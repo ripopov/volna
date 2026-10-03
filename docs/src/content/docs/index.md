@@ -7,7 +7,7 @@ hero:
   tagline: Hardware debug starts with a trace. Understand the runtime data, write a recording, and build tools around it.
   actions:
     - text: Start with VTR
-      link: ./vtr/getting-started/
+      link: ./vtr/
       icon: right-arrow
       variant: primary
     - text: Read the format
@@ -28,7 +28,7 @@ and structured logs on a shared time base. Design semantics and presentation
 belong to the separate VDB and application layers.
 
 <div class="v-guide-grid">
-<a class="v-guide" href="./vtr/"><span class="v-guide__label">01 / START HERE</span><strong>VTR trace library</strong><span>Scope, data model, and the boundary between a trace and a viewer.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
+<a class="v-guide" href="./vtr/"><span class="v-guide__label">01 / START HERE</span><strong>VTR trace library</strong><span>Data model, boundaries, and a first trace in Rust.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="./vtr/specification/"><span class="v-guide__label">02 / REFERENCE</span><strong>File format</strong><span>Container layout, binary encodings, recovery, and conformance.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="./vtr/rationale/"><span class="v-guide__label">03 / DECISIONS</span><strong>Design rationale</strong><span>Why sections, local compression, stable identity, and derived indexes.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="./vtr/logging/"><span class="v-guide__label">04 / GUIDE</span><strong>Structured logging</strong><span>Typed call sites and timestamped records alongside transactions.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
@@ -39,7 +39,7 @@ belong to the separate VDB and application layers.
 Building the workspace requires Rust 1.85 or newer and a C compiler to build
 the Zstandard dependency.
 
-The [getting started guide](./vtr/getting-started/) includes a complete waveform
+The [VTR guide](./vtr/) includes a complete waveform
 round trip and instructions for browsing the Rust API documentation.
 
 ## Maintain the documentation

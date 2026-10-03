@@ -32,3 +32,4 @@ rustc-ice-*.txt
 /docs/dist/
 /docs/test-results/
 /docs/public/assets/volna.svg
+/docs/public/assets/container.svg

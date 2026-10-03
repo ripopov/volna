@@ -47,10 +47,11 @@ permissions only to the deployment job.
 
 ## Sources
 
-The content loader reads `../vtr/README.md` and
-`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md` directly. Edit those files for VTR
-changes; the development server watches them for updates. The loader supplies
-page metadata, removes the top-level title, and adapts repository links to web
+The content loader reads `../vtr/README.md` as the VTR introduction and
+`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md` as the remaining VTR pages. There are
+no authored VTR pages; edit those crate files for VTR changes, and the
+development server watches them for updates. The loader supplies page metadata,
+removes the top-level title, and adapts repository links and image paths to web
 routes in memory without generating Markdown copies.
 The specification is normative; the extracted crate's current documentation
 supersedes the prototype's broader documentation and application proposals.
@@ -59,8 +60,8 @@ Authored pages live in `src/content/docs/`. See the
 [authoring guide](src/content/docs/authoring.md) for SVG, Mermaid, widget,
 navigation, and accessibility conventions. The
 [design system guide](design-system/readme.md) documents shared design ownership
-and import scope. The sync step also mirrors the canonical brand SVG into
-`public/assets/volna.svg`; this generated favicon is ignored by Git.
+and import scope. The sync step also mirrors the canonical brand SVG and the VTR container
+schematic into `public/assets/`; these generated assets are ignored by Git.
 
 ## Verification
 

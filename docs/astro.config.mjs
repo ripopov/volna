@@ -6,9 +6,12 @@ import starlight from '@astrojs/starlight';
 import rehypeMermaid from 'rehype-mermaid';
 import { focusScrollRegions, rehypeFocusScrollRegions } from './scripts/focus-scroll-regions.mjs';
 
-// Mirror the canonical brand asset into the static public directory.
+// Mirror the canonical brand asset and the VTR container schematic into the
+// static public directory; both are ignored by Git.
 await copyFile(new URL('./design-system/assets/volna.svg', import.meta.url),
   new URL('./public/assets/volna.svg', import.meta.url));
+await copyFile(new URL('../vtr/docs/container.svg', import.meta.url),
+  new URL('./public/assets/container.svg', import.meta.url));
 
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const executablePath = process.env.CHROME_PATH || (existsSync(chrome) ? chrome : undefined);
@@ -47,7 +50,6 @@ export default defineConfig({
       { label: 'Overview', link: '/' },
       { label: 'VTR trace library', items: [
         { label: 'Introduction', slug: 'vtr' },
-        { label: 'Getting started', slug: 'vtr/getting-started' },
         { label: 'File format', slug: 'vtr/specification' },
         { label: 'Design rationale', slug: 'vtr/rationale' },
         { label: 'Structured logging', slug: 'vtr/logging' },

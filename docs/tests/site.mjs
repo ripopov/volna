@@ -33,7 +33,7 @@ let browser;
 const report = { pages: [], accessibility: [], behavior: [] };
 try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || (existsSync(chrome) ? chrome : undefined) });
-  const routes = ['', 'vtr/', 'vtr/getting-started/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'authoring/', 'design/', '404.html'];
+  const routes = ['', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'authoring/', 'design/', '404.html'];
   for (const theme of ['dark', 'light']) {
     for (const width of [1440, 360]) {
       const context = await browser.newContext({ viewport: { width, height: 1000 }, colorScheme: theme, reducedMotion: 'reduce' });

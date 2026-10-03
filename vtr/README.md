@@ -1,28 +1,59 @@
 # VTR — Volna Trace Record
 
-A Rust library for the VTR hardware simulation trace format. One file stores
-signal waveforms, transactions, elaborated runtime hierarchy, and runtime
-relations on a shared time base.
+**VTR (Volna Trace Record)** is a Rust library for a hardware simulation trace
+format that stores runtime facts in one file. A recording contains:
 
-## Scope
+| Data | Purpose |
+| --- | --- |
+| Metadata | Time unit, time-zero offset, producer, and typed attributes |
+| Hierarchy | Scopes, variables, streams, generators, and enum tables |
+| Waveforms | 2-, 4-, and 9-state bit vectors, reals, byte strings, aliases, and events |
+| Transactions | Intervals, attributes, events, stages, parents, and directed relations |
+| Logs | Timestamped records of declared sites with typed arguments |
+| Clocks | Declared steady edge stretches represented by ordinary transactions |
 
-- 2-, 4-, and 9-state bit vectors, reals, byte strings, aliases, and event signals.
-- Dynamically declared scopes, variables, streams, generators, and enum tables.
-- Transactions with typed attributes, events, stages, parent links, and relations.
-- Structured timestamped logs and declared clock stretches.
-- Streaming writing with optional background encoding, LZ4/Zstandard compression,
-  checksums, and recovery of complete sections after an interrupted write.
-- Memory-mapped random-access reading, owned immutable histories, hierarchy
-  counts, and a rebuildable activity-index sidecar.
+The library owns trace storage and queries: streaming writing with optional
+background encoding, LZ4/Zstandard compression, checksums, and recovery of
+complete sections after an interrupted write; memory-mapped random-access
+reading, owned immutable histories, hierarchy counts, and a rebuildable
+activity-index sidecar.
 
-This crate implements trace storage and queries only. It does **not** implement
-VDB, source indexing, presentation, a viewer, conversion tools, a server, or a C
-ABI. Stable names and runtime identity allow separate consumers to bind design
-metadata without changing a trace. Log-site source provenance is the only
-source-location exception.
+## Trace and application boundaries
 
-The format remains experimental. Version fields are not a compatibility
-promise; the [specification](docs/SPEC.md) defines this checkout's encoding.
+```mermaid
+flowchart TB
+  accTitle: Trace and application boundaries
+  accDescr: A producer writes VTR runtime data. The VTR reader supplies runtime data to a consumer. A separate VDB supplies design semantics to the same consumer.
+  P["Producer"] -->|"runtime facts"| T["VTR writer · file · reader"]
+  T -->|"values and identities"| C["Consumer or viewer"]
+  D["VDB · separate design metadata"] -->|"semantics and presentation"| C
+```
+
+VTR captures runtime facts and identity. VDB, source indexing, presentation,
+viewers, simulator adapters, conversion tools, servers, and C bindings belong to
+separate components; the diagram shows responsibilities, not components present
+in this workspace. The [design rationale](docs/RATIONALE.md) explains the
+division.
+
+Stable names and runtime identity let separate consumers bind design metadata
+without changing a trace; log-site source provenance is the only source-location
+exception. The format remains experimental. Version fields are not a
+compatibility promise; the [specification](docs/SPEC.md) defines this checkout's
+encoding.
+
+## Container structure
+
+<figure class="v-figure">
+<div class="v-figure__canvas" tabindex="0" role="region" aria-label="Scrollable VTR container schematic">
+<img src="docs/container.svg" alt="A 32-byte file header, append-only sections, a directory section, and a 24-byte trailer in file order." width="780" height="210" />
+</div>
+<figcaption>Logical file order. Block widths are schematic and do not represent payload sizes.</figcaption>
+</figure>
+
+Every section has a 24-byte header and a payload. The writer appends the
+directory and trailer at close. If a trailer is missing or invalid, recovery
+scans complete sections and stops at the first invalid or incomplete section.
+The [container specification](docs/SPEC.md#2-container) defines the exact rules.
 
 ## Quick start
 
