@@ -28,3 +28,22 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 CI runs these automated, headless checks. To select the library, use
 `cargo test -p vtr`. See the [crate guide](vtr/README.md),
 [format specification](vtr/docs/SPEC.md), and [design rationale](vtr/docs/RATIONALE.md).
+
+## Documentation website
+
+Engineering documentation builds to a static Astro/Starlight website in
+[`docs/`](docs/README.md). It uses Markdown, SVG, build-time Mermaid diagrams,
+and small HTML/JavaScript widgets. The shared
+[Volna design system](docs/design-system/readme.md) also supplies application UI
+tokens and assets.
+
+```sh
+cd docs
+npm ci
+npx playwright install chromium
+npm run build
+npm run preview
+```
+
+The output is `docs/dist/`. See the docs README for checks, browser verification,
+and hosting under a URL prefix.

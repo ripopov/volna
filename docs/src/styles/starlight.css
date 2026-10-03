@@ -1,0 +1,82 @@
+@import '../../design-system/styles.css';
+
+/* Starlight owns layout and navigation; Volna owns visual roles and component foundations. */
+:root,
+:root[data-theme='light'] {
+  --sl-font: var(--font-sans);
+  --sl-font-mono: var(--font-mono);
+  --sl-color-white: var(--text-1);
+  --sl-color-gray-1: var(--text-1);
+  --sl-color-gray-2: var(--text-2);
+  --sl-color-gray-3: var(--text-3);
+  --sl-color-gray-4: var(--border-strong);
+  --sl-color-gray-5: var(--border);
+  --sl-color-gray-6: var(--bg-raised);
+  --sl-color-gray-7: var(--bg);
+  --sl-color-black: var(--bg);
+  --sl-color-accent-low: var(--accent-soft);
+  --sl-color-accent: var(--accent);
+  --sl-color-accent-high: var(--accent-text);
+  --sl-color-text: var(--text-2);
+  --sl-color-text-accent: var(--accent-text);
+  --sl-color-bg: var(--bg);
+  --sl-color-bg-nav: var(--bg);
+  --sl-color-bg-sidebar: var(--bg);
+  --sl-color-hairline: var(--border-subtle);
+  --sl-color-hairline-light: var(--border-subtle);
+  --sl-color-hairline-shade: var(--border);
+  --sl-color-bg-inline-code: var(--code-bg);
+  --sl-color-text-invert: var(--on-accent);
+  --sl-nav-height: var(--nav-height);
+  --sl-sidebar-width: 17rem;
+  --sl-content-width: 49rem;
+  --sl-line-height: var(--leading-normal);
+  --sl-text-body: var(--text-md);
+  --sl-text-h1: clamp(2rem, 3vw, 2.75rem);
+  --sl-text-h2: 1.5rem;
+  --sl-text-h3: 1.125rem;
+}
+body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+h1, h2, h3, h4 { font-weight: var(--weight-semibold); letter-spacing: var(--heading-tracking); }
+.site-title { color: var(--text-1); gap: var(--space-3); font-size: var(--text-h3); font-weight: var(--weight-semibold); }
+.site-title img { height: 2rem; }
+/* Starlight uses .header for both the outer bar and its inner layout row. */
+header.header { padding-block: 0; border-bottom: var(--border-width) solid var(--border); }
+.sidebar-content a { border-radius: var(--radius-sm); font-size: var(--text-sm); }
+.sidebar-content [aria-current='page'] { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--weight-semibold); }
+.sidebar-content .top-level > li > a { font-size: var(--text-sm); }
+.right-sidebar { font-size: var(--text-xs); }
+.sl-markdown-content { color: var(--text-2); }
+.sl-markdown-content :is(h1,h2,h3,h4,strong) { color: var(--text-1); }
+.sl-markdown-content .sl-heading-wrapper.level-h2 { margin-top: var(--space-12); padding-top: var(--space-4); border-top: var(--border-width) solid var(--border-subtle); }
+.sl-markdown-content :is(code, pre) { font-variant-ligatures: none; }
+.sl-markdown-content :not(pre) > code { border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-xs); }
+.sl-markdown-content table { display: block; max-width: 100%; overflow-x: auto; font-size: var(--text-sm); }
+.sl-markdown-content :is(td,th) { border-color: var(--border); padding: var(--space-3); vertical-align: top; }
+.sl-markdown-content th { color: var(--text-1); font-weight: var(--weight-semibold); }
+.sl-markdown-content pre { max-width: 100%; overflow-x: auto; }
+.expressive-code { --ec-brdRad: var(--radius-md); }
+.pagination-links a { border-color: var(--border); border-radius: var(--radius-md); box-shadow: none; }
+.pagination-links a:hover { background: var(--surface-card-hover); }
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.hero { padding-block: var(--space-16) var(--space-8); gap: var(--space-6); }
+/* Text-only heroes use the full content column instead of reserving an image column. */
+.hero:not(:has(> img, > .hero-html)) { grid-template-columns: minmax(0, 1fr); }
+.hero h1 { max-width: none; font-size: clamp(2.5rem, 5vw, 4rem); font-weight: var(--weight-semibold); letter-spacing: var(--display-tracking); line-height: 1.08; }
+.hero .tagline { max-width: 58ch; font-size: var(--text-lg); line-height: var(--leading-normal); color: var(--text-2); }
+.hero .sl-link-button { border-radius: var(--radius-sm); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
+.hero .sl-link-button.primary { background: var(--btn-primary-bg); color: var(--btn-primary-fg); border-color: var(--btn-primary-bg); }
+.hero .sl-link-button.primary:hover { background: var(--btn-primary-hover); }
+.hero .sl-link-button.secondary { border-color: var(--border-strong); color: var(--text-1); box-shadow: none; }
+[data-has-hero] .sl-markdown-content { max-width: 62rem; }
+
+/* Imported Mermaid SVGs use semantic tokens so manual theme changes also update diagrams. */
+.sl-markdown-content svg[id^='mermaid'] { display: block; width: 100%; height: auto; min-width: 480px; padding: var(--space-6); background: var(--surface-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); }
+.sl-markdown-content svg[id^='mermaid'] .node :is(rect,polygon,path) { fill: var(--accent-soft) !important; stroke: var(--accent) !important; }
+.sl-markdown-content svg[id^='mermaid'] :is(text,.nodeLabel,.edgeLabel) { color: var(--text-1) !important; fill: var(--text-1) !important; font-family: var(--font-sans) !important; }
+.sl-markdown-content svg[id^='mermaid'] .labelBkg { fill: var(--surface-card) !important; }
+.sl-markdown-content svg[id^='mermaid'] .edgeLabel p { background: var(--surface-card) !important; }
+.sl-markdown-content svg[id^='mermaid'] .flowchart-link { stroke: var(--text-3) !important; }
+.sl-markdown-content svg[id^='mermaid'] marker path { fill: var(--text-3) !important; stroke: var(--text-3) !important; }
+@media (max-width: 50rem) { .hero { padding-top: var(--space-8); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; } }

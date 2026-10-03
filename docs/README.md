@@ -1,0 +1,58 @@
+# Volna documentation
+
+A static Astro/Starlight site authored in Markdown, with build-time Mermaid SVGs,
+original SVG figures, and small HTML/JavaScript widgets. The shared Volna design
+system lives in `design-system/`; the agent entry is
+`../.agents/skills/volna-design`.
+
+## Build
+
+Requires Node.js 22.19+ and Chromium for Mermaid. From this directory:
+
+```sh
+npm ci
+npx playwright install chromium
+npm run check
+npm run build
+npm test
+npm run preview
+```
+
+On macOS, installed Google Chrome is used automatically. `CHROME_PATH` overrides
+the executable; otherwise Playwright's installed Chromium is used. Linux CI
+installs Chromium and its system dependencies with
+`npx playwright install --with-deps chromium`.
+
+The complete static website is in `dist/`, including the local Pagefind search
+index. Serve that directory from any static host. No backend, old checkout, CDN,
+or network request is required for fonts, diagrams, or widgets. Publishing is a
+separate hosting operation.
+
+Use `npm run dev` for live authoring. Set `DOCS_BASE=/volna/` on the build and test
+commands for hosting under a prefix. Use the same environment when previewing.
+Set `DOCS_SITE` to the public site URL when building for a known host to generate
+a sitemap. Without it, the sitemap integration is skipped.
+
+## Sources
+
+The build refreshes four generated Markdown pages from `../vtr/README.md` and
+`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md`. Edit those files for VTR changes.
+Generated pages preserve the guide body while moving the top-level title into
+frontmatter and adapting repository links to routes. They are ignored by Git.
+The specification is normative; the extracted crate's current documentation
+supersedes the prototype's broader documentation and application proposals.
+
+Authored pages live in `src/content/docs/`. See the
+[authoring guide](src/content/docs/authoring.md) for SVG, Mermaid, widget,
+navigation, and accessibility conventions. The
+[design system guide](design-system/readme.md) documents shared design ownership
+and import scope. The sync step also mirrors the canonical brand SVG into
+`public/assets/volna.svg`; this generated favicon is ignored by Git.
+
+## Verification
+
+`npm run check` checks Astro and TypeScript. The build also checks local links,
+anchors, and static assets. `npm test` serves the built output and tests all docs
+routes in desktop/mobile light/dark layouts, accessibility, search, no-JavaScript
+reading, SVG rendering, focus, reduced motion, and exact timestamp conversion.
+Screenshots are written to `test-results/` for visual review.

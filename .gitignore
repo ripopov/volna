@@ -25,3 +25,14 @@ rustc-ice-*.txt
 
 # macOS
 .DS_Store
+
+# Documentation build and generated crate guides
+/docs/node_modules/
+/docs/.astro/
+/docs/dist/
+/docs/test-results/
+/docs/public/assets/volna.svg
+/docs/src/content/docs/vtr/getting-started.md
+/docs/src/content/docs/vtr/specification.md
+/docs/src/content/docs/vtr/rationale.md
+/docs/src/content/docs/vtr/logging.md

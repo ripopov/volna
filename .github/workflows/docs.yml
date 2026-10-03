@@ -1,0 +1,41 @@
+name: Documentation
+
+on:
+  push:
+    paths: ['docs/**', 'vtr/docs/**', 'vtr/README.md', '.agents/**', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['docs/**', 'vtr/docs/**', 'vtr/README.md', '.agents/**', '.github/workflows/docs.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: docs
+    env:
+      ASTRO_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check
+      - run: npm run build
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docs-browser-verification
+          path: docs/test-results/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: volna-static-docs
+          path: docs/dist/
