@@ -4,6 +4,11 @@ Write comments and documentation for maintainers who have never seen the prompts
 
 A useful review test is: If the conversation disappeared, would this comment still help someone understand or safely change the code?
 
+# Staging and commits
+
+Stage completed changes. Commit only when explicitly requested by the user.
+Include only task-related changes; preserve unrelated work and its staging state.
+
 # Shared Volna design
 
 For documentation and application UI changes, read and apply the
