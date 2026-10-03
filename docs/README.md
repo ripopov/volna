@@ -25,13 +25,25 @@ installs Chromium and its system dependencies with
 
 The complete static website is in `dist/`, including the local Pagefind search
 index. Serve that directory from any static host. No backend, old checkout, CDN,
-or network request is required for fonts, diagrams, or widgets. Publishing is a
-separate hosting operation.
+or network request is required for fonts, diagrams, or widgets.
 
 Use `npm run dev` for live authoring. Set `DOCS_BASE=/volna/` on the build and test
 commands for hosting under a prefix. Use the same environment when previewing.
 Set `DOCS_SITE` to the public site URL when building for a known host to generate
 a sitemap. Without it, the sitemap integration is skipped.
+
+## GitHub Pages
+
+The [documentation workflow](../.github/workflows/docs.yml) builds and tests with
+`DOCS_BASE=/volna/` and `DOCS_SITE=https://ripopov.github.io`. Successful builds
+on `main` deploy to [ripopov.github.io/volna](https://ripopov.github.io/volna/).
+Pull requests run the same checks without deploying.
+
+Pushes affecting documentation, VTR guides, the design skill, or the workflow
+trigger the build. The workflow also supports manual runs for redeployment.
+The repository's Pages publishing source must be set to **GitHub Actions**.
+Deployment uses the `github-pages` environment and grants Pages/OIDC write
+permissions only to the deployment job.
 
 ## Sources
 
