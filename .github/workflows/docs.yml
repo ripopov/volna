@@ -27,8 +27,8 @@ jobs:
       DOCS_BASE: /volna/
       DOCS_SITE: https://ripopov.github.io
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: npm
@@ -38,15 +38,17 @@ jobs:
       - run: npm run check
       - run: npm run build
       - run: npm test
-      - uses: actions/upload-artifact@v4
-        if: always()
+      - uses: actions/upload-artifact@v6
+        if: ${{ always() && hashFiles('docs/test-results/**') != '' }}
         with:
           name: docs-browser-verification
           path: docs/test-results/
-      - uses: actions/upload-artifact@v4
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
         with:
           name: volna-static-docs
           path: docs/dist/
+          if-no-files-found: error
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v4

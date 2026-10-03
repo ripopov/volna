@@ -546,7 +546,9 @@ fn metadata_limit_and_per_signal_failure_are_explicit() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures/picorv32.vtr");
     let mut server = Server::start(&path);
     assert!(server.open(1).unwrap_err().contains("limit"));
-    server.close();
+    // A rejected Open closes the service after the error acknowledgement.
+    assert!(read_packet(&mut server.output).unwrap().is_none());
+    assert!(server.wait().success());
     let mut server = Server::start(&path);
     let meta = server.open(64 * 1024 * 1024).unwrap();
     let id = meta.hierarchy.var(0).signal.0;

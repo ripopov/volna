@@ -1,4 +1,4 @@
-import { copyFile } from 'node:fs/promises';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
@@ -8,6 +8,7 @@ import { focusScrollRegions, rehypeFocusScrollRegions } from './scripts/focus-sc
 
 // Mirror the canonical brand asset and the VTR container schematic into the
 // static public directory; both are ignored by Git.
+await mkdir(new URL('./public/assets/', import.meta.url), { recursive: true });
 await copyFile(new URL('./design-system/assets/volna.svg', import.meta.url),
   new URL('./public/assets/volna.svg', import.meta.url));
 await copyFile(new URL('../vtr/docs/container.svg', import.meta.url),
