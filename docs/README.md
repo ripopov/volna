@@ -39,7 +39,7 @@ The [documentation workflow](../.github/workflows/docs.yml) builds and tests wit
 on `main` deploy to [ripopov.github.io/volna](https://ripopov.github.io/volna/).
 Pull requests run the same checks without deploying.
 
-Pushes affecting documentation, VTR guides, the design skill, or the workflow
+Pushes affecting documentation, crate guides, the design skill, or the workflow
 trigger the build. The workflow also supports manual runs for redeployment.
 The repository's Pages publishing source must be set to **GitHub Actions**.
 Deployment uses the `github-pages` environment and grants Pages/OIDC write
@@ -48,9 +48,10 @@ permissions only to the deployment job.
 ## Sources
 
 The content loader reads `../vtr/README.md` as the VTR introduction and
-`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md` as the remaining VTR pages. There are
-no authored VTR pages; edit those crate files for VTR changes, and the
-development server watches them for updates. The loader supplies page metadata,
+`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md` as the remaining VTR pages. It also
+reads `../volna-trace/README.md` and `../volna-server/README.md` as their loading
+and hosting guides. Edit these canonical crate files; the development server
+watches them for updates. The loader supplies page metadata,
 removes the top-level title, and adapts repository links and image paths to web
 routes in memory without generating Markdown copies.
 The specification is normative; the extracted crate's current documentation

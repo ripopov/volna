@@ -1,23 +1,20 @@
 import { readFile } from 'node:fs/promises';
-import { relative } from 'node:path';
+import { posix, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Loader } from 'astro/loaders';
 import { docsLoader } from '@astrojs/starlight/loaders';
 
-// VTR pages are rendered straight from the crate tree; the README is the
-// introduction and the crate guide at once, so there is no authored copy to
-// drift from. Image paths are rewritten to public assets mirrored by the
-// Astro config.
+// Render crate guides directly from their canonical Markdown sources. Local
+// links between guides map to website routes; other repository links retain
+// their source locations. The container schematic is mirrored by Astro.
 const sources = [
-  ['README.md', 'vtr', 'VTR trace library', 'What a VTR recording contains, and how to write, read, and recover one.'],
-  ['docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR 1.1 container, encodings, recovery rules, and activity sidecar.'],
-  ['docs/RATIONALE.md', 'vtr/rationale', 'VTR design rationale', 'Trace storage decisions, library boundaries, and derived indexes.'],
-  ['docs/LOGGING.md', 'vtr/logging', 'Structured logging', 'Declare typed log sites, write records, and query messages.'],
+  ['vtr/README.md', 'vtr', 'VTR trace library', 'What a VTR recording contains, and how to write, read, and recover one.'],
+  ['vtr/docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR 1.1 container, encodings, recovery rules, and activity sidecar.'],
+  ['vtr/docs/RATIONALE.md', 'vtr/rationale', 'VTR design rationale', 'Trace storage decisions, library boundaries, and derived indexes.'],
+  ['vtr/docs/LOGGING.md', 'vtr/logging', 'Structured logging', 'Declare typed log sites, write records, and query messages.'],
+  ['volna-trace/README.md', 'volna-trace', 'Volna trace loading', 'Read immutable VTR/FST recordings locally or through a cooperative remote client.'],
+  ['volna-server/README.md', 'volna-server', 'Volna server', 'Host one immutable recording over framed pipes, with complete objects and activity sidecars.'],
 ] as const;
-// Cross-page links are written relative to the nested guide pages; links
-// rewritten into the README render one level higher, so they need no prefix.
-const routes = { SPEC: 'specification/', RATIONALE: 'rationale/', LOGGING: 'logging/' };
-
 export function volnaDocsLoader(): Loader {
   const authored = docsLoader();
   return {
@@ -26,18 +23,28 @@ export function volnaDocsLoader(): Loader {
       await authored.load(context);
       // The authored loader removes entries outside its directory; load crate guides afterwards.
       const guides = new Map(sources.map(([source, slug, title, description]) => {
-        const fileURL = new URL(`../../vtr/${source}`, import.meta.url);
+        const fileURL = new URL(`../../${source}`, import.meta.url);
         return [fileURLToPath(fileURL), { fileURL, id: slug, title, description }];
       }));
       async function loadGuide(path: string) {
         const guide = guides.get(path)!;
-        const prefix = guide.id.includes('/') ? '../' : '';
         let body = await readFile(guide.fileURL, 'utf8');
         body = body.replace(/^# [^\n]+\n+/, '');
-        body = body.replace(/\]\((?:docs\/)?(SPEC|RATIONALE|LOGGING)\.md([^)]*)\)/g,
-          (_, name: keyof typeof routes, fragment: string) => `](${prefix}${routes[name]}${fragment})`);
-        body = body.replace('](../).', '](https://github.com/ripopov/volna/tree/main/vtr).');
-        body = body.replace('](../LICENSE)', '](https://github.com/ripopov/volna/blob/main/LICENSE)');
+        body = body.replace(/\]\(([^)]+)\)/g, (match, href: string) => {
+          if (/^(?:[a-z]+:|#|\/)/i.test(href)) return match;
+          const target = new URL(href, guide.fileURL);
+          const fragment = target.hash;
+          target.hash = '';
+          const path = fileURLToPath(target);
+          const linkedGuide = guides.get(path) || (href.split('#')[0].endsWith('/')
+            ? guides.get(fileURLToPath(new URL('README.md', target))) : undefined);
+          if (linkedGuide) {
+            const route = posix.relative(guide.id, linkedGuide.id) || '.';
+            return `](${route}/${fragment})`;
+          }
+          const repoPath = relative(fileURLToPath(new URL('../../', import.meta.url)), path).split(sep).join('/');
+          return `](https://github.com/ripopov/volna/blob/main/${repoPath}${fragment})`;
+        });
         // README-relative repo path of the container schematic -> page-relative public asset.
         body = body.replace('src="docs/container.svg"', 'src="../assets/container.svg"');
         const data = await context.parseData({

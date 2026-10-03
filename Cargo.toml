@@ -1,5 +1,5 @@
 [workspace]
-members = ["vtr"]
+members = ["vtr", "volna-trace", "volna-server"]
 resolver = "3"
 
 [workspace.package]
@@ -11,6 +11,7 @@ license-file = "LICENSE"
 repository = "https://github.com/ripopov/volna"
 
 [workspace.dependencies]
+vtr = { path = "vtr" }
 crc32fast = "1.4"
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 memmap2 = "0.9"

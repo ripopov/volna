@@ -54,6 +54,10 @@ export default defineConfig({
         { label: 'Design rationale', slug: 'vtr/rationale' },
         { label: 'Structured logging', slug: 'vtr/logging' },
       ] },
+      { label: 'Trace access', items: [
+        { label: 'Local and remote loading', slug: 'volna-trace' },
+        { label: 'Headless server', slug: 'volna-server' },
+      ] },
       { label: 'Contributing', items: [
         { label: 'Writing documentation', slug: 'authoring' },
         { label: 'Design foundations', slug: 'design' },

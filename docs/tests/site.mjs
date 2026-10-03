@@ -33,7 +33,7 @@ let browser;
 const report = { pages: [], accessibility: [], behavior: [] };
 try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || (existsSync(chrome) ? chrome : undefined) });
-  const routes = ['', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'authoring/', 'design/', '404.html'];
+  const routes = ['', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'volna-trace/', 'volna-server/', 'authoring/', 'design/', '404.html'];
   for (const theme of ['dark', 'light']) {
     for (const width of [1440, 360]) {
       const context = await browser.newContext({ viewport: { width, height: 1000 }, colorScheme: theme, reducedMotion: 'reduce' });
@@ -73,7 +73,7 @@ try {
           report.accessibility.push({ route, theme, violations: audit.violations });
           assert.deepEqual(audit.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target).join(', ')}`), [], `${route} ${theme}: accessibility`);
         }
-        if (['', 'vtr/', 'authoring/', 'vtr/specification/'].includes(route)) {
+        if (['', 'vtr/', 'authoring/', 'vtr/specification/', 'volna-trace/', 'volna-server/'].includes(route)) {
           await page.screenshot({ path: `${results}/${route.replaceAll('/', '-') || 'landing'}-${theme}-${width}.png`, fullPage: true });
         }
         report.pages.push({ route, theme, width, ...state });
@@ -101,6 +101,8 @@ try {
   await search.fill('log site');
   await page.locator('.pagefind-ui__result-link').first().waitFor();
   assert.ok((await page.locator('.pagefind-ui__result-link').allTextContents()).some(title => /logging|log|format/i.test(title)), 'search must find VTR content');
+  await search.fill('framed');
+  await page.locator('.pagefind-ui__result-link').filter({ hasText: 'Volna server' }).first().waitFor();
   await page.keyboard.press('Escape');
   report.behavior.push('static Mermaid SVG, keyboard focus, persistent theme, local Pagefind search');
 
@@ -131,6 +133,10 @@ try {
   assert.ok((await staticPage.locator('main').textContent()).includes('Conformance checklist'));
   await staticPage.goto(`${origin}${base}authoring/`);
   assert.ok((await staticPage.locator('main').textContent()).includes('ticks × 10^timescale'));
+  await staticPage.goto(`${origin}${base}volna-trace/`);
+  assert.ok((await staticPage.locator('main').textContent()).includes('Read a local recording'));
+  await staticPage.goto(`${origin}${base}volna-server/`);
+  assert.ok((await staticPage.locator('main').textContent()).includes('Session lifecycle'));
   await noJs.close();
   report.behavior.push('readable docs and diagrams without JavaScript');
   await page.setViewportSize({ width: 360, height: 800 });
@@ -140,7 +146,12 @@ try {
   assert.equal(await sidebar.evaluate(element => element.matches(':popover-open')), true);
   await sidebar.getByRole('link', { name: 'Structured logging', exact: true }).click();
   await page.waitForURL(`${origin}${base}vtr/logging/`);
-  report.behavior.push('mobile menu and guide navigation');
+  await page.locator('button[popovertarget="starlight__sidebar"]').click();
+  await sidebar.getByRole('link', { name: 'Headless server', exact: true }).click();
+  await page.waitForURL(`${origin}${base}volna-server/`);
+  await page.locator('main').getByRole('link', { name: 'volna-trace', exact: true }).click();
+  await page.waitForURL(`${origin}${base}volna-trace/`);
+  report.behavior.push('mobile menu, server navigation, and canonical crate cross-links');
   await page.close();
   console.log(`Verified ${report.pages.length} route/theme/viewport combinations, ${report.accessibility.length} accessibility audits, search, widgets, and static reading.`);
 } finally {
