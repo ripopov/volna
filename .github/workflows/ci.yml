@@ -47,12 +47,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      # Package verification creates transient source trees under target/package.
+      # Cache dependency downloads without scanning generated workspace artifacts.
+      - uses: actions/cache@v5
         with:
-          # Package verification creates transient source trees under target/package.
-          # Cache registry downloads without restoring or walking those build trees.
-          cache-targets: false
-          prefix-key: v1-rust-registry
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo doc --workspace --no-deps --locked
