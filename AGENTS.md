@@ -15,3 +15,10 @@ For documentation and application UI changes, read and apply the
 [Volna design skill](docs/design-system/SKILL.md). The shared tokens and assets
 live in `docs/design-system`; engineering content lives in Markdown and builds
 through Astro/Starlight. The current VTR guides in `vtr/docs` are authoritative.
+
+# Compatibility
+
+Volna is a research project. Do not add backwards-compatibility machinery
+for old assets or interfaces. When a
+protocol, serialization format, or other API layer changes, bump its version
+as needed and ignore or regenerate assets produced by older versions.
