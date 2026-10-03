@@ -32,6 +32,11 @@ One Dark neutrals; blue accent (`--accent`); flat surfaces; 1px borders; radii
 first-class. Do not recolor the app icon. Use waveform state, marker, and stage
 roles from `tokens/viewer.css` for time-based application panels.
 
+Use the compact technical typography scale in `tokens/typography.css`: 16px body
+text, 30/24/20/16px headings, and 32px display titles at the default root size.
+Heading sizes stay consistent across viewport widths and use a 1.3 line height.
+Documentation adapters and prose components must consume these shared tokens.
+
 Keep prose precise and calm. State behavior, limitations, and status. Use sentence
 case. Diagrams should explain engineering models. Comparative performance claims
 require reproducible measurements and are absent from the current docs.

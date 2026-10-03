@@ -28,7 +28,11 @@ as the source, rather than duplicating color values in application components.
 <div class="v-swatch v-swatch--code">Code surface<br /><code>--code-bg</code></div>
 </div>
 
-Body text uses Inter at 16px with a 1.55 line height. Headings use weight 600.
+Body text uses Inter at 16px with a 1.55 line height. Headings use weight 600
+and a 1.3 line height. The scale stays consistent across viewport widths:
+30px page titles, 24px section headings, 20px subsections, and 16px minor
+headings. Landing titles use 32px. Sizes use rem units relative to the browser's
+default root size.
 Code uses JetBrains Mono with ligatures disabled. Use the monochrome brand mark
 or the canonical app icon without recoloring it.
 

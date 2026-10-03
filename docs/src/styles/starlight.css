@@ -32,9 +32,13 @@
   --sl-content-width: 49rem;
   --sl-line-height: var(--leading-normal);
   --sl-text-body: var(--text-md);
-  --sl-text-h1: clamp(2rem, 3vw, 2.75rem);
-  --sl-text-h2: 1.5rem;
-  --sl-text-h3: 1.125rem;
+  --sl-text-h1: var(--text-h1);
+  --sl-text-h2: var(--text-h2);
+  --sl-text-h3: var(--text-h3);
+  --sl-text-h4: var(--text-h4);
+  --sl-text-h5: var(--text-md);
+  --sl-text-h6: var(--text-sm);
+  --sl-line-height-headings: var(--leading-heading);
 }
 body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
 h1, h2, h3, h4 { font-weight: var(--weight-semibold); letter-spacing: var(--heading-tracking); }
@@ -48,7 +52,7 @@ header.header { padding-block: 0; border-bottom: var(--border-width) solid var(-
 .right-sidebar { font-size: var(--text-xs); }
 .sl-markdown-content { color: var(--text-2); }
 .sl-markdown-content :is(h1,h2,h3,h4,strong) { color: var(--text-1); }
-.sl-markdown-content .sl-heading-wrapper.level-h2 { margin-top: var(--space-12); padding-top: var(--space-4); border-top: var(--border-width) solid var(--border-subtle); }
+.sl-markdown-content .sl-heading-wrapper.level-h2 { margin-top: var(--space-8); padding-top: var(--space-3); border-top: var(--border-width) solid var(--border-subtle); }
 .sl-markdown-content :is(code, pre) { font-variant-ligatures: none; }
 .sl-markdown-content :not(pre) > code { border: var(--border-width) solid var(--border-subtle); border-radius: var(--radius-xs); }
 .sl-markdown-content table { display: block; max-width: 100%; overflow-x: auto; font-size: var(--text-sm); }
@@ -59,11 +63,11 @@ header.header { padding-block: 0; border-bottom: var(--border-width) solid var(-
 .pagination-links a { border-color: var(--border); border-radius: var(--radius-md); box-shadow: none; }
 .pagination-links a:hover { background: var(--surface-card-hover); }
 :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.hero { padding-block: var(--space-16) var(--space-8); gap: var(--space-6); }
+.hero { padding-block: var(--space-8) var(--space-6); gap: var(--space-6); }
 /* Text-only heroes use the full content column instead of reserving an image column. */
 .hero:not(:has(> img, > .hero-html)) { grid-template-columns: minmax(0, 1fr); }
-.hero h1 { max-width: none; font-size: clamp(2.5rem, 5vw, 4rem); font-weight: var(--weight-semibold); letter-spacing: var(--display-tracking); line-height: 1.08; }
-.hero .tagline { max-width: 58ch; font-size: var(--text-lg); line-height: var(--leading-normal); color: var(--text-2); }
+.hero h1 { max-width: none; font-size: var(--text-display); font-weight: var(--weight-semibold); letter-spacing: var(--heading-tracking); line-height: var(--leading-heading); }
+.hero .tagline { max-width: 58ch; font-size: var(--text-md); line-height: var(--leading-normal); color: var(--text-2); }
 .hero .sl-link-button { border-radius: var(--radius-sm); font-size: var(--text-sm); font-weight: var(--weight-semibold); }
 .hero .sl-link-button.primary { background: var(--btn-primary-bg); color: var(--btn-primary-fg); border-color: var(--btn-primary-bg); }
 .hero .sl-link-button.primary:hover { background: var(--btn-primary-hover); }
@@ -78,5 +82,4 @@ header.header { padding-block: 0; border-bottom: var(--border-width) solid var(-
 .sl-markdown-content svg[id^='mermaid'] .edgeLabel p { background: var(--surface-card) !important; }
 .sl-markdown-content svg[id^='mermaid'] .flowchart-link { stroke: var(--text-3) !important; }
 .sl-markdown-content svg[id^='mermaid'] marker path { fill: var(--text-3) !important; stroke: var(--text-3) !important; }
-@media (max-width: 50rem) { .hero { padding-top: var(--space-8); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; } }
