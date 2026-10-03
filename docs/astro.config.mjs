@@ -1,9 +1,14 @@
+import { copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import rehypeMermaid from 'rehype-mermaid';
 import { focusScrollRegions, rehypeFocusScrollRegions } from './scripts/focus-scroll-regions.mjs';
+
+// Mirror the canonical brand asset into the static public directory.
+await copyFile(new URL('./design-system/assets/volna.svg', import.meta.url),
+  new URL('./public/assets/volna.svg', import.meta.url));
 
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const executablePath = process.env.CHROME_PATH || (existsSync(chrome) ? chrome : undefined);

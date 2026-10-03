@@ -47,10 +47,11 @@ permissions only to the deployment job.
 
 ## Sources
 
-The build refreshes four generated Markdown pages from `../vtr/README.md` and
-`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md`. Edit those files for VTR changes.
-Generated pages preserve the guide body while moving the top-level title into
-frontmatter and adapting repository links to routes. They are ignored by Git.
+The content loader reads `../vtr/README.md` and
+`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md` directly. Edit those files for VTR
+changes; the development server watches them for updates. The loader supplies
+page metadata, removes the top-level title, and adapts repository links to web
+routes in memory without generating Markdown copies.
 The specification is normative; the extracted crate's current documentation
 supersedes the prototype's broader documentation and application proposals.
 

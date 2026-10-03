@@ -6,10 +6,9 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "sync": "node scripts/sync-vtr.mjs",
-    "dev": "npm run sync && astro dev",
-    "check": "npm run sync && astro check",
-    "build": "npm run sync && astro build && node scripts/check-links.mjs",
+    "dev": "astro dev",
+    "check": "astro check",
+    "build": "astro build && node scripts/check-links.mjs",
     "preview": "astro preview",
     "test": "node tests/site.mjs"
   },

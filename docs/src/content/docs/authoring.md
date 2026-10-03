@@ -43,18 +43,17 @@ Use the same prefix when serving and testing the build:
 | Location | Responsibility |
 | --- | --- |
 | `vtr/README.md`, `vtr/docs/*.md` | Authoritative VTR guides |
-| `docs/scripts/sync-vtr.mjs` | Copy the crate guide and three format guides, adapting web links |
+| `docs/scripts/docs-loader.ts` | Load crate guides directly, supplying metadata and adapting web links |
 | `docs/src/content/docs/` | Landing page and authored site guides |
 | `docs/design-system/` | Shared design tokens, fonts, branding, and component foundations |
 | `docs/src/styles/starlight.css` | Map the shared design roles onto Starlight |
 | `docs/public/assets/` | Static engineering figures |
 | `docs/src/scripts/` | Small bundled widget scripts |
 
-The generated `vtr/getting-started.md`, `vtr/specification.md`,
-`vtr/rationale.md`, and `vtr/logging.md` pages are ignored by Git and refreshed
-before development, checking, and building. Edit their crate sources, then run
-`npm run sync`. The specification stays intact apart from its page title and
-repository-to-website links.
+The VTR getting started, specification, rationale, and logging pages are loaded
+directly from their crate sources. Edit those sources; development watches them
+and builds read them without a separate synchronization step. The specification
+stays intact apart from its page title and repository-to-website links.
 
 ## Markdown
 
