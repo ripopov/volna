@@ -1,0 +1,21 @@
+[workspace]
+members = ["vtr"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+license-file = "LICENSE"
+repository = "https://github.com/ripopov/volna"
+
+[workspace.dependencies]
+crc32fast = "1.4"
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+memmap2 = "0.9"
+rand = "0.8"
+tempfile = "3"
+thiserror = "2"
+zstd = { version = "0.13", default-features = false }
+zstd-sys = { version = "2.0.16", default-features = false, features = ["experimental"] }
