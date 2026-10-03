@@ -348,14 +348,16 @@ fn recover_every_cut_file() {
 }
 
 #[test]
-fn commit_interval_bounds_what_waits_in_memory() {
-    use std::time::{Duration, Instant};
-    // A slow run (a time step every 200 us) that is never closed, as when it is killed:
-    // with a commit interval the file keeps everything older than the interval.
+fn commit_interval_flushes_pending_signal_and_log_records() {
+    use std::time::Duration;
+    // Keep blocks below their size limits, wait for the interval, then drive a
+    // full 256-call commit-check cycle. Inline encoding makes the file readable
+    // immediately after the check without depending on thread scheduling.
     for interval in [Duration::ZERO, Duration::from_millis(100)] {
         let path = tmp(&format!("commit{}.vtr", interval.as_millis()));
         let opts = WriterOptions {
             commit_interval: interval,
+            background: false,
             ..Default::default()
         };
         let mut w = Writer::create_with(&path, opts).unwrap();
@@ -380,27 +382,18 @@ fn commit_interval_bounds_what_waits_in_memory() {
                 &[LogArgType::U64],
             ))
             .unwrap();
-        let start = Instant::now();
-        let mut progress = Vec::new();
-        let mut t = 0u64;
-        while start.elapsed() < Duration::from_millis(1500) {
-            t += 1;
+        let last = 600u64;
+        for t in 1..=last {
             w.set_time(t).unwrap();
             w.emit_u64(a, t).unwrap();
             if t % 10 == 0 {
                 w.log(site, t, &[LogArg::U64(t)]).unwrap();
             }
-            progress.push((start.elapsed(), t));
-            std::thread::sleep(Duration::from_micros(200));
         }
-        // What had been emitted half a second before the end must be in the file.
-        let settled = progress
-            .iter()
-            .rev()
-            .find(|(at, _)| *at + Duration::from_millis(500) + interval <= start.elapsed())
-            .unwrap()
-            .1;
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(interval);
+        for _ in 0..256 {
+            w.set_time(last).unwrap();
+        }
         let on_disk = Reader::from_bytes(std::fs::read(&path).unwrap()).unwrap();
         let kept = if on_disk.signal_count() > 0 {
             on_disk.load_signal(a).unwrap().len() as u64
@@ -414,15 +407,10 @@ fn commit_interval_bounds_what_waits_in_memory() {
                 "without an interval everything waits for the block"
             );
         } else {
-            assert!(
-                kept >= settled,
-                "kept {kept} changes of the {settled} emitted {} ms before the end",
-                500 + interval.as_millis()
-            );
-            assert!(
-                on_disk.log_count() >= settled / 10,
-                "kept {} log records",
-                on_disk.log_count()
+            assert_eq!(
+                (kept, on_disk.log_count()),
+                (last, last / 10),
+                "the interval commits all pending signal changes and log records"
             );
         }
         drop(w);
