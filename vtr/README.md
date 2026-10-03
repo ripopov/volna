@@ -68,7 +68,8 @@ rather than relying on `Drop`.
 
 ## Documentation and examples
 
-- `cargo doc -p vtr --no-deps`: API guide, query costs, ordering, and ownership.
+- `cargo doc -p vtr --no-deps --open`: build and open the Rust API documentation,
+  including query costs, ordering, and ownership.
 - [File-format specification](docs/SPEC.md): container, encodings, recovery,
   and the activity sidecar.
 - [Design rationale](docs/RATIONALE.md): format and library boundaries.

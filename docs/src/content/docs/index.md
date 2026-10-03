@@ -36,7 +36,8 @@ belong to the separate VDB and application layers.
 
 ## Work with the library
 
-The workspace requires Rust 1.85 or newer and a C compiler for vendored Zstandard.
+Building the workspace requires Rust 1.85 or newer and a C compiler to build
+the Zstandard dependency.
 Run these commands from the repository root:
 
 ```sh
@@ -46,8 +47,7 @@ cargo run -p vtr --example waveform -- /tmp/waveform.vtr
 ```
 
 The [getting started guide](./vtr/getting-started/) includes a complete waveform
-round trip. Rust API contracts and executable examples are available through
-`cargo doc -p vtr --no-deps`.
+round trip and instructions for browsing the Rust API documentation.
 
 ## Maintain the documentation
 
