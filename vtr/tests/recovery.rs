@@ -13,7 +13,8 @@ fn tmp(name: &str) -> std::path::PathBuf {
 
 /// A closed file with every kind of section, many of each.
 fn sample() -> (Vec<u8>, SignalId) {
-    let path = tmp("sample.vtr");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sample.vtr");
     let opts = WriterOptions {
         block_records: 64,
         tx_block_bytes: 512,
