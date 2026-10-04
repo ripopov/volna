@@ -70,12 +70,8 @@ section ordering, and recovery rules.
 
 ## Quick start
 
-From another crate in this workspace:
-
-```toml
-[dependencies]
-vtr = { path = "../vtr" }
-```
+See the [runnable waveform API example](examples/waveform.rs) for a complete
+write-and-read round trip.
 
 Write a waveform, close it explicitly to check errors, then query it:
 
@@ -146,7 +142,3 @@ round trips, aliases, late hierarchy declarations, logs, clocks, recovery,
 sealing, and activity-index correctness and memory bounds. Historical Verilator
 output is checked in under `tests/fixtures/verilator`; tests need neither
 Verilator nor the prototype repository.
-
-## License
-
-Licensed under MIT; see the repository root [LICENSE](../LICENSE).

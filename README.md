@@ -50,3 +50,7 @@ npm run preview
 
 The output is `docs/dist/`. See the docs README for checks, browser verification,
 and hosting under a URL prefix.
+
+## License
+
+Licensed under MIT; see [LICENSE](LICENSE).
