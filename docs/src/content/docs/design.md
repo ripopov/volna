@@ -57,6 +57,15 @@ scroll within their own containers. Motion changes only color or opacity and
 respects the reduced-motion preference. Backgrounds are flat, borders are thin,
 and radii follow the shared 3/4/6/8/10px scale.
 
+The desktop header is a live specimen of the shared ghost icon buttons
+(`v-btn v-btn--ghost v-btn--icon`). The left and right panel icons independently
+hide or show the documentation navigator and page navigation. Each button reports
+its panel's expanded state and remembers the preference across pages and visits
+when browser storage is available. Hiding a panel releases its layout space.
+At narrower widths, Starlight's mobile navigation controls remain available;
+desktop preferences do not hide them. Without JavaScript, the desktop buttons
+are hidden and the navigation panels remain visible.
+
 ## Engineering content
 
 Use diagrams to explain structure and widgets to inspect exact relationships.

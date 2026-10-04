@@ -46,6 +46,23 @@ h1, h2, h3, h4 { font-weight: var(--weight-semibold); letter-spacing: var(--head
 .site-title img { height: 2rem; }
 /* Starlight uses .header for both the outer bar and its inner layout row. */
 header.header { padding-block: 0; border-bottom: var(--border-width) solid var(--border); }
+.volna-header { display: flex; align-items: center; gap: var(--space-2); height: 100%; }
+.volna-header > .header { flex: 1; min-width: 0; }
+volna-panel-controls { display: none; flex: none; gap: var(--space-1); }
+/* Desktop preferences must not hide Starlight's mobile popover or sticky contents menu. */
+@media (min-width: 50rem) {
+  .volna-header > .header { display: flex; }
+  volna-panel-controls:not([hidden]) { display: flex; }
+  volna-panel-controls [data-panel='right'] { display: none; }
+  :root[data-panel-left-hidden] { --sl-content-inline-start: 0rem; }
+  :root[data-panel-left-hidden] #starlight__sidebar { display: none; }
+}
+@media (min-width: 72rem) {
+  volna-panel-controls [data-panel='right'] { display: inline-flex; }
+  :root[data-panel-right-hidden] .right-sidebar-container { display: none; }
+  :root[data-panel-right-hidden] .main-pane { width: 100%; --sl-content-margin-inline: auto; }
+}
+@media print { volna-panel-controls { display: none !important; } }
 .sidebar-content a { border-radius: var(--radius-sm); font-size: var(--text-sm); }
 .sidebar-content [aria-current='page'] { background: var(--accent-soft); color: var(--accent-text); font-weight: var(--weight-semibold); }
 .sidebar-content .top-level > li > a { font-size: var(--text-sm); }

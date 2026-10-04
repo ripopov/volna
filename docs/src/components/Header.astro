@@ -1,0 +1,74 @@
+---
+import Header from '@astrojs/starlight/components/Header.astro';
+
+const { hasSidebar, toc } = Astro.locals.starlightRoute;
+---
+
+<script is:inline>
+  // Restore before the panels are parsed to avoid flashing the expanded layout.
+  for (const panel of ['left', 'right']) {
+    try {
+      if (localStorage.getItem(`volna-panel-${panel}`) === 'hidden') {
+        document.documentElement.setAttribute(`data-panel-${panel}-hidden`, '');
+      }
+    } catch { /* Storage can be unavailable; the controls still work for this page. */ }
+  }
+</script>
+
+<div class="volna-header">
+  <Header />
+  <volna-panel-controls hidden class="print:hidden">
+    {hasSidebar && (
+      <button type="button" class="v-btn v-btn--ghost v-btn--icon" data-panel="left"
+        aria-label="Documentation navigator" aria-expanded="true" aria-controls="starlight__sidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M9 4v16M6 8v8" />
+        </svg>
+      </button>
+    )}
+    {toc && (
+      <button type="button" class="v-btn v-btn--ghost v-btn--icon" data-panel="right"
+        aria-label="On this page" aria-expanded="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M15 4v16M18 8v8" />
+        </svg>
+      </button>
+    )}
+  </volna-panel-controls>
+</div>
+
+<script>
+  class PanelControls extends HTMLElement {
+    connectedCallback() {
+      const root = document.documentElement;
+      for (const button of this.querySelectorAll<HTMLButtonElement>('button[data-panel]')) {
+        const panel = button.dataset.panel!;
+        const attribute = `data-panel-${panel}-hidden`;
+        const update = () => {
+          const visible = !root.hasAttribute(attribute);
+          button.setAttribute('aria-expanded', String(visible));
+          button.title = `${visible ? 'Hide' : 'Show'} ${panel === 'left' ? 'documentation navigator' : 'page navigation'}`;
+        };
+        if (panel === 'right') {
+          const sidebar = document.querySelector('.right-sidebar-container');
+          if (sidebar) {
+            sidebar.id = 'volna-page-navigation';
+            button.setAttribute('aria-controls', sidebar.id);
+          }
+        }
+        update();
+        button.addEventListener('click', () => {
+          const hidden = root.toggleAttribute(attribute);
+          try {
+            localStorage.setItem(`volna-panel-${panel}`, hidden ? 'hidden' : 'visible');
+          } catch { /* Page-local toggling does not depend on persistent storage. */ }
+          update();
+        });
+      }
+      this.hidden = false;
+    }
+  }
+  customElements.define('volna-panel-controls', PanelControls);
+</script>

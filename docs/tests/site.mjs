@@ -82,10 +82,11 @@ try {
     }
   }
 
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const behaviorContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await behaviorContext.newPage();
   await page.goto(`${origin}${base}vtr/`);
   assert.equal(await page.locator('svg[id^="mermaid"]').count(), 1, 'Mermaid must be a built SVG');
-  assert.equal(await page.locator('svg[id^="mermaid"] title').textContent(), 'Trace and application boundaries');
+  assert.equal(await page.locator('svg[id^="mermaid"] title').textContent(), 'VTR and VDB in a design-aware viewer');
   await page.keyboard.press('Tab');
   const focus = await page.evaluate(() => ({ width: getComputedStyle(document.activeElement).outlineWidth, style: getComputedStyle(document.activeElement).outlineStyle }));
   assert.notEqual(focus.width, '0px', 'keyboard focus must be visible');
@@ -105,6 +106,68 @@ try {
   await page.locator('.pagefind-ui__result-link').filter({ hasText: 'Volna server' }).first().waitFor();
   await page.keyboard.press('Escape');
   report.behavior.push('static Mermaid SVG, keyboard focus, persistent theme, local Pagefind search');
+
+  for (const theme of ['dark', 'light']) {
+    await page.locator('starlight-theme-select select').first().selectOption(theme);
+    await page.goto(`${origin}${base}vtr/`);
+    const leftToggle = page.getByRole('button', { name: 'Documentation navigator', exact: true });
+    const rightToggle = page.getByRole('button', { name: 'On this page', exact: true });
+    const leftPanel = page.locator('#starlight__sidebar');
+    const rightPanel = page.locator('.right-sidebar-container');
+    const initial = await page.locator('.main-pane').boundingBox();
+    assert.equal(await leftToggle.getAttribute('aria-expanded'), 'true');
+    assert.equal(await rightToggle.getAttribute('aria-expanded'), 'true');
+    await leftToggle.focus();
+    await page.keyboard.press('Enter');
+    assert.equal(await leftToggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(await leftPanel.isVisible(), false);
+    assert.equal(await rightPanel.isVisible(), true, 'left toggle must leave the right panel visible');
+    assert.ok((await page.locator('.main-pane').boundingBox()).x < initial.x, 'left panel space must be released');
+    await leftToggle.click();
+    await rightToggle.click();
+    assert.equal(await leftPanel.isVisible(), true, 'right toggle must leave the left panel visible');
+    assert.equal(await rightPanel.isVisible(), false);
+    assert.ok((await page.locator('.main-pane').boundingBox()).width > initial.width, 'right panel space must be released');
+    await leftToggle.click();
+    await page.goto(`${origin}${base}vtr/specification/`);
+    await page.reload();
+    assert.equal(await leftPanel.isVisible(), false, 'left preference must persist');
+    assert.equal(await rightPanel.isVisible(), false, 'right preference must persist');
+    assert.equal(await leftToggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(await rightToggle.getAttribute('aria-expanded'), 'false');
+    await page.screenshot({ path: `${results}/panels-hidden-${theme}-1440.png` });
+    const audit = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+    assert.deepEqual(audit.violations.map(v => v.id), [], 'collapsed panels must remain accessible');
+    await page.setViewportSize({ width: 900, height: 1000 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'intermediate header must fit');
+    assert.equal(await leftToggle.isVisible(), true);
+    assert.equal(await rightToggle.isVisible(), false, 'right toggle is only available with the desktop contents panel');
+    await page.setViewportSize({ width: 360, height: 800 });
+    assert.equal(await leftToggle.isVisible(), false);
+    await page.locator('button[popovertarget="starlight__sidebar"]').click();
+    assert.equal(await leftPanel.isVisible(), true, 'saved desktop preference must not hide the mobile menu');
+    await page.locator('button[popovertarget="starlight__sidebar"]').click();
+    const mobileContents = page.locator('#starlight__on-this-page--mobile');
+    assert.equal(await mobileContents.isVisible(), true, 'saved desktop preference must not hide mobile page navigation');
+    await mobileContents.click();
+    assert.equal(await page.locator('#starlight__mobile-toc').getAttribute('open'), '');
+    await mobileContents.click();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await leftToggle.click();
+    await rightToggle.click();
+  }
+  const unavailableStorage = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  await unavailableStorage.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Storage unavailable', 'SecurityError'); } });
+  });
+  const storagePage = await unavailableStorage.newPage();
+  await storagePage.goto(`${origin}${base}vtr/`);
+  await storagePage.getByRole('button', { name: 'Documentation navigator', exact: true }).click();
+  assert.equal(await storagePage.locator('#starlight__sidebar').isVisible(), false);
+  await storagePage.getByRole('button', { name: 'Documentation navigator', exact: true }).click();
+  assert.equal(await storagePage.locator('#starlight__sidebar').isVisible(), true);
+  await unavailableStorage.close();
+  report.behavior.push('independent panel toggles, keyboard activation, layout space, persisted preferences, mobile resizing, unavailable storage');
 
   await page.goto(`${origin}${base}authoring/`);
   const ticks = page.locator('[data-ticks]');
@@ -127,6 +190,9 @@ try {
   const noJs = await browser.newContext({ javaScriptEnabled: false });
   const staticPage = await noJs.newPage();
   await staticPage.goto(`${origin}${base}vtr/`);
+  assert.equal(await staticPage.getByRole('button', { name: 'Documentation navigator', exact: true }).isVisible(), false);
+  assert.equal(await staticPage.locator('#starlight__sidebar').isVisible(), true);
+  assert.equal(await staticPage.locator('.right-sidebar-container').isVisible(), true);
   assert.equal(await staticPage.locator('svg[id^="mermaid"]').count(), 1);
   assert.ok((await staticPage.locator('main').textContent()).includes('Trace and application boundaries'));
   await staticPage.goto(`${origin}${base}vtr/specification/`);
@@ -153,6 +219,7 @@ try {
   await page.waitForURL(`${origin}${base}volna-trace/`);
   report.behavior.push('mobile menu, server navigation, and canonical crate cross-links');
   await page.close();
+  await behaviorContext.close();
   console.log(`Verified ${report.pages.length} route/theme/viewport combinations, ${report.accessibility.length} accessibility audits, search, widgets, and static reading.`);
 } finally {
   await writeReport();

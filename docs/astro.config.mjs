@@ -39,7 +39,10 @@ export default defineConfig({
     logo: { src: './design-system/assets/volna.svg', replacesTitle: false },
     favicon: '/assets/volna.svg',
     customCss: ['./src/styles/starlight.css'],
-    components: { Footer: './src/components/Footer.astro' },
+    components: {
+      Footer: './src/components/Footer.astro',
+      Header: './src/components/Header.astro',
+    },
     expressiveCode: {
       themes: ['one-dark-pro', 'github-light'],
       useStarlightUiTheme: true,
