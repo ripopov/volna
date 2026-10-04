@@ -75,6 +75,15 @@ write-and-read round trip.
 
 <!-- include-code: examples/waveform.rs rust -->
 
+Configure metadata with `Writer::builder()` before creating the file.
+`Timescale` defaults to picoseconds, names common time units, and supports
+arbitrary decimal exponents.
+`add_module`, `add_wire`, and `add_reg` simplify common declarations; wires and
+registers use four-state logic. Use `add_var` with
+`SignalKind::bits(width, LogicStates::Four)` for access to the hierarchy node ID,
+or choose `LogicStates::Two` or `LogicStates::Nine` for other logic alphabets. Scalar `emit_bit` takes a `Logic` value
+such as `Logic::One` or `Logic::X`.
+
 `Writer` accepts non-decreasing waveform times; transaction/log timestamps
 have their own ordering rules. `Reader` is `Send + Sync`. Do not modify or
 truncate a file while it is memory-mapped by a reader; see the safety contract
@@ -90,14 +99,19 @@ rather than relying on `Drop`.
 - [Design rationale](docs/RATIONALE.md): format and library boundaries.
 - [Structured logging](docs/LOGGING.md): typed sites, records, and queries.
 - `examples/waveform.rs`: minimal waveform round trip.
+- [Transaction example](examples/transactions.rs): attributes, stages, and dependency relations.
 - `examples/logging.rs`: logs alongside transactions, read back three ways.
 
 Run examples from the workspace root (the output path is optional):
 
 ```sh
 cargo run -p vtr --example waveform -- /tmp/waveform.vtr
+cargo run -p vtr --example transactions -- /tmp/transactions.vtr
 cargo run -p vtr --example logging -- /tmp/logging.vtr
 ```
+
+The waveform and transaction examples use temporary files when their output
+paths are omitted.
 
 ## Building and testing
 

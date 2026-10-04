@@ -46,7 +46,7 @@
 //! #     let mut w = Writer::create(&path)?;
 //! #     let top = Some(w.add_scope(None, "top", ScopeType::Module, "")?);
 //! #     let (_, clk) = w.add_var(top, "clk", VarType::Wire, Direction::Input, SignalKind::Bits { width: 1, states: 2 })?;
-//! #     for t in 0..100 { w.set_time(t * 5)?; w.emit_bit(clk, (t & 1) as u8)?; }
+//! #     for t in 0..100 { w.set_time(t * 5)?; w.emit_bit(clk, vtr::Logic::from(t & 1 != 0))?; }
 //! #     w.close()?;
 //! # }
 //! let reader = vtr::Reader::open(&path)?;

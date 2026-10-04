@@ -119,7 +119,7 @@ fn random_trace(path: &Path, seed: u64, steps: usize, block_records: usize) {
 
 fn emit(w: &mut Writer, s: SignalId, kind: SignalKind, v: u64) {
     match kind {
-        SignalKind::Bits { width: 1, .. } => w.emit_bit(s, (v & 1) as u8).unwrap(),
+        SignalKind::Bits { width: 1, .. } => w.emit_bit(s, vtr::Logic::from(v & 1 != 0)).unwrap(),
         SignalKind::Bits { width, .. } => w
             .emit_packed(s, 2, &vec![v as u8; (width as usize).div_ceil(8)])
             .unwrap(),

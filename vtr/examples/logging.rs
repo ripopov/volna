@@ -5,16 +5,17 @@
 //! The example also reads back warnings, parent-linked records, and typed arguments.
 
 use vtr::{
-    LogArgType, LogQuery, LogSiteSpec, Reader, ScopeType, Severity, TxQuery, TxStatus, Value,
-    Writer,
+    LogArgType, LogQuery, LogSiteSpec, Reader, ScopeType, Severity, Timescale, TxQuery, TxStatus,
+    Value, Writer,
 };
 
 fn main() -> vtr::Result<()> {
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "demo_log.vtr".into());
-    let mut w = Writer::create(&path)?;
-    w.set_timescale(-9)?; // ns
+    let mut w = Writer::builder()
+        .timescale(Timescale::Nanoseconds)
+        .create(&path)?;
 
     // Hierarchy: a SoC with a CPU and a DMA engine; each component owns a LOG stream.
     let soc = w.add_scope(None, "soc", ScopeType::Generic, "")?;

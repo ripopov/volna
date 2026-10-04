@@ -125,7 +125,7 @@ fn signals_roundtrip_multi_block() {
             ..Default::default()
         };
         let mut w = Writer::create_with(&path, opts).unwrap();
-        w.set_timescale(-12).unwrap();
+        w.set_timescale(vtr::Timescale::Picoseconds).unwrap();
         w.set_comment("hello").unwrap();
         let s_test = w.intern("test");
         w.set_file_attr("tool", Value::Str(s_test)).unwrap();
@@ -254,7 +254,7 @@ fn signals_roundtrip_multi_block() {
         for i in 0..400u64 {
             let t = i * 5;
             w.set_time(t).unwrap();
-            w.emit_bit(clk, (i & 1) as u8).unwrap();
+            w.emit_bit(clk, vtr::Logic::from(i & 1 != 0)).unwrap();
             exp_clk.push((t, format!("{}", i & 1)));
             if i % 3 == 0 {
                 let v = (i * 7) & 0xff;
@@ -294,7 +294,7 @@ fn signals_roundtrip_multi_block() {
                 w.emit_logic_str(nine, b"uwlh-1").unwrap();
             }
             if i % 23 == 0 {
-                w.emit_bit(ev, 1).unwrap();
+                w.emit_bit(ev, vtr::Logic::One).unwrap();
             }
             if i == 100 {
                 w.emit_u64(quiet, 0xA).unwrap();
@@ -664,7 +664,7 @@ fn errors() {
     assert!(w.end_tx(5, 1, TxStatus::Ok).is_err());
     w.emit_u64(a, 3).unwrap();
     w.flush().unwrap();
-    assert!(w.set_timescale(-6).is_err());
+    assert!(w.set_timescale(vtr::Timescale::Microseconds).is_err());
     w.close().unwrap();
 }
 
@@ -691,7 +691,7 @@ fn long_columns_with_checkpoints() {
         w.set_time(i * 3).unwrap();
         w.emit_u64(a, i & 0xffff).unwrap();
         if i % 2 == 0 {
-            w.emit_bit(b, ((i / 2) & 1) as u8).unwrap();
+            w.emit_bit(b, vtr::Logic::from((i / 2) & 1 != 0)).unwrap();
         }
         if i % 5 == 0 {
             w.emit_real(c, i as f64).unwrap();
@@ -755,10 +755,11 @@ fn dynamic_aliasing_of_identical_columns() {
     let (_, e) = wire(&mut w, "e", 16, 4);
     for i in 0..5000u64 {
         w.set_time(i * 2).unwrap();
-        let bit = (i & 1) as u8;
+        let bit = vtr::Logic::from(i & 1 != 0);
         w.emit_bit(a, bit).unwrap();
         w.emit_bit(b, bit).unwrap();
-        w.emit_bit(c, if i == 4998 { 2 } else { bit }).unwrap(); // an X breaks the identity
+        w.emit_bit(c, if i == 4998 { vtr::Logic::X } else { bit })
+            .unwrap(); // an X breaks the identity
         w.emit_u64(d, i * 7).unwrap();
         w.emit_u64(e, i * 7).unwrap();
     }
@@ -1391,12 +1392,12 @@ fn events_bypass_dedup_in_all_payload_paths() {
             .is_err());
         for time in [0, 0, 5, 5, 10] {
             w.set_time(time).unwrap();
-            w.emit_bit(events[0], 1).unwrap();
+            w.emit_bit(events[0], vtr::Logic::One).unwrap();
             w.emit_logic_str(events[1], &[b'x'; 128]).unwrap();
             w.emit_real(events[2], 0.0).unwrap();
             w.emit_varlen(events[3], b"").unwrap();
-            w.emit_bit(alias, 1).unwrap();
-            w.emit_bit(wire, 1).unwrap();
+            w.emit_bit(alias, vtr::Logic::One).unwrap();
+            w.emit_bit(wire, vtr::Logic::One).unwrap();
         }
         w.close().unwrap();
         let reader = Reader::open(&path).unwrap();

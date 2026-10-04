@@ -78,7 +78,7 @@ impl Expected {
         self.emits += 1;
         let ascii = match self.kind {
             Kind::Bit => {
-                w.emit_bit(self.id, (c % 2) as u8).unwrap();
+                w.emit_bit(self.id, vtr::Logic::from(c % 2 != 0)).unwrap();
                 format!("{}", c % 2)
             }
             Kind::Byte2 => {

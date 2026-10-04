@@ -49,8 +49,8 @@ use crate::hierarchy::{
     self, Direction, Node, NodeData, NodeId, NodeKind, ScopeType, SignalId, SignalKind, VarType,
 };
 use crate::logblock::{self, LogArg, LogBlockInput, LogSiteEnc, LogSiteId, LogSiteSpec};
-use crate::sections::{self, Blackout, FileType, Meta};
-use crate::signal;
+use crate::sections::{self, Blackout, FileType, Meta, Timescale};
+use crate::signal::{self, Logic, LogicStates};
 use crate::strings::{Interner, StrId};
 use crate::txblock::{self, TxBlockInput, TxId, TxKind, TxStatus};
 use crate::value::{packed_len, Value};
@@ -1280,13 +1280,91 @@ pub struct Writer {
     log_at: Option<Instant>,
 }
 
+/// Configures a trace before creating its file. Metadata remains editable
+/// through writer setters until the first flush.
+#[derive(Clone, Debug, Default)]
+pub struct WriterBuilder {
+    options: WriterOptions,
+    timescale: Timescale,
+    time_zero: i64,
+    file_type: FileType,
+    writer_name: Option<String>,
+    date: String,
+    comment: String,
+    attrs: Vec<(String, Value)>,
+}
+
+impl WriterBuilder {
+    /// Sets encoding, buffering and background-worker options.
+    pub fn options(mut self, options: WriterOptions) -> Self {
+        self.options = options;
+        self
+    }
+    /// Sets the duration of one timestamp tick.
+    pub fn timescale(mut self, timescale: Timescale) -> Self {
+        self.timescale = timescale;
+        self
+    }
+    /// Sets the display offset added to timestamps.
+    pub fn time_zero(mut self, time_zero: i64) -> Self {
+        self.time_zero = time_zero;
+        self
+    }
+    /// Sets the producer class.
+    pub fn file_type(mut self, file_type: FileType) -> Self {
+        self.file_type = file_type;
+        self
+    }
+    /// Sets the producing tool's name and version.
+    pub fn writer_name(mut self, name: impl Into<String>) -> Self {
+        self.writer_name = Some(name.into());
+        self
+    }
+    /// Sets the free-form creation date.
+    pub fn date(mut self, date: impl Into<String>) -> Self {
+        self.date = date.into();
+        self
+    }
+    /// Sets the file comment.
+    pub fn comment(mut self, comment: impl Into<String>) -> Self {
+        self.comment = comment.into();
+        self
+    }
+    /// Appends a file-level attribute, preserving insertion order.
+    pub fn file_attr(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.attrs.push((key.into(), value));
+        self
+    }
+    /// Creates (truncates) the file with the configured options and metadata.
+    pub fn create(self, path: impl AsRef<Path>) -> Result<Writer> {
+        let mut writer = Writer::create_with(path, self.options)?;
+        writer.meta.timescale = self.timescale.exponent();
+        writer.meta.time_zero = self.time_zero;
+        writer.meta.file_type = self.file_type;
+        if let Some(name) = self.writer_name {
+            writer.meta.writer = name;
+        }
+        writer.meta.date = self.date;
+        writer.meta.comment = self.comment;
+        for (key, value) in self.attrs {
+            writer.set_file_attr(&key, value)?;
+        }
+        Ok(writer)
+    }
+}
+
 impl Writer {
+    /// Configures options and metadata before creating a trace file.
+    pub fn builder() -> WriterBuilder {
+        WriterBuilder::default()
+    }
+
     /// Creates a new trace file with default options.
     pub fn create(path: impl AsRef<Path>) -> Result<Writer> {
         Self::create_with(path, WriterOptions::default())
     }
 
-    /// Creates (truncates) a trace file. `Meta` starts with timescale `-9`,
+    /// Creates (truncates) a trace file. `Meta` starts with timescale `-12` (picoseconds),
     /// [`FileType::Verilog`] and writer name `"vtr <crate version>"`.
     pub fn create_with(path: impl AsRef<Path>, opts: WriterOptions) -> Result<Writer> {
         let mut file = File::create(path)?;
@@ -1425,12 +1503,12 @@ impl Writer {
         }
         Ok(&mut self.meta)
     }
-    /// Time unit as a power of ten seconds (`-9` = ns). Default `-9`.
+    /// Sets the duration of one timestamp tick. Default: picoseconds.
     ///
     /// Like every metadata setter, fails with [`Error::State`] after the
     /// first flush.
-    pub fn set_timescale(&mut self, exp: i8) -> Result<()> {
-        self.meta_mut()?.timescale = exp;
+    pub fn set_timescale(&mut self, timescale: Timescale) -> Result<()> {
+        self.meta_mut()?.timescale = timescale.exponent();
         Ok(())
     }
     /// Display offset added to every time (FST `timezero`). Default 0.
@@ -1537,6 +1615,55 @@ impl Writer {
             },
             attrs: Vec::new(),
         }))
+    }
+
+    /// Declares a module scope under `parent` (`None` = a root).
+    /// `component` names the instantiated module definition.
+    pub fn add_module(
+        &mut self,
+        parent: Option<NodeId>,
+        name: &str,
+        component: &str,
+    ) -> Result<NodeId> {
+        self.add_scope(parent, name, ScopeType::Module, component)
+    }
+
+    /// Declares a four-state wire and returns its signal id.
+    /// Use `add_var` when the hierarchy node id or another logic alphabet is needed.
+    pub fn add_wire(
+        &mut self,
+        parent: Option<NodeId>,
+        name: &str,
+        width: u32,
+        direction: Direction,
+    ) -> Result<SignalId> {
+        self.add_var(
+            parent,
+            name,
+            VarType::Wire,
+            direction,
+            SignalKind::bits(width, LogicStates::Four),
+        )
+        .map(|(_, signal)| signal)
+    }
+
+    /// Declares a four-state register and returns its signal id.
+    /// Use `add_var` when the hierarchy node id or another logic alphabet is needed.
+    pub fn add_reg(
+        &mut self,
+        parent: Option<NodeId>,
+        name: &str,
+        width: u32,
+        direction: Direction,
+    ) -> Result<SignalId> {
+        self.add_var(
+            parent,
+            name,
+            VarType::Reg,
+            direction,
+            SignalKind::bits(width, LogicStates::Four),
+        )
+        .map(|(_, signal)| signal)
     }
 
     /// Declares a variable with a new signal under `parent` (`None` = a root).
@@ -1970,10 +2097,11 @@ impl Writer {
         Ok(s)
     }
 
-    /// Emits a single-bit value: logic code 0..=8 (see [`crate::signal`]).
-    /// On a wider vector emits `code & 1`.
+    /// Emits a named scalar logic value on a single-bit signal.
+    /// Rejects wider vectors and non-bit signals; use `emit_u64` or a vector emitter for those.
     #[inline]
-    pub fn emit_bit(&mut self, sig: SignalId, code: u8) -> Result<()> {
+    pub fn emit_bit(&mut self, sig: SignalId, value: Logic) -> Result<()> {
+        let code = value as u8;
         let s = self.check_sig(sig)?;
         let info = unsafe { *self.info.get_unchecked(s) };
         if info.kind == 0 && info.width == 1 && code <= 1 {
@@ -1981,7 +2109,6 @@ impl Writer {
         }
         match self.kinds[s] {
             SignalKind::Bits { width: 1, states } => {
-                let code = code.min(8);
                 if signal::states_for_code(code) > states {
                     return Err(Error::invalid(
                         "logic code not representable in signal's states",
@@ -1989,7 +2116,7 @@ impl Writer {
                 }
                 self.emit_narrow(s, code as u64, code <= 1)
             }
-            SignalKind::Bits { .. } => self.emit_u64(sig, (code & 1) as u64),
+            SignalKind::Bits { .. } => Err(Error::invalid("emit_bit requires a single-bit signal")),
             _ => Err(Error::invalid("emit_bit on a non-bit signal")),
         }
     }

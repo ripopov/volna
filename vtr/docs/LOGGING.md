@@ -12,10 +12,11 @@ The on-disk encoding is [section 8 of the specification](SPEC.md#8-log_block-kin
 ## Writing
 
 ```rust
-use vtr::{LogArgType, LogSiteSpec, Severity, Writer};
+use vtr::{LogArgType, LogSiteSpec, Severity, Timescale, Writer};
 
-let mut writer = Writer::create("messages.vtr")?;
-writer.set_timescale(-9)?;
+let mut writer = Writer::builder()
+    .timescale(Timescale::Nanoseconds)
+    .create("messages.vtr")?;
 let stream = writer.add_stream(None, "simulation_log", vtr::LOG_STREAM_KIND)?;
 let site = writer.add_log_site(
     &LogSiteSpec::new(stream, Severity::Warn, "{} stalled {} cycles",

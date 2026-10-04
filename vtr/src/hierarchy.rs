@@ -415,6 +415,14 @@ pub enum SignalKind {
 }
 
 impl SignalKind {
+    /// Declares a bit vector with a named logic alphabet.
+    pub const fn bits(width: u32, states: crate::signal::LogicStates) -> Self {
+        Self::Bits {
+            width,
+            states: states as u8,
+        }
+    }
+
     /// Bytes used by one packed value (`None` for variable-length).
     pub fn packed_len(self) -> Option<usize> {
         match self {

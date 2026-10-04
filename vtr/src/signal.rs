@@ -9,6 +9,43 @@
 use crate::hierarchy::SignalKind;
 use crate::value::packed_len;
 
+/// A scalar VCD/VHDL logic value. Discriminants are VTR's packed logic codes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Logic {
+    Zero = 0,
+    One = 1,
+    X = 2,
+    Z = 3,
+    U = 4,
+    W = 5,
+    L = 6,
+    H = 7,
+    DontCare = 8,
+}
+
+impl From<bool> for Logic {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::One
+        } else {
+            Self::Zero
+        }
+    }
+}
+
+/// Logic alphabet supported by each bit of a signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum LogicStates {
+    /// Binary values: 0 and 1.
+    Two = 2,
+    /// Verilog values: 0, 1, X and Z.
+    Four = 4,
+    /// VHDL values: 0, 1, X, Z, U, W, L, H and don't-care.
+    Nine = 9,
+}
+
 pub const L0: u8 = 0;
 pub const L1: u8 = 1;
 pub const LX: u8 = 2;

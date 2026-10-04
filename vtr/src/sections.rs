@@ -7,6 +7,38 @@ use crate::strings::StrId;
 use crate::value::{self, Value};
 use crate::varint::{self, Reader};
 
+/// Duration of one timestamp tick, expressed as a power of ten seconds.
+///
+/// `Exponent(-8)` represents 10 ns; `Exponent(-7)` represents 100 ns.
+/// This changes timestamp interpretation, not the integer timestamps themselves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Timescale {
+    Seconds,
+    Milliseconds,
+    Microseconds,
+    Nanoseconds,
+    #[default]
+    Picoseconds,
+    Femtoseconds,
+    /// One tick is `10^exponent` seconds.
+    Exponent(i8),
+}
+
+impl Timescale {
+    /// Decimal exponent stored in file metadata.
+    pub const fn exponent(self) -> i8 {
+        match self {
+            Self::Seconds => 0,
+            Self::Milliseconds => -3,
+            Self::Microseconds => -6,
+            Self::Nanoseconds => -9,
+            Self::Picoseconds => -12,
+            Self::Femtoseconds => -15,
+            Self::Exponent(exp) => exp,
+        }
+    }
+}
+
 /// Source language / producer class of the trace (FST file types 0..2 kept).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -59,7 +91,7 @@ pub struct Meta {
 impl Default for Meta {
     fn default() -> Self {
         Meta {
-            timescale: -9,
+            timescale: Timescale::default().exponent(),
             time_zero: 0,
             file_type: FileType::Verilog,
             writer: String::new(),
