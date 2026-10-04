@@ -2,51 +2,50 @@
 
 **VTR (Versatile Trace Record)** is a hardware simulation trace format that combines
 signal waveforms and transactions in a single trace file,
-as many commercial simulators do. Conceptually, think of it as **FST + FTR
-dumped into the same file**, using VTR's own unified encoding:
-
-- [FST (Fast Signal Trace)](https://github.com/gtkwave/libfst) records signal waveforms.
-- [FTR (Fast Transaction Recording)](https://github.com/Minres/LWTR4SC) records transactions.
+as many commercial simulators do. Conceptually, think of it as
+[FST (Fast Signal Trace)](https://github.com/gtkwave/libfst) for waveforms and
+[FTR (Fast Transaction Recording)](https://github.com/Minres/LWTR4SC) for
+transactions, combined in one file using VTR's own unified encoding.
 
 A VTR recording contains:
 
 | Data | Purpose |
 | --- | --- |
-| Metadata | Time unit, time-zero offset, producer, and typed attributes |
-| Hierarchy | Scopes, variables, streams, generators, and enum tables |
-| Waveforms | 2-, 4-, and 9-state bit vectors, reals, byte strings, aliases, and events |
-| Transactions | Intervals, attributes, events, stages, parents, and directed relations |
-| Logs | Timestamped records of declared sites with typed arguments |
-| Clocks | Declared steady edge stretches represented by ordinary transactions |
+| Metadata | Time scale, time origin, producer identity, and typed attributes |
+| Hierarchy | Scopes, variables, signal aliases, streams, generators, and enum tables |
+| Waveforms | Value changes of 2-, 4-, and 9-state bit vectors, reals, and byte strings; event occurrences |
+| Transactions | Timed intervals with typed attributes, point events, stages, parent links, and directed relations |
+| Logs | Timestamped log messages with typed arguments and shared call-site metadata |
+| Clocks | Clock edges grouped into intervals with a constant period |
 
-The library owns trace storage and queries: streaming writing with optional
-background encoding, LZ4/Zstandard compression, checksums, and recovery of
-complete sections after an interrupted write; memory-mapped random-access
-reading, owned immutable histories, hierarchy counts, and a rebuildable
-activity-index sidecar.
+The library provides streaming writes with optional background encoding,
+LZ4/Zstandard compression, and checksums. It can recover complete sections after
+an interrupted write. For reading and queries, it provides memory-mapped random
+access, owned immutable histories, hierarchy counts, and a rebuildable activity
+index stored alongside the trace.
 
 ## Trace and application boundaries
 
+VTR is designed to work alongside a **VDB (Versatile Data Base)**. VTR records
+what happened during simulation; VDB provides design information such as the
+netlist and source code. Together, they allow tools to trace signal drivers,
+annotate netlist and source code views with recorded values, and build other
+features that connect simulation behavior to the design.
+
+The two files are linked through shared names. Full hierarchical paths identify
+scopes and variables; stream and generator names, attribute keys, event and stage
+names, lane names, and relation kinds identify other recorded objects and their
+meaning. A consumer uses these names to associate VTR data with the corresponding
+VDB information.
+
 ```mermaid
 flowchart TB
-  accTitle: Trace and application boundaries
-  accDescr: A producer writes VTR runtime data. The VTR reader supplies runtime data to a consumer. A separate VDB supplies design semantics to the same consumer.
-  P["Producer"] -->|"runtime facts"| T["VTR writer · file · reader"]
-  T -->|"values and identities"| C["Consumer or viewer"]
-  D["VDB · separate design metadata"] -->|"semantics and presentation"| C
+  accTitle: VTR and VDB in a design-aware viewer
+  accDescr: A viewer matches shared names in VTR simulation data and VDB design information to trace signal drivers and annotate netlist and source code views.
+  T["VTR · simulation data"] -->|"recorded values and events"| C["Viewer · matches shared names"]
+  D["VDB · netlist and source code"] -->|"design information"| C
+  C --> F["Driver tracing · annotated netlist and source code views"]
 ```
-
-VTR captures runtime facts and identity. VDB, source indexing, presentation,
-viewers, simulator adapters, conversion tools, servers, and C bindings belong to
-separate components; the diagram shows responsibilities, not components present
-in this workspace. The [design rationale](docs/RATIONALE.md) explains the
-division.
-
-Stable names and runtime identity let separate consumers bind design metadata
-without changing a trace; log-site source provenance is the only source-location
-exception. The format remains experimental. Version fields are not a
-compatibility promise; the [specification](docs/SPEC.md) defines this checkout's
-encoding.
 
 ## Container structure
 
