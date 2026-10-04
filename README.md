@@ -6,7 +6,7 @@ Volna is a hardware debug environment under development.
 
 | Crate | Responsibility |
 | --- | --- |
-| [`vtr`](vtr/README.md) | Volna Trace Record: runtime trace format, reader, writer, and derived indexes |
+| [`vtr`](vtr/README.md) | Versatile Trace Record: runtime trace format, reader, writer, and derived indexes |
 | [`volna-trace`](volna-trace/README.md) | Immutable VTR/FST sessions, complete objects, memory admission, and remote client |
 | [`volna-server`](volna-server/README.md) | Headless process serving one recording over framed stdin/stdout |
 

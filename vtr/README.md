@@ -1,7 +1,14 @@
-# VTR — Volna Trace Record
+# VTR — Versatile Trace Record
 
-**VTR (Volna Trace Record)** is a Rust library for a hardware simulation trace
-format that stores runtime facts in one file. A recording contains:
+**VTR (Versatile Trace Record)** is a hardware simulation trace format that combines
+signal waveforms and transactions in a single trace file,
+as many commercial simulators do. Conceptually, think of it as **FST + FTR
+dumped into the same file**, using VTR's own unified encoding:
+
+- [FST (Fast Signal Trace)](https://github.com/gtkwave/libfst) records signal waveforms.
+- [FTR (Fast Transaction Recording)](https://github.com/Minres/LWTR4SC) records transactions.
+
+A VTR recording contains:
 
 | Data | Purpose |
 | --- | --- |

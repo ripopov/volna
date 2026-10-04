@@ -20,7 +20,7 @@ hero:
 ## The trace layer
 
 Volna is a hardware debug environment under development. The workspace includes
-**VTR (Volna Trace Record)** for writing and querying
+**VTR (Versatile Trace Record)** for writing and querying
 hardware simulation traces, **volna-trace** for immutable VTR/FST access, and
 **volna-server** for serving a recording to a remote client.
 
