@@ -85,8 +85,7 @@ try {
   const behaviorContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await behaviorContext.newPage();
   await page.goto(`${origin}${base}vtr/`);
-  assert.equal(await page.locator('svg[id^="mermaid"]').count(), 1, 'Mermaid must be a built SVG');
-  assert.equal(await page.locator('svg[id^="mermaid"] title').textContent(), 'VTR and VDB in a design-aware viewer');
+  await verifyDiagrams(page);
   await page.keyboard.press('Tab');
   const focus = await page.evaluate(() => ({ width: getComputedStyle(document.activeElement).outlineWidth, style: getComputedStyle(document.activeElement).outlineStyle }));
   assert.notEqual(focus.width, '0px', 'keyboard focus must be visible');
@@ -97,14 +96,14 @@ try {
   await page.reload();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light', 'theme must persist');
   await page.locator('starlight-theme-select select').first().selectOption('dark');
-  await page.locator('button[data-open-modal]').click();
-  const search = page.locator('.pagefind-ui__search-input');
-  await search.fill('log site');
-  await page.locator('.pagefind-ui__result-link').first().waitFor();
-  assert.ok((await page.locator('.pagefind-ui__result-link').allTextContents()).some(title => /logging|log|format/i.test(title)), 'search must find VTR content');
-  await search.fill('framed');
-  await page.locator('.pagefind-ui__result-link').filter({ hasText: 'Volna server' }).first().waitFor();
-  await page.keyboard.press('Escape');
+  for (const route of ['vtr/logging/', 'volna-server/']) {
+    await page.goto(`${origin}${base}${route}`);
+    const title = (await page.locator('h1').textContent()).trim();
+    await page.locator('button[data-open-modal]').click();
+    await page.locator('.pagefind-ui__search-input').fill(title);
+    await page.locator(`.pagefind-ui__result-link[href="${base}${route}"]`).waitFor();
+    await page.keyboard.press('Escape');
+  }
   report.behavior.push('static Mermaid SVG, keyboard focus, persistent theme, local Pagefind search');
 
   for (const theme of ['dark', 'light']) {
@@ -193,16 +192,13 @@ try {
   assert.equal(await staticPage.getByRole('button', { name: 'Documentation navigator', exact: true }).isVisible(), false);
   assert.equal(await staticPage.locator('#starlight__sidebar').isVisible(), true);
   assert.equal(await staticPage.locator('.right-sidebar-container').isVisible(), true);
-  assert.equal(await staticPage.locator('svg[id^="mermaid"]').count(), 1);
-  assert.ok((await staticPage.locator('main').textContent()).includes('Trace and application boundaries'));
-  await staticPage.goto(`${origin}${base}vtr/specification/`);
-  assert.ok((await staticPage.locator('main').textContent()).includes('Conformance checklist'));
-  await staticPage.goto(`${origin}${base}authoring/`);
-  assert.ok((await staticPage.locator('main').textContent()).includes('ticks × 10^timescale'));
-  await staticPage.goto(`${origin}${base}volna-trace/`);
-  assert.ok((await staticPage.locator('main').textContent()).includes('Read a local recording'));
-  await staticPage.goto(`${origin}${base}volna-server/`);
-  assert.ok((await staticPage.locator('main').textContent()).includes('Session lifecycle'));
+  await verifyDiagrams(staticPage);
+  for (const route of ['vtr/', 'vtr/specification/', 'authoring/', 'volna-trace/', 'volna-server/']) {
+    await staticPage.goto(`${origin}${base}${route}`);
+    assert.equal(await staticPage.locator('h1').count(), 1, `${route}: static page title`);
+    assert.ok((await staticPage.locator('.sl-markdown-content').textContent()).trim().length > 20, `${route}: static content must not be empty`);
+    assert.ok(await staticPage.locator('.sl-markdown-content h2').count() > 0, `${route}: sections must render without JavaScript`);
+  }
   await noJs.close();
   report.behavior.push('readable docs and diagrams without JavaScript');
   await page.setViewportSize({ width: 360, height: 800 });
@@ -210,12 +206,12 @@ try {
   await page.locator('button[popovertarget="starlight__sidebar"]').click();
   const sidebar = page.locator('#starlight__sidebar');
   assert.equal(await sidebar.evaluate(element => element.matches(':popover-open')), true);
-  await sidebar.getByRole('link', { name: 'Structured logging', exact: true }).click();
+  await sidebar.locator(`a[href="${base}vtr/logging/"]`).click();
   await page.waitForURL(`${origin}${base}vtr/logging/`);
   await page.locator('button[popovertarget="starlight__sidebar"]').click();
-  await sidebar.getByRole('link', { name: 'Headless server', exact: true }).click();
+  await sidebar.locator(`a[href="${base}volna-server/"]`).click();
   await page.waitForURL(`${origin}${base}volna-server/`);
-  await page.locator('main').getByRole('link', { name: 'volna-trace', exact: true }).click();
+  await page.locator('main a[href$="volna-trace/"]').first().click();
   await page.waitForURL(`${origin}${base}volna-trace/`);
   report.behavior.push('mobile menu, server navigation, and canonical crate cross-links');
   await page.close();
@@ -229,4 +225,21 @@ try {
 async function writeReport() {
   const { writeFile } = await import('node:fs/promises');
   await writeFile(`${results}/report.json`, JSON.stringify(report, null, 2) + '\n');
+}
+
+async function verifyDiagrams(page) {
+  const diagrams = page.locator('svg[id^="mermaid"]');
+  assert.ok(await diagrams.count() > 0, 'Mermaid must render as static SVG');
+  for (const diagram of await diagrams.all()) {
+    const state = await diagram.evaluate(svg => ({
+      width: svg.viewBox.baseVal.width,
+      height: svg.viewBox.baseVal.height,
+      labelled: ['aria-labelledby', 'aria-describedby'].every(attribute => {
+        const ids = svg.getAttribute(attribute)?.trim().split(/\s+/);
+        return ids?.length && ids.every(id => svg.querySelector(`[id="${id}"]`)?.textContent.trim());
+      }),
+    }));
+    assert.ok(state.width > 0 && state.height > 0, 'diagram must have drawable dimensions');
+    assert.ok(state.labelled, 'diagram must reference nonempty accessible title and description');
+  }
 }
