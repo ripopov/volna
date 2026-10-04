@@ -51,15 +51,22 @@ flowchart TB
 
 <figure class="v-figure">
 <div class="v-figure__canvas" tabindex="0" role="region" aria-label="Scrollable VTR container schematic">
-<img src="docs/container.svg" alt="A 32-byte file header, append-only sections, a directory section, and a 24-byte trailer in file order." width="780" height="210" />
+<img src="docs/container.svg" alt="A 32-byte file header, append-only sections, a directory section, and a 24-byte trailer in file order." width="852" height="210" />
 </div>
 <figcaption>Logical file order. Block widths are schematic and do not represent payload sizes.</figcaption>
 </figure>
 
-Every section has a 24-byte header and a payload. The writer appends the
-directory and trailer at close. If a trailer is missing or invalid, recovery
-scans complete sections and stops at the first invalid or incomplete section.
-The [container specification](docs/SPEC.md#2-container) defines the exact rules.
+VTR stores metadata, strings, hierarchy declarations, waveform data, transactions,
+logs, and blackout intervals in append-only sections. Each section has a 24-byte
+header followed by its payload.
+
+When recording finishes, the writer appends a directory that indexes the preceding
+sections, then a trailer that points to the directory. This lets readers locate
+data without scanning the whole file. If writing is interrupted, readers recover
+complete sections by scanning from the start.
+
+See the [container specification](docs/SPEC.md#2-container) for field layouts,
+section ordering, and recovery rules.
 
 ## Quick start
 
