@@ -26,6 +26,7 @@ export function volnaDocsLoader(): Loader {
         const fileURL = new URL(`../../${source}`, import.meta.url);
         return [fileURLToPath(fileURL), { fileURL, id: slug, title, description }];
       }));
+      const dependencies = new Map<string, Set<string>>();
       async function loadGuide(path: string) {
         const guide = guides.get(path)!;
         let body = await readFile(guide.fileURL, 'utf8');
@@ -47,6 +48,17 @@ export function volnaDocsLoader(): Loader {
         });
         // README-relative repo path of the container schematic -> page-relative public asset.
         body = body.replace('src="docs/container.svg"', 'src="../assets/container.svg"');
+        // Hidden Markdown markers embed source files on the website without
+        // duplicating code in repository guides. Paths are relative to the guide.
+        const includes = [...body.matchAll(/^<!-- include-code: (\S+) (\w+) -->[ \t]*$/gm)];
+        const includedPaths = new Set(includes.map((match) => fileURLToPath(new URL(match[1], guide.fileURL))));
+        dependencies.set(path, includedPaths);
+        context.watcher?.add([...includedPaths]);
+        for (const match of includes) {
+          const code = await readFile(new URL(match[1], guide.fileURL), 'utf8');
+          const fence = '`'.repeat(Math.max(3, ...[...code.matchAll(/`+/g)].map((run) => run[0].length + 1)));
+          body = body.replace(match[0], () => `${fence}${match[2]}\n${code.trimEnd()}\n${fence}`);
+        }
         const data = await context.parseData({
           id: guide.id, filePath: path,
           data: { title: guide.title, description: guide.description },
@@ -66,18 +78,20 @@ export function volnaDocsLoader(): Loader {
         // Serialize reloads so an older render cannot overwrite a newer source revision.
         let pending = Promise.resolve();
         const reload = (path: string) => {
-          if (!guides.has(path)) return;
-          pending = pending.then(() => loadGuide(path)).catch((error) => {
-            context.store.delete(guides.get(path)!.id);
-            context.logger.error(`Failed to load ${path}: ${error.message}`);
-          });
+          const affected = [...guides.keys()].filter((guidePath) => guidePath === path || dependencies.get(guidePath)?.has(path));
+          for (const guidePath of affected) {
+            pending = pending.then(() => loadGuide(guidePath)).catch((error) => {
+              context.store.delete(guides.get(guidePath)!.id);
+              context.logger.error(`Failed to load ${guidePath}: ${error.message}`);
+            });
+          }
         };
         context.watcher.on('change', reload);
         context.watcher.on('add', reload);
         context.watcher.on('unlink', (path) => {
           if (guides.has(path)) {
             pending = pending.then(() => { context.store.delete(guides.get(path)!.id); });
-          }
+          } else reload(path);
         });
       }
     },

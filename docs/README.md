@@ -54,6 +54,13 @@ and hosting guides. Edit these canonical crate files; the development server
 watches them for updates. The loader supplies page metadata,
 removes the top-level title, and adapts repository links and image paths to web
 routes in memory without generating Markdown copies.
+
+Crate guides can embed source code on the website with a standalone
+`<!-- include-code: examples/waveform.rs rust -->` marker. The path is relative
+to the guide, and the final word is the code block language. GitHub hides the
+marker, so provide a normal source link alongside it. The loader watches included
+files and refreshes their guides when the code changes.
+
 The specification is normative; the extracted crate's current documentation
 supersedes the prototype's broader documentation and application proposals.
 
