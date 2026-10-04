@@ -37,6 +37,10 @@ jobs:
         run: |
           cargo run -p vtr --locked --example waveform -- "$RUNNER_TEMP/waveform.vtr"
           cargo run -p vtr --locked --example logging -- "$RUNNER_TEMP/logging.vtr"
+          cargo run -p vtr-cli --locked -- convert vtr-cli/tests/fixtures/pipeline.kanata "$RUNNER_TEMP/pipeline.vtr"
+          cargo run -p vtr-cli --locked -- clocks "$RUNNER_TEMP/pipeline.vtr"
+          cargo run -p vtr-cli --locked -- convert vtr-cli/tests/fixtures/waves.vcd "$RUNNER_TEMP/imported.vtr"
+          cargo run -p vtr-cli --locked -- value "$RUNNER_TEMP/imported.vtr" 'top.bus [3:0]' 5
 
   quality:
     name: Format, lint, docs, and package

@@ -1,0 +1,24 @@
+[package]
+name = "vtr-cli"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.96"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Inspect, query, and convert hardware traces"
+
+[[bin]]
+name = "vtr"
+path = "src/main.rs"
+# The binary rustdoc path would collide with the vtr library.
+doc = false
+
+[dependencies]
+vtr.workspace = true
+volna-trace = { path = "../volna-trace" }
+anyhow = "1"
+clap = { version = "4.6", features = ["derive"] }
+flate2 = "1"
+vcd = "0.7"
+tempfile.workspace = true

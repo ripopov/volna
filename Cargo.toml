@@ -1,5 +1,5 @@
 [workspace]
-members = ["vtr", "volna-trace", "volna-server"]
+members = ["vtr", "volna-trace", "volna-server", "vtr-cli"]
 resolver = "3"
 
 [workspace.package]
