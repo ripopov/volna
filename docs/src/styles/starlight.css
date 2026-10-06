@@ -48,6 +48,10 @@ h1, h2, h3, h4 { font-weight: var(--weight-semibold); letter-spacing: var(--head
 header.header { padding-block: 0; border-bottom: var(--border-width) solid var(--border); }
 .volna-header { display: flex; align-items: center; gap: var(--space-2); height: 100%; }
 .volna-header > .header { flex: 1; min-width: 0; }
+.volna-site-links { display: flex; flex: none; align-items: center; gap: var(--space-2); padding-inline: var(--space-2); }
+.volna-site-links a { color: var(--text-2); font: var(--weight-semibold) var(--text-sm)/1 var(--font-sans); text-decoration: none; padding: var(--space-2); border-radius: var(--radius-sm); white-space: nowrap; }
+.volna-site-links a:hover, .volna-site-links a[aria-current='page'] { color: var(--accent-text); background: var(--accent-soft); }
+@media (max-width: 50rem) { .volna-site-links { gap: 0; padding-inline: 0; } .volna-site-links a { font-size: var(--text-xs); padding: var(--space-1); } }
 volna-panel-controls { display: none; flex: none; gap: var(--space-1); }
 /* Desktop preferences must not hide Starlight's mobile popover or sticky contents menu. */
 @media (min-width: 50rem) {
@@ -90,6 +94,9 @@ volna-panel-controls { display: none; flex: none; gap: var(--space-1); }
 .hero .sl-link-button.primary:hover { background: var(--btn-primary-hover); }
 .hero .sl-link-button.secondary { border-color: var(--border-strong); color: var(--text-1); box-shadow: none; }
 [data-has-hero] .sl-markdown-content { max-width: 62rem; }
+:root:has(.v-viewer-frame) { --sl-content-width: 80rem; }
+:root:has(.v-viewer-frame) .sl-markdown-content { max-width: none; }
+:root:has(.v-viewer-frame) .sl-markdown-content > p { max-width: 74ch; }
 
 /* Imported Mermaid SVGs use semantic tokens so manual theme changes also update diagrams. */
 .sl-markdown-content svg[id^='mermaid'] { display: block; width: 100%; height: auto; min-width: 480px; padding: var(--space-6); background: var(--surface-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); }

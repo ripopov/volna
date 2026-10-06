@@ -6,9 +6,10 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "dev": "astro dev",
+    "dev": "npm run build:viewer && astro dev",
+    "build:viewer": "node scripts/build-viewer.mjs",
     "check": "astro check",
-    "build": "astro build && node scripts/check-links.mjs",
+    "build": "npm run build:viewer && astro build && node scripts/check-links.mjs",
     "preview": "astro preview",
     "test": "node tests/site.mjs"
   },

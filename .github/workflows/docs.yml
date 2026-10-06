@@ -3,9 +3,9 @@ name: Documentation
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'vtr/docs/**', 'vtr/README.md', 'vtr-capi/README.md', 'vtr-guard/README.md', 'volna-trace/README.md', 'volna-server/README.md', 'volna-core/README.md', 'volna/README.md', '.agents/**', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'vtr/**', 'vtr-capi/**', 'vtr-guard/**', 'volna-trace/**', 'volna-server/README.md', 'volna-core/**', 'volna/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.agents/**', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['docs/**', 'vtr/docs/**', 'vtr/README.md', 'vtr-capi/README.md', 'vtr-guard/README.md', 'volna-trace/README.md', 'volna-server/README.md', 'volna-core/README.md', 'volna/README.md', '.agents/**', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'vtr/**', 'vtr-capi/**', 'vtr-guard/**', 'volna-trace/**', 'volna-server/README.md', 'volna-core/**', 'volna/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.agents/**', '.github/workflows/docs.yml']
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: docs
@@ -33,6 +33,12 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: docs/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: wasm32-unknown-unknown
+      - run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+        working-directory: .
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run check

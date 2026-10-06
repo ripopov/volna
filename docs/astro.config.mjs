@@ -51,7 +51,7 @@ export default defineConfig({
       } }],
     },
     sidebar: [
-      { label: 'Overview', link: '/' },
+      { label: 'Overview', slug: 'docs' },
       { label: 'VTR trace library', items: [
         { label: 'Introduction', slug: 'vtr' },
         { label: 'File format', slug: 'vtr/specification' },

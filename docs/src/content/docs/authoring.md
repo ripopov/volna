@@ -9,9 +9,12 @@ than text. Interaction should answer a specific engineering question.
 
 ## Run the site
 
-From the repository root, with Node.js 22.19 or newer:
+From the repository root, with Node.js 22.19 or newer, Rust 1.97.1, the
+`wasm32-unknown-unknown` target, and `wasm-bindgen-cli` 0.2.128:
 
 ```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.128 --locked
 cd docs
 npm ci
 npx playwright install chromium
@@ -32,7 +35,10 @@ npm test
 `npm run build` writes the static website to `docs/dist/` and checks internal
 links, anchors, and assets. `npm test` starts its own server for that built output
 and verifies desktop/mobile layouts, themes, search, diagrams, accessibility,
-and widget behavior. No application server is needed to serve `dist/`.
+and widget behavior. `npm run dev` and `npm run build` compile the Volna browser
+viewer once and copy its generated WASM bundle and landing recording into the
+static site. These generated files are ignored by Git. No application server is
+needed to serve `dist/`.
 
 For a host below a URL prefix, build with `DOCS_BASE=/volna/ npm run build`.
 Use the same prefix when serving and testing the build:
@@ -45,7 +51,8 @@ Use the same prefix when serving and testing the build:
 | `vtr/README.md`, `vtr/docs/*.md`, `vtr-capi/README.md`, `vtr-guard/README.md` | Authoritative VTR guides |
 | `volna-trace/README.md`, `volna-server/README.md`, `volna-core/README.md`, `volna/README.md` | Trace access, hosting, and viewer guides |
 | `docs/scripts/docs-loader.ts` | Load crate guides directly, supplying metadata and adapting web links |
-| `docs/src/content/docs/` | Landing page and authored site guides |
+| `docs/src/content/docs/` | Landing page, documentation overview, and authored site guides |
+| `docs/public/viewer/host.js`, `docs/scripts/build-viewer.mjs` | Shared browser host and static WASM asset build |
 | `docs/design-system/` | Shared design tokens, fonts, branding, and component foundations |
 | `docs/src/styles/starlight.css` | Map the shared design roles onto Starlight |
 | `docs/public/assets/` | Static engineering figures |

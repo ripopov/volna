@@ -403,6 +403,15 @@ pub mod web {
         post(serde_json::json!({"type":"notice", "text":text}));
     }
 
+    pub fn viewer_state(state: &str) {
+        let global = js_sys::global();
+        if let Ok(callback) = js_sys::Reflect::get(&global, &JsValue::from_str("volnaViewerState"))
+            && let Some(callback) = callback.dyn_ref::<js_sys::Function>()
+        {
+            callback.call1(&global, &JsValue::from_str(state)).ok();
+        }
+    }
+
     /// Say `text` politely to assistive technology: `document.ariaNotify`
     /// where the browser has it, else a visually hidden live region. The
     /// page, not the host, speaks, so VS Code shows no popup for an undo.

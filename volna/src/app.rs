@@ -988,6 +988,10 @@ impl Workspace {
         self.sync_filter(cx);
         self.sync_menus(cx);
         self.run_requests(cx);
+        #[cfg(target_family = "wasm")]
+        if self.app.doc.is_loaded() {
+            crate::web::viewer_state(&self.debug_state());
+        }
     }
 
     /// Rebuild the application menu when the trace or the undo history

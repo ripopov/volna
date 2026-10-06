@@ -1,66 +1,51 @@
 ---
-title: Volna engineering documentation
-description: Trace storage, local and remote loading, viewer architecture, and engineering guides for Volna.
+title: Volna
+description: Inspect a sample hardware simulation recording in the browser.
 template: splash
 hero:
-  title: Volna engineering docs
-  tagline: Hardware debug starts with a trace. Understand the runtime data, write a recording, and inspect it in the viewer.
+  title: Explore a hardware trace
+  tagline: Volna is a hardware debug environment for recordings of signals, transactions, and runtime events on one time base.
   actions:
-    - text: Start with VTR
-      link: ./vtr/
+    - text: Open Web App
+      link: ./app/
       icon: right-arrow
       variant: primary
-    - text: Read the format
-      link: ./vtr/specification/
+    - text: Read the Docs
+      link: ./docs/
       variant: secondary
 ---
 
-<div class="v-status"><span class="v-status__label">PROJECT STATUS</span> Under development · VTR format is experimental</div>
+The sample below opens a VTR recording with a saved workspace showing waveforms,
+pipeline activity, transactions, and a table. Select a panel, scroll to inspect
+time, and use the viewer controls to move between events. Click inside the viewer
+before using its keyboard shortcuts; scroll the surrounding page outside the viewer.
 
-## The workspace
-
-Volna is a hardware debug environment under development. The workspace includes
-**VTR (Versatile Trace Record)** for writing and querying
-hardware simulation traces, **vtr-capi** for C and simulator integrations,
-**vtr-guard** for Linux crash handling, **volna-trace** for immutable VTR/FST
-access, and **volna-server** for serving a recording to a remote client.
-**volna-core** owns viewer state and rendering models; **volna** is the GPUI
-desktop frontend.
-
-A recording carries signal values, transactions, runtime hierarchy, relations,
-and structured logs on a shared time base. Design semantics and presentation
-belong to the separate VDB and application layers.
-
-<div class="v-guide-grid">
-<a class="v-guide" href="./vtr/"><span class="v-guide__label">01 / START HERE</span><strong>VTR trace library</strong><span>Data model, boundaries, and a first trace in Rust.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./vtr/specification/"><span class="v-guide__label">02 / REFERENCE</span><strong>File format</strong><span>Container layout, binary encodings, recovery, and conformance.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./vtr/rationale/"><span class="v-guide__label">03 / DECISIONS</span><strong>Design rationale</strong><span>Why sections, local compression, stable identity, and derived indexes.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./vtr/logging/"><span class="v-guide__label">04 / GUIDE</span><strong>Structured logging</strong><span>Typed call sites and timestamped records alongside transactions.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./vtr-capi/"><span class="v-guide__label">05 / C API</span><strong>Build with C</strong><span>Link libvtr, manage handles, and write a trace from C.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./vtr-guard/"><span class="v-guide__label">06 / RECOVERY</span><strong>Crash guard</strong><span>Finish watched writers after Linux faults, stop requests, and exit.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./volna-trace/"><span class="v-guide__label">07 / LOADING</span><strong>Local and remote traces</strong><span>Open VTR/FST recordings, load complete objects, and manage memory.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./volna-server/"><span class="v-guide__label">08 / HOSTING</span><strong>Headless server</strong><span>Process hosting, framed protocol, and activity sidecar transfers.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./volna-core/"><span class="v-guide__label">09 / VIEWER CORE</span><strong>Viewer models</strong><span>Commands, panel state, display lists, persistence, and undo.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="./volna/"><span class="v-guide__label">10 / DESKTOP</span><strong>Run the viewer</strong><span>Build the GPUI frontend and open VTR or FST recordings.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
+<div class="v-viewer-frame" role="region" aria-label="Volna sample viewer" tabindex="0">
+  <iframe title="Interactive Volna sample recording" src="./viewer/" loading="eager" allow="clipboard-write"></iframe>
 </div>
+<div class="v-viewer-mobile-nav" aria-label="Viewer panels">
+  <button class="v-btn v-btn--sm" type="button" data-viewer-scroll="left" aria-label="Show left viewer panels">← Left panels</button>
+  <button class="v-btn v-btn--sm" type="button" data-viewer-scroll="right" aria-label="Show right viewer panels">Right panels →</button>
+</div>
+<script>
+  const viewerFrame = document.querySelector('.v-viewer-frame');
+  const updateViewerFrameTop = () => {
+    if (!viewerFrame) return;
+    // The intro can wrap at different widths, so measure where the frame starts.
+    const top = viewerFrame.getBoundingClientRect().top + window.scrollY;
+    viewerFrame.style.setProperty('--viewer-frame-top', `${top}px`);
+  };
+  updateViewerFrameTop();
+  window.addEventListener('resize', updateViewerFrameTop);
+  document.fonts?.ready.then(updateViewerFrameTop);
+  document.querySelectorAll('[data-viewer-scroll]').forEach(button => {
+    button.addEventListener('click', () => {
+      document.querySelector('.v-viewer-frame')?.scrollBy({
+        left: button.dataset.viewerScroll === 'right' ? 320 : -320,
+      });
+    });
+  });
+</script>
 
-## Work with the libraries
-
-Building the workspace requires Rust 1.97.1 or newer and a C compiler to build
-the Zstandard dependency.
-
-The [VTR guide](./vtr/) includes a complete waveform
-round trip and instructions for browsing the Rust API documentation.
-The [C API guide](./vtr-capi/) covers building, linking, ownership, and errors;
-the [crash guard guide](./vtr-guard/) covers Linux process recovery.
-The [trace loading guide](./volna-trace/) explains the shared session API.
-The [server guide](./volna-server/) covers building and hosting the executable.
-The [viewer core guide](./volna-core/) explains the frontend contract; the
-[desktop guide](./volna/) covers building and running the application.
-
-## Maintain the documentation
-
-Pages are Markdown, with SVG figures, Mermaid diagrams, and small HTML/JavaScript
-widgets when interaction helps explain a concept. The [authoring guide](./authoring/)
-covers the build and content conventions. The [design foundations](./design/)
-are shared by the documentation and Volna application UI.
+The viewer runs locally in your browser. If it cannot start, you can still
+[open the Web App](./app/) or [read the engineering documentation](./docs/).

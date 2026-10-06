@@ -10,7 +10,7 @@ import AxeBuilder from '@axe-core/playwright';
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const results = fileURLToPath(new URL('../test-results/', import.meta.url));
 const base = `/${(process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/')}`.replace(/\/$/, '') + '/';
-const mime = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.json': 'application/json' };
+const mime = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.json': 'application/json' };
 const server = createServer(async (req, res) => {
   try {
     const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
@@ -33,57 +33,64 @@ let browser;
 const report = { pages: [], accessibility: [], behavior: [] };
 try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || (existsSync(chrome) ? chrome : undefined) });
-  const routes = ['', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'vtr-capi/', 'vtr-guard/', 'volna-trace/', 'volna-server/', 'volna-core/', 'volna/', 'authoring/', 'design/', '404.html'];
-  for (const theme of ['dark', 'light']) {
-    for (const width of [1440, 360]) {
-      const context = await browser.newContext({ viewport: { width, height: 1000 }, colorScheme: theme, reducedMotion: 'reduce' });
-      const page = await context.newPage();
-      const errors = [];
-      page.on('pageerror', error => errors.push(error.message));
-      page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()}: ${response.url()}`); });
-      for (const route of routes) {
-        const response = await page.goto(`${origin}${base}${route}`);
-        assert.equal(response.status(), 200, route);
-        await page.evaluate(() => document.fonts.ready);
-        await page.waitForFunction(() => [...document.querySelectorAll('.expressive-code pre')].every(pre => pre.scrollWidth <= pre.clientWidth || pre.tabIndex === 0));
-        const state = await page.evaluate(() => ({
-          overflow: document.documentElement.scrollWidth > innerWidth + 1,
-          theme: document.documentElement.dataset.theme,
-          headings: document.querySelectorAll('h1').length,
-          badImages: [...document.images].filter(img => !img.complete || img.naturalWidth === 0).map(img => img.src),
-          font: getComputedStyle(document.body).fontFamily,
-          inter: document.fonts.check('16px Inter'),
-          movement: [...document.querySelectorAll('*')].some(el => {
-            const style = getComputedStyle(el);
-            return style.animationName !== 'none' && style.animationDuration !== '0s';
-          }),
-        }));
-        assert.equal(state.overflow, false, `${route} ${theme} ${width}: page overflow`);
-        assert.equal(state.theme, theme);
-        assert.equal(state.headings, 1, route);
-        assert.deepEqual(state.badImages, [], route);
-        assert.match(state.font, /Inter/);
-        assert.equal(state.inter, true);
-        assert.equal(state.movement, false);
-        const content = await page.locator('.sl-markdown-content').textContent();
-        assert.ok(content.trim().length > 20, `${route}: rendered content must not be empty`);
-        assert.deepEqual(errors, [], `${route}: browser errors`);
-        if (width === 1440) {
-          const audit = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
-          report.accessibility.push({ route, theme, violations: audit.violations });
-          assert.deepEqual(audit.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target).join(', ')}`), [], `${route} ${theme}: accessibility`);
-        }
-        if (['', 'vtr/', 'authoring/', 'vtr/specification/', 'volna-trace/', 'volna-server/'].includes(route)) {
-          await page.screenshot({ path: `${results}/${route.replaceAll('/', '-') || 'landing'}-${theme}-${width}.png`, fullPage: true });
-        }
-        report.pages.push({ route, theme, width, ...state });
-      }
-      await context.close();
-    }
-  }
-
-  const behaviorContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const behaviorContext = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'dark' });
   const page = await behaviorContext.newPage();
+  await page.goto(`${origin}${base}`);
+  assert.equal(await page.locator('.site-title').getAttribute('href'), base);
+  assert.equal(await page.getByRole('navigation', { name: 'Site' }).getByRole('link', { name: 'Docs' }).getAttribute('href'), `${base}docs/`);
+  assert.equal(await page.getByRole('navigation', { name: 'Site' }).getByRole('link', { name: 'Web App' }).getAttribute('href'), `${base}app/`);
+  const sample = page.frameLocator('iframe[title="Interactive Volna sample recording"]');
+  await sample.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
+  const sampleState = await sample.locator('body').evaluate(() => window.volnaCurrentState);
+  assert.match(sampleState, /panel=1 .*items=\d+/);
+  assert.match(sampleState, /panel=4 table .*rows=\d+/);
+  assert.match(sampleState, /panel=3 transaction/);
+  await page.screenshot({ path: `${results}/landing-restored-dark-1440.png`, fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  const frameBounds = await page.locator('.v-viewer-frame').boundingBox();
+  assert.ok(frameBounds && Math.abs(frameBounds.x - 72) < 2 && Math.abs(frameBounds.width - 1296) < 2,
+    'landing viewer must occupy 90% of the viewport width');
+  assert.ok(Math.abs(1600 - frameBounds.y - frameBounds.height - 24) < 2,
+    'landing viewer must grow to fill available viewport height');
+  await page.setViewportSize({ width: 360, height: 800 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+  const frameScroll = page.locator('.v-viewer-frame');
+  assert.ok(await frameScroll.evaluate(element => element.scrollWidth > element.clientWidth));
+  await page.screenshot({ path: `${results}/landing-restored-dark-360.png`, fullPage: true });
+  await page.getByRole('button', { name: 'Show right viewer panels' }).click();
+  await page.waitForFunction(() => document.querySelector('.v-viewer-frame').scrollLeft > 0);
+  await page.locator('html').evaluate(element => { element.dataset.theme = 'light'; });
+  assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+  await page.evaluate(() => scrollTo(0, 0));
+  await page.screenshot({ path: `${results}/landing-restored-light-360.png`, fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${origin}${base}docs/`);
+  assert.match(await page.locator('h1').textContent(), /engineering docs/);
+  assert.equal(await page.locator('.v-guide').count(), 10);
+  await page.goto(`${origin}${base}app/`);
+  assert.equal(await page.locator('.volna-header, #starlight__sidebar').count(), 0);
+  await page.locator('#viewer-status').waitFor({ state: 'hidden', timeout: 60000 });
+  const appCanvas = await page.locator('body > canvas').boundingBox();
+  assert.ok(appCanvas && Math.abs(appCanvas.width - 1440) < 2 && Math.abs(appCanvas.height - 1000) < 2,
+    'standalone canvas must fill the browser viewport');
+  await page.locator('#recording-file').setInputFiles(fileURLToPath(new URL('../../volna/examples/landing.vtr', import.meta.url)));
+  await page.locator('body[data-local-trace-opened="landing.vtr"]').waitFor({ timeout: 30000 });
+  await page.evaluate(async base => (await import(`${base}viewer/pkg/volna.js`)).dispatch_command('openWorkspace'), base);
+  await page.locator('input[aria-label="Open a Volna workspace"]').setInputFiles(fileURLToPath(new URL('../../volna/examples/landing.vtr.volna.json', import.meta.url)));
+  await page.waitForFunction(() => window.volnaCurrentState?.includes('panel=4 table'));
+  const downloadPromise = page.waitForEvent('download');
+  await page.evaluate(async base => (await import(`${base}viewer/pkg/volna.js`)).dispatch_command('saveWorkspaceAs'), base);
+  assert.equal((await downloadPromise).suggestedFilename(), 'landing.vtr.volna.json');
+  await page.getByRole('button', { name: 'Load sample' }).click();
+  await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
+  report.behavior.push('landing workspace restore, header destinations, docs overview, standalone app sample, local file, workspace import and export');
+  const failedViewer = await behaviorContext.newPage();
+  await failedViewer.route('**/viewer/pkg/volna_bg.wasm', route => route.abort());
+  await failedViewer.goto(`${origin}${base}`);
+  await failedViewer.frameLocator('iframe[title="Interactive Volna sample recording"]').getByRole('alert').waitFor();
+  assert.equal(await failedViewer.getByRole('link', { name: 'Read the Docs' }).first().getAttribute('href'), './docs/');
+  await failedViewer.close();
+  report.behavior.push('viewer initialization failure keeps landing documentation links usable');
   await page.goto(`${origin}${base}vtr/`);
   const waveform = await readFile(new URL('../../vtr/examples/waveform.rs', import.meta.url), 'utf8');
   const example = page.locator('.expressive-code pre').filter({ hasText: 'Minimal waveform round trip.' });
@@ -195,12 +202,15 @@ try {
 
   const noJs = await browser.newContext({ javaScriptEnabled: false });
   const staticPage = await noJs.newPage();
+  await staticPage.goto(`${origin}${base}`);
+  assert.match(await staticPage.locator('.sl-markdown-content').textContent(), /sample below opens a VTR recording/);
+  assert.equal(await staticPage.getByRole('link', { name: 'Read the Docs' }).first().getAttribute('href'), './docs/');
   await staticPage.goto(`${origin}${base}vtr/`);
   assert.equal(await staticPage.getByRole('button', { name: 'Documentation navigator', exact: true }).isVisible(), false);
   assert.equal(await staticPage.locator('#starlight__sidebar').isVisible(), true);
   assert.equal(await staticPage.locator('.right-sidebar-container').isVisible(), true);
   await verifyDiagrams(staticPage);
-  for (const route of ['vtr/', 'vtr/specification/', 'authoring/', 'volna-trace/', 'volna-server/']) {
+  for (const route of ['docs/', 'vtr/', 'vtr/specification/', 'authoring/', 'volna-trace/', 'volna-server/']) {
     await staticPage.goto(`${origin}${base}${route}`);
     assert.equal(await staticPage.locator('h1').count(), 1, `${route}: static page title`);
     assert.ok((await staticPage.locator('.sl-markdown-content').textContent()).trim().length > 20, `${route}: static content must not be empty`);
@@ -223,6 +233,55 @@ try {
   report.behavior.push('mobile menu, server navigation, and canonical crate cross-links');
   await page.close();
   await behaviorContext.close();
+  const routes = ['', 'docs/', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'vtr-capi/', 'vtr-guard/', 'volna-trace/', 'volna-server/', 'volna-core/', 'volna/', 'authoring/', 'design/', '404.html'];
+  for (const theme of ['dark', 'light']) {
+    for (const width of [1440, 360]) {
+      const context = await browser.newContext({ viewport: { width, height: 1000 }, colorScheme: theme, reducedMotion: 'reduce' });
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()}: ${response.url()}`); });
+      for (const route of routes) {
+        const response = await page.goto(`${origin}${base}${route}`);
+        assert.equal(response.status(), 200, route);
+        await page.evaluate(() => document.fonts.ready);
+        await page.waitForFunction(() => [...document.querySelectorAll('.expressive-code pre')].every(pre => pre.scrollWidth <= pre.clientWidth || pre.tabIndex === 0));
+        const state = await page.evaluate(() => ({
+          overflow: document.documentElement.scrollWidth > innerWidth + 1,
+          theme: document.documentElement.dataset.theme,
+          headings: document.querySelectorAll('h1').length,
+          badImages: [...document.images].filter(img => !img.complete || img.naturalWidth === 0).map(img => img.src),
+          font: getComputedStyle(document.body).fontFamily,
+          inter: document.fonts.check('16px Inter'),
+          movement: [...document.querySelectorAll('*')].some(el => {
+            const style = getComputedStyle(el);
+            return style.animationName !== 'none' && style.animationDuration !== '0s';
+          }),
+        }));
+        assert.equal(state.overflow, false, `${route} ${theme} ${width}: page overflow`);
+        assert.equal(state.theme, theme);
+        assert.equal(state.headings, 1, route);
+        assert.deepEqual(state.badImages, [], route);
+        assert.match(state.font, /Inter/);
+        assert.equal(state.inter, true);
+        assert.equal(state.movement, false);
+        const content = await page.locator('.sl-markdown-content').textContent();
+        assert.ok(content.trim().length > 20, `${route}: rendered content must not be empty`);
+        assert.deepEqual(errors, [], `${route}: browser errors`);
+        if (width === 1440) {
+          const audit = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
+          report.accessibility.push({ route, theme, violations: audit.violations });
+          assert.deepEqual(audit.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target).join(', ')}`), [], `${route} ${theme}: accessibility`);
+        }
+        if (['', 'vtr/', 'authoring/', 'vtr/specification/', 'volna-trace/', 'volna-server/'].includes(route)) {
+          await page.screenshot({ path: `${results}/${route.replaceAll('/', '-') || 'landing'}-${theme}-${width}.png`, fullPage: true });
+        }
+        report.pages.push({ route, theme, width, ...state });
+      }
+      await context.close();
+    }
+  }
+
   console.log(`Verified ${report.pages.length} route/theme/viewport combinations, ${report.accessibility.length} accessibility audits, search, widgets, and static reading.`);
 } finally {
   await writeReport();

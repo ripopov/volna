@@ -33,3 +33,5 @@ rustc-ice-*.txt
 /docs/test-results/
 /docs/public/assets/volna.svg
 /docs/public/assets/container.svg
+/docs/public/viewer/pkg/
+/docs/public/examples/
