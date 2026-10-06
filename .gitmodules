@@ -1,0 +1,4 @@
+[submodule "ext/verilator"]
+	path = ext/verilator
+	url = https://github.com/ripopov/verilator
+	branch = volna
