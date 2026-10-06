@@ -7,6 +7,8 @@ Volna is a hardware debug environment under development.
 | Crate | Responsibility |
 | --- | --- |
 | [`vtr`](vtr/README.md) | Versatile Trace Record: runtime trace format, reader, writer, and derived indexes |
+| [`vtr-capi`](vtr-capi/README.md) | C ABI, public C/C++ headers, and simulator integration helpers for VTR |
+| [`vtr-guard`](vtr-guard/README.md) | Linux crash and stop guard for VTR writers, used by the C API |
 | [`volna-trace`](volna-trace/README.md) | Immutable VTR/FST sessions, complete objects, memory admission, and remote client |
 | [`vtr-cli`](vtr-cli/README.md) | Terminal trace inspection, queries, activity indexing, and Kanata/VCD/FST conversion |
 | [`volna-server`](volna-server/README.md) | Headless process serving one recording over framed stdin/stdout |
@@ -17,7 +19,8 @@ VTR stores runtime signal values, transactions, logs, clocks, hierarchy, and ide
 
 ## Development
 
-Use stable Rust 1.96 or newer and a C compiler (for vendored Zstandard).
+Use stable Rust 1.96 or newer and a C compiler (for vendored Zstandard and
+C smoke tests). The C++ smoke tests also need a C++17 compiler.
 No simulator, submodules, GUI SDK, or old repository checkout is required.
 
 ```sh

@@ -42,7 +42,7 @@ Use the same prefix when serving and testing the build:
 
 | Location | Responsibility |
 | --- | --- |
-| `vtr/README.md`, `vtr/docs/*.md` | Authoritative VTR guides |
+| `vtr/README.md`, `vtr/docs/*.md`, `vtr-capi/README.md`, `vtr-guard/README.md` | Authoritative VTR guides |
 | `docs/scripts/docs-loader.ts` | Load crate guides directly, supplying metadata and adapting web links |
 | `docs/src/content/docs/` | Landing page and authored site guides |
 | `docs/design-system/` | Shared design tokens, fonts, branding, and component foundations |
@@ -50,8 +50,8 @@ Use the same prefix when serving and testing the build:
 | `docs/public/assets/` | Static engineering figures |
 | `docs/src/scripts/` | Small bundled widget scripts |
 
-The VTR getting started, specification, rationale, and logging pages are loaded
-directly from their crate sources. Edit those sources; development watches them
+The VTR getting started, specification, rationale, logging, C API, and crash
+guard pages are loaded directly from their crate sources. Edit those sources; development watches them
 and builds read them without a separate synchronization step. The specification
 stays intact apart from its page title and repository-to-website links.
 

@@ -58,6 +58,10 @@ export default defineConfig({
         { label: 'Design rationale', slug: 'vtr/rationale' },
         { label: 'Structured logging', slug: 'vtr/logging' },
       ] },
+      { label: 'C and simulator integration', items: [
+        { label: 'C API', slug: 'vtr-capi' },
+        { label: 'Crash guard', slug: 'vtr-guard' },
+      ] },
       { label: 'Trace access', items: [
         { label: 'Local and remote loading', slug: 'volna-trace' },
         { label: 'Headless server', slug: 'volna-server' },

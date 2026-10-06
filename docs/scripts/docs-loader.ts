@@ -12,6 +12,8 @@ const sources = [
   ['vtr/docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR 1.1 container, encodings, recovery rules, and activity sidecar.'],
   ['vtr/docs/RATIONALE.md', 'vtr/rationale', 'VTR design rationale', 'Trace storage decisions, library boundaries, and derived indexes.'],
   ['vtr/docs/LOGGING.md', 'vtr/logging', 'Structured logging', 'Declare typed log sites, write records, and query messages.'],
+  ['vtr-capi/README.md', 'vtr-capi', 'VTR C API', 'Build and link libvtr, use opaque handles, and write a trace from C.'],
+  ['vtr-guard/README.md', 'vtr-guard', 'VTR crash guard', 'Finish watched VTR writers after Linux faults, stop requests, and exit.'],
   ['volna-trace/README.md', 'volna-trace', 'Volna trace loading', 'Read immutable VTR/FST recordings locally or through a cooperative remote client.'],
   ['volna-server/README.md', 'volna-server', 'Volna server', 'Host one immutable recording over framed pipes, with complete objects and activity sidecars.'],
 ] as const;

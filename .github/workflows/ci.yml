@@ -30,6 +30,7 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
+      # The Linux workspace run also compiles and executes the C/C++ integration tests.
       - run: cargo test --workspace --locked
       - run: cargo check --workspace --all-targets --locked
       - name: Exercise examples
