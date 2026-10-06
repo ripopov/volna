@@ -7,7 +7,7 @@ It uses [`volna-trace`](../volna-trace/README.md) and has no viewer or GUI depen
 
 ## Build and start
 
-From the repository root, with Rust 1.96 or newer and a C compiler:
+From the repository root, with Rust 1.97.1 or newer and a C compiler:
 
 ```sh
 cargo build --locked --release -p volna-server

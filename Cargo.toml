@@ -1,11 +1,12 @@
 [workspace]
-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli"]
+members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "volna-core", "volna"]
 resolver = "3"
+default-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "volna-core"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.97.1"
 license = "MIT"
 repository = "https://github.com/ripopov/volna"
 

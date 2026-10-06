@@ -18,7 +18,7 @@ cargo build --locked -p volna-trace
 cargo doc --locked -p volna-trace --no-deps --open
 ```
 
-The crate requires Rust 1.96 or newer. The workspace also needs a C compiler
+The crate requires Rust 1.97.1 or newer. The workspace also needs a C compiler
 for VTR's Zstandard dependency.
 
 `OpenSpec::Path` detects the format from the file header, rather than its

@@ -28,3 +28,4 @@ pub(crate) mod hierarchy_columns;
 
 #[cfg(not(target_family = "wasm"))]
 mod fst_activity;
+pub use fst_activity::FstTrace;

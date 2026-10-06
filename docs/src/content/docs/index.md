@@ -42,7 +42,7 @@ belong to the separate VDB and application layers.
 
 ## Work with the libraries
 
-Building the workspace requires Rust 1.96 or newer and a C compiler to build
+Building the workspace requires Rust 1.97.1 or newer and a C compiler to build
 the Zstandard dependency.
 
 The [VTR guide](./vtr/) includes a complete waveform

@@ -1,7 +1,7 @@
 # VTR command-line tools
 
 `vtr-cli` supplies the `vtr` executable and Rust converters for Kanata, VCD,
-and FST. It requires Rust 1.96 or newer. Build or install from the workspace:
+and FST. It requires Rust 1.97.1 or newer. Build or install from the workspace:
 
 ```sh
 cargo build -p vtr-cli --locked

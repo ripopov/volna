@@ -22,8 +22,7 @@ and its canonical Volna assets. No runtime dependency on that checkout remains.
 
 The source repository's marketing pages, UI kits, React exports, screenshot
 assets, benchmark components, and old visual baselines are not part of this
-system. Application layers are under development; imported viewer tokens are a
-shared design vocabulary, not proof that a viewer is implemented here.
+system. The GPUI viewer in `volna/` maps these viewer tokens into its native theme.
 
 ## Direction
 

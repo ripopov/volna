@@ -12,6 +12,8 @@ Volna is a hardware debug environment under development.
 | [`volna-trace`](volna-trace/README.md) | Immutable VTR/FST sessions, complete objects, memory admission, and remote client |
 | [`vtr-cli`](vtr-cli/README.md) | Terminal trace inspection, queries, activity indexing, and Kanata/VCD/FST conversion |
 | [`volna-server`](volna-server/README.md) | Headless process serving one recording over framed stdin/stdout |
+| [`volna-core`](volna/README.md) | Toolkit-independent viewer state, commands, layouts, and display lists |
+| [`volna`](volna/README.md) | GPUI desktop viewer for VTR and FST recordings |
 
 ## VTR/VDB boundary
 
@@ -19,9 +21,11 @@ VTR stores runtime signal values, transactions, logs, clocks, hierarchy, and ide
 
 ## Development
 
-Use stable Rust 1.96 or newer and a C compiler (for vendored Zstandard and
+Use Rust 1.97.1 or newer and a C compiler (for vendored Zstandard and
 C smoke tests). The C++ smoke tests also need a C++17 compiler.
-No simulator, submodules, GUI SDK, or old repository checkout is required.
+Core libraries need no simulator, submodules, GUI SDK, or old repository checkout.
+The GPUI viewer requires its platform SDK and display libraries; see the
+[viewer guide](volna/README.md).
 
 ```sh
 cargo build --workspace --locked
@@ -32,7 +36,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
 CI runs these automated, headless checks. To select the library, use
-`cargo test -p vtr`; VTR alone supports Rust 1.85 or newer. See the
+`cargo test -p vtr`; VTR alone requires Rust 1.97.1 or newer. See the
 [crate guide](vtr/README.md),
 [format specification](vtr/docs/SPEC.md), and [design rationale](vtr/docs/RATIONALE.md).
 
