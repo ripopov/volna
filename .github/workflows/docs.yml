@@ -3,9 +3,9 @@ name: Documentation
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'vtr/docs/**', 'vtr/README.md', 'vtr-capi/README.md', 'vtr-guard/README.md', 'volna-trace/README.md', 'volna-server/README.md', '.agents/**', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'vtr/docs/**', 'vtr/README.md', 'vtr-capi/README.md', 'vtr-guard/README.md', 'volna-trace/README.md', 'volna-server/README.md', 'volna-core/README.md', 'volna/README.md', '.agents/**', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['docs/**', 'vtr/docs/**', 'vtr/README.md', 'vtr-capi/README.md', 'vtr-guard/README.md', 'volna-trace/README.md', 'volna-server/README.md', '.agents/**', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'vtr/docs/**', 'vtr/README.md', 'vtr-capi/README.md', 'vtr-guard/README.md', 'volna-trace/README.md', 'volna-server/README.md', 'volna-core/README.md', 'volna/README.md', '.agents/**', '.github/workflows/docs.yml']
   workflow_dispatch:
 
 permissions:

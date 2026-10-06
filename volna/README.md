@@ -7,6 +7,9 @@ complete-object remote protocol used by `volna-server`. Pipeline, table, and
 transaction panels inspect runtime records from VTR. VDB attachment is not
 implemented.
 
+See the [`volna-core` guide](../volna-core/README.md) for the frontend contract,
+headless tests, persistence model, and undo journal.
+
 ## Build and run
 
 Use Rust 1.97.1 or newer and the platform libraries required by GPUI. From the

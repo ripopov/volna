@@ -50,7 +50,8 @@ permissions only to the deployment job.
 The content loader reads `../vtr/README.md` as the VTR introduction and
 `../vtr/docs/{SPEC,RATIONALE,LOGGING}.md` as the remaining VTR pages. It also
 reads `../vtr-capi/README.md`, `../vtr-guard/README.md`,
-`../volna-trace/README.md`, and `../volna-server/README.md` as crate guides.
+`../volna-trace/README.md`, `../volna-server/README.md`,
+`../volna-core/README.md`, and `../volna/README.md` as crate guides.
 Edit these canonical crate files; the development server
 watches them for updates. The loader supplies page metadata,
 removes the top-level title, and adapts repository links and image paths to web

@@ -66,6 +66,10 @@ export default defineConfig({
         { label: 'Local and remote loading', slug: 'volna-trace' },
         { label: 'Headless server', slug: 'volna-server' },
       ] },
+      { label: 'Viewer', items: [
+        { label: 'Desktop application', slug: 'volna' },
+        { label: 'Viewer core', slug: 'volna-core' },
+      ] },
       { label: 'Contributing', items: [
         { label: 'Writing documentation', slug: 'authoring' },
         { label: 'Design foundations', slug: 'design' },
