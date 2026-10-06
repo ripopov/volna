@@ -156,8 +156,8 @@ pub struct FontFace {
     pub bytes: &'static [u8],
 }
 
-/// Inter (UI) and JetBrains Mono (mono), the pair of JetBrains' IDEs, the
-/// same faces on every platform.
+/// Inter (UI), JetBrains Mono (mono), and GPUI's web system-font fallback.
+/// The same faces are registered on every platform.
 pub const FONTS: &[FontFace] = &[
     FontFace {
         family: "Inter",
@@ -178,5 +178,10 @@ pub const FONTS: &[FontFace] = &[
         family: "JetBrains Mono",
         weight: 400,
         bytes: include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+    },
+    FontFace {
+        family: "IBM Plex Sans",
+        weight: 400,
+        bytes: include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
     },
 ];

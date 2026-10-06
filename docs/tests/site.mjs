@@ -35,6 +35,8 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || (existsSync(chrome) ? chrome : undefined) });
   const behaviorContext = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'dark' });
   const page = await behaviorContext.newPage();
+  const appErrors = [];
+  page.on('pageerror', error => appErrors.push(error.message));
   await page.goto(`${origin}${base}`);
   assert.equal(await page.locator('.site-title').getAttribute('href'), base);
   assert.equal(await page.getByRole('navigation', { name: 'Site' }).getByRole('link', { name: 'Docs' }).getAttribute('href'), `${base}docs/`);
@@ -83,7 +85,13 @@ try {
   assert.equal((await downloadPromise).suggestedFilename(), 'landing.vtr.volna.json');
   await page.getByRole('button', { name: 'Load sample' }).click();
   await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
-  report.behavior.push('landing workspace restore, header destinations, docs overview, standalone app sample, local file, workspace import and export');
+  await page.mouse.move(1130, 632);
+  await page.mouse.down();
+  await page.mouse.move(1180, 632, { steps: 3 });
+  await page.mouse.move(950, 500, { steps: 3 });
+  await page.mouse.up();
+  assert.deepEqual(appErrors, [], 'dragging the Table panel must not panic in the browser');
+  report.behavior.push('landing workspace restore, header destinations, docs overview, standalone app sample, local file, workspace import and export, Table panel drag');
   const failedViewer = await behaviorContext.newPage();
   await failedViewer.route('**/viewer/pkg/volna_bg.wasm', route => route.abort());
   await failedViewer.goto(`${origin}${base}`);
