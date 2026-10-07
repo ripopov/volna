@@ -5,7 +5,7 @@ use volna_core::testing::ProceduralTrace;
 use volna_core::testing::a_all;
 use volna_core::trace::{TraceId, Traced};
 use volna_core::workspace::{MAX_BYTES, Workspace, resolve_trace};
-use volna_core::{Action, App, Command};
+use volna_core::{Action, App, Command, LoadRequest, LoadResult};
 
 const TRACE: &str = "vscode-remote://ssh-remote+board/home/user/trace.vtr";
 const LOCATION: &str = "vscode-remote://ssh-remote+board/home/user/trace.vtr.volna.json";
@@ -568,6 +568,90 @@ fn invalid_open_workspace_cannot_flush_live_edits_or_queue_trace_opens() {
             "flushed live edits for {path}"
         );
     }
+}
+
+fn assert_cancelled_workspace_trace_open_can_save(in_flight: bool) {
+    let mut app = persistent_app();
+    assert!(!app.workspace.scheduler.dirty());
+    let b = TraceId::from_letter('B').unwrap();
+    let mut saved = capture(&app);
+    let mut secondary = saved.traces[0].clone();
+    secondary.letter = b;
+    secondary.path = "file:///other.vtr".into();
+    secondary.name = "other.vtr".into();
+    saved.traces.push(secondary);
+    saved.shared.cursor = Some(23);
+    let destination = file(&resolve_trace("cancelled.volna.json", LOCATION).unwrap());
+    app.open_workspace(destination.clone(), &saved.to_bytes().unwrap())
+        .unwrap();
+    assert!(app.doc.traces().get(b).is_some());
+    assert!(app.doc.session(b).is_none());
+    assert!(app.workspace.scheduler.outstanding().is_none());
+
+    // Taking the request simulates dispatch to a worker. Its result may
+    // arrive after cancellation; a queued request must instead be removed.
+    let dispatched = if in_flight {
+        let mut requests = app.take_requests();
+        assert_eq!(requests.len(), 1);
+        let LoadRequest::Open {
+            trace, generation, ..
+        } = requests.pop().unwrap()
+        else {
+            panic!("expected a trace open request");
+        };
+        assert_eq!(trace, b);
+        Some(LoadResult::Opened {
+            trace,
+            generation,
+            result: Ok(ProceduralTrace::session(100)),
+        })
+    } else {
+        None
+    };
+    app.handle(Command::RemoveTrace(b));
+    assert!(
+        !app.take_requests()
+            .iter()
+            .any(|request| matches!(request, LoadRequest::Open { trace, .. } if *trace == b)),
+        "cancellation must remove B's queued open"
+    );
+    if let Some(result) = dispatched {
+        app.deliver(result);
+    }
+    assert_eq!(app.doc.traces().ids().collect::<Vec<_>>(), [TraceId::A]);
+
+    app.take_events();
+    app.save_workspace(None);
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, destination);
+    assert_eq!(app.workspace.scheduler.target(), Some(&destination));
+    let restored = Workspace::parse(&bytes).unwrap();
+    assert_eq!(restored.shared.cursor, Some(23), "the restore must finish");
+    assert_eq!(restored.traces.len(), 1);
+    assert_eq!(restored.traces[0].letter, TraceId::A);
+
+    let now = Instant::now();
+    app.workspace_saved(ticket, None, now);
+    assert!(!app.workspace.scheduler.dirty());
+    assert!(!app.workspace.scheduler.suspended());
+    app.handle_at(Command::SetFilter("after cancelled open".into()), now);
+    app.tick(now + IDLE * 2);
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, destination);
+    assert_eq!(
+        Workspace::parse(&bytes).unwrap().sidebar.filter,
+        "after cancelled open"
+    );
+}
+
+#[test]
+fn cancelling_a_queued_workspace_trace_open_finishes_restore_and_allows_saving() {
+    assert_cancelled_workspace_trace_open_can_save(false);
+}
+
+#[test]
+fn cancelling_an_in_flight_workspace_trace_open_ignores_late_completion_and_allows_saving() {
+    assert_cancelled_workspace_trace_open_can_save(true);
 }
 
 #[test]

@@ -237,6 +237,7 @@ impl App {
             self.doc.remove_trace(trace);
             self.scopes.remove_trace(self.doc.traces(), trace);
             self.layout_changed();
+            self.workspace_trace_failed(trace, "opening cancelled".into());
             return;
         }
         if !others {
