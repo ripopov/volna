@@ -364,6 +364,18 @@ fn has_comma(text: &str, range: Range<usize>) -> bool {
     false
 }
 
+/// Locate a separator using the parser's whitespace/comment rules.
+fn comma_after(text: &str, at: usize) -> Option<usize> {
+    let mut parser = Parser {
+        text,
+        bytes: text.as_bytes(),
+        pos: at,
+        depth: 0,
+    };
+    parser.skip().ok()?;
+    (parser.peek() == Some(b',')).then_some(parser.pos)
+}
+
 fn newline(text: &str) -> &'static str {
     if text.contains("\r\n") { "\r\n" } else { "\n" }
 }
@@ -435,7 +447,7 @@ pub fn remove(text: &str, doc: &Document, key: &str) -> String {
     let Some(entry) = doc.get(key) else {
         return text.to_owned();
     };
-    let Some((open, close)) = doc.braces else {
+    let Some((open, _close)) = doc.braces else {
         return text.to_owned();
     };
     let bytes = text.as_bytes();
@@ -450,8 +462,9 @@ pub fn remove(text: &str, doc: &Document, key: &str) -> String {
     };
     // `[ \t]*,?[ \t]*(//[^\n]*)?\r?\n?`
     let mut end = skip_blanks(bytes, entry.value_span.end);
-    let had_comma = bytes.get(end) == Some(&b',');
-    if had_comma {
+    let comma = comma_after(text, entry.value_span.end);
+    let had_comma = comma.is_some();
+    if comma == Some(end) {
         end += 1;
     }
     end = skip_blanks(bytes, end);
@@ -474,12 +487,12 @@ pub fn remove(text: &str, doc: &Document, key: &str) -> String {
         .entries
         .last()
         .is_some_and(|last| last.key_span == entry.key_span);
-    if is_last && !had_comma && !has_comma(text, entry.value_span.end..close) {
+    if is_last && !had_comma {
         let previous = doc.entries.iter().rev().nth(1);
         if let Some(previous) = previous
-            && let Some(comma) = text[previous.value_span.end..start].find(',')
+            && let Some(comma_at) = comma_after(text, previous.value_span.end)
+            && comma_at < start
         {
-            let comma_at = previous.value_span.end + comma;
             out.push_str(&text[..comma_at]);
             out.push_str(&text[comma_at + 1..start]);
             out.push_str(&text[end..]);
@@ -487,7 +500,14 @@ pub fn remove(text: &str, doc: &Document, key: &str) -> String {
         }
     }
     out.push_str(&text[..start]);
-    out.push_str(&text[end..]);
+    if let Some(comma) = comma.filter(|&comma| comma >= end) {
+        // Comments between the value and separator remain outside the
+        // deleted property; remove only the separator from that suffix.
+        out.push_str(&text[end..comma]);
+        out.push_str(&text[comma + 1..]);
+    } else {
+        out.push_str(&text[end..]);
+    }
     finish_remove(out, open)
 }
 
@@ -622,6 +642,29 @@ mod tests {
         let out = remove(inline, &parse(inline).unwrap(), "a");
         serde_json::from_str::<serde_json::Value>(&out).unwrap();
         assert_eq!(remove(SAMPLE, &doc, "missing"), SAMPLE);
+    }
+
+    #[test]
+    fn removing_properties_skips_comments_when_finding_separators() {
+        for text in [
+            r#"{"a":1, "b":2 /* preserve */ , "c":3}"#,
+            r#"{"a":1 /* preserve , */ , "b":2}"#,
+            "{\n  \"a\":1,\n  \"b\":2 /* preserve */\n ,\n  \"c\":3\n}",
+            "{\"a\":1, \"b\":2 // preserve\n , \"c\":3}",
+        ] {
+            let doc = parse(text).unwrap();
+            for removed in &doc.entries {
+                let out = remove(text, &doc, &removed.key);
+                let after = parse(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
+                assert!(after.get(&removed.key).is_none());
+                for entry in doc.entries.iter().filter(|e| e.key != removed.key) {
+                    assert_eq!(after.get(&entry.key).unwrap().value, entry.value);
+                }
+                if text.contains("/*") {
+                    assert!(out.contains("preserve"), "{out}");
+                }
+            }
+        }
     }
 
     #[test]
