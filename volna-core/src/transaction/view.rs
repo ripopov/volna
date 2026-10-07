@@ -3,8 +3,7 @@
 //! Nothing here touches a reader, a transport or a panel; the frontends only
 //! render what this produces, and the headless tests assert on it directly.
 
-use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::data::text::{
@@ -178,8 +177,8 @@ pub struct EventTick {
 pub struct AttrRow {
     /// The key without its folded phase suffix.
     pub key: String,
-    /// The whole key, as recorded; what a radix choice is remembered by.
-    pub full_key: String,
+    /// Index in the recorded attribute array; resolves the full key on interaction.
+    pub attribute: usize,
     pub phase: Option<&'static str>,
     pub value: String,
     /// The radix in effect, for integers only.
@@ -294,19 +293,20 @@ pub fn view(
     let session = doc.session(track.trace)?;
     let catalog = session.tracks();
     let declaration = catalog.iter().find(|t| t.id == track.item)?;
+    // Leave room for bounded formatting temporaries while output grows.
+    let mut budget = Budget::new(VIEW_BYTES - 4096);
     let stream = match declaration.kind {
         TrackKind::Generator { stream } => catalog
             .iter()
             .find(|t| t.id == stream)
-            .map(|t| t.path.clone())
+            .map(|t| budget.path(&t.path))
             .unwrap_or_default(),
         TrackKind::Stream { .. } => Vec::new(),
     };
     let base = doc.time_base();
     let time = |t: u64| format_time(t as f64, base);
-    let palette = StagePalette::build(std::slice::from_ref(&generator));
+    let palette = generator.palette();
     let limit = prefs.detail_items.clamp(1, 1000);
-    let mut budget = Budget::new(VIEW_BYTES);
 
     let label = tx
         .attributes
@@ -316,7 +316,11 @@ pub fn view(
     let identity = Identity {
         track,
         stream,
-        generator: declaration.path.last().cloned().unwrap_or_default(),
+        generator: declaration
+            .path
+            .last()
+            .map(|s| budget.text(s))
+            .unwrap_or_default(),
         ordinal: generator.transaction_ordinal(id).unwrap_or(0),
         id,
         label,
@@ -332,18 +336,18 @@ pub fn view(
         begin: tx.begin,
         end: (!open).then_some(tx.end),
         duration,
-        begin_text: time(tx.begin),
-        end_text: if open { "open".into() } else { time(tx.end) },
-        duration_text: if open {
+        begin_text: budget.text(&time(tx.begin)),
+        end_text: budget.text(&if open { "open".into() } else { time(tx.end) }),
+        duration_text: budget.text(&if open {
             format!("≥ {}", time(duration))
         } else {
             time(duration)
-        },
+        }),
     };
 
     let span = duration.max(1) as f64;
     let fraction = |t: u64| ((t.saturating_sub(tx.begin) as f64) / span).clamp(0.0, 1.0) as f32;
-    let (lifeline, event_ticks) = lifeline(tx, &palette, &fraction);
+    let (lifeline, event_ticks) = lifeline(tx, palette, &fraction, limit, &mut budget);
     let cursor = doc
         .shared
         .cursor
@@ -351,7 +355,15 @@ pub fn view(
         .map(fraction);
 
     let attributes = attributes(tx, prefs, limit, &mut budget);
-    let mut stages = stages(tx, &palette, limit, duration, &time, &mut budget);
+    let mut stages = stages(
+        tx,
+        palette,
+        generator.stage_order(identity.ordinal),
+        limit,
+        duration,
+        &time,
+        &mut budget,
+    );
     let mut events = events(tx, limit, &time, &mut budget);
     let mut related = related(doc, &generator, tx, track, limit, &mut budget);
     stages.collapsed = prefs.collapsed.contains(&SectionKey::Stages);
@@ -372,8 +384,8 @@ pub fn view(
     })
 }
 
-/// The byte ledger of one prepared view: every string is admitted through it
-/// so a pathological record cuts its values instead of its counts.
+/// Admit owned strings, collection capacities and bounded sorting scratch.
+/// Recorded totals survive truncation so omitted detail stays visible.
 struct Budget {
     remaining: usize,
     truncated: bool,
@@ -399,21 +411,100 @@ impl Budget {
     /// An attribute rendered in `radix`, bounded the same way.
     fn value(&mut self, value: &AttributeValue, radix: Radix) -> (String, bool) {
         let room = self.remaining.min(PREVIEW_BYTES);
-        let out = format_attribute_radix(value, radix, room);
+        let mut out = format_attribute_radix(value, radix, room);
+        out.shrink_to_fit();
         let cut = attribute_value_min_bytes(value) > out.len();
         self.truncated |= cut;
         self.remaining = self.remaining.saturating_sub(out.len());
         (out, cut)
     }
 
-    /// Whether another row still fits.
-    fn open(&mut self) -> bool {
-        if self.remaining == 0 {
+    /// Admit the next vector slot before any associated strings are built.
+    fn slot<T>(&mut self, rows: &mut Vec<T>) -> bool {
+        if rows.len() < rows.capacity() {
+            return true;
+        }
+        let size = std::mem::size_of::<T>().max(1);
+        let growth = rows.capacity().max(1).min(self.remaining / size);
+        if growth == 0 {
             self.truncated = true;
             return false;
         }
+        self.remaining -= growth * size;
+        rows.reserve_exact(rows.capacity() + growth - rows.len());
         true
     }
+
+    fn path(&mut self, path: &[String]) -> Vec<String> {
+        let mut out = Vec::new();
+        for part in path {
+            if !self.slot(&mut out) {
+                break;
+            }
+            out.push(self.text(part));
+        }
+        out
+    }
+
+    /// Select the first ordered items with bounded scratch, keeping recording
+    /// order in the key as a final tie breaker. Never collect the whole record.
+    fn ordered<K: Ord, V>(
+        &mut self,
+        items: impl Iterator<Item = (K, V)>,
+        limit: usize,
+    ) -> Vec<Ranked<K, V>> {
+        let count = limit.min(self.remaining / std::mem::size_of::<Ranked<K, V>>().max(1));
+        self.remaining -= count * std::mem::size_of::<Ranked<K, V>>();
+        let mut heap = BinaryHeap::with_capacity(count);
+        for (key, value) in items {
+            if count == 0 {
+                self.truncated = true;
+                break;
+            }
+            let item = Ranked { key, value };
+            if heap.len() < count {
+                heap.push(item);
+            } else if item.key < heap.peek().unwrap().key {
+                *heap.peek_mut().unwrap() = item;
+            }
+        }
+        heap.into_sorted_vec()
+    }
+}
+
+struct Ranked<K, V> {
+    key: K,
+    value: V,
+}
+impl<K: Ord, V> PartialEq for Ranked<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+impl<K: Ord, V> Eq for Ranked<K, V> {}
+impl<K: Ord, V> PartialOrd for Ranked<K, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl<K: Ord, V> Ord for Ranked<K, V> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+/// Case-insensitive matching without copying an arbitrarily long recorded key.
+fn contains_folded(text: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    text.char_indices().any(|(i, _)| {
+        let mut hay = text[i..].chars().flat_map(char::to_lowercase);
+        needle
+            .chars()
+            .flat_map(char::to_lowercase)
+            .all(|c| hay.next() == Some(c))
+    })
 }
 
 fn status_text(status: TxStatus) -> &'static str {
@@ -473,21 +564,41 @@ fn lifeline(
     tx: &Transaction,
     palette: &StagePalette,
     fraction: &impl Fn(u64) -> f32,
+    limit: usize,
+    budget: &mut Budget,
 ) -> (Vec<LaneRow>, Vec<EventTick>) {
     let primary = palette.primary_lane();
-    let mut lanes: Vec<LaneRow> = vec![LaneRow {
-        lane: primary.to_owned(),
-        primary: true,
-        cells: Vec::new(),
-    }];
-    let mut lane_index = HashMap::from([(primary, 0usize)]);
-    for (index, stage) in tx.stages.iter().enumerate() {
-        let begin = stage.begin;
+    let mut lanes: Vec<LaneRow> = Vec::new();
+    for (index, stage) in tx.stages.iter().enumerate().take(limit) {
+        // There can be at most detail_items lanes, so this lookup is bounded.
+        let row = match lanes.iter().position(|l| {
+            l.cells
+                .first()
+                .and_then(|c| c.stage)
+                .is_some_and(|i| tx.stages[i].lane == stage.lane)
+        }) {
+            Some(row) => row,
+            None => {
+                if !budget.slot(&mut lanes) {
+                    break;
+                }
+                let row = lanes.len();
+                lanes.push(LaneRow {
+                    lane: budget.text(&stage.lane),
+                    primary: stage.lane == primary,
+                    cells: Vec::new(),
+                });
+                row
+            }
+        };
+        if !budget.slot(&mut lanes[row].cells) {
+            break;
+        }
         let end = crate::pipeline::PipelineModel::stage_end(tx, stage);
-        let start = fraction(begin);
-        let cell = LaneCell {
-            name: stage.name.clone(),
-            begin,
+        let start = fraction(stage.begin);
+        lanes[row].cells.push(LaneCell {
+            name: budget.text(&stage.name),
+            begin: stage.begin,
             end,
             start,
             width: (fraction(end) - start).max(0.0),
@@ -497,40 +608,39 @@ fn lifeline(
                 StageSwatch::Fallback
             },
             stage: Some(index),
-        };
-        let row = *lane_index.entry(stage.lane.as_str()).or_insert_with(|| {
-            lanes.push(LaneRow {
-                lane: stage.lane.clone(),
-                primary: false,
-                cells: Vec::new(),
+        });
+    }
+    lanes.sort_unstable_by_key(|lane| !lane.primary);
+    if tx.stages.is_empty() && budget.slot(&mut lanes) {
+        let mut cells = Vec::new();
+        if budget.slot(&mut cells) {
+            cells.push(LaneCell {
+                name: String::new(),
+                begin: tx.begin,
+                end: tx.end,
+                start: 0.0,
+                width: 1.0,
+                swatch: StageSwatch::Fallback,
+                stage: None,
             });
-            lanes.len() - 1
-        });
-        lanes[row].cells.push(cell);
-    }
-    if tx.stages.is_empty() {
-        // The pipeline paints a stageless record as one cell over its
-        // lifetime; the lifeline shows the same shape.
-        lanes[0].cells.push(LaneCell {
-            name: String::new(),
-            begin: tx.begin,
-            end: tx.end,
-            start: 0.0,
-            width: 1.0,
-            swatch: StageSwatch::Fallback,
-            stage: None,
+        }
+        lanes.push(LaneRow {
+            lane: budget.text(primary),
+            primary: true,
+            cells,
         });
     }
-    lanes.retain(|row| !row.cells.is_empty());
-    let ticks = tx
-        .events
-        .iter()
-        .map(|event| EventTick {
-            name: event.name.clone(),
+    let mut ticks = Vec::new();
+    for event in tx.events.iter().take(limit) {
+        if !budget.slot(&mut ticks) {
+            break;
+        }
+        ticks.push(EventTick {
+            name: budget.text(&event.name),
             time: event.time,
             at: fraction(event.time),
-        })
-        .collect();
+        });
+    }
     (lanes, ticks)
 }
 
@@ -540,21 +650,23 @@ fn attributes(
     limit: usize,
     budget: &mut Budget,
 ) -> Section<AttrRow> {
-    let filter = prefs.filter.trim().to_lowercase();
+    let filter = prefs.filter.trim();
     // The caption is the panel's title, so it is never an attribute row.
-    let listed = tx.attributes.iter().filter(|a| a.key != LABEL_ATTRIBUTE);
+    let listed = tx
+        .attributes
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.key != LABEL_ATTRIBUTE);
     let total = listed.clone().count();
-    let matching = listed.filter(|a| {
+    let matching = listed.filter(|(_, a)| {
         filter.is_empty()
-            || a.key.to_lowercase().contains(&filter)
-            || format_attribute(&a.value, PREVIEW_BYTES)
-                .to_lowercase()
-                .contains(&filter)
+            || contains_folded(&a.key, filter)
+            || contains_folded(&format_attribute(&a.value, PREVIEW_BYTES), filter)
     });
     let matched = matching.clone().count();
     let mut rows = Vec::new();
-    for attribute in matching.take(limit) {
-        if !budget.open() {
+    for (index, attribute) in matching.take(limit) {
+        if !budget.slot(&mut rows) {
             break;
         }
         let radix = is_integer(&attribute.value).then(|| prefs.radix_of(&attribute.key));
@@ -562,7 +674,7 @@ fn attributes(
         let (key, phase) = split_phase(&attribute.key);
         rows.push(AttrRow {
             key: budget.text(key),
-            full_key: attribute.key.clone(),
+            attribute: index,
             phase,
             value,
             radix,
@@ -582,7 +694,7 @@ fn attributes(
 fn chips(attributes: &Attributes, limit: usize, budget: &mut Budget) -> Vec<Chip> {
     let mut chips = Vec::new();
     for (key, value) in attributes.iter().take(limit) {
-        if !budget.open() {
+        if !budget.slot(&mut chips) {
             break;
         }
         let key = budget.text(key);
@@ -595,26 +707,16 @@ fn chips(attributes: &Attributes, limit: usize, budget: &mut Budget) -> Vec<Chip
 fn stages(
     tx: &Transaction,
     palette: &StagePalette,
+    order: &[usize],
     limit: usize,
     lifetime: u64,
     time: &impl Fn(u64) -> String,
     budget: &mut Budget,
 ) -> Section<StageRow> {
     let primary = palette.primary_lane();
-    // Grouped by lane, the primary lane first, each lane in record order.
-    let mut order: Vec<usize> = (0..tx.stages.len()).collect();
-    let mut lanes = HashMap::new();
-    for stage in &tx.stages {
-        let rank = lanes.len() + 1;
-        lanes.entry(stage.lane.as_str()).or_insert(rank);
-    }
-    let lane_rank = |lane: &str| {
-        if lane == primary { 0 } else { lanes[lane] }
-    };
-    order.sort_by_key(|&index| (lane_rank(&tx.stages[index].lane), index));
     let mut rows = Vec::new();
-    for index in order.into_iter().take(limit) {
-        if !budget.open() {
+    for &index in order.iter().take(limit) {
+        if !budget.slot(&mut rows) {
             break;
         }
         let stage = &tx.stages[index];
@@ -638,12 +740,12 @@ fn stages(
             } else {
                 StageSwatch::Fallback
             },
-            begin_text: time(stage.begin),
-            end_text: match stage.end {
+            begin_text: budget.text(&time(stage.begin)),
+            end_text: budget.text(&match stage.end {
                 Some(end) => time(end),
                 None => "open".into(),
-            },
-            duration_text: time(duration),
+            }),
+            duration_text: budget.text(&time(duration)),
             attributes: chips(&stage.attributes, limit, budget),
             attributes_total,
         });
@@ -663,18 +765,21 @@ fn events(
     time: &impl Fn(u64) -> String,
     budget: &mut Budget,
 ) -> Section<EventRow> {
-    let mut order: Vec<usize> = (0..tx.events.len()).collect();
-    order.sort_by_key(|&index| (tx.events[index].time, index));
+    let order = budget.ordered(
+        tx.events.iter().enumerate().map(|(i, e)| ((e.time, i), i)),
+        limit,
+    );
     let mut rows = Vec::new();
-    for index in order.into_iter().take(limit) {
-        if !budget.open() {
+    for item in order {
+        let index = item.value;
+        if !budget.slot(&mut rows) {
             break;
         }
         let event = &tx.events[index];
         rows.push(EventRow {
             name: budget.text(&event.name),
             time: event.time,
-            time_text: time(event.time),
+            time_text: budget.text(&time(event.time)),
             attributes_total: event.attributes.len(),
             attributes: chips(&event.attributes, limit, budget),
         });
@@ -719,19 +824,26 @@ fn related(
     let outgoing = |e: &volna_trace::data::loaded_tracks::LoadedRelation| {
         e.relation.from == tx.id && e.from_generator == track.item
     };
-    let mut edges: Vec<_> = generator.relations_of(tx.id).collect();
-    edges.sort_by(|a, b| (&a.relation.kind, !outgoing(a)).cmp(&(&b.relation.kind, !outgoing(b))));
+    let edge_count = generator.relations_of(tx.id).count();
+    let edges = budget.ordered(
+        generator
+            .relations_of(tx.id)
+            .enumerate()
+            .map(|(i, e)| ((e.relation.kind.as_str(), !outgoing(e), i), e)),
+        limit,
+    );
     let total = usize::from(parent.is_some())
         + doc
             .resident_generators(track.trace)
             .map(|other| other.children(here).len())
             .sum::<usize>()
-        + edges.len();
+        + edge_count;
     let entries = parent
-        .map(|parent| (Cow::Borrowed("Parent"), parent, RefRole::Parent, None))
+        .map(|parent| ("Parent", parent, RefRole::Parent, None))
         .into_iter()
-        .chain(children().map(|child| (Cow::Borrowed("Children"), child, RefRole::Child, None)))
-        .chain(edges.iter().map(|edge| {
+        .chain(children().map(|child| ("Children", child, RefRole::Child, None)))
+        .chain(edges.iter().map(|item| {
+            let edge = item.value;
             let outgoing = outgoing(edge);
             let (target, target_generator) = if outgoing {
                 (edge.relation.to, edge.to_generator)
@@ -743,13 +855,9 @@ fn related(
                 .attributes
                 .iter()
                 .find(|(key, _)| key == LABEL_ATTRIBUTE)
-                .map(|(_, value)| format_attribute(value, PREVIEW_BYTES));
+                .map(|(_, value)| value);
             (
-                Cow::Owned(format!(
-                    "{} · {}",
-                    edge.relation.kind,
-                    if outgoing { "to" } else { "from" }
-                )),
+                edge.relation.kind.as_str(),
                 TransactionLocation {
                     transaction: target,
                     generator: target_generator,
@@ -761,32 +869,45 @@ fn related(
     let catalog = doc.session(track.trace).map(|s| s.tracks()).unwrap_or(&[]);
     let mut rows = Vec::new();
     for (group, target, role, relation_label) in entries.take(limit) {
-        if !budget.open() {
+        if !budget.slot(&mut rows) {
             break;
         }
         let resident = doc.resident_generator(track.with(target.generator));
         let label = resident
             .as_ref()
             .and_then(|g| g.transaction(target.transaction))
-            .map(crate::pipeline::PipelineModel::label)
-            .filter(|label| !label.is_empty())
-            .map(|label| budget.text(&label));
+            .and_then(|tx| tx.attributes.iter().find(|a| a.key == LABEL_ATTRIBUTE))
+            .map(|a| budget.value(&a.value, Radix::Dec).0)
+            .filter(|label| !label.is_empty());
         let path = (target.generator != track.item)
             .then(|| {
                 catalog
                     .iter()
                     .find(|t| t.id == target.generator)
-                    .map(|t| t.path.clone())
+                    .map(|t| budget.path(&t.path))
             })
             .flatten();
+        let group = match role {
+            RefRole::Relation { outgoing } => {
+                let mut text = budget.text(group);
+                let suffix = if outgoing { " · to" } else { " · from" };
+                if budget.remaining >= suffix.len() {
+                    budget.remaining -= suffix.len();
+                    text.reserve_exact(suffix.len());
+                    text.push_str(suffix);
+                }
+                text
+            }
+            _ => budget.text(group),
+        };
         rows.push(RefRow {
             role,
-            group: budget.text(&group),
+            group,
             target,
             trace: track.trace,
             label,
             track: path,
-            relation_label: relation_label.map(|label| budget.text(&label)),
+            relation_label: relation_label.map(|value| budget.value(value, Radix::Dec).0),
             loaded: resident.is_some(),
         });
     }

@@ -114,6 +114,8 @@ pub struct LoadedGenerator {
     depth: u16,
     median_lifetime: u64,
     stage_census: StageCensus,
+    palette: crate::pipeline::palette::StagePalette,
+    stage_order: Vec<Vec<usize>>,
     _reservation: Option<volna_trace::remote::memory::Reservation>,
     _placed_reservation: Option<volna_trace::remote::memory::Reservation>,
 }
@@ -153,7 +155,8 @@ impl LoadedGenerator {
             checkpoint().await;
             for stage in &tx.stages {
                 checkpoint().await;
-                upper = upper.saturating_add((stage.lane.len() + stage.name.len()) as u64 + 512);
+                upper =
+                    upper.saturating_add((stage.lane.len() + stage.name.len()) as u64 * 4 + 1024);
             }
         }
         let mut reservation = budget
@@ -215,8 +218,40 @@ impl LoadedGenerator {
             }
         };
 
-        let bytes =
-            (sub_rows.capacity() * std::mem::size_of::<u16>()) as u64 + stage_census.bytes();
+        let palette =
+            crate::pipeline::palette::StagePalette::from_censuses(std::iter::once(&stage_census));
+        let mut stage_order = Vec::with_capacity(transactions.len());
+        for tx in transactions {
+            checkpoint().await;
+            let mut lanes = HashMap::new();
+            for stage in &tx.stages {
+                let rank = lanes.len() + 1;
+                lanes.entry(stage.lane.as_str()).or_insert(rank);
+            }
+            let mut order: Vec<usize> = (0..tx.stages.len()).collect();
+            order.sort_unstable_by_key(|&i| {
+                let lane = tx.stages[i].lane.as_str();
+                (
+                    if lane == palette.primary_lane() {
+                        0
+                    } else {
+                        lanes[lane]
+                    },
+                    i,
+                )
+            });
+            stage_order.push(order);
+        }
+        drop(open);
+        drop(free);
+        let bytes = palette.resident_bytes()
+            + (stage_order.capacity() * std::mem::size_of::<Vec<usize>>()) as u64
+            + stage_order
+                .iter()
+                .map(|o| (o.capacity() * std::mem::size_of::<usize>()) as u64)
+                .sum::<u64>()
+            + (sub_rows.capacity() * std::mem::size_of::<u16>()) as u64
+            + stage_census.bytes();
         if let Some(r) = &mut reservation {
             r.shrink(r.bytes().saturating_sub(bytes))?;
         }
@@ -226,6 +261,8 @@ impl LoadedGenerator {
             depth,
             median_lifetime,
             stage_census,
+            palette,
+            stage_order,
             _reservation: reservation,
             _placed_reservation: None,
         })
@@ -321,6 +358,12 @@ impl LoadedGenerator {
     }
 
     /// Stage names per lane, counted at load.
+    pub fn palette(&self) -> &crate::pipeline::palette::StagePalette {
+        &self.palette
+    }
+    pub fn stage_order(&self, ordinal: usize) -> &[usize] {
+        &self.stage_order[ordinal]
+    }
     pub fn stage_census(&self) -> &StageCensus {
         &self.stage_census
     }

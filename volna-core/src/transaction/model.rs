@@ -132,6 +132,23 @@ impl TransactionModel {
         self.history.get(self.cursor)
     }
 
+    /// Resolve an interaction's recorded attribute index without retaining a
+    /// potentially unbounded full key in every prepared view.
+    pub fn attribute_key(
+        &self,
+        doc: &Document,
+        id: TransactionRef,
+        index: usize,
+    ) -> Option<String> {
+        let shown = self.shown()?;
+        if shown.id != id {
+            return None;
+        }
+        let generator = doc.resident_generator(shown.track.track()?)?;
+        let tx = generator.transaction(shown.id)?;
+        Some(tx.attributes.get(index)?.key.clone())
+    }
+
     /// A trace is closing: forget its records, and release its track if
     /// the shown record was one of them.
     pub(crate) fn forget_trace(&mut self, doc: &mut Document, trace: crate::trace::TraceId) {

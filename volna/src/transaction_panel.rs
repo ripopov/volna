@@ -689,7 +689,7 @@ impl TransactionPanelView {
             element = element.child(div().px_3().pb_1().child(Input::new(&self.filter).small()));
         }
         for row in &section.rows {
-            element = element.child(self.attribute_row(t, row, cx));
+            element = element.child(self.attribute_row(t, row, view.identity.id, cx));
         }
         if let Some(note) = self.cut_note(t, section) {
             element = element.child(note);
@@ -701,9 +701,10 @@ impl TransactionPanelView {
         &self,
         t: &crate::theme::Theme,
         row: &AttrRow,
+        record: volna_trace::data::transactions::TransactionRef,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let key = row.full_key.clone();
+        let attribute = row.attribute;
         let value = div()
             .flex_1()
             .min_w_0()
@@ -712,7 +713,7 @@ impl TransactionPanelView {
         // An integer cycles its radix on click, remembered per key.
         let value = match row.radix {
             Some(radix) => value
-                .id(SharedString::from(format!("tx-attr-{key}")))
+                .id(SharedString::from(format!("tx-attr-{attribute}")))
                 .cursor_pointer()
                 .hover(|style| style.bg(t.hover.bg))
                 .tooltip({
@@ -720,7 +721,17 @@ impl TransactionPanelView {
                     move |w, cx| Tooltip::new(hint.clone()).build(w, cx)
                 })
                 .on_click(cx.listener(move |view, _, window, cx| {
-                    view.dispatch(TransactionCommand::Radix(key.clone()), window, cx)
+                    let key = view.ws.upgrade().and_then(|owner| {
+                        let ws = owner.read(cx);
+                        ws.app.panels.transaction(view.id)?.attribute_key(
+                            &ws.app.doc,
+                            record,
+                            attribute,
+                        )
+                    });
+                    if let Some(key) = key {
+                        view.dispatch(TransactionCommand::Radix(key), window, cx);
+                    }
                 }))
                 .into_any_element(),
             None => value.into_any_element(),

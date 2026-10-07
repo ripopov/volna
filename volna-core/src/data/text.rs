@@ -88,7 +88,13 @@ pub fn format_attribute_radix(value: &AttributeValue, radix: Radix, limit: usize
         AttributeValue::Text(v) => return truncate_ref(v, limit),
         AttributeValue::Bytes(v) => format!("{} bytes", v.len()),
         AttributeValue::Logic { width, states, .. } => format!("logic[{width}]/{states}-state"),
-        AttributeValue::Enum { value, name } => format!("{name} ({value})"),
+        AttributeValue::Enum { value, name } => {
+            let suffix = format!(" ({value})");
+            if name.len().saturating_add(suffix.len()) > limit {
+                return truncate_ref(name, limit);
+            }
+            format!("{name}{suffix}")
+        }
         AttributeValue::Fixed { raw, scale } => format!("{raw}e{scale}"),
         AttributeValue::UFixed { raw, scale } => format!("{raw}e{scale}"),
         AttributeValue::List(values) => format!("list[{}]", values.len()),
@@ -101,6 +107,9 @@ pub fn format_attribute_radix(value: &AttributeValue, radix: Radix, limit: usize
 pub fn attribute_value_min_bytes(value: &AttributeValue) -> usize {
     match value {
         AttributeValue::Text(value) => value.len(),
+        AttributeValue::Enum { name, value } => {
+            name.len().saturating_add(value.to_string().len() + 3)
+        }
         _ => 0,
     }
 }
@@ -153,6 +162,9 @@ pub fn truncate(mut text: String, limit: usize) -> String {
     if text.len() <= limit {
         return text;
     }
+    if limit < "…".len() {
+        return String::new();
+    }
     let suffix = "…";
     let mut end = limit.saturating_sub(suffix.len()).min(text.len());
     while end > 0 && !text.is_char_boundary(end) {
@@ -166,6 +178,9 @@ pub fn truncate(mut text: String, limit: usize) -> String {
 pub fn truncate_ref(text: &str, limit: usize) -> String {
     if text.len() <= limit {
         return text.to_owned();
+    }
+    if limit < "…".len() {
+        return String::new();
     }
     let suffix = "…";
     let mut end = limit.saturating_sub(suffix.len()).min(text.len());

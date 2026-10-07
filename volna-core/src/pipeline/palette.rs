@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::color::Color;
-use crate::data::loaded_tracks::LoadedGenerator;
+use crate::data::loaded_tracks::{LoadedGenerator, StageCensus};
 use crate::theme::Theme;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,7 +61,13 @@ impl StagePalette {
     pub fn build(generators: &[Arc<LoadedGenerator>]) -> Self {
         // Merging the census of each generator in order keeps first
         // appearance across generators, so no record is scanned here.
-        let lanes = || generators.iter().flat_map(|g| &g.stage_census().lanes);
+        Self::from_censuses(generators.iter().map(|g| g.stage_census()))
+    }
+
+    pub(crate) fn from_censuses<'a>(
+        censuses: impl Iterator<Item = &'a StageCensus> + Clone,
+    ) -> Self {
+        let lanes = || censuses.clone().flat_map(|c| &c.lanes);
         let mut lane_counts: Vec<(&str, u64)> = Vec::new();
         let mut lane_index = HashMap::new();
         for lane in lanes() {
@@ -111,6 +117,14 @@ impl StagePalette {
             names,
             primary_lane,
         }
+    }
+
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        (self.primary_lane.capacity()
+            + self.names.capacity() * std::mem::size_of::<String>()
+            + self.by_name.capacity() * (std::mem::size_of::<(String, usize)>() + 1)
+            + self.names.iter().map(String::capacity).sum::<usize>()
+            + self.by_name.keys().map(String::capacity).sum::<usize>()) as u64
     }
 
     /// Where stage `name` sits on the ladder.
