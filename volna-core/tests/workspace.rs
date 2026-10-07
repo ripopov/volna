@@ -987,3 +987,57 @@ fn serialization_refuses_bytes_above_the_reader_limit() {
     saved.sidebar.filter = "x".repeat(MAX_BYTES);
     assert!(saved.to_bytes().is_err());
 }
+
+#[test]
+fn prepared_plans_reject_secondary_trace_set_changes_atomically() {
+    for change in ["replace", "remove", "add"] {
+        let mut app = app();
+        let b = app.add_session(ProceduralTrace::session(100)).unwrap();
+        app.handle(Command::AddVars(vec![Traced::new(b, 1)]));
+        let plan = prepare(&value(&app), &app).unwrap();
+        let generation = app.doc.generation();
+        if change == "add" {
+            app.add_session(ProceduralTrace::session(100)).unwrap();
+        } else {
+            app.handle(Command::RemoveTrace(b));
+            if change == "replace" {
+                assert_eq!(app.add_session(ProceduralTrace::session(100)).unwrap(), b);
+            }
+        }
+        assert_eq!(app.doc.generation(), generation);
+        let before = app.debug_state();
+        let saved = value(&app);
+        assert!(plan.commit(&mut app).is_err(), "accepted {change}");
+        assert_eq!(app.debug_state(), before);
+        assert_eq!(value(&app), saved);
+    }
+}
+
+#[test]
+fn prepared_plans_reject_a_trace_completing_after_resolution() {
+    let mut app = app();
+    app.handle(Command::AddTrace(volna_trace::session::OpenSpec::Bytes {
+        name: "B.vtr".into(),
+        bytes: vec![],
+    }));
+    let request = app
+        .take_requests()
+        .into_iter()
+        .find(|r| matches!(r, LoadRequest::Open { .. }))
+        .unwrap();
+    let plan = prepare(&value(&app), &app).unwrap();
+    let LoadRequest::Open {
+        trace, generation, ..
+    } = request
+    else {
+        unreachable!()
+    };
+    app.deliver(LoadResult::Opened {
+        trace,
+        generation,
+        result: Ok(ProceduralTrace::session(100)),
+    });
+    let before = app.debug_state();
+    assert!(plan.commit(&mut app).is_err());
+    assert_eq!(app.debug_state(), before);
+}

@@ -119,6 +119,12 @@ impl RestoreReport {
 
 pub struct RestorePlan {
     generation: u64,
+    // Resolved identities belong to each slot, including its load state.
+    traces: Vec<(
+        TraceId,
+        u64,
+        std::mem::Discriminant<crate::trace::SlotState>,
+    )>,
     /// How saved times convert to the session unit, when it differs.
     retime: Option<crate::trace::Rescale>,
     /// The names the user gave the traces, by letter.
@@ -434,6 +440,12 @@ impl Workspace {
         scopes.restore(app.doc.traces(), selected, expanded);
         Ok(RestorePlan {
             generation: app.doc.generation(),
+            traces: app
+                .doc
+                .traces()
+                .iter()
+                .map(|s| (s.id, s.generation(), std::mem::discriminant(s.state())))
+                .collect(),
             retime,
             renames,
             panels,
@@ -452,7 +464,13 @@ impl RestorePlan {
 
     pub fn commit(self, app: &mut App) -> Result<RestoreReport> {
         ensure!(
-            app.doc.generation() == self.generation,
+            app.doc.generation() == self.generation
+                && app
+                    .doc
+                    .traces()
+                    .iter()
+                    .map(|s| (s.id, s.generation(), std::mem::discriminant(s.state())))
+                    .eq(self.traces),
             "trace changed while preparing workspace"
         );
         ensure!(app.doc.is_loaded(), "no trace open");
