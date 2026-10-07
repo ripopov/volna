@@ -1041,3 +1041,83 @@ fn prepared_plans_reject_a_trace_completing_after_resolution() {
     assert!(plan.commit(&mut app).is_err());
     assert_eq!(app.debug_state(), before);
 }
+
+fn initial_opens() -> (App, Vec<(TraceId, u64)>) {
+    let mut app = App::new();
+    app.configure_persistence(Persistence::Auto);
+    let spec = |name: &str| volna_trace::session::OpenSpec::Bytes {
+        name: name.into(),
+        bytes: vec![],
+    };
+    app.open_resource(spec("A.vtr"), TRACE.into());
+    app.add_resource(spec("B.vtr"), "file:///B.vtr".into());
+    let requests = app
+        .take_requests()
+        .into_iter()
+        .filter_map(|r| match r {
+            LoadRequest::Open {
+                trace, generation, ..
+            } => Some((trace, generation)),
+            _ => None,
+        })
+        .collect();
+    (app, requests)
+}
+fn finish_initial(app: &mut App, request: (TraceId, u64), success: bool) {
+    app.deliver(LoadResult::Opened {
+        trace: request.0,
+        generation: request.1,
+        result: if success {
+            Ok(ProceduralTrace::session(100))
+        } else {
+            Err(anyhow::anyhow!("open failed"))
+        },
+    });
+}
+#[test]
+fn secondary_completion_cannot_publish_primary_resource_events() {
+    let (mut app, requests) = initial_opens();
+    app.take_events();
+    finish_initial(&mut app, requests[1], true);
+    assert!(!app.take_events().iter().any(|e| matches!(
+        e,
+        volna_core::Event::TraceOpened { .. } | volna_core::Event::LoadWorkspace { .. }
+    )));
+    finish_initial(&mut app, requests[0], true);
+    let events = app.take_events();
+    assert_eq!(events.iter().filter(|e| matches!(e, volna_core::Event::LoadWorkspace { trace_uri } if trace_uri == TRACE)).count(), 1);
+    assert_eq!(app.workspace.trace_uri.as_deref(), Some(TRACE));
+}
+#[test]
+fn initial_completion_order_never_makes_primary_trace_undoable() {
+    for order in [[0, 1], [1, 0]] {
+        let (mut app, requests) = initial_opens();
+        for i in order {
+            finish_initial(&mut app, requests[i], true);
+        }
+        assert_eq!(app.undo_label(), Some("Add trace B"));
+        app.handle(Command::Undo);
+        assert!(app.doc.session(TraceId::A).is_some());
+        assert!(app.doc.traces().get(requests[1].0).is_none());
+    }
+}
+#[test]
+fn failed_secondary_open_does_not_cancel_primary_workspace_loading() {
+    let (mut app, requests) = initial_opens();
+    finish_initial(&mut app, requests[1], false);
+    finish_initial(&mut app, requests[0], true);
+    app.restore_candidates(
+        TRACE,
+        Candidate {
+            target: file(LOCATION),
+            content: Content::Missing,
+            writable: true,
+        },
+        Candidate {
+            target: Target::Storage { key: TRACE.into() },
+            content: Content::Missing,
+            writable: true,
+        },
+    );
+    assert_eq!(app.workspace.scheduler.target(), Some(&file(LOCATION)));
+}

@@ -960,8 +960,14 @@ impl App {
                 result: Ok(_),
                 refined,
             }) => {
-                if self.doc.traces().loaded().count() == 1 {
+                let first = self.doc.traces().loaded().count() == 1;
+                if first {
                     self.on_session_changed();
+                }
+                if trace.is_a() {
+                    if !first {
+                        self.trace_visible(trace, refined, Instant::now());
+                    }
                     self.session_ready_for_workspace();
                 } else {
                     self.trace_joined(trace, refined, Instant::now());
@@ -977,10 +983,11 @@ impl App {
                     self.events.push(Event::Notice(format!(
                         "Trace {trace} was not added: {error}"
                     )));
-                    self.workspace_trace_failed(trace, error);
-                } else {
+                }
+                if trace.is_a() {
                     self.workspace.loading = false;
                 }
+                self.workspace_trace_failed(trace, error);
                 self.changed();
             }
             None => {}

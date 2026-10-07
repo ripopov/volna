@@ -163,18 +163,21 @@ impl App {
         Ok(trace)
     }
 
-    /// A trace other than the first finished opening: place the rest anew
-    /// if the unit refined, show it in the sidebar, and make its arrival an
-    /// undoable step.
-    pub(super) fn trace_joined(&mut self, trace: TraceId, refined: Option<u64>, now: Instant) {
+    /// Place an arriving trace and refresh its sidebar and panel identity.
+    /// Primary trace A can arrive after a secondary and never enters history.
+    pub(super) fn trace_visible(&mut self, trace: TraceId, refined: Option<u64>, now: Instant) {
         if let Some(factor) = refined {
             self.refine(factor, now);
         }
         self.scopes.add_trace(self.doc.traces(), trace);
         self.variables.rebuild(self.doc.traces());
-        self.record_trace_step(format!("Add trace {trace}"), TraceEdit::Remove(trace), now);
-        // Panel titles and chips name traces once there are several.
         self.layout_changed();
+    }
+
+    /// A secondary arrival is undoable, regardless of disk completion order.
+    pub(super) fn trace_joined(&mut self, trace: TraceId, refined: Option<u64>, now: Instant) {
+        self.trace_visible(trace, refined, now);
+        self.record_trace_step(format!("Add trace {trace}"), TraceEdit::Remove(trace), now);
     }
 
     /// Journal a trace edit as a step of its own, or as part of the command
