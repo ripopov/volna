@@ -29,65 +29,81 @@ pub struct NameCensus {
     pub position_sum: u64,
 }
 
+/// Borrowed load-time indexes; census vectors retain first appearance order.
+#[derive(Default)]
+struct StageIndex<'a> {
+    lanes: HashMap<&'a str, usize>,
+    names: HashMap<(&'a str, &'a str), usize>,
+    cursors: Vec<(u64, usize)>,
+    touched: Vec<usize>,
+}
+
 impl StageCensus {
-    /// Count one record's stages. `cursors` is scratch space reused across
-    /// records: per lane, the next position and the name after the last one
-    /// matched. Stages mostly arrive in pipeline order, so that name and the
-    /// previous stage's lane are tried before a search.
-    async fn add<F: std::future::Future<Output = ()>>(
+    /// Count one record, reusing indexed lanes/names and pipeline-order hints.
+    /// Reset only lanes this record touched; a global lane census may be large
+    /// while individual records have very few stages.
+    async fn add<'a, F: std::future::Future<Output = ()>>(
         &mut self,
-        stages: &[TransactionStage],
-        cursors: &mut Vec<(u64, usize)>,
+        stages: &'a [TransactionStage],
+        index: &mut StageIndex<'a>,
         checkpoint: &mut impl FnMut() -> F,
     ) {
-        cursors.iter_mut().for_each(|cursor| *cursor = (0, 0));
         let mut lane = 0;
         for stage in stages {
             checkpoint().await;
             if self.lanes.get(lane).is_none_or(|l| l.lane != stage.lane) {
-                lane = match self.lanes.iter().position(|l| l.lane == stage.lane) {
-                    Some(lane) => lane,
-                    None => {
-                        self.lanes.push(LaneCensus {
-                            lane: stage.lane.clone(),
-                            stages: 0,
-                            names: Vec::new(),
-                        });
-                        cursors.push((0, 0));
-                        self.lanes.len() - 1
-                    }
-                };
+                lane = *index.lanes.entry(&stage.lane).or_insert_with(|| {
+                    self.lanes.push(LaneCensus {
+                        lane: stage.lane.clone(),
+                        stages: 0,
+                        names: Vec::new(),
+                    });
+                    index.cursors.push((0, 0));
+                    self.lanes.len() - 1
+                });
             }
             let census = &mut self.lanes[lane];
             census.stages += 1;
-            let (position, hint) = cursors[lane];
+            let (position, hint) = index.cursors[lane];
+            if position == 0 {
+                index.touched.push(lane);
+            }
             let name = if census.names.get(hint).is_some_and(|n| n.name == stage.name) {
                 hint
-            } else if let Some(name) = census.names.iter().position(|n| n.name == stage.name) {
-                name
             } else {
-                census.names.push(NameCensus {
-                    name: stage.name.clone(),
-                    count: 0,
-                    position_sum: 0,
-                });
-                census.names.len() - 1
+                *index
+                    .names
+                    .entry((&stage.lane, &stage.name))
+                    .or_insert_with(|| {
+                        census.names.push(NameCensus {
+                            name: stage.name.clone(),
+                            count: 0,
+                            position_sum: 0,
+                        });
+                        census.names.len() - 1
+                    })
             };
             census.names[name].count += 1;
             census.names[name].position_sum += position;
-            cursors[lane] = (position + 1, name + 1);
+            index.cursors[lane] = (position + 1, name + 1);
+        }
+        for lane in index.touched.drain(..) {
+            index.cursors[lane] = (0, 0);
         }
     }
 
     fn bytes(&self) -> u64 {
-        let lane = std::mem::size_of::<LaneCensus>() as u64;
-        let name = std::mem::size_of::<NameCensus>() as u64;
-        self.lanes.iter().fold(0, |bytes, l| {
-            l.names.iter().fold(
-                bytes.saturating_add(lane + l.lane.capacity() as u64),
-                |bytes, n| bytes.saturating_add(name + n.name.capacity() as u64),
-            )
-        })
+        let mut bytes = (self.lanes.capacity() * std::mem::size_of::<LaneCensus>()) as u64;
+        for lane in &self.lanes {
+            bytes += lane.lane.capacity() as u64
+                + (lane.names.capacity() * std::mem::size_of::<NameCensus>()) as u64;
+            bytes += lane
+                .names
+                .iter()
+                .map(|name| name.name.capacity() as u64)
+                .sum::<u64>();
+        }
+        bytes
     }
 }
 
@@ -129,12 +145,15 @@ impl LoadedGenerator {
         mut checkpoint: impl FnMut() -> F,
     ) -> anyhow::Result<Self> {
         let transactions = raw.transactions();
-        let mut upper = (transactions.len() as u64).saturating_mul(128);
+        // Include census vector growth and the borrowed lane/name hash indexes.
+        let mut upper = (transactions.len() as u64)
+            .saturating_mul(128)
+            .saturating_add(256);
         for tx in transactions {
             checkpoint().await;
             for stage in &tx.stages {
                 checkpoint().await;
-                upper = upper.saturating_add((stage.lane.len() + stage.name.len()) as u64 + 128);
+                upper = upper.saturating_add((stage.lane.len() + stage.name.len()) as u64 + 512);
             }
         }
         let mut reservation = budget
@@ -174,13 +193,14 @@ impl LoadedGenerator {
             )));
         }
         let mut stage_census = StageCensus::default();
-        let mut cursors = Vec::new();
+        let mut index = StageIndex::default();
         for tx in transactions {
             checkpoint().await;
             stage_census
-                .add(&tx.stages, &mut cursors, &mut checkpoint)
+                .add(&tx.stages, &mut index, &mut checkpoint)
                 .await;
         }
+        drop(index);
         let median_lifetime = {
             let mut lifetimes = Vec::with_capacity(transactions.len());
             for tx in transactions {

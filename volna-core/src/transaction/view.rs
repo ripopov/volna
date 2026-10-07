@@ -4,7 +4,7 @@
 //! render what this produces, and the headless tests assert on it directly.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::data::text::{
@@ -480,6 +480,7 @@ fn lifeline(
         primary: true,
         cells: Vec::new(),
     }];
+    let mut lane_index = HashMap::from([(primary, 0usize)]);
     for (index, stage) in tx.stages.iter().enumerate() {
         let begin = stage.begin;
         let end = crate::pipeline::PipelineModel::stage_end(tx, stage);
@@ -497,14 +498,15 @@ fn lifeline(
             },
             stage: Some(index),
         };
-        match lanes.iter_mut().find(|row| row.lane == stage.lane) {
-            Some(row) => row.cells.push(cell),
-            None => lanes.push(LaneRow {
+        let row = *lane_index.entry(stage.lane.as_str()).or_insert_with(|| {
+            lanes.push(LaneRow {
                 lane: stage.lane.clone(),
                 primary: false,
-                cells: vec![cell],
-            }),
-        }
+                cells: Vec::new(),
+            });
+            lanes.len() - 1
+        });
+        lanes[row].cells.push(cell);
     }
     if tx.stages.is_empty() {
         // The pipeline paints a stageless record as one cell over its
@@ -601,18 +603,13 @@ fn stages(
     let primary = palette.primary_lane();
     // Grouped by lane, the primary lane first, each lane in record order.
     let mut order: Vec<usize> = (0..tx.stages.len()).collect();
-    let mut lanes: Vec<&str> = Vec::new();
+    let mut lanes = HashMap::new();
     for stage in &tx.stages {
-        if !lanes.contains(&stage.lane.as_str()) {
-            lanes.push(&stage.lane);
-        }
+        let rank = lanes.len() + 1;
+        lanes.entry(stage.lane.as_str()).or_insert(rank);
     }
     let lane_rank = |lane: &str| {
-        if lane == primary {
-            0
-        } else {
-            1 + lanes.iter().position(|l| *l == lane).unwrap_or(0)
-        }
+        if lane == primary { 0 } else { lanes[lane] }
     };
     order.sort_by_key(|&index| (lane_rank(&tx.stages[index].lane), index));
     let mut rows = Vec::new();

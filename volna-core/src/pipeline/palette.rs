@@ -5,7 +5,7 @@
 //! first shows them in. The theme turns a rank into colours
 //! ([`Theme::stage_style`]), so one palette serves a dark pipeline and a light
 //! transaction panel. The counts come from each generator's `StageCensus`,
-//! taken once at load, so building a palette costs lanes × names rather than
+//! taken once at load, so building a palette indexes lanes and sorts distinct names rather than
 //! a scan of every record. A future stage table can fill the same struct with
 //! authored colours; the painter only ever asks for `style(name, theme)`.
 
@@ -63,11 +63,13 @@ impl StagePalette {
         // appearance across generators, so no record is scanned here.
         let lanes = || generators.iter().flat_map(|g| &g.stage_census().lanes);
         let mut lane_counts: Vec<(&str, u64)> = Vec::new();
+        let mut lane_index = HashMap::new();
         for lane in lanes() {
-            match lane_counts.iter_mut().find(|(name, _)| *name == lane.lane) {
-                Some((_, n)) => *n += lane.stages,
-                None => lane_counts.push((&lane.lane, lane.stages)),
-            }
+            let index = *lane_index.entry(lane.lane.as_str()).or_insert_with(|| {
+                lane_counts.push((&lane.lane, 0));
+                lane_counts.len() - 1
+            });
+            lane_counts[index].1 += lane.stages;
         }
         let primary_lane = if lane_counts.iter().any(|(lane, _)| *lane == DEFAULT_LANE) {
             DEFAULT_LANE.to_owned()
@@ -79,18 +81,18 @@ impl StagePalette {
                 .unwrap_or_else(|| DEFAULT_LANE.to_owned())
         };
         // Per name in first-appearance order: the sum and count of its positions.
-        let mut seen: Vec<(String, u64, u64)> = Vec::new();
+        let mut seen: Vec<(&str, u64, u64)> = Vec::new();
+        let mut name_index = HashMap::new();
         for census in lanes()
             .filter(|lane| lane.lane == primary_lane)
             .flat_map(|lane| &lane.names)
         {
-            match seen.iter_mut().find(|(name, _, _)| *name == census.name) {
-                Some((_, sum, n)) => {
-                    *sum += census.position_sum;
-                    *n += census.count;
-                }
-                None => seen.push((census.name.clone(), census.position_sum, census.count)),
-            }
+            let index = *name_index.entry(census.name.as_str()).or_insert_with(|| {
+                seen.push((&census.name, 0, 0));
+                seen.len() - 1
+            });
+            seen[index].1 += census.position_sum;
+            seen[index].2 += census.count;
         }
         let mut order: Vec<usize> = (0..seen.len()).collect();
         // A stable sort keeps first appearance among equal positions.
@@ -98,7 +100,7 @@ impl StagePalette {
             let mean = |i: usize| seen[i].1 as f64 / seen[i].2 as f64;
             mean(a).total_cmp(&mean(b))
         });
-        let names: Vec<String> = order.into_iter().map(|i| seen[i].0.clone()).collect();
+        let names: Vec<String> = order.into_iter().map(|i| seen[i].0.to_owned()).collect();
         let by_name = names
             .iter()
             .enumerate()
