@@ -31,8 +31,13 @@ pub struct Viewport {
 impl Viewport {
     pub fn fit(range: (u64, u64)) -> Self {
         let (a, b) = (range.0 as f64, range.1 as f64);
-        let end = if b > a { b } else { a + 1.0 };
-        Viewport { start: a, end }
+        // One integer tick can disappear when converted at a large absolute
+        // timestamp. Use the navigation minimum before constructing endpoints.
+        let width = (b - a).max(1.0).max(min_width(a.abs().max(b.abs())));
+        Viewport {
+            start: a,
+            end: a + width,
+        }
     }
 
     /// The trace with `margin_px` on each side of a `width_px` wide area;
@@ -108,8 +113,11 @@ impl Viewport {
 
     /// Keep the window inside the trace plus edge space and above the minimum width.
     pub fn clamp(&mut self, limits: (u64, u64)) {
-        let (a, b) = (limits.0 as f64, limits.1 as f64);
-        let span = (b - a).max(1.0);
+        // Clamp against the same representable extent used by fit; raw
+        // rounded endpoints could otherwise force the minimum width to zero.
+        let fit = Self::fit(limits);
+        let (a, b) = (fit.start, fit.end);
+        let span = fit.width();
         let lo = a - span * EDGE_SPACE;
         let hi = b + span * EDGE_SPACE;
         if !(self.start.is_finite() && self.end.is_finite()) {
@@ -206,6 +214,58 @@ mod tests {
         };
         v.clamp((0, 1000));
         assert!(v.start.is_finite() && v.width() > 0.0);
+    }
+
+    #[test]
+    fn short_late_traces_fit_and_navigate_with_finite_nonzero_windows() {
+        for range in [
+            (1u64 << 60, (1u64 << 60) + 1),
+            (u64::MAX - 1, u64::MAX),
+            (1u64 << 60, 1u64 << 60),
+            (0, 0),
+        ] {
+            let check = |v: Viewport| {
+                assert!(v.start.is_finite() && v.end.is_finite());
+                assert!(v.width() > 0.0, "{range:?}: {v:?}");
+                assert!(v.x_of(range.0 as f64, 1000.0).is_finite());
+                assert!(v.time_at(0.0, 1000.0) < v.time_at(500.0, 1000.0));
+                assert!(v.time_at(500.0, 1000.0) < v.time_at(1000.0, 1000.0));
+            };
+            let mut v = Viewport::fit(range);
+            check(v);
+            v.clamp(range);
+            check(v);
+            v = Viewport::fit_px(range, 1000.0, FIT_MARGIN_PX);
+            check(v);
+            for _ in 0..100 {
+                v.zoom_about(500.0, 1000.0, 2.0, range);
+                check(v);
+            }
+            for delta in [-1e6, 1e6] {
+                v.pan_px(delta, 1000.0, range);
+                check(v);
+            }
+            v.go_to_start(range);
+            check(v);
+            v.go_to_end(range);
+            check(v);
+            v.center_on(range.0 as f64, range);
+            check(v);
+        }
+    }
+
+    #[test]
+    fn clamping_degenerate_late_windows_recovers_the_minimum_width() {
+        let range = (1u64 << 60, (1u64 << 60) + 1);
+        for start in [range.0 as f64, f64::NAN] {
+            let mut v = Viewport {
+                start,
+                end: range.1 as f64,
+            };
+            v.clamp(range);
+            assert!(v.width() > 0.0 && v.width().is_finite());
+            assert!(v.x_of(range.0 as f64, 1000.0).is_finite());
+        }
     }
 
     #[test]
