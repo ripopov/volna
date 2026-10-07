@@ -60,7 +60,7 @@ pub struct Trace {
     pub design_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Shared {
     pub viewport: Viewport,
     pub cursor: Option<u64>,
@@ -69,7 +69,7 @@ pub struct Shared {
     pub reference: Option<Reference>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sidebar {
     pub visible: bool,
     pub width: f32,
@@ -229,7 +229,7 @@ impl Workspace {
     /// Resolve against an immutable live session. Hosts resolve the trace resource
     /// before this call; `expected_trace` is its durable identity.
     pub fn prepare(
-        self,
+        &self,
         app: &App,
         expected_trace: &str,
         workspace_location: &str,
@@ -362,10 +362,10 @@ impl Workspace {
         };
         let panels = self
             .panels
-            .into_iter()
+            .iter()
             .map(|raw| Panel::restore(raw, &mut context))
             .collect::<Result<_>>()?;
-        let panels = Panels::restore(self.layout, panels, self.focused, &app.panels)?;
+        let panels = Panels::restore(self.layout.clone(), panels, self.focused, &app.panels)?;
         let mut scopes = ScopeTreeModel::default();
         let find = |path: &Traced<Vec<String>>| {
             open.hierarchy(path.trace)
@@ -403,8 +403,8 @@ impl Workspace {
             retime,
             renames,
             panels,
-            shared: self.shared,
-            sidebar: self.sidebar,
+            shared: self.shared.clone(),
+            sidebar: self.sidebar.clone(),
             scopes,
             report,
         })

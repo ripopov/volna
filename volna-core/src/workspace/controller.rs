@@ -419,11 +419,15 @@ impl App {
             self.workspace.scheduler.enabled(),
             "workspace persistence is disabled"
         );
-        ensure!(
-            self.workspace.trace_uri.is_some(),
-            "open the referenced trace first"
-        );
+        let trace_uri = self
+            .workspace
+            .trace_uri
+            .as_deref()
+            .context("open the referenced trace first")?;
         let workspace = Workspace::parse(bytes)?;
+        // Validate before flushing or changing traces. Resolve again after
+        // the requested recordings open, rather than reusing their old identities.
+        workspace.prepare(self, trace_uri, target.location())?;
         let waiting = Waiting {
             workspace: Box::new(workspace),
             origin: target.clone(),
@@ -433,7 +437,6 @@ impl App {
             explicit: true,
             traces: Default::default(),
         };
-        resolve_traces(&waiting)?;
         // The open workspace is flushed before any of its traces change.
         self.transition(Transition::OpenWorkspace(Box::new(waiting)));
         Ok(())

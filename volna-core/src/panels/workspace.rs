@@ -88,21 +88,19 @@ impl Panel {
         }
     }
 
-    pub(crate) fn restore(raw: Box<RawValue>, ctx: &mut RestoreContext<'_>) -> Result<Self> {
+    pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Self> {
         let header: PanelHeader =
             serde_json::from_str(raw.get()).context("invalid panel header")?;
         match (header.kind.as_str(), header.version) {
-            ("waves", crate::wave::workspace::VERSION) => {
-                crate::wave::workspace::restore(&raw, ctx)
-            }
+            ("waves", crate::wave::workspace::VERSION) => crate::wave::workspace::restore(raw, ctx),
             ("pipeline", crate::pipeline::workspace::VERSION) => {
-                crate::pipeline::workspace::restore(&raw, ctx)
+                crate::pipeline::workspace::restore(raw, ctx)
             }
             ("table", crate::table::workspace::VERSION) => {
-                crate::table::workspace::restore(&raw, ctx)
+                crate::table::workspace::restore(raw, ctx)
             }
             ("transaction", crate::transaction::workspace::VERSION) => {
-                crate::transaction::workspace::restore(&raw, ctx)
+                crate::transaction::workspace::restore(raw, ctx)
             }
             ("start", 1) => Ok(Self {
                 id: header.id,
@@ -117,7 +115,7 @@ impl Panel {
                 Ok(Self {
                     id: header.id,
                     title: crate::history::Journaled::new(header.title),
-                    kind: PanelKind::Unsupported(raw),
+                    kind: PanelKind::Unsupported(raw.to_owned()),
                 })
             }
         }

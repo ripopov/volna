@@ -3,6 +3,7 @@ use std::sync::Arc;
 use volna_core::panels::{PanelId, PanelsCommand};
 use volna_core::testing::ProceduralTrace;
 use volna_core::testing::a_all;
+use volna_core::trace::{TraceId, Traced};
 use volna_core::workspace::{MAX_BYTES, Workspace, resolve_trace};
 use volna_core::{Action, App, Command};
 
@@ -441,6 +442,132 @@ fn automatic_corruption_suspends_saves_but_explicit_failures_leave_policy_and_st
     let (ticket, _) = emitted_save(&mut app);
     app.workspace_saved(ticket, None, Instant::now());
     assert!(!app.workspace.scheduler.suspended());
+}
+
+#[test]
+fn invalid_open_workspace_preserves_live_traces_views_and_save_destination() {
+    let mut app = persistent_app();
+    let b = TraceId::from_letter('B').unwrap();
+    app.add_resource(
+        volna_trace::session::OpenSpec::Bytes {
+            name: "other.vtr".into(),
+            bytes: Vec::new(),
+        },
+        resolve_trace("other.vtr", LOCATION).unwrap(),
+    );
+    volna_core::testing::complete_open(&mut app, ProceduralTrace::session(100));
+    app.handle(Command::AddVars(vec![
+        Traced::new(TraceId::A, 0),
+        Traced::new(b, 1),
+    ]));
+    app.doc.shared.cursor = Some(23);
+    app.doc.add_marker(17).unwrap();
+    app.handle(Command::Action(Action::SplitRight));
+    volna_core::testing::complete_open(&mut app, ProceduralTrace::session(100));
+
+    // Start with an acknowledged workspace so no pending flush delays the restore.
+    app.save_workspace(None);
+    let (ticket, _) = emitted_save(&mut app);
+    app.workspace_saved(ticket, None, Instant::now());
+    assert!(!app.workspace.scheduler.dirty());
+    assert!(!app.workspace.scheduler.suspended());
+    let before = value(&app);
+    let traces = app.doc.traces().ids().collect::<Vec<_>>();
+    assert_eq!(traces, [TraceId::A, b]);
+    let undo = app.undo_label().map(str::to_owned);
+    let redo = app.redo_label().map(str::to_owned);
+    let revision = app.workspace.scheduler.revision();
+
+    // The file parses, but its reversed viewport must be rejected before B is closed.
+    let mut invalid = capture(&app);
+    invalid.traces.retain(|trace| trace.letter == TraceId::A);
+    invalid.shared.viewport.end = invalid.shared.viewport.start - 1.0;
+    let bytes = invalid.to_bytes().unwrap();
+    Workspace::parse(&bytes).unwrap();
+    let destination = file(&resolve_trace("invalid.volna.json", LOCATION).unwrap());
+    let result = app.open_workspace(destination, &bytes);
+
+    assert_eq!(
+        app.doc.traces().ids().collect::<Vec<_>>(),
+        traces,
+        "rejecting a workspace must not remove an existing trace"
+    );
+    assert_eq!(value(&app), before);
+    assert_eq!(app.undo_label(), undo.as_deref());
+    assert_eq!(app.redo_label(), redo.as_deref());
+    assert_eq!(app.workspace.scheduler.target(), Some(&file(LOCATION)));
+    assert_eq!(app.workspace.scheduler.revision(), revision);
+    assert!(!app.workspace.scheduler.dirty());
+    assert!(!app.workspace.scheduler.suspended());
+    assert!(result.is_err(), "the invalid viewport must be rejected");
+
+    app.take_events();
+    app.handle(Command::SetFilter("after rejected restore".into()));
+    app.tick(Instant::now() + IDLE * 2);
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, file(LOCATION));
+    assert_eq!(Workspace::parse(&bytes).unwrap().traces.len(), 2);
+}
+
+#[test]
+fn invalid_open_workspace_cannot_flush_live_edits_or_queue_trace_opens() {
+    let mut app = persistent_app();
+    app.handle(Command::AddVars(a_all(vec![0])));
+    volna_core::testing::complete_open(&mut app, ProceduralTrace::session(100));
+    assert!(app.workspace.scheduler.dirty());
+    let before = value(&app);
+    let revision = app.workspace.scheduler.revision();
+    let undo = app.undo_label().map(str::to_owned);
+    let mut incoming = before.clone();
+    let mut secondary = incoming["traces"][0].clone();
+    secondary["letter"] = json!("B");
+    secondary["path"] = json!("file:///other.vtr");
+    incoming["traces"].as_array_mut().unwrap().push(secondary);
+    let destination = file(&resolve_trace("invalid.volna.json", LOCATION).unwrap());
+    app.take_events();
+
+    for (path, invalid) in [
+        ("/shared/viewport/end", json!(-1)),
+        (
+            "/shared/markers",
+            json!([
+                {"id": 1, "time": 1, "label": null},
+                {"id": 1, "time": 2, "label": null}
+            ]),
+        ),
+        ("/shared/reference", json!({"marker": 99})),
+        ("/sidebar/width", json!(-1)),
+        ("/panels/0/selected", json!([999])),
+        ("/panels/0/link/cursor", json!(false)),
+        ("/layout/tabs", json!([999])),
+        ("/focused", json!(999)),
+        ("/traces/0/path", json!("different.vtr")),
+        ("/traces/1/letter", json!("A")),
+        ("/traces/1/time_range", json!([100, 0])),
+    ] {
+        let mut invalid_workspace = incoming.clone();
+        *invalid_workspace.pointer_mut(path).unwrap() = invalid;
+        let bytes = serde_json::to_vec(&invalid_workspace).unwrap();
+        Workspace::parse(&bytes).unwrap();
+        assert!(
+            app.open_workspace(destination.clone(), &bytes).is_err(),
+            "accepted invalid {path}"
+        );
+        assert_eq!(value(&app), before, "changed state for {path}");
+        assert_eq!(app.undo_label(), undo.as_deref());
+        assert_eq!(app.workspace.scheduler.target(), Some(&file(LOCATION)));
+        assert_eq!(app.workspace.scheduler.revision(), revision);
+        assert!(app.workspace.scheduler.dirty());
+        assert!(!app.workspace.scheduler.suspended());
+        assert!(app.workspace.scheduler.outstanding().is_none());
+        assert!(app.take_requests().is_empty(), "queued a load for {path}");
+        assert!(
+            !app.take_events()
+                .iter()
+                .any(|event| matches!(event, volna_core::Event::PersistWorkspace { .. })),
+            "flushed live edits for {path}"
+        );
+    }
 }
 
 #[test]
