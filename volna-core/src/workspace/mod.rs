@@ -25,6 +25,32 @@ pub const VERSION: u32 = 5;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ROWS: usize = 100_000;
 
+/// Capture and restore share the same aggregate row limit across panels.
+pub(crate) fn admit_rows(total: &mut usize, count: usize) -> Result<()> {
+    *total = total
+        .checked_add(count)
+        .context("too many workspace rows")?;
+    ensure!(*total <= MAX_ROWS, "too many workspace rows");
+    Ok(())
+}
+
+/// Stop serialization before an oversized snapshot can replace a readable save.
+struct SnapshotWriter(Vec<u8>);
+impl std::io::Write for SnapshotWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > MAX_BYTES.saturating_sub(self.0.len()) {
+            return Err(std::io::Error::other(format!(
+                "workspace exceeds {MAX_BYTES} bytes"
+            )));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Workspace {
     pub format: String,
@@ -139,7 +165,9 @@ impl Workspace {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        Ok(serde_json::to_vec_pretty(self)?)
+        let mut writer = SnapshotWriter(Vec::new());
+        serde_json::to_writer_pretty(&mut writer, self)?;
+        Ok(writer.0)
     }
 
     /// Capture destinations use a durable URI, or a reference relative to the workspace:
@@ -176,6 +204,12 @@ impl Workspace {
             "trace A has no durable location"
         );
         let (layout, focused, saved_panels) = app.panels.saved_view();
+        let mut row_count = 0;
+        for panel in &saved_panels {
+            if let Some(waves) = panel.kind.waves() {
+                admit_rows(&mut row_count, waves.items().len())?;
+            }
+        }
         let panels = saved_panels
             .into_iter()
             .map(|p| p.save(&app.doc))

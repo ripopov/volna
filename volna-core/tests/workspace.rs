@@ -954,3 +954,36 @@ fn a_save_that_keeps_failing_the_same_way_notices_once() {
     }
     assert_eq!(app.workspace.notices, ["Workspace not saved: disk full"]);
 }
+
+#[test]
+fn saves_refuse_excess_rows_without_acknowledging_or_overwriting_live_state() {
+    let mut app = persistent_app();
+    app.handle(Command::AddVars(a_all(vec![
+        0;
+        volna_core::workspace::MAX_ROWS
+            + 1
+    ])));
+    let count = app.panels.focused_waves().unwrap().items().len();
+    assert!(Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).is_err());
+    app.save_workspace(None);
+    assert!(
+        !app.take_events()
+            .iter()
+            .any(|e| matches!(e, volna_core::Event::PersistWorkspace { .. }))
+    );
+    assert!(app.workspace.scheduler.dirty());
+    assert_eq!(app.panels.focused_waves().unwrap().items().len(), count);
+    assert!(
+        app.workspace
+            .notices
+            .iter()
+            .any(|s| s.contains("too many workspace rows"))
+    );
+}
+
+#[test]
+fn serialization_refuses_bytes_above_the_reader_limit() {
+    let mut saved = capture(&app());
+    saved.sidebar.filter = "x".repeat(MAX_BYTES);
+    assert!(saved.to_bytes().is_err());
+}

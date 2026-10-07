@@ -16,7 +16,7 @@ use crate::clock::ClockView;
 use crate::panels::workspace::valid_viewport;
 use crate::panels::{Panel, PanelId, PanelKind, workspace::RestoreContext};
 use crate::trace::{TraceId, Traced};
-use crate::workspace::MAX_ROWS;
+use crate::workspace::admit_rows;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -305,8 +305,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     let mut saved: WavePanel = serde_json::from_str(raw.get()).context("invalid waveform panel")?;
     let mut flat = Vec::new();
     flatten(std::mem::take(&mut saved.rows), 0, &mut flat)?;
-    ctx.row_count += flat.len();
-    ensure!(ctx.row_count <= MAX_ROWS, "too many workspace rows");
+    admit_rows(&mut ctx.row_count, flat.len())?;
     ensure!(
         saved.scroll_y.is_finite() && saved.scroll_y >= 0.0,
         "invalid row scroll"
