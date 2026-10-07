@@ -19,12 +19,23 @@ pub struct ActivityCounter {
     contributions: vtr::Contributions,
     /// Census index → scope.
     order: Vec<ScopeId>,
-    reservation: Option<Reservation>,
+    _reservation: Reservation,
 }
 
 impl ActivityCounter {
     /// One recording census over the hierarchy in preorder.
-    pub fn build(h: &Hierarchy) -> Self {
+    pub fn build(h: &Hierarchy, budget: &MemoryBudget) -> anyhow::Result<Self> {
+        let signals = h.vars().map(|v| v.signal.0 as usize + 1).max().unwrap_or(0);
+        // Census owns scope/union-find stacks and up to two recorded weights
+        // per variable. Allow vector growth and the overlapping arrays made
+        // while grouping weights by signal; discard that scratch after build.
+        let upper = super::admission::sum([
+            super::admission::bytes::<[u8; 128]>(h.scope_count())?,
+            super::admission::bytes::<[u8; 48]>(h.var_count())?,
+            super::admission::bytes::<[u8; 16]>(signals)?,
+            512,
+        ])?;
+        let reservation = budget.reserve_object("the activity counter", upper)?;
         let mut census = vtr::Census::recording();
         let mut order = Vec::with_capacity(h.scope_count());
         let mut stack: Vec<Option<ScopeId>> = h.roots().iter().rev().map(Some).collect();
@@ -43,22 +54,19 @@ impl ActivityCounter {
             stack.extend(scope.children.iter().rev().map(Some));
         }
         let (_, contributions) = census.finish_recorded();
-        Self {
+        drop(stack);
+        let resident = contributions.memory_bytes()
+            + (order.capacity() * std::mem::size_of::<ScopeId>()) as u64;
+        Ok(Self {
             contributions,
             order,
-            reservation: None,
-        }
-    }
-
-    pub fn account(mut self, budget: &MemoryBudget) -> anyhow::Result<Self> {
-        self.reservation =
-            Some(budget.reserve_object("the activity counter", self.resident_bytes())?);
-        Ok(self)
+            _reservation: super::admission::finish(reservation, resident)?,
+        })
     }
 
     pub fn resident_bytes(&self) -> u64 {
         self.contributions.memory_bytes()
-            + (self.order.len() * std::mem::size_of::<ScopeId>()) as u64
+            + (self.order.capacity() * std::mem::size_of::<ScopeId>()) as u64
     }
 
     /// Distinct signals of `signals` at or below every scope, by scope.
@@ -71,6 +79,11 @@ impl ActivityCounter {
         }
         by_scope
     }
+}
+
+fn counts_bytes(changing: &Vec<u32>, upper: &Vec<u32>, undecided: &Vec<SignalRef>) -> u64 {
+    ((changing.capacity() + upper.capacity()) * std::mem::size_of::<u32>()
+        + undecided.capacity() * std::mem::size_of::<SignalRef>()) as u64
 }
 
 /// One window's activity per scope: the signals that change, and at most
@@ -86,7 +99,7 @@ pub struct ActivityCounts {
     /// Signals the index cannot decide in this window, to read from the
     /// trace; empty once exact.
     pub undecided: Vec<SignalRef>,
-    reservation: Option<Reservation>,
+    _reservation: Reservation,
 }
 
 impl ActivityCounts {
@@ -95,7 +108,16 @@ impl ActivityCounts {
         index: &vtr::activity::Index,
         counter: &ActivityCounter,
         window: (u64, u64),
-    ) -> Self {
+        budget: &MemoryBudget,
+    ) -> anyhow::Result<Self> {
+        // Two classification lists can grow to twice their logical length;
+        // per-scope count scratch overlaps the changing and upper arrays.
+        let upper = super::admission::sum([
+            super::admission::bytes::<[u8; 16]>(index.signal_count() as usize)?,
+            super::admission::bytes::<[u8; 16]>(counter.order.len())?,
+            64,
+        ])?;
+        let reservation = budget.reserve_object("the scope activity", upper)?;
         let c = index.classify(window.0, window.1);
         let changing = counter.count(c.active.iter().map(|s| s.0));
         let upper = if c.undecided.is_empty() {
@@ -104,37 +126,58 @@ impl ActivityCounts {
             let may = counter.count(c.undecided.iter().map(|s| s.0));
             changing.iter().zip(may).map(|(a, b)| a + b).collect()
         };
-        Self {
+        let undecided: Vec<_> = c.undecided.into_iter().map(|s| SignalRef(s.0)).collect();
+        drop(c.active);
+        let resident = counts_bytes(&changing, &upper, &undecided);
+        Ok(Self {
             window,
             changing,
             upper,
-            undecided: c.undecided.into_iter().map(|s| SignalRef(s.0)).collect(),
-            reservation: None,
-        }
+            undecided,
+            _reservation: super::admission::finish(reservation, resident)?,
+        })
+    }
+
+    /// Admit the count arrays before resolving histories or projecting a
+    /// remote answer. The returned owner pays for both scratch and output.
+    pub(crate) fn admit_resolution(
+        &self,
+        counter: &ActivityCounter,
+        budget: &MemoryBudget,
+    ) -> anyhow::Result<Reservation> {
+        budget.reserve_object(
+            "the scope activity",
+            super::admission::sum([
+                super::admission::bytes::<[u8; 12]>(counter.order.len())?,
+                super::admission::bytes::<[SignalRef; 2]>(self.undecided.len())?,
+                32,
+            ])?,
+        )
     }
 
     /// The exact counts once the undecided signals were read: `changed` are
-    /// those of them that change in the window.
-    pub fn resolved(&self, counter: &ActivityCounter, changed: &[SignalRef]) -> Self {
+    /// those of them that change in the window. Admission covers count scratch.
+    pub(crate) fn resolved(
+        &self,
+        counter: &ActivityCounter,
+        changed: Vec<SignalRef>,
+        reservation: Reservation,
+    ) -> anyhow::Result<Self> {
         let more = counter.count(changed.iter().map(|s| s.0));
-        Self {
+        let changing: Vec<_> = self.changing.iter().zip(more).map(|(a, b)| a + b).collect();
+        drop(changed);
+        let resident = counts_bytes(&changing, &Vec::new(), &Vec::new());
+        Ok(Self {
             window: self.window,
-            changing: self.changing.iter().zip(more).map(|(a, b)| a + b).collect(),
+            changing,
             upper: Vec::new(),
             undecided: Vec::new(),
-            reservation: None,
-        }
-    }
-
-    pub fn account(mut self, budget: &MemoryBudget) -> anyhow::Result<Self> {
-        self.reservation =
-            Some(budget.reserve_object("the scope activity", self.resident_bytes())?);
-        Ok(self)
+            _reservation: super::admission::finish(reservation, resident)?,
+        })
     }
 
     pub fn resident_bytes(&self) -> u64 {
-        ((self.changing.len() + self.upper.len()) * 4
-            + self.undecided.len() * std::mem::size_of::<SignalRef>()) as u64
+        counts_bytes(&self.changing, &self.upper, &self.undecided)
     }
 
     /// Whether every signal is decided.

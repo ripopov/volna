@@ -479,7 +479,7 @@ pub struct IntegralSummary {
     integral: Vec<f64>,
     /// `undefined[m]`: how many of those spans are undefined and last.
     undefined: Vec<u32>,
-    reservation: Option<volna_trace::remote::memory::Reservation>,
+    _reservation: volna_trace::remote::memory::Reservation,
 }
 
 impl std::fmt::Debug for IntegralSummary {
@@ -496,9 +496,16 @@ impl IntegralSummary {
     /// One pass over `h` read as `reading`. The span of change `j` is its
     /// value from its time to the next change's; the last change's span is
     /// open and never summed.
-    pub fn build(h: &Arc<dyn SignalHistory>, reading: Reading) -> Self {
+    pub fn build(
+        h: &Arc<dyn SignalHistory>,
+        reading: Reading,
+        budget: &volna_trace::remote::memory::MemoryBudget,
+    ) -> anyhow::Result<Self> {
         let len = h.len();
-        let blocks = len.saturating_sub(1) / INTEGRAL_BLOCK + 1;
+        let blocks = len.saturating_sub(1).div_ceil(INTEGRAL_BLOCK).max(1);
+        let bytes = crate::data::admission::bytes::<f64>(blocks)?
+            + crate::data::admission::bytes::<u32>(blocks)?;
+        let reservation = budget.reserve_object("the integral summary", bytes)?;
         let mut integral = Vec::with_capacity(blocks);
         let mut undefined = Vec::with_capacity(blocks);
         let (mut sum, mut count) = (Kahan::default(), 0u32);
@@ -518,29 +525,19 @@ impl IntegralSummary {
             integral.push(0.0);
             undefined.push(0);
         }
-        Self {
+        Ok(Self {
             reading,
             history: analog::history_identity(h),
             len,
             integral,
             undefined,
-            reservation: None,
-        }
-    }
-
-    /// Charge the summary to a memory budget for as long as it lives.
-    pub fn account(
-        mut self,
-        budget: &volna_trace::remote::memory::MemoryBudget,
-    ) -> anyhow::Result<Self> {
-        self.reservation =
-            Some(budget.reserve_object("the integral summary", self.resident_bytes())?);
-        Ok(self)
+            _reservation: reservation,
+        })
     }
 
     pub fn resident_bytes(&self) -> u64 {
-        (self.integral.len() * std::mem::size_of::<f64>()
-            + self.undefined.len() * std::mem::size_of::<u32>()) as u64
+        (self.integral.capacity() * std::mem::size_of::<f64>()
+            + self.undefined.capacity() * std::mem::size_of::<u32>()) as u64
     }
 
     pub fn reading(&self) -> Reading {
@@ -817,15 +814,13 @@ impl<'a> Merge<'a> {
     /// (`None` before a layer's first).
     fn new(layers: &'a [Layer], at: Vec<Option<usize>>) -> Self {
         let values: Vec<Sample> = layers.iter().zip(&at).map(|(l, &i)| l.sample(i)).collect();
-        let heap = layers
-            .iter()
-            .zip(&at)
-            .enumerate()
-            .filter_map(|(k, (l, i))| {
-                let next = i.map_or(0, |i| i + 1);
-                (next < l.history.len()).then(|| Reverse((l.history.time(next), k)))
-            })
-            .collect();
+        let mut heap = BinaryHeap::with_capacity(layers.len());
+        for (k, (l, i)) in layers.iter().zip(&at).enumerate() {
+            let next = i.map_or(0, |i| i + 1);
+            if next < l.history.len() {
+                heap.push(Reverse((l.history.time(next), k)));
+            }
+        }
         let mut merge = Self {
             layers,
             at,
@@ -971,18 +966,46 @@ pub struct TotalSummary {
     /// `levels[0]` has one extent per block of `1 << shift` ticks from
     /// `start`; each level above merges [`TOTAL_FANOUT`] of the one below.
     levels: Vec<Vec<Peak>>,
-    reservation: Option<volna_trace::remote::memory::Reservation>,
+    _reservation: volna_trace::remote::memory::Reservation,
 }
 
 impl TotalSummary {
     /// Walk every change of `layers` in time order over the trace's time
     /// range `span`: O(changes × log layers + blocks).
-    pub fn build(layers: &[Layer], span: (u64, u64)) -> Self {
+    pub fn build(
+        layers: &[Layer],
+        span: (u64, u64),
+        budget: &volna_trace::remote::memory::MemoryBudget,
+    ) -> anyhow::Result<Self> {
         let (start, end) = (span.0, span.1.max(span.0));
         let shift = (0..64)
             .find(|&s| ((end - start) >> s) < TOTAL_BLOCKS)
             .unwrap_or(63);
         let blocks = ((end - start) >> shift) as usize + 1;
+        let (arrays, level_count) = crate::data::admission::pyramid(
+            blocks,
+            TOTAL_FANOUT,
+            TOTAL_FANOUT,
+            std::mem::size_of::<Vec<Peak>>(),
+            crate::data::admission::bytes::<Peak>,
+        )?;
+        let resident = arrays
+            .checked_add(std::mem::size_of::<Self>() as u64)
+            .and_then(|n| {
+                n.checked_add(crate::data::admission::bytes::<(usize, Reading)>(layers.len()).ok()?)
+            })
+            .ok_or_else(|| anyhow::anyhow!("analysis storage size overflow"))?;
+        let scratch = crate::data::admission::sum([
+            crate::data::admission::bytes::<Option<usize>>(layers.len())?,
+            crate::data::admission::bytes::<Sample>(layers.len())?,
+            crate::data::admission::bytes::<Reverse<(u64, usize)>>(layers.len())?,
+        ])?;
+        let reservation = budget.reserve_object(
+            "the stack total",
+            resident
+                .checked_add(scratch)
+                .ok_or_else(|| anyhow::anyhow!("analysis storage size overflow"))?,
+        )?;
         let block = |t: u64| ((t.clamp(start, end) - start) >> shift) as usize;
         let mut level: Vec<Peak> = vec![None; blocks];
         // The total held from `since` up to (not including) `until`.
@@ -1010,7 +1033,9 @@ impl TotalSummary {
             account(&merge);
         }
         hold(&mut level, merge.total(), since, end + 1);
-        let mut levels = vec![level];
+        drop(merge);
+        let mut levels = Vec::with_capacity(level_count);
+        levels.push(level);
         while levels.last().is_some_and(|l| l.len() > TOTAL_FANOUT) {
             let above = levels
                 .last()
@@ -1026,14 +1051,14 @@ impl TotalSummary {
                 .collect();
             levels.push(above);
         }
-        Self {
+        Ok(Self {
             key: key(layers),
             range,
             start,
             shift,
             levels,
-            reservation: None,
-        }
+            _reservation: crate::data::admission::finish(reservation, resident)?,
+        })
     }
 
     fn block_ticks(&self, level: usize) -> f64 {
@@ -1074,19 +1099,11 @@ impl TotalSummary {
         out
     }
 
-    /// Charge the summary to a memory budget for as long as it lives.
-    pub fn account(
-        mut self,
-        budget: &volna_trace::remote::memory::MemoryBudget,
-    ) -> anyhow::Result<Self> {
-        self.reservation = Some(budget.reserve_object("the stack total", self.resident_bytes())?);
-        Ok(self)
-    }
-
     pub fn resident_bytes(&self) -> u64 {
-        let blocks: usize = self.levels.iter().map(Vec::len).sum();
+        let blocks: usize = self.levels.iter().map(Vec::capacity).sum();
         (std::mem::size_of::<Self>()
-            + self.key.len() * std::mem::size_of::<(usize, Reading)>()
+            + self.key.capacity() * std::mem::size_of::<(usize, Reading)>()
+            + self.levels.capacity() * std::mem::size_of::<Vec<Peak>>()
             + blocks * std::mem::size_of::<Peak>()) as u64
     }
 

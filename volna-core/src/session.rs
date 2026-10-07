@@ -321,8 +321,7 @@ impl LoadRequest {
             } => LoadResult::ActivityCounter {
                 trace,
                 generation,
-                result: crate::data::ActivityCounter::build(session.hierarchy())
-                    .account(&budget)
+                result: crate::data::ActivityCounter::build(session.hierarchy(), &budget)
                     .map(Arc::new),
             },
             LoadRequest::Activity {
@@ -336,8 +335,7 @@ impl LoadRequest {
                 trace,
                 generation,
                 window,
-                result: crate::data::ActivityCounts::classify(&index, &counter, window)
-                    .account(&budget)
+                result: crate::data::ActivityCounts::classify(&index, &counter, window, &budget)
                     .map(Arc::new),
             },
             LoadRequest::ResolveActivity {
@@ -351,9 +349,16 @@ impl LoadRequest {
                 trace,
                 generation,
                 window: counts.window,
-                result: session
-                    .resolve_activity(&counts.undecided, counts.window.0, counts.window.1)
-                    .and_then(|changed| counts.resolved(&counter, &changed).account(&budget))
+                result: counts
+                    .admit_resolution(&counter, &budget)
+                    .and_then(|reservation| {
+                        let changed = session.resolve_activity(
+                            &counts.undecided,
+                            counts.window.0,
+                            counts.window.1,
+                        )?;
+                        counts.resolved(&counter, changed, reservation)
+                    })
                     .map(Arc::new),
             },
             LoadRequest::Summary {
@@ -367,8 +372,7 @@ impl LoadRequest {
                 signal,
                 kind,
                 history: crate::wave::analog::history_identity(&history),
-                result: crate::wave::analog::AnalogSummary::build(&history, kind)
-                    .account(&budget)
+                result: crate::wave::analog::AnalogSummary::build(&history, kind, &budget)
                     .map(Arc::new),
             },
             LoadRequest::GroupSummary {
@@ -377,11 +381,12 @@ impl LoadRequest {
                 range,
                 budget,
             } => {
-                let summary = crate::wave::group::GroupSummary::build(&members, range);
+                let key = crate::wave::group::key(&members);
+                let summary = crate::wave::group::GroupSummary::build(&members, range, &budget);
                 LoadResult::GroupSummary {
                     generation,
-                    key: summary.key().to_vec(),
-                    result: summary.account(&budget).map(Arc::new),
+                    key,
+                    result: summary.map(Arc::new),
                 }
             }
             LoadRequest::Integral {
@@ -393,8 +398,7 @@ impl LoadRequest {
                 generation,
                 history: crate::wave::analog::history_identity(&history),
                 reading,
-                result: crate::wave::stack::IntegralSummary::build(&history, reading)
-                    .account(&budget)
+                result: crate::wave::stack::IntegralSummary::build(&history, reading, &budget)
                     .map(Arc::new),
             },
             LoadRequest::StackTotal {
@@ -403,11 +407,12 @@ impl LoadRequest {
                 range,
                 budget,
             } => {
-                let summary = crate::wave::stack::TotalSummary::build(&layers, range);
+                let key = crate::wave::stack::key(&layers);
+                let summary = crate::wave::stack::TotalSummary::build(&layers, range, &budget);
                 LoadResult::StackTotal {
                     generation,
-                    key: summary.key().clone(),
-                    result: summary.account(&budget).map(Arc::new),
+                    key,
+                    result: summary.map(Arc::new),
                 }
             }
         }

@@ -799,7 +799,7 @@ impl Document {
                 continue;
             }
             if stack::changes(&layers) <= stack::WALK_MAX {
-                let load = match TotalSummary::build(&layers, self.limits()).account(budget) {
+                let load = match TotalSummary::build(&layers, self.limits(), budget) {
                     Ok(summary) => TotalLoad::Ready(Arc::new(summary)),
                     Err(_) => TotalLoad::Failed,
                 };

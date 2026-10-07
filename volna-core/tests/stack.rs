@@ -252,7 +252,12 @@ fn a_stack_draws_negative_parts_below_zero_and_stops_at_an_undefined_layer() {
 fn the_whole_trace_walk_finds_the_highest_top_and_lowest_bottom() {
     for seed in 1..40u64 {
         let layers = members(0x5bd1_e995 ^ (seed * 31));
-        let summary = TotalSummary::build(&layers, (0, 10_000));
+        let summary = TotalSummary::build(
+            &layers,
+            (0, 10_000),
+            &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+        )
+        .unwrap();
         let mut times: Vec<u64> = layers
             .iter()
             .flat_map(|l| {
@@ -325,7 +330,12 @@ fn integral_prefixes_equal_a_direct_walk_at_every_block_boundary() {
         let mut rng = Rng(0x7f4a_7c15 ^ (seed * 131));
         let layer = member_until(&mut rng, 0, 20_000);
         let h = layer.history.as_ref();
-        let summary = IntegralSummary::build(&layer.history, layer.reading);
+        let summary = IntegralSummary::build(
+            &layer.history,
+            layer.reading,
+            &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+        )
+        .unwrap();
         let direct = |k: usize| {
             (0..k).fold((0.0, 0u32), |(sum, count), j| {
                 let dur = (h.time(j + 1) - h.time(j)) as f64;
@@ -373,7 +383,12 @@ fn integral_prefixes_equal_a_direct_walk_at_every_block_boundary() {
                 .collect(),
             initial: WaveValue::Unavailable,
         });
-        let summary = IntegralSummary::build(&h, Reading::Bit);
+        let summary = IntegralSummary::build(
+            &h,
+            Reading::Bit,
+            &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+        )
+        .unwrap();
         let ones = (len - 1) / 2;
         assert_eq!(
             summary.prefix(h.as_ref(), len - 1),
@@ -391,7 +406,14 @@ fn column_means_from_summaries_equal_the_walked_ones() {
         let summarized: Vec<Layer> = walked
             .iter()
             .map(|l| {
-                let s = Arc::new(IntegralSummary::build(&l.history, l.reading));
+                let s = Arc::new(
+                    IntegralSummary::build(
+                        &l.history,
+                        l.reading,
+                        &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+                    )
+                    .unwrap(),
+                );
                 l.clone().with_summary(Some(s))
             })
             .collect();
@@ -433,17 +455,25 @@ fn a_long_layer_waits_for_its_summary_rather_than_walk() {
     };
     layers[0].building = true;
     assert!(stack::frame(&layers, &vp, 800).waiting());
-    let s = Arc::new(IntegralSummary::build(
-        &layers[0].history,
-        layers[0].reading,
-    ));
+    let s = Arc::new(
+        IntegralSummary::build(
+            &layers[0].history,
+            layers[0].reading,
+            &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+        )
+        .unwrap(),
+    );
     layers[0] = layers[0].clone().with_summary(Some(s));
     assert!(!stack::frame(&layers, &vp, 800).waiting());
     // A summary of another reading is not used.
-    let other = Arc::new(IntegralSummary::build(
-        &layers[1].history,
-        Reading::Number(NumericKind::Float),
-    ));
+    let other = Arc::new(
+        IntegralSummary::build(
+            &layers[1].history,
+            Reading::Number(NumericKind::Float),
+            &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+        )
+        .unwrap(),
+    );
     assert!(
         layers[1]
             .clone()
@@ -656,7 +686,12 @@ fn the_summarys_peaks_agree_with_a_walk() {
                 .map(|k| member_until(&mut rng, k, end))
                 .collect()
         };
-        let summary = TotalSummary::build(&layers, (0, end));
+        let summary = TotalSummary::build(
+            &layers,
+            (0, end),
+            &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+        )
+        .unwrap();
         // Columns of 1,024 ticks hold four whole 256-tick blocks: exact.
         let vp = Viewport {
             start: 0.0,

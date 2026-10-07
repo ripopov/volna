@@ -308,9 +308,9 @@ impl RemoteClient {
                 let work = self.resolutions.remove(pos);
                 let result = result
                     .and_then(|changed| {
-                        work.counts
-                            .resolved(&work.counter, &changed)
-                            .account(&work.budget)
+                        let reservation =
+                            work.counts.admit_resolution(&work.counter, &work.budget)?;
+                        work.counts.resolved(&work.counter, changed, reservation)
                     })
                     .map(Arc::new);
                 LoadResult::ActivityResolved {

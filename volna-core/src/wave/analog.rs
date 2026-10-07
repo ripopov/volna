@@ -296,7 +296,7 @@ pub struct AnalogSummary {
     len: usize,
     /// `levels[0]` holds one extent per block; each level above halves it.
     levels: Vec<Vec<Extent>>,
-    reservation: Option<volna_trace::remote::memory::Reservation>,
+    _reservation: volna_trace::remote::memory::Reservation,
 }
 
 impl std::fmt::Debug for AnalogSummary {
@@ -310,13 +310,26 @@ impl std::fmt::Debug for AnalogSummary {
 }
 
 impl AnalogSummary {
-    pub fn build(h: &Arc<dyn SignalHistory>, kind: NumericKind) -> Self {
+    pub fn build(
+        h: &Arc<dyn SignalHistory>,
+        kind: NumericKind,
+        budget: &volna_trace::remote::memory::MemoryBudget,
+    ) -> anyhow::Result<Self> {
         let len = h.len();
+        let (bytes, level_count) = crate::data::admission::pyramid(
+            len.div_ceil(SUMMARY_BLOCK),
+            2,
+            1,
+            std::mem::size_of::<Vec<Extent>>(),
+            crate::data::admission::bytes::<Extent>,
+        )?;
+        let reservation = budget.reserve_object("the analog summary", bytes)?;
         let mut leaves = vec![Extent::EMPTY; len.div_ceil(SUMMARY_BLOCK)];
         for (i, leaf) in (0..len).zip((0..len).map(|i| i / SUMMARY_BLOCK)) {
             leaves[leaf].add(sample(h.as_ref(), kind, Some(i)));
         }
-        let mut levels = vec![leaves];
+        let mut levels = Vec::with_capacity(level_count);
+        levels.push(leaves);
         while levels.last().is_some_and(|l| l.len() > 1) {
             let below = levels.last().unwrap();
             let above = below
@@ -331,28 +344,19 @@ impl AnalogSummary {
                 .collect();
             levels.push(above);
         }
-        Self {
+        Ok(Self {
             kind,
             history: history_identity(h),
             len,
             levels,
-            reservation: None,
-        }
-    }
-
-    /// Charge the summary to a memory budget for as long as it lives.
-    pub fn account(
-        mut self,
-        budget: &volna_trace::remote::memory::MemoryBudget,
-    ) -> anyhow::Result<Self> {
-        self.reservation =
-            Some(budget.reserve_object("the analog summary", self.resident_bytes())?);
-        Ok(self)
+            _reservation: reservation,
+        })
     }
 
     pub fn resident_bytes(&self) -> u64 {
-        let nodes: usize = self.levels.iter().map(Vec::len).sum();
-        (nodes * std::mem::size_of::<Extent>()) as u64
+        let nodes: usize = self.levels.iter().map(Vec::capacity).sum();
+        (nodes * std::mem::size_of::<Extent>()
+            + self.levels.capacity() * std::mem::size_of::<Vec<Extent>>()) as u64
     }
 
     pub fn kind(&self) -> NumericKind {
@@ -940,7 +944,12 @@ mod tests {
             .map(|i| (i % 97 != 13).then_some((i * 7919) % 2001 - 1000))
             .collect();
         let h = history(&values);
-        let s = AnalogSummary::build(&h, NumericKind::Signed);
+        let s = AnalogSummary::build(
+            &h,
+            NumericKind::Signed,
+            &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+        )
+        .unwrap();
         let direct = |a: usize, b: usize| {
             let mut e = Extent::EMPTY;
             for i in a..=b {
@@ -960,7 +969,7 @@ mod tests {
         // 16 blocks, then 8, 4, 2 and the root.
         assert_eq!(
             s.resident_bytes(),
-            31 * std::mem::size_of::<Extent>() as u64
+            (31 * std::mem::size_of::<Extent>() + 5 * std::mem::size_of::<Vec<Extent>>()) as u64
         );
     }
 

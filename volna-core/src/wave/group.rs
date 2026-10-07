@@ -118,7 +118,7 @@ pub struct GroupSummary {
     start: u64,
     shift: u32,
     levels: Vec<SummaryLevel>,
-    reservation: Option<volna_trace::remote::memory::Reservation>,
+    _reservation: volna_trace::remote::memory::Reservation,
 }
 
 struct SummaryLevel {
@@ -159,13 +159,31 @@ pub fn key(members: &[Arc<dyn SignalHistory>]) -> Vec<usize> {
 
 impl GroupSummary {
     /// Summarize `members` over the trace time range `range`.
-    pub fn build(members: &[Arc<dyn SignalHistory>], range: (u64, u64)) -> Self {
+    pub fn build(
+        members: &[Arc<dyn SignalHistory>],
+        range: (u64, u64),
+        budget: &volna_trace::remote::memory::MemoryBudget,
+    ) -> anyhow::Result<Self> {
         let (start, end) = (range.0, range.1.max(range.0));
         let span = end - start;
         let shift = (0..64)
             .find(|&s| (span >> s) < SUMMARY_BLOCKS)
             .unwrap_or(63);
         let blocks = (span >> shift) as usize + 1;
+        let (bytes, level_count) = crate::data::admission::pyramid(
+            blocks,
+            FANOUT,
+            FANOUT,
+            std::mem::size_of::<SummaryLevel>(),
+            |n| {
+                Ok(crate::data::admission::bytes::<u8>(n)?
+                    + crate::data::admission::bytes::<u64>(n.div_ceil(64))?)
+            },
+        )?;
+        let bytes = bytes
+            .checked_add(crate::data::admission::bytes::<usize>(members.len())?)
+            .ok_or_else(|| anyhow::anyhow!("analysis storage size overflow"))?;
+        let reservation = budget.reserve_object("the group summary", bytes)?;
         let block = |t: u64| (t.clamp(start, end) - start) as usize >> shift;
         let mut level = SummaryLevel::new(blocks);
         for h in members {
@@ -188,7 +206,8 @@ impl GroupSummary {
                 level.mark(from..=blocks - 1);
             }
         }
-        let mut levels = vec![level];
+        let mut levels = Vec::with_capacity(level_count);
+        levels.push(level);
         while levels.last().is_some_and(|l| l.changes.len() > FANOUT) {
             let below = levels.last().unwrap();
             let n = below.changes.len().div_ceil(FANOUT);
@@ -201,29 +220,23 @@ impl GroupSummary {
             }
             levels.push(above);
         }
-        Self {
+        Ok(Self {
             key: key(members),
             start,
             shift,
             levels,
-            reservation: None,
-        }
-    }
-
-    /// Charge the summary to a memory budget for as long as it lives.
-    pub fn account(
-        mut self,
-        budget: &volna_trace::remote::memory::MemoryBudget,
-    ) -> anyhow::Result<Self> {
-        self.reservation = Some(budget.reserve_object("the group summary", self.resident_bytes())?);
-        Ok(self)
+            _reservation: reservation,
+        })
     }
 
     pub fn resident_bytes(&self) -> u64 {
-        self.levels
-            .iter()
-            .map(|l| (l.changes.len() + l.undefined.len() * 8) as u64)
-            .sum()
+        (self.key.capacity() * std::mem::size_of::<usize>()
+            + self.levels.capacity() * std::mem::size_of::<SummaryLevel>()) as u64
+            + self
+                .levels
+                .iter()
+                .map(|l| (l.changes.capacity() + l.undefined.capacity() * 8) as u64)
+                .sum::<u64>()
     }
 
     /// The identity of the signals it summarizes (see [`key`]).
@@ -414,7 +427,12 @@ mod tests {
                 changes(SignalShape::Vector { width: 8 }, &at)
             })
             .collect();
-        let summary = GroupSummary::build(&members, (0, 100_000));
+        let summary = GroupSummary::build(
+            &members,
+            (0, 100_000),
+            &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
+        )
+        .unwrap();
         for (start, end, width) in [(0.0, 100_000.0, 500), (20_000.0, 60_000.0, 800)] {
             let vp = vp(start, end);
             let walked = walk(&members, &vp, width);
