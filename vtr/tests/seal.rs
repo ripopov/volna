@@ -138,7 +138,7 @@ impl Run {
                 let s = self.sigs[i];
                 let v: u64 = self.rng.gen();
                 match w.signal_kind(s).unwrap() {
-                    SignalKind::Bits { states: 4, width } if v % 5 == 0 => {
+                    SignalKind::Bits { states: 4, width } if v.is_multiple_of(5) => {
                         let text: String = (0..width)
                             .map(|k| b"01xz"[(v >> (k % 60)) as usize & 3] as char)
                             .collect();
@@ -172,7 +172,11 @@ impl Run {
                     self.t,
                     &[
                         LogArg::U64(self.t),
-                        LogArg::Text(if self.t % 2 == 0 { "even" } else { "odd" }),
+                        LogArg::Text(if self.t.is_multiple_of(2) {
+                            "even"
+                        } else {
+                            "odd"
+                        }),
                     ],
                 )
                 .unwrap();

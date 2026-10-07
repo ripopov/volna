@@ -471,7 +471,7 @@ fn check(case: &Case, keeps: Keeps, ends: Ends, e: &Emitted, k: &Kept) -> Vec<St
                 .position(|a| *a == "--block-records")
                 .map_or(BLOCK_RECORDS, |i| case.args[i + 1].parse().unwrap());
             let fewer = grows || k.changes < e.changes;
-            if !k.recovered || !fewer || k.changes % block != 0 || k.logs != 0 {
+            if !k.recovered || !fewer || !k.changes.is_multiple_of(block) || k.logs != 0 {
                 problems.push(format!(
                     "expected a recovered file of completed blocks, kept {k:?} of {e:?}"
                 ));

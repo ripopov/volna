@@ -1910,7 +1910,7 @@ impl Writer {
     #[inline(always)]
     fn tick(&mut self) -> Result<()> {
         self.ticks = self.ticks.wrapping_add(1);
-        if self.ticks % 256 == 0 && !self.opts.commit_interval.is_zero() {
+        if self.ticks.is_multiple_of(256) && !self.opts.commit_interval.is_zero() {
             return self.commit_due();
         }
         Ok(())
@@ -2427,7 +2427,8 @@ impl Writer {
         let g = self.meta.group_size as usize;
         let n_sig = self.kinds.len();
         let a = self.frame_sigs;
-        if n_sig > a && a % g != 0 && self.sent_bits[a / g / 64] & 1 << (a / g % 64) != 0 {
+        if n_sig > a && !a.is_multiple_of(g) && self.sent_bits[a / g / 64] & 1 << (a / g % 64) != 0
+        {
             let before = chunk.frame.len();
             for s in a..n_sig.min((a / g + 1) * g) {
                 self.push_frame(s, &mut chunk.frame);

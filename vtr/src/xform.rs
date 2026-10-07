@@ -120,7 +120,7 @@ pub fn dict_encode(
     t: &mut DictTable,
     max: usize,
 ) -> Option<usize> {
-    debug_assert!(w > 0 && v.len() % w == 0 && max <= DICT_MAX);
+    debug_assert!(w > 0 && v.len().is_multiple_of(w) && max <= DICT_MAX);
     t.dict.clear();
     t.codes.clear();
     t.codes.reserve(v.len() / w);
@@ -227,7 +227,7 @@ fn dict_expand<const W: usize>(dict: &[u8], codes: &[u8], out: &mut Vec<u8>) {
 
 /// Applies `x` in place to `v` (a whole number of `w`-byte entries); `tmp` is scratch space.
 pub fn forward(x: Xform, w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
-    debug_assert!(w > 0 && v.len() % w == 0);
+    debug_assert!(w > 0 && v.len().is_multiple_of(w));
     match x {
         Xform::None => {}
         Xform::Shuffle => shuffle(w, v, tmp),
@@ -242,7 +242,7 @@ pub fn forward(x: Xform, w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
 
 /// Undoes [`forward`].
 pub fn inverse(x: Xform, w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
-    debug_assert!(w > 0 && v.len() % w == 0);
+    debug_assert!(w > 0 && v.len().is_multiple_of(w));
     match x {
         Xform::None => {}
         Xform::Shuffle => unshuffle(w, v, tmp),

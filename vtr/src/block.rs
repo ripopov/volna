@@ -1555,7 +1555,7 @@ pub fn build_index(col: &[u8], kind: SignalKind, stride: usize) -> Result<Vec<Ch
         let (before, code_before) = (it.tidx, it.code);
         match it.next_raw()? {
             Some(c) => {
-                if i % stride == 0 {
+                if i.is_multiple_of(stride) {
                     out.push(Checkpoint {
                         tidx: c.tidx,
                         tidx_before: before,

@@ -78,7 +78,8 @@ impl Expected {
         self.emits += 1;
         let ascii = match self.kind {
             Kind::Bit => {
-                w.emit_bit(self.id, vtr::Logic::from(c % 2 != 0)).unwrap();
+                w.emit_bit(self.id, vtr::Logic::from(!c.is_multiple_of(2)))
+                    .unwrap();
                 format!("{}", c % 2)
             }
             Kind::Byte2 => {
@@ -175,7 +176,7 @@ fn write_run(path: &std::path::Path, group_size: u32, background: bool) -> Vec<E
             declare(&mut w, &mut sigs, t);
         }
         for (i, s) in sigs.iter_mut().enumerate() {
-            if (step + i as u64) % (1 + i as u64 % 3) == 0 {
+            if (step + i as u64).is_multiple_of(1 + i as u64 % 3) {
                 s.emit(&mut w, t);
             }
         }

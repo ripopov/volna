@@ -841,7 +841,11 @@ fn stream_delivers_same_step_repeats_in_order() {
         for t in 0..20u64 {
             w.set_time(t * 10).unwrap();
             for (i, &s) in sigs.iter().enumerate().take(64) {
-                let reps = if (i as u64 + t) % 3 == 0 { 3 } else { 1 };
+                let reps = if (i as u64 + t).is_multiple_of(3) {
+                    3
+                } else {
+                    1
+                };
                 for k in 0..reps {
                     w.emit_u64(s, (t * 4 + k) & 0xff).unwrap();
                     expected.push((t * 10, s.0, (t * 4 + k) & 0xff));
