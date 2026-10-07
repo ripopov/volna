@@ -301,11 +301,13 @@ impl App {
             waiting.workspace.traces.iter().map(|t| t.letter).collect();
         for (letter, uri) in traces {
             let slot = self.doc.traces().get(letter);
-            if slot.is_some_and(|slot| slot.uri.as_deref() == Some(uri.as_str())) {
-                continue;
-            }
-            if slot.is_some() {
-                if !waiting.explicit {
+            if let Some(slot) = slot {
+                if slot.uri.as_deref() == Some(uri.as_str()) || !waiting.explicit {
+                    // Automatic restores use an existing slot even when its
+                    // URI differs. Resolve rows only after its hierarchy arrives.
+                    if matches!(slot.state(), crate::trace::SlotState::Loading) {
+                        waiting.traces.insert(letter);
+                    }
                     continue;
                 }
                 self.drop_trace(letter);

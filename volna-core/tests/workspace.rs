@@ -1121,3 +1121,145 @@ fn failed_secondary_open_does_not_cancel_primary_workspace_loading() {
     );
     assert_eq!(app.workspace.scheduler.target(), Some(&file(LOCATION)));
 }
+
+fn waiting_existing_secondary(
+    in_flight: bool,
+    same_uri: bool,
+) -> (App, TraceId, Option<(TraceId, u64)>) {
+    let mut source = app();
+    let b = source.add_session(ProceduralTrace::session(100)).unwrap();
+    source.handle(Command::AddVars(vec![Traced::new(b, 1)]));
+    let mut saved = Workspace::capture(
+        &source,
+        |slot| {
+            Ok(Some(if slot.id.is_a() {
+                "trace.vtr".into()
+            } else if same_uri {
+                "file:///B.vtr".into()
+            } else {
+                "file:///saved-B.vtr".into()
+            }))
+        },
+        None,
+    )
+    .unwrap();
+    saved.shared.cursor = Some(23);
+    let mut app = App::new();
+    app.configure_persistence(Persistence::Auto);
+    let spec = |name: &str| volna_trace::session::OpenSpec::Bytes {
+        name: name.into(),
+        bytes: vec![],
+    };
+    app.open_resource(spec("A.vtr"), TRACE.into());
+    let a = app
+        .take_requests()
+        .into_iter()
+        .find_map(|r| match r {
+            LoadRequest::Open {
+                trace, generation, ..
+            } => Some((trace, generation)),
+            _ => None,
+        })
+        .unwrap();
+    app.add_resource(spec("B.vtr"), "file:///B.vtr".into());
+    let dispatched = in_flight.then(|| {
+        app.take_requests()
+            .into_iter()
+            .find_map(|r| match r {
+                LoadRequest::Open {
+                    trace, generation, ..
+                } => Some((trace, generation)),
+                _ => None,
+            })
+            .unwrap()
+    });
+    finish_initial(&mut app, a, true);
+    app.restore_candidates(
+        TRACE,
+        Candidate {
+            target: file(LOCATION),
+            content: Content::Bytes(saved.to_bytes().unwrap()),
+            writable: true,
+        },
+        Candidate {
+            target: Target::Storage { key: TRACE.into() },
+            content: Content::Missing,
+            writable: true,
+        },
+    );
+    (app, b, dispatched)
+}
+fn secondary_request(
+    app: &mut App,
+    b: TraceId,
+    dispatched: Option<(TraceId, u64)>,
+) -> (TraceId, u64) {
+    dispatched.unwrap_or_else(|| {
+        app.take_requests()
+            .into_iter()
+            .find_map(|r| match r {
+                LoadRequest::Open {
+                    trace, generation, ..
+                } if trace == b => Some((trace, generation)),
+                _ => None,
+            })
+            .unwrap()
+    })
+}
+#[test]
+fn automatic_restore_waits_for_existing_queued_and_in_flight_traces() {
+    for in_flight in [false, true] {
+        for same_uri in [false, true] {
+            let (mut app, b, dispatched) = waiting_existing_secondary(in_flight, same_uri);
+            assert_ne!(
+                app.doc.shared.cursor,
+                Some(23),
+                "restore committed before B settled"
+            );
+            let request = secondary_request(&mut app, b, dispatched);
+            finish_initial(&mut app, request, true);
+            assert_eq!(app.doc.shared.cursor, Some(23));
+            let row = app.panels.focused_waves().unwrap().signal(3).unwrap();
+            assert!(row.source.signal().is_some());
+            assert_eq!(row.source.var(), Some(Traced::new(b, 1)));
+            assert_eq!(app.workspace.scheduler.target(), Some(&file(LOCATION)));
+        }
+    }
+}
+#[test]
+fn automatic_restore_settles_existing_trace_failure() {
+    let (mut app, b, dispatched) = waiting_existing_secondary(true, true);
+    assert_ne!(app.doc.shared.cursor, Some(23));
+    let request = secondary_request(&mut app, b, dispatched);
+    finish_initial(&mut app, request, false);
+    assert_eq!(app.doc.shared.cursor, Some(23));
+    assert!(
+        app.panels
+            .focused_waves()
+            .unwrap()
+            .signal(3)
+            .unwrap()
+            .source
+            .signal()
+            .is_none()
+    );
+    app.take_events();
+    app.save_workspace(None);
+    emitted_save(&mut app);
+}
+#[test]
+fn automatic_restore_settles_existing_trace_cancellation_and_ignores_late_results() {
+    for in_flight in [false, true] {
+        let (mut app, b, dispatched) = waiting_existing_secondary(in_flight, true);
+        assert_ne!(app.doc.shared.cursor, Some(23));
+        app.handle(Command::RemoveTrace(b));
+        if let Some(request) = dispatched {
+            finish_initial(&mut app, request, true);
+        }
+        assert!(app.doc.traces().get(b).is_none());
+        assert_eq!(app.doc.shared.cursor, Some(23));
+        app.take_events();
+        app.save_workspace(None);
+        emitted_save(&mut app);
+    }
+}
