@@ -26,6 +26,11 @@ rustc-ice-*.txt
 # macOS
 .DS_Store
 
+# VTR/Luna-generated files
+*.index
+*.index.lock
+*.volna.json
+
 # Documentation build
 /docs/node_modules/
 /docs/.astro/
