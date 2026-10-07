@@ -22,6 +22,6 @@ run('wasm-bindgen', [
   '--target', 'web', '--out-dir', pkg,
   fileURLToPath(new URL('../../target/wasm32-unknown-unknown/release/volna.wasm', import.meta.url)),
 ], docs);
-for (const name of ['landing.vtr', 'landing.vtr.volna.json']) {
+for (const name of ['landing.vtr', 'landing-page.volna.json']) {
   await cp(new URL(`../../volna/examples/${name}`, import.meta.url), new URL(`../public/examples/${name}`, import.meta.url));
 }

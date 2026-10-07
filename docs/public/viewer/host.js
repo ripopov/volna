@@ -9,6 +9,7 @@ workspaceInput.hidden = true;
 workspaceInput.setAttribute('aria-label', 'Open a Volna workspace');
 document.body.append(workspaceInput);
 const sampleUrl = new URL('examples/landing.vtr', base);
+const sampleWorkspaceUrl = new URL('examples/landing-page.volna.json', base);
 let viewer;
 let pendingLocal = null;
 let pendingSample = false;
@@ -32,7 +33,7 @@ function bytesContent(bytes) {
   return { status: 'bytes', value: Array.from(bytes) };
 }
 
-function candidates(traceUri, sidecarBytes) {
+function candidates(traceUri, sidecarBytes, workspaceUri = `${traceUri}.volna.json`) {
   const key = `volna.workspace.${traceUri}`;
   let saved = null;
   if (!sidecarBytes) {
@@ -40,7 +41,7 @@ function candidates(traceUri, sidecarBytes) {
   }
   return {
     sidecar: {
-      target: { kind: 'file', uri: `${traceUri}.volna.json` },
+      target: { kind: 'file', uri: workspaceUri },
       content: sidecarBytes ? bytesContent(sidecarBytes) : { status: 'missing' },
       writable: false,
     },
@@ -60,7 +61,7 @@ async function openSample() {
   error.hidden = true;
   try {
     const [traceResponse, workspaceResponse] = await Promise.all([
-      fetch(sampleUrl), fetch(new URL('examples/landing.vtr.volna.json', base)),
+      fetch(sampleUrl), fetch(sampleWorkspaceUrl),
     ]);
     if (!traceResponse.ok || !workspaceResponse.ok) throw new Error('Sample files are unavailable.');
     const [trace, workspace] = await Promise.all([
@@ -69,7 +70,7 @@ async function openSample() {
     currentTraceUri = sampleUrl.href;
     viewer.open_resource('landing.vtr', new Uint8Array(trace), JSON.stringify({
       traceUri: sampleUrl.href,
-      candidates: candidates(sampleUrl.href, new Uint8Array(workspace)),
+      candidates: candidates(sampleUrl.href, new Uint8Array(workspace), sampleWorkspaceUrl.href),
     }));
     status.textContent = 'Opening the sample workspace…';
   } catch (cause) {

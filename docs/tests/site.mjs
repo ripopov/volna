@@ -78,7 +78,7 @@ try {
   await page.locator('#recording-file').setInputFiles(fileURLToPath(new URL('../../volna/examples/landing.vtr', import.meta.url)));
   await page.locator('body[data-local-trace-opened="landing.vtr"]').waitFor({ timeout: 30000 });
   await page.evaluate(async base => (await import(`${base}viewer/pkg/volna.js`)).dispatch_command('openWorkspace'), base);
-  await page.locator('input[aria-label="Open a Volna workspace"]').setInputFiles(fileURLToPath(new URL('../../volna/examples/landing.vtr.volna.json', import.meta.url)));
+  await page.locator('input[aria-label="Open a Volna workspace"]').setInputFiles(fileURLToPath(new URL('../../volna/examples/landing-page.volna.json', import.meta.url)));
   await page.waitForFunction(() => window.volnaCurrentState?.includes('panel=4 table'));
   const downloadPromise = page.waitForEvent('download');
   await page.evaluate(async base => (await import(`${base}viewer/pkg/volna.js`)).dispatch_command('saveWorkspaceAs'), base);

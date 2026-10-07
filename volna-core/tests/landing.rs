@@ -33,9 +33,10 @@ fn pump(app: &mut App) {
 /// The landing trace with its checked-in workspace restored.
 fn landing() -> App {
     let trace = examples().join("landing.vtr").canonicalize().unwrap();
-    let saved = std::fs::read(examples().join("landing.vtr.volna.json")).unwrap();
+    let workspace = examples().join("landing-page.volna.json");
+    let saved = std::fs::read(&workspace).unwrap();
     let trace_uri = url::Url::from_file_path(&trace).unwrap().to_string();
-    let location = format!("{trace_uri}.volna.json");
+    let location = url::Url::from_file_path(workspace).unwrap().to_string();
     let session = OpenSpec::Path(trace.clone()).open().unwrap();
     let mut app = App::new();
     app.open_resource(OpenSpec::Path(trace), trace_uri.clone());
@@ -104,9 +105,10 @@ fn the_whole_landing_run_follows_the_rendering_rules() {
 #[test]
 fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
     let trace = examples().join("landing.vtr").canonicalize().unwrap();
-    let saved = std::fs::read(examples().join("landing.vtr.volna.json")).unwrap();
+    let workspace = examples().join("landing-page.volna.json");
+    let saved = std::fs::read(&workspace).unwrap();
     let trace_uri = url::Url::from_file_path(&trace).unwrap().to_string();
-    let location = format!("{trace_uri}.volna.json");
+    let location = url::Url::from_file_path(workspace).unwrap().to_string();
     let session = OpenSpec::Path(trace.clone()).open().unwrap();
     let mut app = App::new();
     app.open_resource(OpenSpec::Path(trace), trace_uri.clone());
