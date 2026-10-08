@@ -2629,10 +2629,14 @@ impl App {
         let focused = id == self.panels.focused_id();
         let bounds = match &panel.kind {
             PanelKind::Waves(w) => {
+                let mut theme = *theme;
+                let appearance = &self.settings.resolved().appearance;
+                theme.digital_wave_width = appearance.digital_wave_width as f32;
+                theme.analog_wave_width = appearance.analog_wave_width as f32;
                 crate::wave::paint::paint(
                     w,
                     &self.doc,
-                    theme,
+                    &theme,
                     &mut self.text,
                     measure,
                     scene,

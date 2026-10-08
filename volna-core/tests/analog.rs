@@ -784,3 +784,53 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     assert!(app.doc.analog_summary(signal, signed).is_none());
     assert_eq!(used(&app), digital);
 }
+
+#[test]
+fn appearance_widths_apply_live_to_digital_and_analog_traces() {
+    use volna_core::app::SettingsCommand;
+    use volna_core::settings::{Host, Value};
+
+    let (_file, mut app, id) = app();
+    app.configure_settings(Host::Native, None);
+    view(&mut app, id, 0.0, 2000.0);
+    for (key, width) in [
+        ("appearance.digitalWaveWidth", 2.5),
+        ("appearance.analogWaveWidth", 3.0),
+    ] {
+        app.handle(Command::Settings(SettingsCommand::Set {
+            id: key.into(),
+            value: Value::Number(width),
+        }));
+        assert!(app.settings.text().contains(key));
+    }
+    frame(&mut app, id);
+    let real = row_rect(&app, id, REAL);
+    let bit = row_rect(&app, id, BIT);
+    let scene = frame(&mut app, id);
+    let color = Theme::one_dark().wave_signal;
+    assert!(scene.prims.iter().any(|p| matches!(p,
+        Prim::Lines { segments, color: c, width }
+        if *c == color && *width == 3.0 && segments.iter().any(|[a, _]| real.contains(*a))
+    )));
+    assert!(
+        scene
+            .quads()
+            .any(|(r, c)| c == color && bit.contains(r.origin) && r.height() == 2.5)
+    );
+    assert!(scene.quads().any(|(r, c)| c == color
+        && bit.contains(r.origin)
+        && r.width() == 2.5
+        && r.height() > 2.5));
+
+    app.settings_external(
+        b"{\"appearance.digitalWaveWidth\": 0, \"appearance.analogWaveWidth\": 5}",
+    );
+    assert_eq!(app.settings.resolved().appearance.digital_wave_width, 1.0);
+    assert_eq!(app.settings.resolved().appearance.analog_wave_width, 1.25);
+    assert_eq!(app.settings.diagnostics().len(), 2);
+    let scene = frame(&mut app, id);
+    assert!(scene.prims.iter().any(|p| matches!(p,
+        Prim::Lines { segments, color: c, width }
+        if *c == color && *width == 1.25 && segments.iter().any(|[a, _]| real.contains(*a))
+    )));
+}

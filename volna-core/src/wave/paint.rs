@@ -33,7 +33,8 @@ use volna_trace::data::transactions::TxStatus;
 use volna_trace::data::{Bit, SignalHistory, SignalShape, ValueKind, WaveValue};
 
 // Pixel constants are design sizes at zoom 1.0; the painter multiplies them
-// by the theme's zoom. Hairlines (1 px strokes and borders) stay one pixel.
+// by the theme's zoom. Borders and decorative hairlines stay one pixel;
+// trace widths come from the theme.
 /// Vertical inset of the trace inside a row.
 const TRACE_PAD: f32 = 5.0;
 /// Segments narrower than this are drawn as a dense band instead of a hexagon.
@@ -1007,7 +1008,11 @@ fn paint_analog_row(
                 points => segments.extend(points.windows(2).map(|w| [w[0], w[1]])),
             }
         }
-        let width = if g.envelope { 1.0 } else { z(1.25).max(1.0) };
+        let width = if g.envelope {
+            1.0
+        } else {
+            z(t.analog_wave_width).max(1.0)
+        };
         scene.lines(segments, t.wave_signal, width);
         let r = z(2.0);
         for d in &g.dots {
@@ -1257,7 +1262,7 @@ pub fn paint_event_row(
     }
     for (segments, color) in [(plain, t.wave_signal), (coalesced, t.wave_event_coalesced)] {
         if !segments.is_empty() {
-            scene.lines(segments, color, 1.0);
+            scene.lines(segments, color, t.digital_wave_width);
         }
     }
     counts
@@ -1302,7 +1307,7 @@ pub fn paint_bit_row(
     paint_bits(h, vp, area, t, scene, true, columns);
 }
 
-/// A 1-bit trace: a level line per stretch, a 1px edge per change, and
+/// A 1-bit trace: a level line per stretch, an edge per change, and
 /// aliased columns where a pixel holds two or more changes. X is a
 /// mid-level line over its hatched tint, Z a bare line at mid level,
 /// don't-care dotted and weak dashed; `high_fill` fills high stretches.
@@ -1329,7 +1334,7 @@ fn paint_bits(
     let y_of = |b: Bit| -> f32 {
         match b {
             Bit::One => top,
-            Bit::Zero => bottom - 1.0,
+            Bit::Zero => bottom - t.digital_wave_width,
             _ => mid,
         }
     };
@@ -1367,10 +1372,16 @@ fn paint_bits(
             }
             _ => {}
         }
-        scene.fill(Rect::new(point(x, y_of(b)), size(w, 1.0)), color);
+        scene.fill(
+            Rect::new(point(x, y_of(b)), size(w, t.digital_wave_width)),
+            color,
+        );
         if b == Bit::One && high_fill {
             scene.fill(
-                Rect::new(point(x, top + 1.0), size(w, bottom - top - 1.0)),
+                Rect::new(
+                    point(x, top + t.digital_wave_width),
+                    size(w, (bottom - top - t.digital_wave_width).max(0.0)),
+                ),
                 t.wave_high_fill,
             );
         }
@@ -1398,7 +1409,10 @@ fn paint_bits(
                 bit.kind()
             });
             scene.fill(
-                Rect::new(point(x0 + x as f32, lo), size(1.0, hi - lo + 1.0)),
+                Rect::new(
+                    point(x0 + x as f32, lo),
+                    size(t.digital_wave_width, hi - lo + t.digital_wave_width),
+                ),
                 color,
             );
         } else if n >= 2 {
@@ -1418,8 +1432,8 @@ fn paint_bits(
         marks::paint_aliased(scene, t, &dense, x0, top, bottom);
     }
     emit_run(scene, run_start, columns.end, bit);
-    scene.lines(dotted, t.wave_dontcare, 1.0);
-    scene.lines(dashed, t.wave_weak, 1.0);
+    scene.lines(dotted, t.wave_dontcare, t.digital_wave_width);
+    scene.lines(dashed, t.wave_weak, t.digital_wave_width);
 }
 
 /// A dash pattern at the theme's zoom.
@@ -1692,7 +1706,10 @@ fn paint_bus_row(
             let open_right = seg.x_end == w_px;
             let la = if open_left { xa } else { xa + tw };
             let rb = if open_right { xb } else { xb - tw };
-            let (topf, botf) = (top + 0.5, bottom - 0.5);
+            let (topf, botf) = (
+                top + t.digital_wave_width / 2.0,
+                bottom - t.digital_wave_width / 2.0,
+            );
             let color = match look {
                 BusLook::Unknown => t.wave_undef,
                 BusLook::Floating => t.wave_highimp,
@@ -1709,13 +1726,24 @@ fn paint_bus_row(
             };
             match look {
                 BusLook::Floating => {
-                    scene.fill(Rect::from_xywh(xa, snap(midf), seg_w, 1.0), color);
+                    scene.fill(
+                        Rect::from_xywh(xa, snap(midf), seg_w, t.digital_wave_width),
+                        color,
+                    );
                     continue;
                 }
                 BusLook::Zero => {
                     // Zero reads as idle: the slants run into a low line; hover still reads it.
                     if rb > la {
-                        scene.fill(Rect::from_xywh(la, bottom - 1.0, rb - la, 1.0), color);
+                        scene.fill(
+                            Rect::from_xywh(
+                                la,
+                                bottom - t.digital_wave_width,
+                                rb - la,
+                                t.digital_wave_width,
+                            ),
+                            color,
+                        );
                     }
                     if !open_left {
                         lines.push([point(xa, midf), point(la, botf)]);
@@ -1762,9 +1790,15 @@ fn paint_bus_row(
                 BusLook::Value => {}
             }
             if rb > la {
-                scene.fill(Rect::new(point(la, top), size(rb - la, 1.0)), color);
                 scene.fill(
-                    Rect::new(point(la, bottom - 1.0), size(rb - la, 1.0)),
+                    Rect::new(point(la, top), size(rb - la, t.digital_wave_width)),
+                    color,
+                );
+                scene.fill(
+                    Rect::new(
+                        point(la, bottom - t.digital_wave_width),
+                        size(rb - la, t.digital_wave_width),
+                    ),
                     color,
                 );
             }
@@ -1804,7 +1838,7 @@ fn paint_bus_row(
             }
         }
         for (color, segments) in slants {
-            scene.lines(segments, color, 1.0);
+            scene.lines(segments, color, t.digital_wave_width);
         }
         for (tx, text, color) in texts {
             scene.text(
@@ -1964,9 +1998,17 @@ fn paint_clock_wave(
             Rect::from_xywh(xa, top, xb - xa, bottom - top),
             t.wave_signal.with_alpha(0.16),
         );
-        scene.fill(Rect::from_xywh(xa, top, xb - xa, 1.0), t.wave_signal);
         scene.fill(
-            Rect::from_xywh(xa, bottom - 1.0, xb - xa, 1.0),
+            Rect::from_xywh(xa, top, xb - xa, t.digital_wave_width),
+            t.wave_signal,
+        );
+        scene.fill(
+            Rect::from_xywh(
+                xa,
+                bottom - t.digital_wave_width,
+                xb - xa,
+                t.digital_wave_width,
+            ),
             t.wave_signal,
         );
     };
@@ -2021,7 +2063,7 @@ fn paint_clock_wave(
                 &mut dashed,
                 xa,
                 xb,
-                bottom - 1.0,
+                bottom - t.digital_wave_width,
                 area.left(),
                 scaled(marks::DASHED, t),
             );
@@ -2029,7 +2071,11 @@ fn paint_clock_wave(
                 labels.push((xa, xb, "gated".to_owned(), t.editor.text_placeholder));
             }
         }
-        scene.lines(std::mem::take(&mut dashed), t.wave_weak, 1.0);
+        scene.lines(
+            std::mem::take(&mut dashed),
+            t.wave_weak,
+            t.digital_wave_width,
+        );
     });
     for (xa, xb, label, color) in labels {
         let w = p.width(&label, FontRole::Mono, t.ui_size_small);
@@ -2382,15 +2428,29 @@ fn paint_group_summary(
             let la = if open_left { xa } else { xa + tw };
             let rb = if open_right { xb } else { xb - tw };
             if rb > la {
-                scene.fill(Rect::from_xywh(la, top, rb - la, 1.0), color);
-                scene.fill(Rect::from_xywh(la, bottom - 1.0, rb - la, 1.0), color);
+                scene.fill(
+                    Rect::from_xywh(la, top, rb - la, t.digital_wave_width),
+                    color,
+                );
+                scene.fill(
+                    Rect::from_xywh(
+                        la,
+                        bottom - t.digital_wave_width,
+                        rb - la,
+                        t.digital_wave_width,
+                    ),
+                    color,
+                );
             }
             let lines = if undefined {
                 &mut undef_slants
             } else {
                 &mut slants
             };
-            let (topf, botf) = (top + 0.5, bottom - 0.5);
+            let (topf, botf) = (
+                top + t.digital_wave_width / 2.0,
+                bottom - t.digital_wave_width / 2.0,
+            );
             if !open_left {
                 lines.push([point(xa, mid), point(xa + tw, topf)]);
                 lines.push([point(xa, mid), point(xa + tw, botf)]);
@@ -2400,8 +2460,8 @@ fn paint_group_summary(
                 lines.push([point(xb, mid), point(xb - tw, botf)]);
             }
         }
-        scene.lines(slants, t.wave_signal, 1.0);
-        scene.lines(undef_slants, undef, 1.0);
+        scene.lines(slants, t.wave_signal, t.digital_wave_width);
+        scene.lines(undef_slants, undef, t.digital_wave_width);
     });
 }
 
@@ -3402,6 +3462,28 @@ mod tests {
         let char_w = MonoMeasure.text_width("0", FontRole::Mono, t.mono_size);
         paint_bus_row(h, translator.as_ref(), &vp, area, area, char_w, &mut p);
         scene
+    }
+
+    #[test]
+    fn bus_outline_width_covers_levels_and_slants() {
+        let mut t = Theme::volna(true);
+        t.digital_wave_width = 3.0;
+        let h = bus(&[(100, "10000000"), (200, "xxxxxxxx"), (300, "zzzzzzzz")]);
+        let scene = paint_bus(&h, "hex", &t);
+        assert!(scene.quads().any(|(r, c)| c == t.wave_signal
+            && r.left() == 0.0
+            && r.top() == 16.0
+            && r.height() == 3.0));
+        assert!(
+            scene
+                .quads()
+                .any(|(r, c)| c == t.wave_highimp && r.left() == 299.0 && r.height() == 3.0)
+        );
+        for color in [t.wave_signal, t.wave_undef] {
+            assert!(scene.prims.iter().any(|p| matches!(p,
+                Prim::Lines { color: c, width, .. } if *c == color && *width == 3.0
+            )));
+        }
     }
 
     #[test]

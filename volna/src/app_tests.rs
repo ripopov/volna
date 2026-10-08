@@ -3261,3 +3261,97 @@ fn remote_activity_banner_names_the_reader_and_dismisses(cx: &mut TestAppContext
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("activity-banner-A").is_none());
 }
+
+#[gpui_kit::test]
+fn clicking_waveform_width_steppers_repaints_visible_panels(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+    use volna_core::app::SettingsCommand;
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let window = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    let mut vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.simulate_resize(size(px(2200.0), px(900.0)));
+    let waves = window
+        .update(&mut vcx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            let first = ws.app.panels.focused_id();
+            ws.dispatch(Command::Action(Action::SplitRight), Some(window), cx);
+            let second = ws.app.panels.focused_id();
+            ws.dispatch(Command::Action(Action::SplitRight), Some(window), cx);
+            ws.dispatch(Command::Settings(SettingsCommand::Open), Some(window), cx);
+            [first, second]
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    for (key, base, selector) in [
+        (
+            "appearance.digitalWaveWidth",
+            1.0,
+            "setting-number-appearance.digitalWaveWidth",
+        ),
+        (
+            "appearance.analogWaveWidth",
+            1.25,
+            "setting-number-appearance.analogWaveWidth",
+        ),
+    ] {
+        window
+            .update(&mut vcx, |ws, window, cx| {
+                ws.dispatch(
+                    Command::Settings(SettingsCommand::Query(format!("@id:{key}"))),
+                    Some(window),
+                    cx,
+                );
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let bounds = vcx.debug_bounds(selector).expect("numeric control");
+        for increment in [true, false] {
+            let before = window
+                .update(&mut vcx, |ws, _, _| {
+                    waves.map(|id| ws.app.panels.waves(id).unwrap().frames_painted)
+                })
+                .unwrap();
+            assert!(
+                before.iter().all(|count| *count > 0),
+                "waveforms must be visible"
+            );
+            let button = point(
+                if increment {
+                    bounds.right() - px(12.0)
+                } else {
+                    bounds.left() + px(12.0)
+                },
+                bounds.center().y,
+            );
+            vcx.simulate_mouse_move(button, None, Modifiers::default());
+            vcx.simulate_click(button, Modifiers::default());
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    assert_eq!(
+                        ws.app.settings.value(key).unwrap().as_f64(),
+                        Some(base + if increment { 0.25 } else { 0.0 })
+                    );
+                    for (id, before) in waves.into_iter().zip(before) {
+                        assert!(
+                            ws.app.panels.waves(id).unwrap().frames_painted > before,
+                            "{key}: panel {id:?} must repaint after a stepper click"
+                        );
+                    }
+                })
+                .unwrap();
+        }
+    }
+}

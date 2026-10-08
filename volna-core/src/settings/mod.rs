@@ -155,6 +155,10 @@ pub struct AppearanceSettings {
     pub theme: String,
     /// Interface zoom factor, 1.0 = design sizes; see [`ZoomStep`].
     pub zoom: f64,
+    /// Digital trace stroke width in logical pixels, independent of UI zoom.
+    pub digital_wave_width: f64,
+    /// Analog curve stroke width at UI zoom 1.
+    pub analog_wave_width: f64,
 }
 
 /// A keyboard or menu step of `appearance.zoom`, like VS Code's View: Zoom
@@ -265,6 +269,8 @@ impl Settings {
             appearance: AppearanceSettings {
                 theme: text("appearance.theme"),
                 zoom: normalize_zoom(value("appearance.zoom").as_f64().unwrap_or(1.0)),
+                digital_wave_width: value("appearance.digitalWaveWidth").as_f64().unwrap_or(1.0),
+                analog_wave_width: value("appearance.analogWaveWidth").as_f64().unwrap_or(1.25),
             },
             panels: PanelSettings {
                 link_by_default: value("panels.linkByDefault").as_bool().unwrap_or(true),

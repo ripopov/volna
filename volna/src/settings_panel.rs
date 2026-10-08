@@ -587,11 +587,12 @@ fn render_number(
         cx,
         |window, cx| {
             let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(bounds.text(current))
-                    .min(bounds.min)
-                    .max(bounds.max)
-                    .step(bounds.step)
+                // Leave the toolkit's numeric bounds unset so button clicks emit
+                // Step events. NumberBounds applies the registry range and step;
+                // toolkit stepping only edits the input text and emits Change.
+                let mut input = InputState::new(window, cx).default_value(bounds.text(current));
+                input.set_step(None, window, cx);
+                input
             });
             let ws_step = ws.clone();
             let ws_change = ws.clone();
@@ -659,10 +660,14 @@ fn render_number(
         }
     });
     let input = state.read(cx).input.clone();
-    NumberInput::new(&input)
-        .small()
-        .disabled(!enabled)
-        .w(theme(cx).px(120.0))
+    div()
+        .debug_selector(move || format!("setting-number-{id}").into())
+        .child(
+            NumberInput::new(&input)
+                .small()
+                .disabled(!enabled)
+                .w(theme(cx).px(120.0)),
+        )
         .into_any_element()
 }
 

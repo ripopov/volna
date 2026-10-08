@@ -7,7 +7,9 @@ use volna_core::icons::{FONTS, IconName};
 
 gpui_kit::assets::icon_assets!(
     ComponentAssets,
-    [Check, Link, Unlink, Plus, X, Ellipsis, Maximize, Minimize]
+    [
+        Check, Link, Unlink, Plus, Minus, X, Ellipsis, Maximize, Minimize
+    ]
 );
 
 pub struct Assets;
@@ -50,4 +52,20 @@ impl AssetSource for Assets {
 pub(crate) fn load_fonts(cx: &App) -> anyhow::Result<()> {
     cx.text_system()
         .add_fonts(FONTS.iter().map(|f| Cow::Borrowed(f.bytes)).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numeric_setting_stepper_icons_are_bundled() {
+        for icon in [
+            gpui_kit::assets::IconName::Minus,
+            gpui_kit::assets::IconName::Plus,
+        ] {
+            let bytes = Assets.load(&icon.path()).unwrap().expect("stepper icon");
+            assert!(!bytes.is_empty());
+        }
+    }
 }

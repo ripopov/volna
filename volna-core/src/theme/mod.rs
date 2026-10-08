@@ -159,6 +159,10 @@ pub struct Theme<C = Color> {
     /// The interface zoom the metrics above already include (1.0 = the
     /// design sizes). Painters multiply their own pixel constants by it.
     pub zoom: f32,
+    /// Digital trace width in logical pixels, independent of interface zoom.
+    pub digital_wave_width: f32,
+    /// Analog curve width at interface zoom 1; dense envelopes use hairlines.
+    pub analog_wave_width: f32,
 }
 
 /// The themes one window paints with: the chrome (bars, sidebar, table,
@@ -296,6 +300,8 @@ impl<C: Copy> Theme<C> {
             icon_size: self.icon_size,
             splitter_grab: self.splitter_grab,
             zoom: self.zoom,
+            digital_wave_width: self.digital_wave_width,
+            analog_wave_width: self.analog_wave_width,
         }
     }
 
@@ -461,6 +467,8 @@ impl Theme<Color> {
             icon_size: 16.0,
             splitter_grab: 8.0,
             zoom: 1.0,
+            digital_wave_width: 1.0,
+            analog_wave_width: 1.25,
         };
         // One Dark's blue, cyan and purple; a pink and the muted grey.
         t.resolve_tints([0x74ade8, 0x6eb4bf, 0xb477cf, 0xf07fbf, 0xa9afbc].map(c));
