@@ -661,7 +661,7 @@ fn render_number(
     });
     let input = state.read(cx).input.clone();
     div()
-        .debug_selector(move || format!("setting-number-{id}").into())
+        .debug_selector(move || format!("setting-number-{id}"))
         .child(
             NumberInput::new(&input)
                 .small()
