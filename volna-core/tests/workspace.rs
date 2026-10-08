@@ -577,7 +577,12 @@ fn assert_cancelled_workspace_trace_open_can_save(in_flight: bool) {
     let mut saved = capture(&app);
     let mut secondary = saved.traces[0].clone();
     secondary.letter = b;
-    secondary.path = "file:///other.vtr".into();
+    // A native absolute path supplies the drive letter required by Windows
+    // file URIs. Cancellation happens before the file is opened.
+    let directory = tempfile::tempdir().unwrap();
+    secondary.path = url::Url::from_file_path(directory.path().join("other.vtr"))
+        .unwrap()
+        .into();
     secondary.name = "other.vtr".into();
     saved.traces.push(secondary);
     saved.shared.cursor = Some(23);
