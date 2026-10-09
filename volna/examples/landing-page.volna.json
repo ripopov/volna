@@ -1,6 +1,6 @@
 {
   "format": "volna-workspace",
-  "version": 5,
+  "version": 6,
   "traces": [
     {
       "letter": "A",
@@ -66,6 +66,15 @@
       }
     ]
   },
+  "timeline_dividers": [
+    {
+      "panels": [
+        1,
+        2
+      ],
+      "width": 260.0
+    }
+  ],
   "focused": 2,
   "panels": [
     {"id":1,"kind":"waves","version":6,"title":null,"link":{"viewport":true,"cursor":true},"scroll_y":0.0,"columns":{"names":150.0,"values":110.0},"rows":[{"type":"group","name":"cpu0","rows":[{"type":"signal","signal":["soc","cpu0","phase"],"format":"text"},{"type":"signal","signal":["soc","cpu0","pc"],"format":"hex"},{"type":"signal","signal":["soc","cpu0","irq"],"format":"bit"},{"type":"signal","signal":["soc","cpu0","stall"],"format":"bit"},{"type":"signal","signal":["soc","cpu0","flush"],"format":"bit"},{"type":"signal","signal":["soc","cpu0","retired"],"format":"udec"}]},{"type":"lane","generator":["soc","l2","bus","read"]},{"type":"lane","generator":["soc","l2","bus","write"]},{"type":"lane","generator":["soc","dram","bus","burst"]},{"type":"group","name":"l2 port","collapsed":true,"rows":[{"type":"signal","signal":["soc","l2","req_valid"],"format":"bit"},{"type":"signal","signal":["soc","l2","req_write"],"format":"bit"},{"type":"signal","signal":["soc","l2","req_addr"],"format":"hex"},{"type":"signal","signal":["soc","l2","resp_valid"],"format":"bit"},{"type":"signal","signal":["soc","l2","resp_data"],"format":"hex"}]},{"type":"group","name":"perf","rows":[{"type":"signal","signal":["soc","perf","ipc"],"format":"real","height":3,"analog":{"draw":"linear","range":"trace"}},{"type":"signal","signal":["soc","perf","l2_bandwidth_gbps"],"format":"real","height":3,"analog":{"draw":"step","range":"trace"}},{"type":"signal","signal":["soc","perf","temperature_c"],"format":"real","height":2,"analog":{"draw":"linear","range":"trace"}}]},{"type":"signal","signal":["soc","l2","mshr_used"],"format":"udec","height":2,"analog":{"draw":"step","range":"trace"}},{"type":"clock","clock":"soc.dram.dram_clk"},{"type":"signal","signal":["soc","reset_n"],"format":"bit"}],"selected":[],"clocks":{"rulers":[["A","soc.clk"],["A","soc.dram.dram_clk"]],"selected":["A","soc.clk"]}},

@@ -1220,6 +1220,7 @@ impl App {
             self.changed();
         }
         self.dispatch(command, now);
+        self.panels.sync_timeline_dividers();
         self.activity.prune(self.doc.traces());
         // Pointer input moves rows but never adds or removes them; a press
         // or release may fold a group.
@@ -1290,6 +1291,12 @@ impl App {
                         self.changed();
                         return;
                     }
+                }
+                if let PointerEvent::Move { position } = ev
+                    && self.panels.resize_timeline(id, position)
+                {
+                    self.changed();
+                    return;
                 }
                 if let Some(panel) = self.panels.get_mut(id)
                     && panel.pointer(&mut self.doc, ev, now)
@@ -2591,10 +2598,12 @@ impl App {
         theme: &Theme,
     ) -> Option<PanelLayout<'_>> {
         self.doc.clocks.defaults = self.pipeline_clocks();
+        self.panels.sync_timeline_dividers();
+        let metadata = self.panels.timeline_metadata(id, bounds, theme.zoom);
         let doc = &self.doc;
         Some(match &mut self.panels.get_mut(id)?.kind {
-            PanelKind::Waves(w) => PanelLayout::Waves(w.layout(bounds, doc, theme)),
-            PanelKind::Pipeline(p) => PanelLayout::Pipeline(p.layout(bounds, doc, theme)),
+            PanelKind::Waves(w) => PanelLayout::Waves(w.layout(bounds, doc, theme, metadata)),
+            PanelKind::Pipeline(p) => PanelLayout::Pipeline(p.layout(bounds, doc, theme, metadata)),
             PanelKind::Table(table) => PanelLayout::Table(table.layout(bounds, theme)),
             _ => return None,
         })

@@ -511,6 +511,7 @@ impl PipelineModel {
         bounds: crate::geometry::Rect,
         doc: &Document,
         theme: &Theme,
+        metadata_width: Option<f32>,
     ) -> &PipelineLayout {
         let (row_count, failed) = match self.rows(doc) {
             Rows::Ready(set) => (set.len(), false),
@@ -520,6 +521,7 @@ impl PipelineModel {
         let rulers = self.nav.clocks().rulers(&doc.clocks);
         let input = LayoutInput {
             bounds,
+            metadata_width,
             header_h: theme.timeline_height,
             ruler_h: rulers.len() as f32 * crate::wave::overlay::RULER_H * theme.zoom,
             zoom: theme.zoom,

@@ -79,7 +79,7 @@ fn projection(app: &App) -> Value {
         .unwrap();
     let mut v: Value = serde_json::from_slice(&bytes).unwrap();
     let o = v.as_object_mut().unwrap();
-    for key in ["focused", "sidebar"] {
+    for key in ["focused", "sidebar", "timeline_dividers"] {
         o.remove(key);
     }
     let shared = o["shared"].as_object_mut().unwrap();

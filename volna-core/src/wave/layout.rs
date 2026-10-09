@@ -48,6 +48,8 @@ pub struct WaveLayout {
     pub name_left: f32,
     pub values: Rect,
     pub waves: Rect,
+    /// The outer divider is coordinated by the dock column.
+    pub shared_metadata: bool,
     /// Visible positions on screen; [`WaveLayout::entry`] maps one to its
     /// entry in the model's row tree.
     pub rows: Range<usize>,
@@ -76,6 +78,8 @@ pub struct WaveLayout {
 
 pub struct LayoutInput<'a> {
     pub bounds: Rect,
+    /// Dock-resolved pixel width; bypasses independent column sizing.
+    pub metadata_width: Option<f32>,
     /// Already zoomed (the theme's `row_height`).
     pub row_h: f32,
     /// Already zoomed (the theme's `timeline_height`).
@@ -136,12 +140,19 @@ impl WaveLayout {
         let z = |v: f32| v * zoom;
         let min_column = z(MIN_COLUMN);
         let total_w = bounds.width();
-        let names_w = z(input.names_width).clamp(
-            min_column,
-            (total_w - 2.0 * min_column - z(160.0)).max(min_column),
-        );
-        let values_w =
-            z(input.values_width).clamp(min_column, (total_w - names_w - z(160.0)).max(min_column));
+        let (names_w, values_w) = if let Some(metadata_w) = input.metadata_width {
+            let min = min_column.min(metadata_w / 2.0);
+            let names_w = z(input.names_width).clamp(min, metadata_w - min);
+            (names_w, metadata_w - names_w)
+        } else {
+            let names_w = z(input.names_width).clamp(
+                min_column,
+                (total_w - 2.0 * min_column - z(160.0)).max(min_column),
+            );
+            let values_w = z(input.values_width)
+                .clamp(min_column, (total_w - names_w - z(160.0)).max(min_column));
+            (names_w, values_w)
+        };
 
         let header = Rect::new(bounds.origin, size(bounds.width(), header_h));
         let ruler_h = input
@@ -161,8 +172,14 @@ impl WaveLayout {
         let rows_h = (bounds.bottom() - rows_top).max(0.0);
         let names = Rect::new(point(bounds.left(), rows_top), size(names_w, rows_h));
         let values = Rect::new(point(names.right(), rows_top), size(values_w, rows_h));
-        let waves_w = (bounds.width() - names_w - values_w).max(0.0);
-        let waves = Rect::new(point(values.right(), rows_top), size(waves_w, rows_h));
+        // Use the dock constraint directly: summing the two metadata columns
+        // can round differently from a pipeline's single label column.
+        let metadata_w = input.metadata_width.unwrap_or(names_w + values_w);
+        let waves_w = (bounds.width() - metadata_w).max(0.0);
+        let waves = Rect::new(
+            point(bounds.left() + metadata_w, rows_top),
+            size(waves_w, rows_h),
+        );
 
         let tops = input.row_tops;
         let item_count = tops.len().saturating_sub(1);
@@ -237,6 +254,7 @@ impl WaveLayout {
         };
 
         WaveLayout {
+            shared_metadata: input.metadata_width.is_some(),
             bounds,
             header,
             rulers,
@@ -351,6 +369,7 @@ mod tests {
 
     fn layout(zoom: f32, items: usize) -> WaveLayout {
         WaveLayout::compute(LayoutInput {
+            metadata_width: None,
             bounds: Rect::from_xywh(0.0, 0.0, 2000.0, 300.0),
             row_h: 24.0 * zoom,
             header_h: 32.0 * zoom,
@@ -411,6 +430,7 @@ mod tests {
     fn tall_rows_shift_every_row_below_and_hit_test_to_their_full_height() {
         let heights = [1, 4, 1, 8, 2].map(|h| RowHeight::try_from(h).unwrap());
         let input = |scroll_y| LayoutInput {
+            metadata_width: None,
             bounds: Rect::from_xywh(0.0, 0.0, 2000.0, 32.0 + LANE_H + 24.0 * 5.0),
             row_h: 24.0,
             header_h: 32.0,

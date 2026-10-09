@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 pub(crate) struct Stamp {
     panel: PanelId,
     layout_revision: u64,
+    timeline_dividers: Vec<crate::panels::TimelineDivider>,
     shared_viewport: Viewport,
     shared_cursor: Option<u64>,
     markers: Vec<Marker>,
@@ -107,6 +108,7 @@ impl Stamp {
         Some(Self {
             panel,
             layout_revision: app.panels.revision(),
+            timeline_dividers: app.panels.timeline.clone(),
             shared_viewport: app.doc.shared.viewport.target(),
             shared_cursor: app.doc.shared.cursor,
             markers: app.doc.markers().to_vec(),

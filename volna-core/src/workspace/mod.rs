@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use volna_trace::data::source::Lookup;
 
 pub const FORMAT: &str = "volna-workspace";
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ROWS: usize = 100_000;
 
@@ -65,6 +65,7 @@ pub struct Workspace {
     /// to the unit of the traces it opens.
     pub timescale: i8,
     pub layout: Layout,
+    pub timeline_dividers: Vec<crate::panels::TimelineDivider>,
     pub focused: PanelId,
     pub panels: Vec<Box<RawValue>>,
     pub shared: Shared,
@@ -210,6 +211,7 @@ impl Workspace {
             "trace A has no durable location"
         );
         let (layout, focused, saved_panels) = app.panels.saved_view();
+        let timeline_dividers = app.panels.timeline_dividers(&layout);
         let mut row_count = 0;
         for panel in &saved_panels {
             if let Some(waves) = panel.kind.waves() {
@@ -247,6 +249,7 @@ impl Workspace {
             traces,
             timescale: app.doc.timescale(),
             layout,
+            timeline_dividers,
             focused,
             panels,
             shared: Shared {
@@ -405,7 +408,8 @@ impl Workspace {
             .iter()
             .map(|raw| Panel::restore(raw, &mut context))
             .collect::<Result<_>>()?;
-        let panels = Panels::restore(self.layout.clone(), panels, self.focused, &app.panels)?;
+        let mut panels = Panels::restore(self.layout.clone(), panels, self.focused, &app.panels)?;
+        panels.restore_timeline_dividers(self.timeline_dividers.clone())?;
         let mut scopes = ScopeTreeModel::default();
         let find = |path: &Traced<Vec<String>>| {
             open.hierarchy(path.trace)

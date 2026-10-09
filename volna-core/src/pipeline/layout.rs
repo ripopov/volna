@@ -55,6 +55,8 @@ pub struct PipelineLayout {
 #[derive(Clone, Copy)]
 pub struct LayoutInput<'a> {
     pub bounds: Rect,
+    /// Dock-resolved pixel width; bypasses independent label sizing.
+    pub metadata_width: Option<f32>,
     /// Already zoomed (the theme's `timeline_height`).
     pub header_h: f32,
     /// Already zoomed height of all clock ruler rows.
@@ -84,8 +86,10 @@ impl PipelineLayout {
         };
         let z = |v: f32| v * zoom;
         let header_h = input.header_h;
-        let labels_w = z(input.label_width.clamp(LABEL_W_MIN, LABEL_W_MAX))
-            .min((bounds.width() - z(LABEL_W_MIN)).max(0.0));
+        let labels_w = input.metadata_width.unwrap_or_else(|| {
+            z(input.label_width.clamp(LABEL_W_MIN, LABEL_W_MAX))
+                .min((bounds.width() - z(LABEL_W_MIN)).max(0.0))
+        });
         let header = Rect::new(bounds.origin, size(bounds.width(), header_h));
         let ruler_h = input
             .ruler_h
@@ -197,6 +201,7 @@ mod tests {
 
     fn layout(zoom: f32, row_px: f32, rows: usize) -> PipelineLayout {
         PipelineLayout::compute(LayoutInput {
+            metadata_width: None,
             bounds: Rect::from_xywh(0.0, 0.0, 1000.0, 332.0),
             header_h: 32.0 * zoom,
             ruler_h: 0.0,

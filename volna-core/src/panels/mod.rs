@@ -1,10 +1,12 @@
 //! Panel identity, ownership, and docking operations. Widget IDs and pixel
-//! geometry never enter this model.
+//! geometry never enter the docking tree; timeline widths use design pixels.
 
 pub(crate) mod content;
 mod layout;
+mod timeline;
 pub(crate) mod workspace;
 pub use layout::{Axis, Layout, MAX_LAYOUT_DEPTH, MAX_PANELS};
+pub use timeline::TimelineDivider;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -366,6 +368,8 @@ impl Panel {
 
 pub struct Panels {
     layout: Layout,
+    pub(crate) timeline: Vec<TimelineDivider>,
+    timeline_revision: Option<u64>,
     panels: BTreeMap<PanelId, Panel>,
     focused: PanelId,
     next_id: u64,
@@ -383,6 +387,8 @@ impl Panels {
         let id = PanelId(1);
         Self {
             layout: Layout::single(id),
+            timeline: Vec::new(),
+            timeline_revision: None,
             panels: BTreeMap::from([(id, Panel::new(id, PanelKind::Start))]),
             focused: id,
             next_id: 2,
@@ -409,6 +415,8 @@ impl Panels {
             .ok_or_else(|| anyhow::anyhow!("panel IDs exhausted"))?;
         let mut result = Self {
             layout,
+            timeline: Vec::new(),
+            timeline_revision: None,
             panels,
             focused,
             next_id: next_id.max(previous.next_id),

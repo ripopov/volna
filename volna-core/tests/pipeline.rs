@@ -659,6 +659,8 @@ fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
         panel: pipeline,
         dim: LinkDim::Viewport,
     }));
+    frame(&mut app, pipeline, &theme);
+    let cells = app.panels.pipeline(pipeline).unwrap().last_layout().cells;
     wheel(&mut app, now);
     assert_eq!(
         app.doc.shared.viewport.value, shared_after,
@@ -1296,7 +1298,7 @@ fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
     assert_eq!(app.doc.shared.cursor, Some(expected));
     app.handle(Command::Action(Action::ClearSelection));
     assert_eq!(app.doc.shared.cursor, None);
-    // The label divider resizes the label column, stored at zoom 1.0.
+    // The label divider resizes the dock column shared with the waveform.
     let split = app
         .panels
         .pipeline(pipeline)
@@ -1319,7 +1321,21 @@ fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
         },
     ));
     app.handle(Command::Pointer(pipeline, PointerEvent::Up));
-    assert_eq!(app.panels.pipeline(pipeline).unwrap().label_width, 250.0);
+    frame(&mut app, pipeline, &theme);
+    frame(&mut app, waves, &theme);
+    assert_eq!(
+        app.panels
+            .pipeline(pipeline)
+            .unwrap()
+            .last_layout()
+            .labels
+            .width(),
+        250.0
+    );
+    assert_eq!(
+        app.panels.waves(waves).unwrap().last_layout().waves.left(),
+        250.0
+    );
 }
 
 #[test]
@@ -2309,4 +2325,387 @@ fn a_pipeline_chip_goes_on_click_moves_onto_cycles_on_drag_and_esc_cancels() {
     assert_eq!(app.undo_label(), Some("Move marker 1"));
     app.handle(Command::Undo);
     assert_eq!(app.doc.markers()[0].time, a);
+}
+
+fn dock_timelines(
+    app: &mut App,
+    waves: PanelId,
+    pipeline: PanelId,
+    axis: volna_core::panels::Axis,
+) {
+    app.handle(Command::Panels(PanelsCommand::SetLayout {
+        layout: Layout::Split {
+            split: axis,
+            sizes: vec![0.5, 0.5],
+            children: vec![Layout::single(waves), Layout::single(pipeline)],
+        },
+        from_revision: app.panels.revision(),
+    }));
+}
+
+fn timeline_frames(app: &mut App, waves: PanelId, pipeline: PanelId, width: f32, theme: &Theme) {
+    // Different vertical origins reproduce a stacked dock. Pipeline goes first
+    // to ensure alignment never depends on the order canvases are laid out.
+    app.layout_panel(pipeline, Rect::from_xywh(25.0, 350.0, width, 300.0), theme)
+        .unwrap();
+    app.layout_panel(waves, Rect::from_xywh(25.0, 20.0, width, 300.0), theme)
+        .unwrap();
+}
+
+fn aligned_metadata(app: &App, waves: PanelId, pipeline: PanelId) -> f32 {
+    let wave = app.panels.waves(waves).unwrap().last_layout();
+    let pipe = app.panels.pipeline(pipeline).unwrap().last_layout();
+    assert_eq!(wave.waves.left(), pipe.cells.left());
+    assert_eq!(wave.waves.width(), pipe.cells.width());
+    let viewport = app.doc.shared.viewport.value;
+    for time in [
+        viewport.start,
+        (viewport.start + viewport.end) / 2.0,
+        viewport.end,
+    ] {
+        let wx = f64::from(wave.waves.left()) + viewport.x_of(time, wave.wave_width_f64());
+        let px = f64::from(pipe.cells.left()) + viewport.x_of(time, pipe.cells_width_f64());
+        assert_eq!(wx, px);
+    }
+    wave.waves.left() - wave.bounds.left()
+}
+
+fn drag_divider(app: &mut App, panel: PanelId, hit: Rect, to_x: f32) {
+    let position = point(
+        hit.left() + hit.width() / 2.0,
+        hit.top() + hit.height() / 2.0,
+    );
+    app.handle(Command::Pointer(
+        panel,
+        PointerEvent::Down {
+            position,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    assert!(app.panels.get(panel).unwrap().dragging());
+    app.handle(Command::Pointer(
+        panel,
+        PointerEvent::Move {
+            position: point(to_x, position.y),
+        },
+    ));
+    app.handle(Command::Pointer(panel, PointerEvent::Up));
+}
+
+#[test]
+fn stacked_timelines_share_divider_and_keep_names_divider_local() {
+    use volna_core::panels::Axis;
+    for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
+        let (mut app, _, waves, pipeline) = opened(30);
+        pump(&mut app);
+        dock_timelines(&mut app, waves, pipeline, Axis::Horizontal);
+        app.panels.pipeline_mut(pipeline).unwrap().label_width = 400.0;
+        dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
+        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        assert_eq!(aligned_metadata(&app, waves, pipeline), 400.0 * theme.zoom);
+
+        let pipe_split = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .last_layout()
+            .label_split;
+        drag_divider(&mut app, pipeline, pipe_split, 25.0 + 500.0 * theme.zoom);
+        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        assert_eq!(aligned_metadata(&app, waves, pipeline), 500.0 * theme.zoom);
+        assert_eq!(app.panels.pipeline(pipeline).unwrap().label_width, 400.0);
+
+        let names_split = app.panels.waves(waves).unwrap().last_layout().names_split;
+        drag_divider(&mut app, waves, names_split, 25.0 + 300.0 * theme.zoom);
+        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        assert_eq!(aligned_metadata(&app, waves, pipeline), 500.0 * theme.zoom);
+        assert_eq!(
+            app.panels.waves(waves).unwrap().last_layout().names.width(),
+            300.0 * theme.zoom
+        );
+        assert_eq!(
+            app.panels
+                .waves(waves)
+                .unwrap()
+                .last_layout()
+                .values
+                .width(),
+            200.0 * theme.zoom
+        );
+
+        let wave_split = app.panels.waves(waves).unwrap().last_layout().values_split;
+        drag_divider(&mut app, waves, wave_split, 25.0 + 350.0 * theme.zoom);
+        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        assert_eq!(aligned_metadata(&app, waves, pipeline), 350.0 * theme.zoom);
+        // Both renderers consume the same geometry for their ruler, marker
+        // lane and cursor, even after pan and zoom change the shared interval.
+        wheel_with(&mut app, pipeline, point(900.0, 450.0), 0.0, 120.0, ctrl());
+        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        aligned_metadata(&app, waves, pipeline);
+        app.render_panel(waves, &theme, &mut MonoMeasure);
+        app.render_panel(pipeline, &theme, &mut MonoMeasure);
+    }
+}
+
+#[test]
+fn timeline_alignment_requires_stacked_viewport_links() {
+    use volna_core::panels::Axis;
+    let (mut app, _, waves, pipeline) = opened(30);
+    let theme = Theme::one_dark();
+    dock_timelines(&mut app, waves, pipeline, Axis::Horizontal);
+    timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+    assert_eq!(
+        app.panels.waves(waves).unwrap().last_layout().waves.left(),
+        365.0
+    );
+    assert_eq!(
+        app.panels
+            .pipeline(pipeline)
+            .unwrap()
+            .last_layout()
+            .cells
+            .left(),
+        215.0
+    );
+    dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
+    timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+    assert_eq!(aligned_metadata(&app, waves, pipeline), 340.0);
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: pipeline,
+        dim: LinkDim::Cursor,
+    }));
+    timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+    aligned_metadata(&app, waves, pipeline);
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: pipeline,
+        dim: LinkDim::Viewport,
+    }));
+    timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+    assert_eq!(
+        app.panels
+            .pipeline(pipeline)
+            .unwrap()
+            .last_layout()
+            .cells
+            .left(),
+        215.0
+    );
+    assert!(
+        !app.panels
+            .waves(waves)
+            .unwrap()
+            .last_layout()
+            .shared_metadata
+    );
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: pipeline,
+        dim: LinkDim::Viewport,
+    }));
+    timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+    aligned_metadata(&app, waves, pipeline);
+}
+
+#[test]
+fn timeline_divider_survives_narrow_windows_and_workspace_restore() {
+    use volna_core::panels::Axis;
+    let (mut app, session, waves, pipeline) = opened(30);
+    let theme = Theme::one_dark();
+    dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
+    timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+    let split = app
+        .panels
+        .pipeline(pipeline)
+        .unwrap()
+        .last_layout()
+        .label_split;
+    drag_divider(&mut app, pipeline, split, 525.0);
+    for width in [360.0, 250.0, 100.0, 1200.0] {
+        timeline_frames(&mut app, waves, pipeline, width, &theme);
+        let expected = 500.0_f32.min((width - 160.0).max(0.0));
+        assert_eq!(aligned_metadata(&app, waves, pipeline), expected);
+    }
+    let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+    assert_eq!(saved.timeline_dividers.len(), 1);
+    assert_eq!(saved.timeline_dividers[0].width, 500.0);
+    let mut restored = App::new();
+    restored.set_session(session);
+    Workspace::parse(&saved.to_bytes().unwrap())
+        .unwrap()
+        .prepare(
+            &restored,
+            "file:///tmp/trace.vtr",
+            "file:///tmp/trace.vtr.volna.json",
+        )
+        .unwrap()
+        .commit(&mut restored)
+        .unwrap();
+    timeline_frames(&mut restored, waves, pipeline, 1200.0, &theme);
+    assert_eq!(aligned_metadata(&restored, waves, pipeline), 500.0);
+
+    let mut invalid = serde_json::to_value(&saved).unwrap();
+    for divider in [
+        serde_json::json!({"panels":[waves,pipeline],"width":-1}),
+        serde_json::json!({"panels":[waves],"width":500}),
+        serde_json::json!({"panels":[waves,999999],"width":500}),
+    ] {
+        invalid["timeline_dividers"] = serde_json::json!([divider]);
+        assert!(
+            Workspace::parse(&serde_json::to_vec(&invalid).unwrap())
+                .unwrap()
+                .prepare(
+                    &restored,
+                    "file:///tmp/trace.vtr",
+                    "file:///tmp/trace.vtr.volna.json"
+                )
+                .is_err()
+        );
+    }
+    timeline_frames(&mut restored, waves, pipeline, 1200.0, &theme);
+    assert_eq!(aligned_metadata(&restored, waves, pipeline), 500.0);
+}
+
+#[test]
+fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans() {
+    use volna_core::panels::Axis;
+    let (mut app, _, waves, pipeline) = opened(30);
+    dock_timelines(&mut app, waves, pipeline, Axis::Horizontal);
+    app.handle(Command::Panels(PanelsCommand::Split {
+        panel: waves,
+        axis: Axis::Vertical,
+    }));
+    let side = app.panels.focused_id();
+    app.handle(Command::Panels(PanelsCommand::NewTab { group_of: waves }));
+    let inactive = app.panels.focused_id();
+    app.panels.waves_mut(inactive).unwrap().names_width = 500.0;
+    let tabs = Layout::Tabs {
+        tabs: vec![waves, inactive],
+        active: waves,
+    };
+    app.handle(Command::Panels(PanelsCommand::SetLayout {
+        layout: Layout::Split {
+            split: Axis::Horizontal,
+            sizes: vec![0.4, 0.3, 0.3],
+            children: vec![tabs.clone(), Layout::single(pipeline), Layout::single(side)],
+        },
+        from_revision: app.panels.revision(),
+    }));
+    let stack = |children| Layout::Split {
+        split: Axis::Vertical,
+        sizes: vec![0.5, 0.5],
+        children,
+    };
+    app.handle(Command::Panels(PanelsCommand::SetLayout {
+        layout: Layout::Split {
+            split: Axis::Horizontal,
+            sizes: vec![0.7, 0.3],
+            children: vec![
+                stack(vec![tabs.clone(), Layout::single(pipeline)]),
+                Layout::single(side),
+            ],
+        },
+        from_revision: app.panels.revision(),
+    }));
+    let theme = Theme::one_dark();
+    timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+    assert_eq!(aligned_metadata(&app, waves, pipeline), 620.0);
+    app.handle(Command::Panels(PanelsCommand::Focus(inactive)));
+    timeline_frames(&mut app, inactive, pipeline, 1200.0, &theme);
+    assert_eq!(aligned_metadata(&app, inactive, pipeline), 620.0);
+    app.layout_panel(side, Rect::from_xywh(1240.0, 20.0, 500.0, 600.0), &theme)
+        .unwrap();
+    assert!(
+        !app.panels
+            .waves(side)
+            .unwrap()
+            .last_layout()
+            .shared_metadata
+    );
+
+    // A full-width panel above two narrower panels has a different time
+    // area from either child, even though they all have shared navigation.
+    app.handle(Command::Panels(PanelsCommand::SetLayout {
+        layout: stack(vec![
+            Layout::single(pipeline),
+            Layout::Split {
+                split: Axis::Horizontal,
+                sizes: vec![0.5, 0.5],
+                children: vec![tabs, Layout::single(side)],
+            },
+        ]),
+        from_revision: app.panels.revision(),
+    }));
+    let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+    assert!(saved.timeline_dividers.is_empty());
+}
+
+#[test]
+fn names_divider_in_a_narrow_stack_keeps_a_restorable_preference() {
+    let (mut app, session, waves, pipeline) = opened(30);
+    let theme = Theme::one_dark();
+    dock_timelines(
+        &mut app,
+        waves,
+        pipeline,
+        volna_core::panels::Axis::Vertical,
+    );
+    for width in [250.0, 100.0] {
+        timeline_frames(&mut app, waves, pipeline, width, &theme);
+        let split = app.panels.waves(waves).unwrap().last_layout().names_split;
+        drag_divider(&mut app, waves, split, 25.0);
+        let saved =
+            Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+        let mut restored = App::new();
+        restored.set_session(session.clone());
+        Workspace::parse(&saved.to_bytes().unwrap())
+            .unwrap()
+            .prepare(
+                &restored,
+                "file:///tmp/trace.vtr",
+                "file:///tmp/trace.vtr.volna.json",
+            )
+            .unwrap()
+            .commit(&mut restored)
+            .unwrap();
+        timeline_frames(&mut restored, waves, pipeline, 1200.0, &theme);
+        aligned_metadata(&restored, waves, pipeline);
+    }
+}
+
+#[test]
+fn saved_timeline_membership_uses_the_dock_tree_without_settings() {
+    use volna_core::panels::Axis;
+    let (mut app, session, waves, pipeline) = opened(30);
+    app.handle(Command::Settings(volna_core::app::SettingsCommand::Open));
+    let settings = app.panels.settings_id().unwrap();
+    app.handle(Command::Panels(PanelsCommand::SetLayout {
+        layout: Layout::Split {
+            split: Axis::Vertical,
+            sizes: vec![0.5, 0.5],
+            children: vec![
+                Layout::single(waves),
+                Layout::Split {
+                    split: Axis::Horizontal,
+                    sizes: vec![0.5, 0.5],
+                    children: vec![Layout::single(pipeline), Layout::single(settings)],
+                },
+            ],
+        },
+        from_revision: app.panels.revision(),
+    }));
+    let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+    let mut restored = App::new();
+    restored.set_session(session);
+    Workspace::parse(&saved.to_bytes().unwrap())
+        .unwrap()
+        .prepare(
+            &restored,
+            "file:///tmp/trace.vtr",
+            "file:///tmp/trace.vtr.volna.json",
+        )
+        .unwrap()
+        .commit(&mut restored)
+        .unwrap();
+    timeline_frames(&mut restored, waves, pipeline, 1200.0, &Theme::one_dark());
+    aligned_metadata(&restored, waves, pipeline);
 }

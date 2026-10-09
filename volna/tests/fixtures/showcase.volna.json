@@ -1,6 +1,6 @@
 {
   "format": "volna-workspace",
-  "version": 5,
+  "version": 6,
   "traces": [
     {
       "letter": "A",
@@ -21,6 +21,7 @@
     ],
     "active": 17
   },
+  "timeline_dividers": [],
   "focused": 17,
   "panels": [
     {"follow":"suspended","id":17,"kind":"pipeline","version":1,"title":null,"track":["soc","cpu","thread0","instructions"],"link":{"viewport":true,"cursor":true},"rows":{"top":-285.70908203125003,"row_px":0.5},"label_width":190.0}

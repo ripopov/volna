@@ -1268,3 +1268,48 @@ fn automatic_restore_settles_existing_trace_cancellation_and_ignores_late_result
         emitted_save(&mut app);
     }
 }
+
+#[test]
+fn a_shared_timeline_divider_drag_schedules_an_autosave() {
+    use volna_core::geometry::{Modifiers, MouseButton, Rect, point};
+    use volna_core::wave::PointerEvent;
+    let mut app = persistent_app();
+    let now = Instant::now();
+    app.handle_at(Command::AddVars(a_all(vec![0])), now);
+    let first = app.panels.focused_id();
+    app.handle_at(Command::Action(Action::SplitDown), now);
+    let second = app.panels.focused_id();
+    let theme = volna_core::Theme::one_dark();
+    app.layout_panel(second, Rect::from_xywh(0.0, 0.0, 1200.0, 600.0), &theme)
+        .unwrap();
+    let split = app.panels.waves(second).unwrap().last_layout().values_split;
+    let position = point(split.left() + split.width() / 2.0, split.top() + 100.0);
+    app.handle_at(
+        Command::Pointer(
+            second,
+            PointerEvent::Down {
+                position,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        ),
+        now,
+    );
+    let revision = app.workspace.scheduler.revision();
+    app.handle_at(
+        Command::Pointer(
+            second,
+            PointerEvent::Move {
+                position: point(500.0, position.y),
+            },
+        ),
+        now,
+    );
+    assert!(app.workspace.scheduler.revision() > revision);
+    app.handle_at(Command::Pointer(second, PointerEvent::Up), now);
+    app.tick(now + IDLE * 2);
+    let (_, bytes) = emitted_save(&mut app);
+    let saved = Workspace::parse(&bytes).unwrap();
+    assert_eq!(saved.timeline_dividers[0].panels, vec![first, second]);
+    assert_eq!(saved.timeline_dividers[0].width, 500.0);
+}

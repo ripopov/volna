@@ -2518,6 +2518,7 @@ impl WaveModel {
         bounds: crate::geometry::Rect,
         doc: &Document,
         theme: &Theme,
+        metadata_width: Option<f32>,
     ) -> &WaveLayout {
         // Keep the same rows on screen when the interface zoom changes.
         if self.layout.row_h > 0.0 && self.layout.row_h != theme.row_height {
@@ -2529,6 +2530,7 @@ impl WaveModel {
         let items = &self.items;
         let layout = WaveLayout::compute(LayoutInput {
             bounds,
+            metadata_width,
             row_h: theme.row_height,
             header_h: theme.timeline_height,
             ruler_h: rulers.len() as f32 * super::overlay::RULER_H * theme.zoom,
@@ -3261,7 +3263,15 @@ impl WaveModel {
             }
             // Column widths are kept at zoom 1.0 (they are saved in workspaces).
             Some(Drag::NamesSplit) => {
-                self.names_width = ((p.x - layout.bounds.left()) / layout.zoom).max(MIN_COLUMN);
+                let width = ((p.x - layout.bounds.left()) / layout.zoom).max(MIN_COLUMN);
+                self.names_width = if layout.shared_metadata {
+                    let metadata = (layout.waves.left() - layout.bounds.left()) / layout.zoom;
+                    let min = MIN_COLUMN.min(metadata / 2.0);
+                    // Narrow windows shrink rendered columns, never their saved minimum.
+                    width.clamp(min, metadata - min).max(MIN_COLUMN)
+                } else {
+                    width
+                };
                 true
             }
             Some(Drag::ValuesSplit) => {
