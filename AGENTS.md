@@ -9,6 +9,10 @@ A useful review test is: If the conversation disappeared, would this comment sti
 Stage completed changes. Commit only when explicitly requested by the user.
 Include only task-related changes; preserve unrelated work and its staging state.
 
+# Temporary plans
+
+`./atemp` is a temporary directory for plans. Never commit this directory or its contents.
+
 # Shared Volna design
 
 For application UI work or when creating or editing HTML, read and apply the
