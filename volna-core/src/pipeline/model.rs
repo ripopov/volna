@@ -14,7 +14,7 @@ use super::zoom::{self, CYCLE_PX_MAX, ROW_PX_CAP, ZoomBox, ZoomPoint};
 use crate::clock::ClockKey;
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::document::{Document, TrackLoadState, TxSelection};
-use crate::geometry::{Modifiers, MouseButton, Point};
+use crate::geometry::{Modifiers, MouseButton, Point, Rect};
 use crate::marker::LaneHit;
 use crate::nav::{Link, NavState, Tween};
 use crate::panels::PanelId;
@@ -31,6 +31,8 @@ use volna_trace::data::transactions::{
 pub const LABEL_ATTRIBUTE: &str = "vtr.label";
 /// A drag shorter than this (at zoom 1.0) is a click.
 const DRAG_THRESHOLD_PX: f32 = 3.0;
+/// Minimum width and height of a box zoom, in design pixels.
+const BOX_ZOOM_MIN_PX: f32 = 4.0;
 /// Rows scrolled by one keyboard step.
 pub const SCROLL_ROWS: f64 = 3.0;
 /// Row height factor of one Increase/Decrease Row Height step.
@@ -105,6 +107,13 @@ pub enum Drag {
         start: Point,
         last: Point,
         moved: bool,
+    },
+    /// Selects an area in a fixed cells layout; resizing cancels the gesture.
+    BoxZoom {
+        start: Point,
+        current: Point,
+        cells: Rect,
+        zoom: f32,
     },
     Cursor,
     LabelSplit,
@@ -540,7 +549,16 @@ impl PipelineModel {
             failed,
         };
         self.layout = PipelineLayout::compute(input);
-        let followed = self.follow_activity(doc);
+        if let Some(Drag::BoxZoom { cells, zoom, .. }) = self.drag
+            && (cells != self.layout.cells || zoom != self.layout.zoom)
+        {
+            self.drag = None;
+        }
+        let followed = if matches!(self.drag, Some(Drag::BoxZoom { .. })) {
+            None
+        } else {
+            self.follow_activity(doc)
+        };
         let rows_before = self.rows.target();
         let layout = if self.rows.value != input.rows {
             PipelineLayout::compute(LayoutInput {
@@ -772,6 +790,65 @@ impl PipelineModel {
             Some(aspect) if !bounds.is_interior(at) => aspect,
             _ => *self.aspect.insert(at.aspect()),
         }
+    }
+
+    /// The normalized, cells-clipped box and whether it is large enough to fit.
+    /// Painting and release use the same geometry and design-pixel threshold.
+    pub(super) fn selection_box(&self) -> Option<(Rect, bool)> {
+        let Drag::BoxZoom {
+            start,
+            current,
+            cells,
+            ..
+        } = self.drag?
+        else {
+            return None;
+        };
+        let x = |v: f32| v.clamp(cells.left(), cells.right());
+        let y = |v: f32| v.clamp(cells.top(), cells.bottom());
+        let rect = Rect::from_xywh(
+            x(start.x).min(x(current.x)),
+            y(start.y).min(y(current.y)),
+            (x(start.x) - x(current.x)).abs(),
+            (y(start.y) - y(current.y)).abs(),
+        );
+        let min = BOX_ZOOM_MIN_PX * self.layout.zoom;
+        Some((rect, rect.width() >= min && rect.height() >= min))
+    }
+
+    fn fit_selection(&mut self, doc: &mut Document, rect: Rect, now: Instant) {
+        let viewport = self.nav.viewport(doc);
+        let mut rows = self.rows.value.zoomed(self.layout.zoom);
+        let bounds = self.zoom_box(doc, &viewport);
+        let from = self.zoom_point(&viewport, rows);
+        // Both axes stop together at the first cap, retaining the screen aspect.
+        let factor = (self.cells_w() / f64::from(rect.width()))
+            .min(f64::from(self.cells_h()) / f64::from(rect.height()))
+            .min((bounds.time.1 - from.time).exp().max(1.0))
+            .min((bounds.rows.1 - from.rows).exp().max(1.0));
+        let center = Point {
+            x: rect.left() + rect.width() * 0.5,
+            y: rect.top() + rect.height() * 0.5,
+        };
+        let time = self.layout.time_at(&viewport, center.x);
+        let row = rows.row_at(center.y - self.layout.cells.top());
+        let width = viewport.width() / factor;
+        let mut target = Viewport {
+            start: time - width * 0.5,
+            end: time + width * 0.5,
+        };
+        target.clamp(doc.limits());
+        // Navigation also enforces a representable minimum time width.
+        let factor = factor.min(viewport.width() / target.width());
+        self.suspend_follow();
+        self.nav.animate_to(doc, target, now);
+        rows.row_px = (f64::from(rows.row_px) * factor) as f32;
+        rows.top = row - f64::from(self.cells_h()) / (2.0 * f64::from(rows.row_px));
+        self.set_rows(doc, rows, Some(now));
+        self.aspect = Some(
+            self.zoom_point(&self.nav.viewport_state(doc).target(), self.rows_target())
+                .aspect(),
+        );
     }
 
     /// Immediate time-axis-only zoom matching the waveform panel's modified
@@ -1028,8 +1105,7 @@ impl PipelineModel {
     // -- pointer input -----------------------------------------------------------
 
     /// Handle pointer input. `panel` owns the selection a click writes.
-    /// Returns true when something visible changed. Every pointer gesture is
-    /// immediate, so `_now` (shared by all panel kinds) is unused.
+    /// Returns true when something visible changed. Box zoom animates on release.
     pub fn pointer(
         &mut self,
         doc: &mut Document,
@@ -1037,6 +1113,14 @@ impl PipelineModel {
         event: PointerEvent,
         now: Instant,
     ) -> bool {
+        if matches!(self.drag, Some(Drag::BoxZoom { .. }))
+            && matches!(
+                event,
+                PointerEvent::Wheel { .. } | PointerEvent::Pinch { .. }
+            )
+        {
+            return false;
+        }
         match event {
             PointerEvent::Down {
                 position,
@@ -1048,7 +1132,14 @@ impl PipelineModel {
             }
             PointerEvent::Move { position } => self.pointer_move(doc, position),
             PointerEvent::Up => {
+                let selection = self.selection_box();
                 let drag = self.drag.take();
+                if let Some((rect, valid)) = selection {
+                    if valid {
+                        self.fit_selection(doc, rect, now);
+                    }
+                    return true;
+                }
                 if let Some(Drag::Marker(held)) = drag {
                     held.release(doc, &mut self.nav, now);
                     return true;
@@ -1209,6 +1300,23 @@ impl PipelineModel {
                 return;
             }
         }
+        if button == MouseButton::Left
+            && (modifiers.control || modifiers.platform)
+            && layout.cells.contains(p)
+        {
+            let cells = layout.cells;
+            let zoom = layout.zoom;
+            let viewport = self.nav.viewport(doc);
+            self.nav.viewport_state_mut(doc).set(viewport);
+            self.rows.set(self.layout.rows.unzoomed(zoom));
+            self.drag = Some(Drag::BoxZoom {
+                start: p,
+                current: p,
+                cells,
+                zoom,
+            });
+            return;
+        }
         // A middle press measures from its point unless it drags, which pans.
         if layout.cells.contains(p) || (button == MouseButton::Middle && in_time) {
             self.drag = Some(Drag::Pan {
@@ -1223,6 +1331,17 @@ impl PipelineModel {
     fn pointer_move(&mut self, doc: &mut Document, p: Point) -> bool {
         self.pointer = Some(p);
         match self.drag {
+            Some(Drag::BoxZoom {
+                start, cells, zoom, ..
+            }) => {
+                self.drag = Some(Drag::BoxZoom {
+                    start,
+                    current: p,
+                    cells,
+                    zoom,
+                });
+                true
+            }
             Some(Drag::Pan {
                 button,
                 start,

@@ -1173,6 +1173,131 @@ struct RootWindow {
     workspace: gpui_kit::Entity<Workspace>,
 }
 
+#[gpui_kit::test]
+fn pipeline_box_zoom_captures_outside_release_and_ignores_double_click_open(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{
+        Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, VisualTestContext,
+    };
+    use volna_core::pipeline::{FollowActivity, RowView};
+    use volna_core::wave::viewport::Viewport;
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let window = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    window
+        .update(cx, |ws, _, cx| {
+            ws.open_path(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/examples/pipeline_showcase.vtr"
+                )
+                .into(),
+                cx,
+            );
+        })
+        .unwrap();
+    let mut vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.run_until_parked();
+    let id = window
+        .update(&mut vcx, |ws, window, cx| {
+            let track = ws.app.pipeline_streams()[0].1;
+            ws.dispatch(Command::OpenPipeline { track }, Some(window), cx);
+            let id = ws.app.panels.focused_id();
+            ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
+            ws.app.doc.shared.viewport.set(Viewport {
+                start: 200.0,
+                end: 400.0,
+            });
+            let p = ws.app.panels.pipeline_mut(id).unwrap();
+            p.follow = FollowActivity::Off;
+            p.rows.set(RowView {
+                top: 200.0,
+                row_px: 6.0,
+            });
+            id
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let layout =
+        window
+            .update(&mut vcx, |ws, _, _| {
+                assert!(ws.app.panels.pipeline_mut(id).unwrap().select_row(
+                    &mut ws.app.doc,
+                    id,
+                    210
+                ));
+                ws.app.panels.pipeline(id).unwrap().last_layout().clone()
+            })
+            .unwrap();
+    let cells = layout.cells;
+    let at = |x, y| gpui_kit::point(gpui_kit::px(x), gpui_kit::px(y));
+    let start = at(
+        cells.left() + cells.width() * 0.5,
+        cells.top() + cells.height() * 0.5,
+    );
+    let outside = at(
+        layout.bounds.left() - 30.0,
+        cells.top() + cells.height() * 0.75,
+    );
+    let modifiers = Modifiers {
+        control: true,
+        ..Default::default()
+    };
+    vcx.simulate_mouse_move(start, None, modifiers);
+    vcx.simulate_event(MouseDownEvent {
+        button: MouseButton::Left,
+        position: start,
+        modifiers,
+        click_count: 2,
+        first_mouse: false,
+    });
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert!(matches!(
+                ws.app.panels.pipeline(id).unwrap().drag,
+                Some(volna_core::pipeline::model::Drag::BoxZoom { .. })
+            ));
+            assert_eq!(ws.app.panels.focused_id(), id);
+            assert_eq!(
+                ws.app.panels.iter().count(),
+                1,
+                "a modified second press opens no transaction tab"
+            );
+        })
+        .unwrap();
+    vcx.simulate_event(MouseMoveEvent {
+        position: outside,
+        pressed_button: Some(MouseButton::Left),
+        modifiers,
+    });
+    vcx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: outside,
+        modifiers,
+        click_count: 2,
+    });
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            let p = ws.app.panels.pipeline(id).unwrap();
+            assert!(p.drag.is_none());
+            assert!((p.nav.viewport(&ws.app.doc).width() - 100.0).abs() < 1e-5);
+            assert!((p.rows.value.row_px - 12.0).abs() < 1e-5);
+        })
+        .unwrap();
+}
+
 impl RootWindow {
     fn update<R>(
         &self,

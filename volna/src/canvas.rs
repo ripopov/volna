@@ -577,8 +577,12 @@ impl PanelCanvas {
                 // A second click on a record-bearing panel opens what the
                 // first click selected; the core decides where.
                 let selects = ws.read(cx).app.panels.get(panel).is_some_and(|p| {
-                    p.kind.pipeline().is_some()
-                        || p.kind.table().is_some()
+                    p.kind.pipeline().is_some_and(|p| {
+                        !matches!(
+                            p.drag,
+                            Some(volna_core::pipeline::model::Drag::BoxZoom { .. })
+                        )
+                    }) || p.kind.table().is_some()
                         || p.kind.waves().is_some_and(|w| w.pressed_record)
                 });
                 // A second click on a group's name renames it.

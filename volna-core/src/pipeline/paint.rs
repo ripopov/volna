@@ -586,6 +586,39 @@ pub fn paint(
     );
     overlay::cursor(&mut p, &column, cursor, base, focused, z(4.0));
 
+    if let Some((rect, valid)) = model.selection_box() {
+        let label = "Zoom to selected area · Esc to cancel";
+        let label_width = p.width(label, FontRole::Ui, t.ui_size);
+        let pointer = model.pointer.unwrap_or(rect.origin);
+        let label_x = (pointer.x + z(8.0))
+            .min(cells.right() - label_width - z(8.0))
+            .max(cells.left() + z(8.0));
+        let label_y = (pointer.y + z(8.0))
+            .min(cells.bottom() - z(20.0))
+            .max(cells.top());
+        p.scene.clipped(cells, |scene| {
+            scene.quad(
+                rect,
+                if valid {
+                    t.selection.bg.with_alpha(0.35)
+                } else {
+                    Color::TRANSPARENT
+                },
+                0.0,
+                1.0,
+                t.editor.text,
+            );
+            scene.text(
+                point(label_x, label_y),
+                z(20.0),
+                label,
+                FontRole::Ui,
+                t.ui_size,
+                t.editor.text,
+            );
+        });
+    }
+
     // -- borders and pointer shapes ---------------------------------------------
     let near_split = model.hover == Some(Hit::LabelSplit);
     let split_border = if near_split || model.drag == Some(Drag::LabelSplit) {

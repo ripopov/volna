@@ -767,6 +767,525 @@ fn ctrl() -> Modifiers {
     }
 }
 
+fn box_pointer(app: &mut App, id: PanelId, event: PointerEvent, now: Instant) {
+    app.handle_at(Command::Pointer(id, event), now);
+}
+
+fn box_press(app: &mut App, id: PanelId, position: Point, modifiers: Modifiers, now: Instant) {
+    box_pointer(
+        app,
+        id,
+        PointerEvent::Down {
+            position,
+            button: MouseButton::Left,
+            modifiers,
+        },
+        now,
+    );
+}
+
+fn box_view(theme: &Theme) -> (App, PanelId, Rect) {
+    let (mut app, _, _, id) = opened(1000);
+    pump(&mut app);
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport {
+            start: 200.0,
+            end: 400.0,
+        });
+    app.panels.pipeline_mut(id).unwrap().rows.set(RowView {
+        top: 200.0,
+        row_px: 6.0,
+    });
+    frame(&mut app, id, theme);
+    let cells = app.panels.pipeline(id).unwrap().last_layout().cells;
+    (app, id, cells)
+}
+
+fn in_box(cells: Rect, x: f32, y: f32) -> Point {
+    point(
+        cells.left() + cells.width() * x,
+        cells.top() + cells.height() * y,
+    )
+}
+
+#[test]
+fn box_zoom_fits_uniformly_in_every_direction_and_preserves_selection() {
+    use volna_core::settings::Animation;
+    for zoom in [1.0, 2.0] {
+        let theme = Theme::one_dark().zoomed(zoom);
+        for platform in [false, true] {
+            for (reverse_x, reverse_y) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let (mut app, id, cells) = box_view(&theme);
+                app.doc.navigation.animation = Animation::Off;
+                app.panels
+                    .pipeline_mut(id)
+                    .unwrap()
+                    .select_row(&mut app.doc, id, 210);
+                app.doc.shared.cursor = Some(211);
+                let selected = app.doc.selection();
+                let undo = app.undo_label().map(str::to_owned);
+                let rows = app.panels.pipeline(id).unwrap().rows.value.zoomed(zoom);
+                let time = app.doc.shared.viewport.value;
+                let now = Instant::now();
+                let start = in_box(
+                    cells,
+                    if reverse_x { 0.45 } else { 0.25 },
+                    if reverse_y { 0.7 } else { 0.3 },
+                );
+                let end = in_box(
+                    cells,
+                    if reverse_x { 0.25 } else { 0.45 },
+                    if reverse_y { 0.3 } else { 0.7 },
+                );
+                box_press(
+                    &mut app,
+                    id,
+                    start,
+                    Modifiers {
+                        control: !platform,
+                        platform,
+                        ..Default::default()
+                    },
+                    now,
+                );
+                box_pointer(&mut app, id, PointerEvent::Move { position: end }, now);
+                assert_eq!(app.doc.shared.viewport.value, time);
+                assert_eq!(
+                    app.panels.pipeline(id).unwrap().rows.value.zoomed(zoom),
+                    rows
+                );
+                box_pointer(&mut app, id, PointerEvent::Up, now);
+                let p = app.panels.pipeline(id).unwrap();
+                let target = p.nav.viewport(&app.doc);
+                let rows_target = p.rows.value.zoomed(zoom);
+                assert!((time.width() / target.width() - 2.5).abs() < 1e-5);
+                assert!((f64::from(rows_target.row_px / rows.row_px) - 2.5).abs() < 1e-5);
+                assert!(((target.start + target.end) * 0.5 - 270.0).abs() < 1e-5);
+                assert!(
+                    (rows_target.row_at(cells.height() * 0.5) - rows.row_at(cells.height() * 0.5))
+                        .abs()
+                        < 1e-5
+                );
+                assert_eq!(app.doc.selection(), selected);
+                assert_eq!(app.doc.shared.cursor, Some(211));
+                assert_eq!(p.row_cap, 24.0);
+                assert!(!p.is_animating());
+                assert_eq!(
+                    app.undo_label(),
+                    undo.as_deref(),
+                    "navigation creates no undo step"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn box_zoom_stops_both_axes_at_the_first_cap() {
+    use volna_core::wave::viewport::Viewport;
+    for zoom in [1.0, 2.0] {
+        let theme = Theme::one_dark().zoomed(zoom);
+        for (width, row_px, cap) in [
+            (200.0, 18.0, 24.0),
+            (12.0, 6.0, 24.0),
+            (5.0, 6.0, 24.0),
+            (200.0, 30.0, 24.0),
+            (200.0, 10.0, 40.0),
+        ] {
+            let (mut app, id, cells) = box_view(&theme);
+            app.doc.shared.viewport.set(Viewport {
+                start: 200.0,
+                end: 200.0 + width,
+            });
+            let p = app.panels.pipeline_mut(id).unwrap();
+            p.rows.set(RowView { top: 200.0, row_px });
+            p.row_cap = cap;
+            frame(&mut app, id, &theme);
+            let expected = 4.0_f64
+                .min((120.0 * f64::from(zoom) * width / f64::from(cells.width())).max(1.0))
+                .min(f64::from(cap / row_px).max(1.0));
+            let now = Instant::now();
+            box_press(&mut app, id, in_box(cells, 0.375, 0.375), ctrl(), now);
+            box_pointer(
+                &mut app,
+                id,
+                PointerEvent::Move {
+                    position: in_box(cells, 0.625, 0.625),
+                },
+                now,
+            );
+            box_pointer(&mut app, id, PointerEvent::Up, now);
+            let p = app.panels.pipeline(id).unwrap();
+            assert!(
+                (width / p.nav.viewport_state(&app.doc).target().width() - expected).abs() < 1e-5
+            );
+            assert!((f64::from(p.rows.target().row_px / row_px) - expected).abs() < 1e-5);
+            assert_eq!(p.row_cap, cap);
+        }
+    }
+}
+
+#[test]
+fn box_zoom_clips_the_overlay_and_fits_the_same_rectangle_on_outside_release() {
+    for theme in [
+        Theme::one_dark(),
+        Theme::volna(false),
+        Theme::one_dark().zoomed(2.0),
+    ] {
+        let (mut app, id, cells) = box_view(&theme);
+        let now = Instant::now();
+        let start = in_box(cells, 0.5, 0.5);
+        let end = point(BOUNDS.right() + 100.0, BOUNDS.bottom() + 100.0);
+        box_press(&mut app, id, start, ctrl(), now);
+        box_pointer(&mut app, id, PointerEvent::Move { position: end }, now);
+        frame(&mut app, id, &theme);
+        let expected_rect =
+            Rect::from_xywh(start.x, start.y, cells.width() * 0.5, cells.height() * 0.5);
+        let index = app.scene().prims.iter().position(|prim| matches!(prim, Prim::Quad { rect, fill, border_color, border_width, .. }
+            if *rect == expected_rect && *fill == theme.selection.bg.with_alpha(0.35) && *border_color == theme.editor.text && *border_width == 1.0)).expect("the themed selection box");
+        assert_eq!(app.scene().prims[index - 1], Prim::PushClip(cells));
+        assert!(
+            matches!(&app.scene().prims[index + 1], Prim::Text { text, color, .. } if text == "Zoom to selected area · Esc to cancel" && *color == theme.editor.text)
+        );
+        assert_eq!(app.scene().prims[index + 2], Prim::PopClip);
+        box_pointer(&mut app, id, PointerEvent::Leave, now);
+        assert!(app.panels.get(id).unwrap().dragging());
+        box_pointer(&mut app, id, PointerEvent::Up, now);
+        let p = app.panels.pipeline(id).unwrap();
+        let target = p.nav.viewport_state(&app.doc).target();
+        assert!((target.start - 300.0).abs() < 1e-5);
+        assert!((target.end - 400.0).abs() < 1e-5);
+        assert!((p.rows.target().row_px - 12.0).abs() < 1e-5);
+        assert!(!app.panels.get(id).unwrap().dragging());
+    }
+}
+
+#[test]
+fn box_zoom_tiny_boxes_escape_and_resizing_cancel_without_clicking() {
+    for zoom in [1.0, 2.0] {
+        let theme = Theme::one_dark().zoomed(zoom);
+        for (dx, dy, cancel) in [
+            (0.0, 0.0, 0),
+            (3.9, 40.0, 0),
+            (40.0, 3.9, 0),
+            (40.0, 40.0, 1),
+            (40.0, 40.0, 2),
+            (40.0, 40.0, 3),
+        ] {
+            let (mut app, id, cells) = box_view(&theme);
+            app.panels
+                .pipeline_mut(id)
+                .unwrap()
+                .select_row(&mut app.doc, id, 210);
+            app.doc.shared.cursor = Some(211);
+            let selected = app.doc.selection();
+            let before = app.doc.shared.viewport.value;
+            let rows = app.panels.pipeline(id).unwrap().rows.value;
+            let now = Instant::now();
+            let start = in_box(cells, 0.5, 0.5);
+            box_press(&mut app, id, start, ctrl(), now);
+            box_pointer(
+                &mut app,
+                id,
+                PointerEvent::Move {
+                    position: point(start.x + dx * zoom, start.y + dy * zoom),
+                },
+                now,
+            );
+            match cancel {
+                1 => app.handle_at(Command::Action(Action::ClearSelection), now),
+                2 => {
+                    app.layout_panel(id, Rect::from_xywh(30.0, 20.0, 1200.0, 600.0), &theme)
+                        .unwrap();
+                }
+                3 => {
+                    app.layout_panel(id, BOUNDS, &theme.zoomed(zoom * 1.1))
+                        .unwrap();
+                }
+                _ => {}
+            }
+            box_pointer(&mut app, id, PointerEvent::Up, now);
+            assert_eq!(app.doc.shared.viewport.target(), before);
+            assert_eq!(app.panels.pipeline(id).unwrap().rows.target(), rows);
+            assert_eq!(app.doc.selection(), selected);
+            assert_eq!(app.doc.shared.cursor, Some(211));
+        }
+    }
+}
+
+#[test]
+fn box_zoom_freezes_displayed_animation_and_follow_then_animates_both_targets() {
+    use volna_core::pipeline::FollowActivity;
+    use volna_core::settings::Animation;
+    use volna_core::wave::viewport::Viewport;
+    let theme = Theme::one_dark();
+    let (mut app, id, cells) = box_view(&theme);
+    app.doc.navigation.animation = Animation::On;
+    let now = Instant::now();
+    app.doc.shared.viewport.animate_to(
+        Viewport {
+            start: 600.0,
+            end: 700.0,
+        },
+        now,
+        Animation::On,
+    );
+    app.panels.pipeline_mut(id).unwrap().rows.animate_to(
+        RowView {
+            top: 600.0,
+            row_px: 12.0,
+        },
+        now,
+        Animation::On,
+    );
+    app.tick(now + Duration::from_millis(30));
+    frame(&mut app, id, &theme);
+    let before = app.doc.shared.viewport.value;
+    let rows = app.panels.pipeline(id).unwrap().last_layout().rows;
+    app.panels.pipeline_mut(id).unwrap().follow = FollowActivity::Following;
+    let press_time = now + Duration::from_millis(30);
+    box_press(&mut app, id, in_box(cells, 0.25, 0.25), ctrl(), press_time);
+    assert_eq!(app.doc.shared.viewport.target(), before);
+    assert_eq!(app.panels.pipeline(id).unwrap().rows.target(), rows);
+    for event in [
+        PointerEvent::Wheel {
+            position: in_box(cells, 0.5, 0.5),
+            dx: 100.0,
+            dy: 120.0,
+            modifiers: ctrl(),
+            precise: false,
+        },
+        PointerEvent::Pinch {
+            position: in_box(cells, 0.5, 0.5),
+            delta: 1.0,
+        },
+    ] {
+        box_pointer(&mut app, id, event, press_time);
+    }
+    // A cursor change would move followed rows on the next layout without the guard.
+    app.doc.shared.cursor = Some(before.start as u64);
+    app.tick(now + Duration::from_secs(1));
+    frame(&mut app, id, &theme);
+    assert_eq!(app.doc.shared.viewport.value, before);
+    assert_eq!(app.panels.pipeline(id).unwrap().rows.value, rows);
+    assert_eq!(
+        app.panels.pipeline(id).unwrap().follow,
+        FollowActivity::Following
+    );
+    box_pointer(
+        &mut app,
+        id,
+        PointerEvent::Move {
+            position: in_box(cells, 0.75, 0.75),
+        },
+        now,
+    );
+    let release_time = now + Duration::from_secs(1);
+    box_pointer(&mut app, id, PointerEvent::Up, release_time);
+    let p = app.panels.pipeline(id).unwrap();
+    assert_eq!(p.follow, FollowActivity::Suspended);
+    assert_eq!(p.rows.value, rows);
+    assert_eq!(app.doc.shared.viewport.value, before);
+    let target = app.doc.shared.viewport.target();
+    let rows_target = p.rows.target();
+    let factor = before.width() / target.width();
+    assert!((f64::from(rows_target.row_px / rows.row_px) - factor).abs() < 1e-5);
+    assert!(app.doc.shared.viewport.is_animating() && p.rows.is_animating());
+    app.tick(release_time + Duration::from_secs(1));
+    assert_eq!(app.doc.shared.viewport.value, target);
+    assert_eq!(app.panels.pipeline(id).unwrap().rows.value, rows_target);
+}
+
+#[test]
+fn box_zoom_release_schedules_autosave_for_linked_and_local_targets() {
+    use volna_core::workspace::persistence::{IDLE, Persistence, Target};
+    for linked in [true, false] {
+        let theme = Theme::one_dark();
+        let (mut app, id, cells) = box_view(&theme);
+        if !linked {
+            app.handle(Command::Panels(PanelsCommand::ToggleLink {
+                panel: id,
+                dim: LinkDim::Viewport,
+            }));
+        }
+        app.configure_persistence(Persistence::Auto);
+        app.workspace
+            .scheduler
+            .begin(
+                Some(Target::Storage {
+                    key: "box-zoom-test".into(),
+                }),
+                None,
+            )
+            .unwrap();
+        let shared = app.doc.shared.viewport.target();
+        let now = Instant::now();
+        box_press(&mut app, id, in_box(cells, 0.25, 0.25), ctrl(), now);
+        let revision = app.workspace.scheduler.revision();
+        box_pointer(
+            &mut app,
+            id,
+            PointerEvent::Move {
+                position: in_box(cells, 0.75, 0.75),
+            },
+            now,
+        );
+        assert_eq!(
+            app.workspace.scheduler.revision(),
+            revision,
+            "the overlay changes no persistent fields"
+        );
+        box_pointer(&mut app, id, PointerEvent::Up, now);
+        assert_eq!(app.workspace.scheduler.revision(), revision + 1);
+        assert!(app.workspace.scheduler.dirty());
+        assert!(
+            app.workspace
+                .scheduler
+                .next(now + IDLE * 2, true, false)
+                .is_none()
+        );
+        let ticket = app
+            .workspace
+            .scheduler
+            .next(now + IDLE * 4, false, false)
+            .expect("release schedules a save after animation settles");
+        assert_eq!(ticket.revision, revision + 1);
+        let p = app.panels.pipeline(id).unwrap();
+        let target = p.nav.viewport_state(&app.doc).target();
+        assert!((target.width() - 100.0).abs() < 1e-5);
+        assert_eq!(
+            app.doc.shared.viewport.target(),
+            if linked { target } else { shared }
+        );
+        let saved =
+            Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+        let json = serde_json::to_value(saved).unwrap();
+        let panel = json["panels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["kind"] == "pipeline")
+            .unwrap();
+        assert_eq!(panel["rows"]["row_px"], 12.0);
+        if !linked {
+            assert_eq!(panel["viewport"]["start"], 250.0);
+        }
+        box_pointer(&mut app, id, PointerEvent::Up, now);
+        assert_eq!(
+            app.workspace.scheduler.revision(),
+            revision + 1,
+            "an unchanged release is a no-op"
+        );
+    }
+}
+
+#[test]
+fn box_zoom_retains_alt_and_special_region_hit_precedence() {
+    use volna_core::pipeline::model::Drag;
+    let theme = Theme::one_dark();
+    let (mut app, id, cells) = box_view(&theme);
+    app.doc.add_marker(300);
+    frame(&mut app, id, &theme);
+    let now = Instant::now();
+    let alt = Modifiers {
+        alt: true,
+        control: true,
+        ..Default::default()
+    };
+    box_press(&mut app, id, in_box(cells, 0.5, 0.5), alt, now);
+    assert!(app.doc.reference_time().is_some());
+    assert!(!app.panels.get(id).unwrap().dragging());
+    frame(&mut app, id, &theme);
+    let layout = app.panels.pipeline(id).unwrap().last_layout().clone();
+    box_press(
+        &mut app,
+        id,
+        point(layout.labels.left() + 20.0, layout.labels.top() + 10.0),
+        ctrl(),
+        now,
+    );
+    assert!(app.doc.selection().is_some());
+    assert!(!app.panels.get(id).unwrap().dragging());
+    box_press(&mut app, id, in_box(layout.header, 0.75, 0.5), ctrl(), now);
+    assert_eq!(app.panels.pipeline(id).unwrap().drag, Some(Drag::Cursor));
+    box_pointer(&mut app, id, PointerEvent::Up, now);
+    box_press(
+        &mut app,
+        id,
+        in_box(layout.label_split, 0.5, 0.5),
+        ctrl(),
+        now,
+    );
+    assert_eq!(
+        app.panels.pipeline(id).unwrap().drag,
+        Some(Drag::LabelSplit)
+    );
+    box_pointer(&mut app, id, PointerEvent::Up, now);
+    box_press(
+        &mut app,
+        id,
+        in_box(layout.marker_lane.chips[0].rect, 0.5, 0.5),
+        ctrl(),
+        now,
+    );
+    assert!(matches!(
+        app.panels.pipeline(id).unwrap().drag,
+        Some(Drag::Marker(_))
+    ));
+    box_pointer(&mut app, id, PointerEvent::Up, now);
+    frame(&mut app, id, &theme);
+    let control = app
+        .panels
+        .pipeline(id)
+        .unwrap()
+        .last_layout()
+        .activity_controls[0]
+        .1;
+    let rows = app.panels.pipeline(id).unwrap().rows.value;
+    box_press(&mut app, id, in_box(control, 0.5, 0.5), ctrl(), now);
+    assert!(!app.panels.get(id).unwrap().dragging());
+    assert_ne!(app.panels.pipeline(id).unwrap().rows.value, rows);
+}
+
+#[test]
+fn box_zoom_adopts_its_aspect_for_subsequent_wheel_zoom() {
+    let theme = Theme::one_dark();
+    let (mut app, id, cells) = box_view(&theme);
+    let now = Instant::now();
+    // Establish a remembered wheel aspect, then change time through the linked view.
+    wheel_with(&mut app, id, in_box(cells, 0.5, 0.5), 0.0, 120.0, ctrl());
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport {
+            start: 200.0,
+            end: 400.0,
+        });
+    frame(&mut app, id, &theme);
+    box_press(&mut app, id, in_box(cells, 0.375, 0.375), ctrl(), now);
+    box_pointer(
+        &mut app,
+        id,
+        PointerEvent::Move {
+            position: in_box(cells, 0.625, 0.625),
+        },
+        now,
+    );
+    box_pointer(&mut app, id, PointerEvent::Up, now);
+    app.tick(now + Duration::from_secs(1));
+    frame(&mut app, id, &theme);
+    let time = app.doc.shared.viewport.value.width();
+    let row_px = app.panels.pipeline(id).unwrap().rows.value.row_px;
+    assert!((row_px - 24.0).abs() < 1e-5);
+    wheel_with(&mut app, id, in_box(cells, 0.5, 0.5), 0.0, -120.0, ctrl());
+    assert!((app.doc.shared.viewport.value.width() - time * 2.0).abs() < 1e-5);
+    assert!((app.panels.pipeline(id).unwrap().rows.value.row_px - row_px * 0.5).abs() < 1e-5);
+}
+
 /// Visible time width and painted row height after a frame.
 fn scales(app: &mut App, id: PanelId, theme: &Theme) -> (f64, f32) {
     frame(app, id, theme);

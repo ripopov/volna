@@ -66,7 +66,7 @@ impl Stamp {
         };
         if let Some((id, event)) = pointer {
             match event {
-                PointerEvent::Leave | PointerEvent::Up => return None,
+                PointerEvent::Leave => return None,
                 PointerEvent::Move { .. } if app.panels.get(id).is_none_or(|p| !p.dragging()) => {
                     return None;
                 }
