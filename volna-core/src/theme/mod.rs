@@ -163,6 +163,8 @@ pub struct Theme<C = Color> {
     pub digital_wave_width: f32,
     /// Analog curve width at interface zoom 1; dense envelopes use hairlines.
     pub analog_wave_width: f32,
+    /// Vertical padding on each side of a waveform at interface zoom 1.
+    pub wave_spacing: f32,
 }
 
 /// The themes one window paints with: the chrome (bars, sidebar, table,
@@ -302,6 +304,7 @@ impl<C: Copy> Theme<C> {
             zoom: self.zoom,
             digital_wave_width: self.digital_wave_width,
             analog_wave_width: self.analog_wave_width,
+            wave_spacing: self.wave_spacing,
         }
     }
 
@@ -469,6 +472,7 @@ impl Theme<Color> {
             zoom: 1.0,
             digital_wave_width: 1.0,
             analog_wave_width: 1.25,
+            wave_spacing: 5.0,
         };
         // One Dark's blue, cyan and purple; a pink and the muted grey.
         t.resolve_tints([0x74ade8, 0x6eb4bf, 0xb477cf, 0xf07fbf, 0xa9afbc].map(c));

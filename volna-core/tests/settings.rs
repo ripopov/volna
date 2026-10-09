@@ -484,3 +484,38 @@ fn memory_menu_offers_checked_presets_and_respects_host_owned_values() {
     assert_eq!(menu.budget_title, "Memory budget: 1.5 GiB");
     assert!(menu.locked.unwrap().contains("VS Code"));
 }
+
+#[test]
+fn waveform_spacing_validates_persists_and_resets() {
+    let mut app = app();
+    assert_eq!(app.settings.resolved().appearance.wave_spacing, 5.0);
+    for spacing in [0.0, 10.0] {
+        app.handle(Command::Settings(SettingsCommand::Set {
+            id: "appearance.waveSpacing".into(),
+            value: Value::Number(spacing),
+        }));
+        assert_eq!(app.settings.resolved().appearance.wave_spacing, spacing);
+        let saved = app.settings.text().to_owned();
+        let mut restored = App::new();
+        restored.configure_settings(Host::Native, None);
+        restored.settings_loaded(&saved);
+        assert_eq!(
+            restored.settings.resolved().appearance.wave_spacing,
+            spacing
+        );
+    }
+    for value in ["-1", "11", "true"] {
+        app.settings_external(format!(r#"{{"appearance.waveSpacing": {value}}}"#).as_bytes());
+        assert_eq!(app.settings.resolved().appearance.wave_spacing, 5.0);
+        assert_eq!(app.settings.diagnostics().len(), 1);
+    }
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "appearance.waveSpacing".into(),
+        value: Value::Number(8.0),
+    }));
+    app.handle(Command::Settings(SettingsCommand::Reset {
+        id: "appearance.waveSpacing".into(),
+    }));
+    assert_eq!(app.settings.resolved().appearance.wave_spacing, 5.0);
+    assert!(!app.settings.text().contains("appearance.waveSpacing"));
+}

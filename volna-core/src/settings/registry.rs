@@ -397,6 +397,22 @@ pub static REGISTRY: &[Spec] = &[
         hosts: Hosts::ALL,
     },
     Spec {
+        id: "appearance.waveSpacing",
+        page: Page::Appearance,
+        group: "Waveforms",
+        title: "Waveform vertical spacing",
+        description: "Blank space above and below each waveform in logical pixels at interface zoom 1. Scales with interface zoom without changing row heights. Reduced in short rows to leave room for the trace.",
+        keywords: &["wave", "spacing", "padding", "gap", "vertical"],
+        kind: Kind::Number {
+            min: 0.0,
+            max: 10.0,
+            step: 1.0,
+        },
+        default: Literal::Number(5.0),
+        apply: Apply::Live,
+        hosts: Hosts::ALL,
+    },
+    Spec {
         id: "panels.linkByDefault",
         page: Page::Waves,
         group: "Panels",

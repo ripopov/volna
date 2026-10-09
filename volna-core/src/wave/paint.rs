@@ -35,8 +35,15 @@ use volna_trace::data::{Bit, SignalHistory, SignalShape, ValueKind, WaveValue};
 // Pixel constants are design sizes at zoom 1.0; the painter multiplies them
 // by the theme's zoom. Borders and decorative hairlines stay one pixel;
 // trace widths come from the theme.
-/// Vertical inset of the trace inside a row.
-const TRACE_PAD: f32 = 5.0;
+/// Keep room for distinct digital levels and analog strokes when padding
+/// would otherwise consume a short row. Spacing is a design size; stroke
+/// widths follow their respective zoom policies.
+fn trace_pad(height: f32, t: &Theme) -> f32 {
+    let min_height = (2.0 * t.digital_wave_width)
+        .max(2.0 * t.analog_wave_width * t.zoom)
+        .max(2.0);
+    (t.wave_spacing * t.zoom).min(((height - min_height) / 2.0).max(0.0))
+}
 /// Segments narrower than this are drawn as a dense band instead of a hexagon.
 const MIN_SEGMENT_PX: usize = 5;
 /// Room a layer's colour swatch takes before its row's name.
@@ -890,13 +897,13 @@ pub fn paint(
 // ---------------------------------------------------------------------------
 
 /// Where row `wave_row` plots its values, once its range is known.
-fn analog_plot(a: &Analog, wave_row: Rect, zoom: f32) -> Option<Plot> {
+fn analog_plot(a: &Analog, wave_row: Rect, t: &Theme) -> Option<Plot> {
     let (lo, hi) = a.shown.or(a.target)?;
     Some(Plot {
         left: wave_row.left(),
         width: wave_row.width().floor(),
-        top: wave_row.top() + TRACE_PAD * zoom,
-        bottom: wave_row.bottom() - TRACE_PAD * zoom,
+        top: wave_row.top() + trace_pad(wave_row.height(), t),
+        bottom: wave_row.bottom() - trace_pad(wave_row.height(), t),
         lo,
         hi,
     })
@@ -941,7 +948,7 @@ fn paint_analog_row(
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
     let clip = intersect(wave_row, waves);
-    let plot = analog_plot(a, wave_row, t.zoom);
+    let plot = analog_plot(a, wave_row, t);
     let g = plot.map(|plot| analog::geometry(series, a.draw, vp, &plot, t.zoom));
     // A long history waits for its summary rather than scanning every change.
     let (Some(plot), Some(g)) = (plot, g.filter(|g| !g.waiting)) else {
@@ -1092,7 +1099,7 @@ fn paint_analog_overlays(
             waves.width(),
             layout.row_height(pos),
         );
-        let Some(plot) = analog_plot(a, wave_row, t.zoom) else {
+        let Some(plot) = analog_plot(a, wave_row, t) else {
             continue;
         };
         let tr = item.translator.as_ref();
@@ -1211,7 +1218,7 @@ pub fn paint_event_row(
         h.index_at((vp.start.ceil() as u64).saturating_sub(1))
             .map_or(0, |last| last + 1)
     };
-    let pad = TRACE_PAD * t.zoom;
+    let pad = trace_pad(area.height(), t);
     // One primitive per colour, not one per arrow.
     let (mut plain, mut coalesced) = (Vec::new(), Vec::new());
     while i < h.len() && h.time(i) as f64 <= vp.end {
@@ -1328,8 +1335,8 @@ fn paint_bits(
     }
     let wf = w_px as f64;
     let x0 = area.left();
-    let top = area.top() + TRACE_PAD * t.zoom;
-    let bottom = area.bottom() - TRACE_PAD * t.zoom;
+    let top = area.top() + trace_pad(area.height(), t);
+    let bottom = area.bottom() - trace_pad(area.height(), t);
     let mid = snap(top + (bottom - top) / 2.0);
     let y_of = |b: Bit| -> f32 {
         match b {
@@ -1599,8 +1606,8 @@ fn paint_bus_row(
     }
     let wf = w_px as f64;
     let x0 = area.left();
-    let top = area.top() + TRACE_PAD * t.zoom;
-    let bottom = area.bottom() - TRACE_PAD * t.zoom;
+    let top = area.top() + trace_pad(area.height(), t);
+    let bottom = area.bottom() - trace_pad(area.height(), t);
     let midf = top + (bottom - top) / 2.0;
     let numeric = translator.numeric_kind().is_some();
 
@@ -1968,8 +1975,8 @@ fn paint_clock_wave(
     }
     let wf = w_px as f64;
     let ppu = vp.px_per_unit(wf);
-    let top = area.top() + TRACE_PAD * t.zoom;
-    let bottom = area.bottom() - TRACE_PAD * t.zoom;
+    let top = area.top() + trace_pad(area.height(), t);
+    let bottom = area.bottom() - trace_pad(area.height(), t);
     let col = |time: u64| vp.x_of(time as f64, wf).clamp(0.0, wf);
     let history = crate::clock::ClockHistory::new(timeline.clone());
     // The stretches in view (they are sorted and disjoint) and the gaps
@@ -2356,8 +2363,8 @@ fn paint_group_summary(
         }
     };
     let x0 = area.left();
-    let top = area.top() + TRACE_PAD * t.zoom;
-    let bottom = area.bottom() - TRACE_PAD * t.zoom;
+    let top = area.top() + trace_pad(area.height(), t);
+    let bottom = area.bottom() - trace_pad(area.height(), t);
     let mid = top + (bottom - top) / 2.0;
 
     // Column counts → segments, as the bus painter does.
@@ -2653,8 +2660,8 @@ fn paint_stack_row(
     let plot = Plot {
         left: wave_row.left(),
         width: width as f32,
-        top: y + TRACE_PAD * t.zoom,
-        bottom: y + full_h - TRACE_PAD * t.zoom,
+        top: y + trace_pad(full_h, t),
+        bottom: y + full_h - trace_pad(full_h, t),
         lo,
         hi,
     };
@@ -3443,6 +3450,10 @@ mod tests {
     }
 
     fn paint_bus(h: &VecHistory, translator: &str, t: &Theme) -> Scene {
+        paint_bus_in_row(h, translator, t, 24.0)
+    }
+
+    fn paint_bus_in_row(h: &VecHistory, translator: &str, t: &Theme, height: f32) -> Scene {
         let translators = crate::data::Translators::builtin();
         let translator = translators.get(translator).unwrap();
         let mut scene = Scene::default();
@@ -3454,7 +3465,7 @@ mod tests {
             measure: &mut measure,
             scene: &mut scene,
         };
-        let area = Rect::from_xywh(0.0, 0.0, 400.0, 24.0);
+        let area = Rect::from_xywh(0.0, 0.0, 400.0, height);
         let vp = Viewport {
             start: 0.0,
             end: 400.0,
@@ -3462,6 +3473,37 @@ mod tests {
         let char_w = MonoMeasure.text_width("0", FontRole::Mono, t.mono_size);
         paint_bus_row(h, translator.as_ref(), &vp, area, area, char_w, &mut p);
         scene
+    }
+
+    #[test]
+    fn spacing_moves_bus_levels_and_scales_with_zoom() {
+        let h = bus(&[(100, "10000000")]);
+        for (spacing, zoom, low_y) in [(0.0, 1.0, 23.0), (8.0, 1.0, 15.0), (3.0, 2.0, 17.0)] {
+            let mut t = Theme::volna(true).zoomed(zoom);
+            t.wave_spacing = spacing;
+            let scene = paint_bus(&h, "hex", &t);
+            assert!(scene.quads().any(|(r, c)| c == t.wave_signal
+                && r.left() == 0.0
+                && r.top() == low_y
+                && r.height() == 1.0));
+        }
+    }
+
+    #[test]
+    fn spacing_leaves_room_for_thick_strokes_in_short_rows() {
+        let mut t = Theme::volna(true).zoomed(0.5);
+        t.wave_spacing = 10.0;
+        t.digital_wave_width = 4.0;
+        let h = bus(&[(100, "10000000")]);
+        let scene = paint_bus_in_row(&h, "hex", &t, 12.0);
+        assert!(scene.quads().any(|(r, c)| c == t.wave_signal
+            && r.left() == 0.0
+            && r.top() == 6.0
+            && r.height() == 4.0));
+        assert!(scene.quads().any(|(r, c)| c == t.wave_signal
+            && r.left() >= 100.0
+            && r.top() == 2.0
+            && r.height() == 4.0));
     }
 
     #[test]

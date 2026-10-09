@@ -3263,7 +3263,7 @@ fn remote_activity_banner_names_the_reader_and_dismisses(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
-fn clicking_waveform_width_steppers_repaints_visible_panels(cx: &mut TestAppContext) {
+fn clicking_waveform_appearance_steppers_repaints_visible_panels(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
     use volna_core::app::SettingsCommand;
     init(cx);
@@ -3292,16 +3292,24 @@ fn clicking_waveform_width_steppers_repaints_visible_panels(cx: &mut TestAppCont
         })
         .unwrap();
     vcx.run_until_parked();
-    for (key, base, selector) in [
+    for (key, base, step, selector) in [
         (
             "appearance.digitalWaveWidth",
             1.0,
+            0.25,
             "setting-number-appearance.digitalWaveWidth",
         ),
         (
             "appearance.analogWaveWidth",
             1.25,
+            0.25,
             "setting-number-appearance.analogWaveWidth",
+        ),
+        (
+            "appearance.waveSpacing",
+            5.0,
+            1.0,
+            "setting-number-appearance.waveSpacing",
         ),
     ] {
         window
@@ -3342,7 +3350,7 @@ fn clicking_waveform_width_steppers_repaints_visible_panels(cx: &mut TestAppCont
                 .update(&mut vcx, |ws, _, _| {
                     assert_eq!(
                         ws.app.settings.value(key).unwrap().as_f64(),
-                        Some(base + if increment { 0.25 } else { 0.0 })
+                        Some(base + if increment { step } else { 0.0 })
                     );
                     for (id, before) in waves.into_iter().zip(before) {
                         assert!(

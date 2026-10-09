@@ -834,3 +834,38 @@ fn appearance_widths_apply_live_to_digital_and_analog_traces() {
         if *c == color && *width == 1.25 && segments.iter().any(|[a, _]| real.contains(*a))
     )));
 }
+
+#[test]
+fn waveform_spacing_applies_live_without_changing_row_geometry() {
+    use volna_core::app::SettingsCommand;
+    use volna_core::settings::{Host, Value};
+
+    let (_file, mut app, id) = app();
+    app.configure_settings(Host::Native, None);
+    view(&mut app, id, 0.0, 4000.0);
+    frame(&mut app, id);
+    let real = row_rect(&app, id, REAL);
+    let bit = row_rect(&app, id, BIT);
+    for spacing in [0.0, 8.0, 10.0] {
+        app.handle(Command::Settings(SettingsCommand::Set {
+            id: "appearance.waveSpacing".into(),
+            value: Value::Number(spacing),
+        }));
+        let scene = frame(&mut app, id);
+        let points = stroke_points(&scene, real);
+        assert!(!points.is_empty());
+        assert!(
+            points
+                .iter()
+                .all(|p| p.y >= real.top() + spacing as f32 - 0.01
+                    && p.y <= real.bottom() - spacing as f32 + 0.01)
+        );
+        let color = Theme::one_dark().wave_signal;
+        assert!(scene.quads().any(|(r, c)| c == color
+            && bit.contains(r.origin)
+            && r.height() == 1.0
+            && r.top() == bit.bottom() - spacing as f32 - 1.0));
+        assert_eq!(row_rect(&app, id, REAL), real);
+        assert_eq!(row_rect(&app, id, BIT), bit);
+    }
+}
