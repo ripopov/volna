@@ -45,6 +45,8 @@ enum Row {
         height: RowHeight,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         analog: Option<SavedAnalog>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        overlay_hidden: bool,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
@@ -97,6 +99,8 @@ enum Row {
         /// A stacked group without its peak band says `false`.
         #[serde(default = "shows_peak", skip_serializing_if = "is_true")]
         peak: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        overlaid: Option<SavedAnalog>,
         rows: Vec<Row>,
     },
 }
@@ -109,13 +113,14 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
-/// How a group draws: activity, the default and not written, or `"stack"`.
+/// The group renderer; activity is the default and is not written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SavedStyle {
     #[default]
     Activity,
     Stack,
+    Overlaid,
 }
 
 impl SavedStyle {
@@ -130,14 +135,22 @@ impl SavedStyle {
         match style {
             GroupStyle::Activity => (Self::Activity, true),
             GroupStyle::Stack { peak } => (Self::Stack, peak),
+            GroupStyle::Overlaid { .. } => (Self::Overlaid, true),
         }
     }
 
-    fn style(self, peak: bool) -> GroupStyle {
-        match self {
+    fn style(self, peak: bool, overlaid: Option<SavedAnalog>) -> Result<GroupStyle> {
+        Ok(match self {
             Self::Activity => GroupStyle::Activity,
             Self::Stack => GroupStyle::Stack { peak },
-        }
+            Self::Overlaid => {
+                let settings = overlaid.context("overlaid group missing drawing settings")?;
+                GroupStyle::Overlaid {
+                    draw: settings.draw,
+                    range: settings.range,
+                }
+            }
+        })
     }
 }
 
@@ -155,6 +168,10 @@ fn nest(items: &[Entry], row: &dyn Fn(&WaveRow) -> Row) -> Vec<Row> {
                 tint: g.tint,
                 style: SavedStyle::of(g.style).0,
                 peak: SavedStyle::of(g.style).1,
+                overlaid: match g.style {
+                    GroupStyle::Overlaid { draw, range } => Some(SavedAnalog { draw, range }),
+                    _ => None,
+                },
                 rows: nest(&items[i + 1..end], row),
             },
             other => row(other),
@@ -181,6 +198,7 @@ fn flatten(rows: Vec<Row>, depth: u8, out: &mut Vec<(u8, Row)>) -> Result<()> {
                 tint,
                 style,
                 peak,
+                overlaid,
                 rows,
             } => {
                 ensure!(!name.trim().is_empty(), "empty group name");
@@ -193,6 +211,7 @@ fn flatten(rows: Vec<Row>, depth: u8, out: &mut Vec<(u8, Row)>) -> Result<()> {
                         tint,
                         style,
                         peak,
+                        overlaid,
                         rows: Vec::new(),
                     },
                 ));
@@ -216,8 +235,9 @@ struct SavedAnalog {
 /// counts rows in pre-order, groups included), version 5 row colours
 /// (`tint`, a name; an unknown one reads as Default), version 6 stacked
 /// groups (`"style": "stack"`, and `"peak": false` without the peak band;
-/// activity is not written).
-pub(crate) const VERSION: u32 = 6;
+/// activity is not written), version 7 overlaid groups (independent lines,
+/// drawing and shared range settings, and per-signal overlay visibility).
+pub(crate) const VERSION: u32 = 7;
 
 // RawValue distinguishes an omitted local cursor from an explicitly saved null.
 #[derive(Serialize, Deserialize)]
@@ -263,6 +283,7 @@ pub(crate) fn save(
                     draw: a.draw,
                     range: a.range,
                 }),
+                overlay_hidden: item.overlay_hidden,
                 tint: item.tint,
             }
         }
@@ -343,7 +364,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     w.values_width = saved.columns.values;
     let mut items = Vec::with_capacity(flat.len());
     for (depth, row) in flat {
-        let (trace, signal, nth, format, height, analog, tint) = match row {
+        let (trace, signal, nth, format, height, analog, overlay_hidden, tint) = match row {
             Row::Signal {
                 trace,
                 signal,
@@ -351,8 +372,18 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 format,
                 height,
                 analog,
+                overlay_hidden,
                 tint,
-            } => (trace, signal, nth, format, height, analog, tint),
+            } => (
+                trace,
+                signal,
+                nth,
+                format,
+                height,
+                analog,
+                overlay_hidden,
+                tint,
+            ),
             Row::Lane {
                 trace,
                 generator,
@@ -409,6 +440,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 tint,
                 style,
                 peak,
+                overlaid,
                 ..
             } => {
                 items.push(Entry::new(
@@ -418,7 +450,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                         collapsed,
                         height,
                         tint,
-                        style: style.style(peak),
+                        style: style.style(peak, overlaid)?,
                         restore_height: None,
                     }),
                 ));
@@ -485,6 +517,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 error: None,
                 height,
                 analog: analog.map(|a| Analog::new(a.draw, a.range)),
+                overlay_hidden,
                 tint,
             }),
         ));

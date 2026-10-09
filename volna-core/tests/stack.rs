@@ -958,7 +958,7 @@ fn the_group_menu_draws_it_as_activity_or_a_stacked_area() {
 }
 
 #[test]
-fn stacked_groups_round_trip_through_workspaces_at_version_6() {
+fn stacked_groups_round_trip_through_workspaces_at_version_7() {
     let (_f, mut app, _) = app();
     app.handle(Command::Action(Action::ToggleStack));
     let saved = serde_json::to_value(
@@ -966,7 +966,7 @@ fn stacked_groups_round_trip_through_workspaces_at_version_6() {
     )
     .unwrap();
     let panel = &saved["panels"][0];
-    assert_eq!(panel["version"], 6);
+    assert_eq!(panel["version"], 7);
     assert_eq!(panel["rows"][0]["style"], "stack");
     assert_eq!(panel["rows"][0]["height"], 3);
     let (_f2, session) = trace();
@@ -1048,7 +1048,7 @@ fn the_stack_paints_layers_in_list_order_with_gaps_and_the_undefined_rest() {
     let scene = app.scene();
     let t = Theme::one_dark();
     let row = row_rect(&app, id, 0);
-    let color = |k| t.layer_fill(k, 3);
+    let color = |k: usize| t.markers[k].stroke;
     let (p, q, r) = (
         quads_of(scene, row, color(0)),
         quads_of(scene, row, color(1)),
@@ -1090,7 +1090,7 @@ fn the_stack_paints_layers_in_list_order_with_gaps_and_the_undefined_rest() {
             .any(|u| (u.left() - x_of(40.0)).abs() <= 1.0 && (u.right() - x_of(50.0)).abs() <= 1.0),
         "{undefined:?}"
     );
-    // The cells: the sum, the header line, swatches and the rows left out.
+    // The cells: the sum, the header line, colour stripes and the rows left out.
     let text = texts(scene);
     assert!(text.iter().any(|s| s == "Σ 6"), "{text:?}");
     assert!(text.iter().any(|s| s == "stacked · 3 layers"), "{text:?}");
@@ -1099,8 +1099,15 @@ fn the_stack_paints_layers_in_list_order_with_gaps_and_the_undefined_rest() {
         2,
         "{text:?}"
     );
-    let swatches = scene.prims.iter().filter(|p| matches!(p, Prim::Quad { fill, radius, .. } if *radius > 0.0 && (0..3).any(|k| *fill == color(k)))).count();
-    assert_eq!(swatches, 3, "one swatch per layer row");
+    let stripes = scene
+        .quads()
+        .filter(|(rect, fill)| {
+            rect.left() == l.names.left()
+                && rect.width() == 3.0
+                && (0..3).any(|k| *fill == color(k))
+        })
+        .count();
+    assert_eq!(stripes, 3, "one stripe per layer row");
     // The sum reads X while a layer is undefined.
     cursor(&mut app, id, 45);
     let text = texts(frame(&mut app, id));

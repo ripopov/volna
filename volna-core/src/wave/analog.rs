@@ -18,7 +18,7 @@ use crate::geometry::{Point, point};
 use crate::wave::model::RowHeight;
 use crate::wave::viewport::Viewport;
 use volna_trace::data::value_view::ValueView;
-use volna_trace::data::{SignalHistory, SignalShape};
+use volna_trace::data::{Bit, SignalHistory, SignalShape};
 
 /// How consecutive values are joined.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -134,9 +134,31 @@ impl Analog {
         shape: SignalShape,
         vp: &Viewport,
     ) {
+        let Some(range) = self.raw_target(series, tr, shape, vp) else {
+            return;
+        };
+        let target = padded(range.unwrap_or((0.0, 1.0)), shape);
+        self.target = Some(target);
+        if self.shown.is_none() {
+            self.shown = Some(target);
+        }
+    }
+
+    /// Unpadded bounds for combining independent plots. The outer `None`
+    /// means a summary is still building; the inner one means no numeric
+    /// sample contributes to the range.
+    pub(crate) fn raw_target(
+        &mut self,
+        series: &Series<'_>,
+        tr: &dyn Translator,
+        shape: SignalShape,
+        vp: &Viewport,
+    ) -> Option<Option<(f64, f64)>> {
         let range = match self.range {
             AnalogRange::Type => tr.limits(shape),
-            AnalogRange::Window if series.waiting(visible_changes(series.history, vp)) => return,
+            AnalogRange::Window if series.waiting(visible_changes(series.history, vp)) => {
+                return None;
+            }
             AnalogRange::Window => series.window_range(vp),
             AnalogRange::Trace => None,
         };
@@ -148,14 +170,10 @@ impl Analog {
                 None if !series.waiting(visible_changes(series.history, vp)) => {
                     series.window_range(vp)
                 }
-                None => return,
+                None => return None,
             },
         };
-        let target = padded(range.unwrap_or((0.0, 1.0)), shape);
-        self.target = Some(target);
-        if self.shown.is_none() {
-            self.shown = Some(target);
-        }
+        Some(range)
     }
 
     /// The whole-history range: the summary's root, or a cached scan of a
@@ -207,6 +225,16 @@ impl Analog {
     }
 }
 
+/// Numeric interpretation for group plots. Bits use 0/1 regardless of their
+/// display format; buses and reals use their translator's interpretation.
+pub fn numeric_kind(shape: SignalShape, tr: &dyn Translator) -> Option<NumericKind> {
+    match shape {
+        SignalShape::Bit => Some(NumericKind::Unsigned),
+        SignalShape::Vector { .. } | SignalShape::Real => tr.numeric_kind(),
+        SignalShape::Text | SignalShape::Event => None,
+    }
+}
+
 /// Whether a row of `shape` shown with `tr` can be drawn as a plot.
 pub fn supports(shape: SignalShape, tr: &dyn Translator) -> bool {
     matches!(shape, SignalShape::Vector { .. } | SignalShape::Real) && tr.numeric_kind().is_some()
@@ -218,7 +246,7 @@ pub fn history_identity(h: &Arc<dyn SignalHistory>) -> usize {
 }
 
 /// A flat range gets room around it: ±0.5 for integers, ±5% for floats.
-fn padded((lo, hi): (f64, f64), shape: SignalShape) -> (f64, f64) {
+pub(crate) fn padded((lo, hi): (f64, f64), shape: SignalShape) -> (f64, f64) {
     if hi - lo > 1e-12 * lo.abs().max(hi.abs()).max(1.0) {
         return (lo, hi);
     }
@@ -241,6 +269,23 @@ pub enum Sample {
 }
 
 pub fn sample(h: &dyn SignalHistory, kind: NumericKind, i: Option<usize>) -> Sample {
+    if h.shape() == SignalShape::Bit && kind == NumericKind::Unsigned {
+        return match h.bit(i) {
+            Bit::Zero => Sample::Value(0.0),
+            Bit::One => Sample::Value(1.0),
+            Bit::Unavailable => Sample::Missing,
+            // A weak drive still has a level.
+            Bit::Other => match h.value_view(i) {
+                ValueView::Logic(l) if l.width == 1 => match l.bit(0) {
+                    b'h' | b'H' => Sample::Value(1.0),
+                    b'l' | b'L' => Sample::Value(0.0),
+                    _ => Sample::Undefined,
+                },
+                _ => Sample::Undefined,
+            },
+            Bit::X | Bit::Z | Bit::DontCare => Sample::Undefined,
+        };
+    }
     let view = h.value_view(i);
     if matches!(view, ValueView::Unavailable) {
         return Sample::Missing;

@@ -220,6 +220,7 @@ fn fixed_commands() -> Vec<(&'static str, Box<dyn Action>)> {
         ("Reset Row Height", Box::new(app::ResetRowHeight)),
         ("Toggle Analog Drawing", Box::new(app::ToggleAnalog)),
         ("Toggle Stacked Area", Box::new(app::ToggleStack)),
+        ("Toggle Overlaid Lines", Box::new(app::ToggleOverlaid)),
         ("Color: Default", Box::new(app::SetTint { tint: None })),
         (
             "Color: Blue",

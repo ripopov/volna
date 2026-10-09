@@ -99,6 +99,8 @@ pub enum Action {
     /// `Shift+A`: draw the selected groups as stacked areas, or back as
     /// activity.
     ToggleStack,
+    /// Shift+O: draw selected groups as independent overlaid lines.
+    ToggleOverlaid,
     /// Colour the selected rows and groups, or clear their own colour with
     /// `None`; the menu, palette and agents use it.
     SetTint(Option<crate::wave::Tint>),
@@ -2051,27 +2053,39 @@ impl App {
         self.changed();
     }
 
-    /// Hold one document retain for every generator a wave lane shows, and
-    /// release those no lane shows any more. A new session drops earlier
-    /// retains with its tracks.
     /// Hold an analog summary for every long history a plot shows, and
     /// release the others with their memory.
     pub(crate) fn sync_analog_summaries(&mut self) {
-        let wanted = self
-            .panels
-            .iter()
-            .filter_map(|panel| panel.kind.waves())
-            .flat_map(|waves| waves.items().iter().map(|e| &e.row))
-            .filter_map(WaveRow::signal)
-            .filter(|s| s.analog.is_some())
-            .filter_map(|s| {
-                let kind = s.translator.numeric_kind()?;
-                let history = s.history.as_ref()?;
-                let signal = s.source.signal()?;
-                (history.len() >= crate::wave::analog::SUMMARY_MIN_CHANGES)
-                    .then(|| ((signal, kind), history.clone()))
-            })
-            .collect();
+        let mut wanted = std::collections::HashMap::new();
+        for waves in self.panels.iter().filter_map(|panel| panel.kind.waves()) {
+            let mut rows: std::collections::BTreeSet<usize> = waves
+                .items()
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| e.signal().filter(|s| s.analog.is_some()).map(|_| i))
+                .collect();
+            for &i in waves.visible().iter() {
+                if waves.is_overlaid(i as usize) {
+                    rows.extend(
+                        waves
+                            .numeric_members(i as usize)
+                            .into_iter()
+                            .filter(|&j| !waves.signal(j).unwrap().overlay_hidden),
+                    );
+                }
+            }
+            for i in rows {
+                let s = waves.signal(i).unwrap();
+                let (Some(kind), Some(history), Some(signal)) =
+                    (s.numeric_kind(), s.history.as_ref(), s.source.signal())
+                else {
+                    continue;
+                };
+                if history.len() >= crate::wave::analog::SUMMARY_MIN_CHANGES {
+                    wanted.insert((signal, kind), history.clone());
+                }
+            }
+        }
         let budget = self.table_memory_budget();
         self.doc.sync_summaries(wanted, &budget);
         self.sync_group_summaries();
@@ -2432,6 +2446,7 @@ impl App {
                 | Action::CycleFormat
                 | Action::ToggleAnalog
                 | Action::ToggleStack
+                | Action::ToggleOverlaid
                 | Action::SetTint(_)
                 | Action::IncreaseRowHeight
                 | Action::DecreaseRowHeight
@@ -2500,6 +2515,7 @@ impl App {
                 Action::CycleFormat => w.cycle_format(doc),
                 Action::ToggleAnalog => w.toggle_analog(),
                 Action::ToggleStack => _ = w.toggle_stack(),
+                Action::ToggleOverlaid => _ = w.toggle_overlaid(),
                 Action::SetTint(tint) => _ = w.tint_selected(tint),
                 Action::IncreaseRowHeight => w.step_row_height(1),
                 Action::DecreaseRowHeight => w.step_row_height(-1),
@@ -2562,6 +2578,7 @@ impl App {
                 | Action::CycleFormat
                 | Action::ToggleAnalog
                 | Action::ToggleStack
+                | Action::ToggleOverlaid
                 | Action::SetTint(_)
                 | Action::GroupSelection
                 | Action::Ungroup

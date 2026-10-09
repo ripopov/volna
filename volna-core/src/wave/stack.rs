@@ -25,8 +25,7 @@ use std::sync::Arc;
 use crate::data::{NumericKind, Translator};
 use crate::wave::analog::{self, EXACT_RATIO, Sample};
 use crate::wave::viewport::Viewport;
-use volna_trace::data::value_view::ValueView;
-use volna_trace::data::{Bit, SignalHistory, SignalShape};
+use volna_trace::data::{SignalHistory, SignalShape};
 
 /// Layers that change at most this often in total get their whole-trace
 /// scale from a walk on the UI thread; longer ones build it on the load
@@ -58,11 +57,12 @@ impl Reading {
     /// How a row of `shape` shown with `tr` counts, or `None` when it has no
     /// number (text, strings, events): such a row is left out.
     pub fn of(shape: SignalShape, tr: &dyn Translator) -> Option<Self> {
-        match shape {
-            SignalShape::Bit => Some(Self::Bit),
-            SignalShape::Vector { .. } | SignalShape::Real => tr.numeric_kind().map(Self::Number),
-            SignalShape::Event | SignalShape::Text => None,
-        }
+        let kind = analog::numeric_kind(shape, tr)?;
+        Some(if shape == SignalShape::Bit {
+            Self::Bit
+        } else {
+            Self::Number(kind)
+        })
     }
 
     /// Whether every number it reads is a whole number.
@@ -76,21 +76,7 @@ impl Reading {
     /// Value `i` of `h` (the value before the first change when `None`).
     pub fn sample(self, h: &dyn SignalHistory, i: Option<usize>) -> Sample {
         let Self::Number(kind) = self else {
-            return match h.bit(i) {
-                Bit::Zero => Sample::Value(0.0),
-                Bit::One => Sample::Value(1.0),
-                Bit::Unavailable => Sample::Missing,
-                // A weak drive still has a level.
-                Bit::Other => match h.value_view(i) {
-                    ValueView::Logic(l) if l.width == 1 => match l.bit(0) {
-                        b'h' | b'H' => Sample::Value(1.0),
-                        b'l' | b'L' => Sample::Value(0.0),
-                        _ => Sample::Undefined,
-                    },
-                    _ => Sample::Undefined,
-                },
-                Bit::X | Bit::Z | Bit::DontCare => Sample::Undefined,
-            };
+            return analog::sample(h, NumericKind::Unsigned, i);
         };
         analog::sample(h, kind, i)
     }

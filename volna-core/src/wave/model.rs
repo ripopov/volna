@@ -173,11 +173,18 @@ pub struct DisplayedSignal {
     pub height: RowHeight,
     /// Drawn as a plot instead of digital values.
     pub analog: Option<Analog>,
+    /// Excluded from enclosing overlaid plots; its individual row stays visible.
+    pub overlay_hidden: bool,
     /// Its own colour; `None` inherits (see [`tint::ink`]).
     pub tint: Option<Tint>,
 }
 
 impl DisplayedSignal {
+    /// Numeric interpretation shared by stacked and overlaid group plots.
+    pub fn numeric_kind(&self) -> Option<crate::data::NumericKind> {
+        analog::numeric_kind(self.shape, self.translator.as_ref())
+    }
+
     /// The translator a workspace file records for this row.
     pub fn format_id(&self) -> String {
         self.requested_format
@@ -223,10 +230,15 @@ pub enum GroupStyle {
     /// with `peak`, zoomed out, a faint band
     /// reaches the total's own extremes in each column.
     Stack { peak: bool },
+    /// Independent numeric members against a shared amplitude scale.
+    Overlaid {
+        draw: AnalogDraw,
+        range: AnalogRange,
+    },
 }
 
 /// A named group of rows. Folded, it hides its rows; its own row draws
-/// their activity when folded, or their stacked area in either state.
+/// their activity when folded, or their numeric plot in either state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupRow {
     pub name: String,
@@ -236,7 +248,7 @@ pub struct GroupRow {
     /// The colour its rows without their own are drawn in.
     pub tint: Option<Tint>,
     pub style: GroupStyle,
-    /// The height stacking replaced; restored when the group is unstacked
+    /// The height a group plot replaced; restored when it returns to activity
     /// while it still has [`RowHeight::ANALOG`]. An explicit resize clears it.
     pub restore_height: Option<RowHeight>,
 }
@@ -255,6 +267,14 @@ impl GroupRow {
 
     pub fn is_stacked(&self) -> bool {
         matches!(self.style, GroupStyle::Stack { .. })
+    }
+
+    pub fn is_overlaid(&self) -> bool {
+        matches!(self.style, GroupStyle::Overlaid { .. })
+    }
+
+    pub fn is_plot(&self) -> bool {
+        self.is_stacked() || self.is_overlaid()
     }
 
     /// Stacked with the peak band.
@@ -421,6 +441,7 @@ impl WaveRow {
                     && format(a) == format(b)
                     && a.height == b.height
                     && analog(&a.analog) == analog(&b.analog)
+                    && a.overlay_hidden == b.overlay_hidden
             }
             (Self::Lane(a), Self::Lane(b)) => a.source == b.source && a.height == b.height,
             (Self::Clock(a), Self::Clock(b)) => a == b,
@@ -548,6 +569,12 @@ pub enum MenuAction {
     Stack(bool),
     /// Show (`true`) or hide the peak band of the menu's stacked groups.
     Peak(bool),
+    Overlaid,
+    OverlaidDraw(AnalogDraw),
+    OverlaidRange(AnalogRange),
+    OverlayHidden(bool),
+    IsolateOverlay,
+    ShowAllOverlay,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -720,6 +747,7 @@ pub struct WaveModel {
     pub rename: Option<usize>,
     /// When analog ranges last eased, while one is moving.
     analog_eased_at: Option<Instant>,
+    pub(crate) overlaid_ranges: std::collections::HashMap<usize, super::overlaid::Ranges>,
     layout: WaveLayout,
     /// Counts changes of the rows' shape (see [`WaveModel::revision`]).
     revision: u64,
@@ -790,6 +818,7 @@ impl WaveModel {
             pressed_record: false,
             rename: None,
             analog_eased_at: None,
+            overlaid_ranges: Default::default(),
             layout: WaveLayout::default(),
             revision: 0,
         }
@@ -819,6 +848,7 @@ impl WaveModel {
         self.nav.is_animating()
             || self.row_drag_scroll_speed() != 0.0
             || self.analog_rows().any(|a| !a.is_settled())
+            || self.overlaid_ranges.values().any(|r| !r.scale.is_settled())
     }
 
     pub fn tick(&mut self, doc: &Document, now: Instant) -> bool {
@@ -839,6 +869,29 @@ impl WaveModel {
     /// Fit the visible plots' target ranges to the current viewport.
     fn update_analog_targets(&mut self, doc: &Document) {
         let vp = self.viewport(doc);
+        let groups: Vec<usize> = self
+            .layout
+            .rows
+            .clone()
+            .filter_map(|pos| self.layout.entry(pos))
+            .filter(|&i| self.is_overlaid(i))
+            .collect();
+        self.overlaid_ranges.retain(|i, _| groups.contains(i));
+        for i in groups {
+            let GroupStyle::Overlaid { range, .. } = self.items[i].group().unwrap().style else {
+                continue;
+            };
+            let indices = self.numeric_members(i);
+            let signals: Vec<&DisplayedSignal> = indices
+                .iter()
+                .filter_map(|&i| self.items[i].signal())
+                .filter(|s| !s.overlay_hidden)
+                .collect();
+            self.overlaid_ranges
+                .entry(i)
+                .or_default()
+                .update(&signals, range, doc, &vp);
+        }
         // The rows on screen only, straight from the layout.
         let Self { layout, items, .. } = self;
         for i in layout.rows.clone().filter_map(|pos| layout.entry(pos)) {
@@ -865,6 +918,9 @@ impl WaveModel {
             if let Some(a) = &mut item.analog {
                 moving |= a.ease(dt);
             }
+        }
+        for range in self.overlaid_ranges.values_mut() {
+            moving |= range.scale.ease(dt);
         }
         self.analog_eased_at = moving.then_some(now);
         moving
@@ -1834,7 +1890,7 @@ impl WaveModel {
         );
     }
 
-    // -- stacked areas --------------------------------------------------------------
+    // -- numeric group plots --------------------------------------------------------
 
     /// Whether entry `i` is a stacked group.
     pub fn is_stacked(&self, i: usize) -> bool {
@@ -1863,13 +1919,7 @@ impl WaveModel {
     /// The stacked group whose area entry `i` is a layer of, or would be
     /// if it had a number: the nearest stacked group above it.
     pub fn stack_of(&self, i: usize) -> Option<usize> {
-        let mut at = tree::parent(&self.items, i)?;
-        loop {
-            if self.is_stacked(at) {
-                return Some(at);
-            }
-            at = tree::parent(&self.items, at)?;
-        }
+        self.enclosing_group(i, GroupRow::is_stacked)
     }
 
     /// Draw the groups among `rows` as stacked areas, or as activity: one
@@ -1882,17 +1932,24 @@ impl WaveModel {
         } else {
             GroupStyle::Activity
         };
-        let groups: Vec<usize> = rows
-            .iter()
-            .copied()
-            .filter(|&r| {
-                self.items
-                    .get(r)
-                    .and_then(|e| e.group())
-                    .is_some_and(|g| g.is_stacked() != stacked)
-            })
-            .collect();
-        let verb = if stacked { "Stack" } else { "Unstack" };
+        self.set_group_style(rows, style, if stacked { "Stack" } else { "Unstack" })
+    }
+
+    /// Change group rendering as one undo step. Switching between numeric
+    /// plots preserves the height to restore on returning to activity.
+    fn set_group_style(&mut self, rows: &[usize], style: GroupStyle, verb: &str) -> bool {
+        let groups: Vec<usize> =
+            rows.iter()
+                .copied()
+                .filter(|&r| {
+                    self.items.get(r).and_then(|e| e.group()).is_some_and(|g| {
+                        match (g.style, style) {
+                            (GroupStyle::Stack { .. }, GroupStyle::Stack { .. }) => false,
+                            _ => g.style != style,
+                        }
+                    })
+                })
+                .collect();
         let label = match groups.as_slice() {
             [g] => format!("{verb} {}", self.items[*g].name()),
             _ => format!("{verb} {}", count(groups.len(), "group", "groups")),
@@ -1903,7 +1960,7 @@ impl WaveModel {
                 return false;
             };
             g.style = style;
-            if stacked {
+            if g.is_plot() {
                 if g.height == RowHeight::DEFAULT {
                     g.restore_height = Some(g.height);
                     g.height = RowHeight::ANALOG;
@@ -1915,12 +1972,152 @@ impl WaveModel {
             }
             true
         });
-        // Keep the anchored row where it was on screen.
         if let (true, Some(a), Some(before)) = (changed, self.anchor, before) {
             let shift = self.row_units_before(a) as f32 - before as f32;
             self.scroll_y = (self.scroll_y + shift * self.layout.row_h).max(0.0);
         }
         changed
+    }
+
+    pub fn is_overlaid(&self, row: usize) -> bool {
+        self.items
+            .get(row)
+            .and_then(|e| e.group())
+            .is_some_and(GroupRow::is_overlaid)
+    }
+
+    /// Numeric members, including unloaded ones, in tree order. Group plots
+    /// use the same ordering whether the group is folded or expanded.
+    pub fn numeric_members(&self, group: usize) -> Vec<usize> {
+        tree::leaves(&self.items, group)
+            .filter(|&i| self.signal(i).is_some_and(|s| s.numeric_kind().is_some()))
+            .collect()
+    }
+
+    pub fn overlaid_of(&self, row: usize) -> Option<usize> {
+        self.enclosing_group(row, GroupRow::is_overlaid)
+    }
+
+    fn enclosing_group(&self, row: usize, matches: fn(&GroupRow) -> bool) -> Option<usize> {
+        let mut at = tree::parent(&self.items, row)?;
+        loop {
+            if self.items[at].group().is_some_and(matches) {
+                return Some(at);
+            }
+            at = tree::parent(&self.items, at)?;
+        }
+    }
+
+    pub fn set_overlaid(&mut self, rows: &[usize]) -> bool {
+        let rows: Vec<usize> = rows
+            .iter()
+            .copied()
+            .filter(|&r| !self.is_overlaid(r))
+            .collect();
+        self.set_group_style(
+            &rows,
+            GroupStyle::Overlaid {
+                draw: AnalogDraw::Step,
+                range: AnalogRange::Trace,
+            },
+            "Overlay",
+        )
+    }
+
+    /// Shift+O toggles selected groups between overlaid lines and activity.
+    pub fn toggle_overlaid(&mut self) -> bool {
+        let groups: Vec<usize> = self
+            .selected
+            .iter()
+            .copied()
+            .filter(|&r| self.items.get(r).is_some_and(Entry::is_group))
+            .collect();
+        if groups.iter().all(|&g| self.is_overlaid(g)) {
+            self.set_group_style(&groups, GroupStyle::Activity, "Remove overlay")
+        } else {
+            let groups: Vec<usize> = groups
+                .into_iter()
+                .filter(|&g| !self.is_overlaid(g))
+                .collect();
+            self.set_overlaid(&groups)
+        }
+    }
+
+    fn set_overlaid_option(
+        &mut self,
+        rows: &[usize],
+        draw: Option<AnalogDraw>,
+        range: Option<AnalogRange>,
+    ) {
+        self.rewrite_rows(
+            "Set overlaid lines".into(),
+            None,
+            rows.iter().copied(),
+            |e| {
+                let WaveRow::Group(g) = &mut e.row else {
+                    return false;
+                };
+                let GroupStyle::Overlaid {
+                    draw: old_draw,
+                    range: old_range,
+                } = g.style
+                else {
+                    return false;
+                };
+                let style = GroupStyle::Overlaid {
+                    draw: draw.unwrap_or(old_draw),
+                    range: range.unwrap_or(old_range),
+                };
+                if g.style == style {
+                    return false;
+                }
+                g.style = style;
+                true
+            },
+        );
+    }
+
+    pub fn set_overlay_hidden(&mut self, rows: &[usize], hidden: bool) -> bool {
+        self.rewrite_rows(
+            if hidden {
+                "Hide overlay lines"
+            } else {
+                "Show overlay lines"
+            }
+            .into(),
+            None,
+            rows.iter().copied(),
+            |e| {
+                let Some(s) = e.row.signal_mut() else {
+                    return false;
+                };
+                if s.overlay_hidden == hidden {
+                    return false;
+                }
+                s.overlay_hidden = hidden;
+                true
+            },
+        )
+    }
+
+    fn isolate_overlay(&mut self, row: usize) {
+        let Some(group) = self.overlaid_of(row) else {
+            return;
+        };
+        let members = self.numeric_members(group);
+        let mut positions = members.clone().into_iter();
+        self.rewrite_rows("Isolate overlay line".into(), None, members, |e| {
+            let WaveRow::Signal(s) = &mut e.row else {
+                return false;
+            };
+            // Both tree leaves and rewrite_rows visit entries in ascending order.
+            let hidden = positions.next() != Some(row);
+            if s.overlay_hidden == hidden {
+                return false;
+            }
+            s.overlay_hidden = hidden;
+            true
+        });
     }
 
     /// Show or hide the peak band of the stacked groups among `rows`: one
@@ -2099,27 +2296,92 @@ impl WaveModel {
         // Groups: make one, and dissolve, rename or fold the ones selected.
         let group = self.items[row].group();
         let any_group = targets.iter().any(|&r| self.items[r].is_group());
+        let overlay_member = self.overlaid_of(row).is_some()
+            && self.signal(row).is_some_and(|s| s.numeric_kind().is_some());
+        let overlay_hidden = self.signal(row).is_some_and(|s| s.overlay_hidden);
         let menu = self.menu.as_mut().expect("just opened");
-        // How the groups draw: their activity, or a stacked area.
+        if overlay_member {
+            menu.entries.extend([
+                MenuEntry::Separator,
+                MenuEntry::Label("Overlay".into()),
+                MenuEntry::Item(MenuItem {
+                    checked: !overlay_hidden,
+                    ..MenuItem::plain(
+                        MenuAction::OverlayHidden(!overlay_hidden),
+                        "Show in overlay",
+                    )
+                }),
+                MenuEntry::Item(MenuItem::plain(
+                    MenuAction::IsolateOverlay,
+                    "Isolate in overlay",
+                )),
+                MenuEntry::Item(MenuItem::plain(
+                    MenuAction::ShowAllOverlay,
+                    "Show all overlay lines",
+                )),
+            ]);
+        }
+        // How groups draw: activity, stacked areas, or independent lines.
         if any_group {
             let groups: Vec<&GroupRow> = targets
                 .iter()
                 .filter_map(|&r| self.items[r].group())
                 .collect();
-            let all = |stacked: bool| groups.iter().all(|g| g.is_stacked() == stacked);
+            let all = |style: GroupStyle| {
+                groups.iter().all(|g| match style {
+                    GroupStyle::Stack { .. } => g.is_stacked(),
+                    GroupStyle::Overlaid { .. } => g.is_overlaid(),
+                    GroupStyle::Activity => g.style == GroupStyle::Activity,
+                })
+            };
             menu.entries.extend([
                 MenuEntry::Separator,
                 MenuEntry::Label("Draw".into()),
                 MenuEntry::Item(MenuItem {
-                    checked: all(false),
+                    checked: all(GroupStyle::Activity),
                     ..MenuItem::plain(MenuAction::Stack(false), "Activity")
                 }),
                 MenuEntry::Item(MenuItem {
                     badge: Some("⇧A".into()),
-                    checked: all(true),
+                    checked: all(GroupStyle::Stack { peak: true }),
                     ..MenuItem::plain(MenuAction::Stack(true), "Stacked area")
                 }),
+                MenuEntry::Item(MenuItem {
+                    badge: Some("⇧O".into()),
+                    checked: groups.iter().all(|g| g.is_overlaid()),
+                    ..MenuItem::plain(MenuAction::Overlaid, "Overlaid lines")
+                }),
             ]);
+            let overlays: Vec<&GroupRow> =
+                groups.iter().copied().filter(|g| g.is_overlaid()).collect();
+            if !overlays.is_empty() {
+                menu.entries
+                    .extend([MenuEntry::Separator, MenuEntry::Label("Lines".into())]);
+                for (draw, label) in [(AnalogDraw::Step, "Step"), (AnalogDraw::Linear, "Linear")] {
+                    menu.entries.push(MenuEntry::Item(MenuItem {
+                        checked: overlays.iter().all(|g| matches!(g.style, GroupStyle::Overlaid { draw: d, .. } if d == draw)),
+                        ..MenuItem::plain(MenuAction::OverlaidDraw(draw), label)
+                    }));
+                }
+                menu.entries.extend([
+                    MenuEntry::Separator,
+                    MenuEntry::Label("Shared range".into()),
+                ]);
+                for (range, label) in [
+                    (AnalogRange::Trace, "Whole trace"),
+                    (AnalogRange::Window, "Visible window"),
+                    (AnalogRange::Type, "Type limits"),
+                ] {
+                    menu.entries.push(MenuEntry::Item(MenuItem {
+                        checked: overlays.iter().all(|g| matches!(g.style, GroupStyle::Overlaid { range: r, .. } if r == range)),
+                        ..MenuItem::plain(MenuAction::OverlaidRange(range), label)
+                    }));
+                }
+                menu.entries.push(MenuEntry::Item(MenuItem::plain(
+                    MenuAction::ShowAllOverlay,
+                    "Show all overlay lines",
+                )));
+            }
             // Checked when every stacked one shows it; choosing flips them all.
             let stacked: Vec<&&GroupRow> = groups.iter().filter(|g| g.is_stacked()).collect();
             if !stacked.is_empty() {
@@ -2293,6 +2555,25 @@ impl WaveModel {
             MenuAction::Fold(collapsed) => _ = self.set_folded(menu.row, *collapsed, false),
             MenuAction::Stack(stacked) => _ = self.set_stacked(&rows, *stacked),
             MenuAction::Peak(peak) => _ = self.set_peak(&rows, *peak),
+            MenuAction::Overlaid => _ = self.set_overlaid(&rows),
+            MenuAction::OverlaidDraw(draw) => self.set_overlaid_option(&rows, Some(*draw), None),
+            MenuAction::OverlaidRange(range) => self.set_overlaid_option(&rows, None, Some(*range)),
+            MenuAction::OverlayHidden(hidden) => _ = self.set_overlay_hidden(&leaves, *hidden),
+            MenuAction::IsolateOverlay => self.isolate_overlay(menu.row),
+            MenuAction::ShowAllOverlay => {
+                let mut members = Vec::new();
+                for row in rows {
+                    let group = if self.is_overlaid(row) {
+                        Some(row)
+                    } else {
+                        self.overlaid_of(row)
+                    };
+                    if let Some(group) = group {
+                        members.extend(self.numeric_members(group));
+                    }
+                }
+                self.set_overlay_hidden(&members, false);
+            }
             MenuAction::FoldAll(collapsed) => _ = self.fold_all(*collapsed),
             _ => {
                 let row = self.signal(menu.row)?;
@@ -2445,6 +2726,15 @@ impl WaveModel {
             WaveRow::Lane(l) => l.generator(doc).map(EdgeSource::Lane),
             WaveRow::Clock(c) => c.timeline(doc).cloned().map(EdgeSource::Clock),
             WaveRow::Group(g) if g.is_stacked() => Some(EdgeSource::Stack(self.stack_layers(row))),
+            WaveRow::Group(g) if g.is_overlaid() => Some(EdgeSource::Group(
+                self.numeric_members(row)
+                    .into_iter()
+                    .filter_map(|i| {
+                        let s = self.signal(i)?;
+                        (!s.overlay_hidden).then(|| s.history.clone()).flatten()
+                    })
+                    .collect(),
+            )),
             WaveRow::Group(_) => Some(EdgeSource::Group(self.group_histories(row))),
         }
     }
@@ -2700,6 +2990,39 @@ impl WaveModel {
                             g.name,
                             if n == 1 { "" } else { "s" },
                             sum.map(|s| format!(", sum {s}")).unwrap_or_default()
+                        ),
+                        Some(!g.collapsed),
+                    )
+                }
+                WaveRow::Group(g) if g.is_overlaid() => {
+                    let members = self.numeric_members(entry);
+                    let shown = members
+                        .iter()
+                        .filter(|&&i| !self.signal(i).unwrap().overlay_hidden)
+                        .count();
+                    let values = cursor
+                        .map(|c| {
+                            members
+                                .iter()
+                                .filter_map(|&i| {
+                                    let s = self.signal(i)?;
+                                    let h = s.history.as_ref()?;
+                                    Some(format!(
+                                        "{}: {}{}",
+                                        s.name,
+                                        s.translator.translate(&h.value(h.index_at(c))).text,
+                                        if s.overlay_hidden { " (hidden)" } else { "" }
+                                    ))
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    (
+                        format!(
+                            "{}, overlaid lines, {shown}/{} lines, {values}",
+                            g.name,
+                            members.len()
                         ),
                         Some(!g.collapsed),
                     )
@@ -3418,6 +3741,7 @@ fn var_rows(doc: &mut Document, vars: &[Traced<VarId>], loaded: &Resident) -> Ve
                 RowHeight::DEFAULT
             },
             analog,
+            overlay_hidden: false,
             tint: None,
         }));
         if needs_load {

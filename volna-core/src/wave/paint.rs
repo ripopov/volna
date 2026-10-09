@@ -6,6 +6,8 @@
 //! (an exponential search from the previous column's index), so the cost of a
 //! frame is O(columns x log(changes)) regardless of trace length.
 
+mod overlaid;
+
 use crate::color::Color;
 use crate::data::Translator;
 use crate::document::Document;
@@ -46,7 +48,7 @@ fn trace_pad(height: f32, t: &Theme) -> f32 {
 }
 /// Segments narrower than this are drawn as a dense band instead of a hexagon.
 const MIN_SEGMENT_PX: usize = 5;
-/// Room a layer's colour swatch takes before its row's name.
+/// Room a numeric member's colour swatch takes before its name.
 const SWATCH_W: f32 = 14.0;
 /// Layers other than the one under the pointer fade to this opacity.
 const STACK_DIM: f32 = 0.35;
@@ -212,8 +214,9 @@ pub fn paint(
     // their full height.
     let row_h = layout.row_h;
     let mut inks = crate::wave::tint::InkWalk::default();
-    let stacks = Stacks::of(model, doc, &layout.visible, theme);
+    let plots = GroupPlots::of(model, doc, &layout.visible, theme);
     let mut stack_rows: Vec<StackRow> = Vec::new();
+    let mut overlaid_rows = Vec::new();
     for pos in layout.rows.clone() {
         let Some(ix) = layout.entry(pos) else {
             continue;
@@ -221,11 +224,11 @@ pub fn paint(
         let entry = &model.items()[ix];
         let row = &entry.row;
         // A coloured row paints with a theme whose signal ink is its colour.
-        let ink = inks.ink(model.items(), ix);
+        let ink = plots.ink(ix, inks.ink(model.items(), ix), theme);
         let inked;
         let t: &Theme = match ink {
-            Some(_) => {
-                inked = theme.inked(ink);
+            Some(color) => {
+                inked = theme.with_signal_ink(color);
                 &inked
             }
             None => theme,
@@ -290,7 +293,7 @@ pub fn paint(
             cursor,
             text: colors.text,
             muted: colors.text_placeholder,
-            left_out: stacks.left_out.contains(&ix),
+            left_out: plots.left_out.get(&ix).copied(),
         };
         let item = match row {
             WaveRow::Signal(item) => item,
@@ -308,9 +311,9 @@ pub fn paint(
                     Rect::from_xywh(bounds.left(), snap(y), bounds.width(), 1.0),
                     t.border_variant,
                 );
-                // A folded group draws its members' activity, unless it is
-                // stacked: then it draws their area, folded or not.
-                let members = if g.collapsed && !g.is_stacked() {
+                // Numeric group plots stay visible when folded; other folded
+                // groups draw their members' merged activity.
+                let members = if g.collapsed && !g.is_plot() {
                     model.group_histories(ix)
                 } else {
                     Vec::new()
@@ -326,7 +329,7 @@ pub fn paint(
                     .flatten(),
                 };
                 paint_group_row(&group, model, doc, &cells, char_w, &mut p);
-                if let Some((layers, colors)) = stacks.groups.get(&ix) {
+                if let Some((layers, colors)) = plots.groups.get(&ix) {
                     stack_rows.extend(paint_stack_row(
                         layers,
                         colors,
@@ -337,18 +340,31 @@ pub fn paint(
                         &mut p,
                     ));
                 }
+                if let Some((entries, colors)) = plots.overlaid_groups.get(&ix) {
+                    overlaid_rows.extend(overlaid::paint_row(
+                        entries,
+                        colors,
+                        model,
+                        doc,
+                        &cells,
+                        group.reading,
+                        &mut p,
+                    ));
+                }
                 continue;
             }
         };
 
-        // A layer of a stacked group shows its colour before its name.
-        let name_x = match stacks.swatches.get(&ix) {
-            Some(&color) => {
-                let side = z(9.0);
-                let swatch =
-                    Rect::from_xywh(snap(name_x), snap(y + (row_h - side) / 2.0), side, side);
+        // Numeric group members share the plot's colour and a solid swatch.
+        let name_x = match plots.members.get(&ix) {
+            Some(member) => {
+                let color = if member.hidden {
+                    member.color.with_alpha(0.3)
+                } else {
+                    member.color
+                };
                 p.scene.clipped(layout.names, |scene| {
-                    scene.quad(swatch, color, z(2.0), 0.0, Color::TRANSPARENT);
+                    paint_member_swatch(scene, point(snap(name_x), y), row_h, color, t);
                 });
                 name_x + z(SWATCH_W)
             }
@@ -430,7 +446,9 @@ pub fn paint(
                 .unwrap_or(layout.values.right() - pad);
             let avail = text_right - layout.values.left() - pad;
             let (value_text, color) = match (&item.history, cursor) {
-                _ if cells.left_out => ("not stacked".to_string(), colors.text_placeholder),
+                _ if cells.left_out.is_some() => {
+                    (cells.left_out.unwrap().to_string(), colors.text_placeholder)
+                }
                 (Some(h), Some(c)) => {
                     let index = h.index_at(c);
                     let value = if item.shape == SignalShape::Event {
@@ -781,8 +799,17 @@ pub fn paint(
         },
     );
     overlay::cursor(&mut p, &column, cursor, base, focused, z(SCROLLBAR_W));
-    paint_analog_overlays(model, doc, &layout, &viewport, cursor, &mut p);
+    paint_analog_overlays(model, doc, &layout, &viewport, cursor, &plots, &mut p);
     paint_stack_overlays(&stack_rows, model, doc, &layout, &viewport, cursor, &mut p);
+    overlaid::paint_probes(
+        &overlaid_rows,
+        model,
+        doc,
+        &layout,
+        &viewport,
+        cursor,
+        &mut p,
+    );
 
     // -- borders --------------------------------------------------------------
     let drag = model.drag;
@@ -1074,6 +1101,7 @@ fn paint_analog_overlays(
     layout: &WaveLayout,
     vp: &Viewport,
     cursor: Option<u64>,
+    plots: &GroupPlots,
     p: &mut TextPainter<'_>,
 ) {
     let t = p.theme;
@@ -1119,7 +1147,7 @@ fn paint_analog_overlays(
             p.scene.clipped(clip, |scene| {
                 scene.quad(
                     Rect::from_xywh(x - r, y - r, 2.0 * r, 2.0 * r),
-                    t.wave_signal,
+                    plots.ink(ix, model.ink(ix), t).unwrap_or(t.wave_signal),
                     r,
                     z(1.5),
                     t.editor.bg,
@@ -1871,8 +1899,8 @@ struct LaneCells<'a> {
     cursor: Option<u64>,
     text: Color,
     muted: Color,
-    /// A stacked group above it leaves it out: it has no number.
-    left_out: bool,
+    /// Why the enclosing numeric group leaves this row out of its plot.
+    left_out: Option<&'static str>,
 }
 
 /// A clock row: its name, its cycle at the cursor in the values column, and
@@ -1910,7 +1938,7 @@ fn paint_clock_row(
         );
     });
     let value = match (timeline, doc.clocks.find(&row.key)) {
-        _ if cells.left_out => Some("not stacked".into()),
+        _ if cells.left_out.is_some() => cells.left_out.map(str::to_owned),
         (Some(tl), _) => cells
             .cursor
             .and_then(|c| tl.cycle_at(c))
@@ -2177,7 +2205,7 @@ fn paint_group_row(
             );
         });
     }
-    if !g.collapsed || g.is_stacked() {
+    if !g.collapsed || g.is_plot() {
         return;
     }
 
@@ -2472,52 +2500,97 @@ fn paint_group_summary(
     });
 }
 
-/// The stacked groups of one frame: each
-/// visible stack's layers and their colours, the swatch of every layer's
-/// row, and the rows a stack leaves out because they have no number.
-#[derive(Default)]
-struct Stacks {
-    groups: std::collections::HashMap<usize, (Vec<stack::Layer>, Vec<Color>)>,
-    /// A layer's colour by its entry, from the nearest stacked group above.
-    swatches: std::collections::HashMap<usize, Color>,
-    left_out: std::collections::HashSet<usize>,
+/// A solid colour key shared by member names and group probe readouts.
+fn paint_member_swatch(scene: &mut Scene, origin: Point, height: f32, color: Color, t: &Theme) {
+    let y = snap(origin.y + height / 2.0);
+    scene.lines(
+        vec![[point(origin.x, y), point(origin.x + 9.0 * t.zoom, y)]],
+        color,
+        1.5 * t.zoom,
+    );
 }
 
-impl Stacks {
+struct GroupMember {
+    color: Color,
+    hidden: bool,
+}
+
+/// Numeric groups of one frame: their members, colours, and nonnumeric
+/// rows excluded from their plots. Inner groups supply their members' ink.
+#[derive(Default)]
+struct GroupPlots {
+    groups: std::collections::HashMap<usize, (Vec<stack::Layer>, Vec<Color>)>,
+    members: std::collections::HashMap<usize, GroupMember>,
+    left_out: std::collections::HashMap<usize, &'static str>,
+    overlaid_groups: std::collections::HashMap<usize, (Vec<usize>, Vec<Color>)>,
+}
+
+impl GroupPlots {
+    fn ink(&self, entry: usize, inherited: Option<super::Tint>, t: &Theme) -> Option<Color> {
+        self.members
+            .get(&entry)
+            .map(|member| member.color)
+            .or_else(|| inherited.map(|tint| t.ink(Some(tint))))
+    }
+
     fn of(model: &WaveModel, doc: &Document, visible: &[u32], t: &Theme) -> Self {
-        let mut stacks = Self::default();
+        let mut plots = Self::default();
         let items = model.items();
-        // Pre-order: an inner stack comes after the outer one and wins.
+        // Pre-order lets an inner numeric group override its members' ink.
         for i in visible.iter().map(|&i| i as usize) {
-            if !model.is_stacked(i) {
+            let overlaid = model.is_overlaid(i);
+            if !overlaid && !model.is_stacked(i) {
                 continue;
             }
-            let mut layers = model.stack_layers(i);
-            doc.summarize_layers(&mut layers);
-            let n = layers.len();
-            // A member with its own colour keeps it; the rest walk the ladder.
-            let colors: Vec<Color> = layers
+            // Include unloaded members so loading cannot shift later colours.
+            let entries = model.numeric_members(i);
+            let colors: Vec<Color> = entries
                 .iter()
                 .enumerate()
-                .map(|(k, l)| match items[l.entry].row.tint() {
-                    Some(tint) => t.ink(Some(tint)),
-                    None => t.layer_fill(k, n),
+                .map(|(k, &j)| {
+                    items[j]
+                        .row
+                        .tint()
+                        .map_or(t.markers[k % t.markers.len()].stroke, |tint| {
+                            t.ink(Some(tint))
+                        })
                 })
                 .collect();
-            for (l, c) in layers.iter().zip(&colors) {
-                stacks.swatches.insert(l.entry, *c);
+            for (&j, &color) in entries.iter().zip(&colors) {
+                plots.members.insert(
+                    j,
+                    GroupMember {
+                        color,
+                        hidden: overlaid && model.signal(j).unwrap().overlay_hidden,
+                    },
+                );
+                plots.left_out.remove(&j);
             }
             for j in tree::leaves(items, i) {
-                let counts = items[j]
-                    .signal()
-                    .is_some_and(|s| stack::Reading::of(s.shape, s.translator.as_ref()).is_some());
-                if !counts {
-                    stacks.left_out.insert(j);
+                if entries.binary_search(&j).is_err() {
+                    plots.left_out.insert(
+                        j,
+                        if overlaid {
+                            "not overlaid"
+                        } else {
+                            "not stacked"
+                        },
+                    );
                 }
             }
-            stacks.groups.insert(i, (layers, colors));
+            if overlaid {
+                plots.overlaid_groups.insert(i, (entries, colors));
+            } else {
+                let mut layers = model.stack_layers(i);
+                doc.summarize_layers(&mut layers);
+                let colors = layers
+                    .iter()
+                    .map(|layer| plots.members[&layer.entry].color)
+                    .collect();
+                plots.groups.insert(i, (layers, colors));
+            }
         }
-        stacks
+        plots
     }
 }
 
@@ -2991,14 +3064,7 @@ fn paint_stack_overlays(
                     );
                 }
                 if let Some(color) = color {
-                    let side = z(9.0);
-                    scene.quad(
-                        Rect::from_xywh(left, snap(ly + (line_h - side) / 2.0), side, side),
-                        color,
-                        z(2.0),
-                        0.0,
-                        Color::TRANSPARENT,
-                    );
+                    paint_member_swatch(scene, point(left, ly), line_h, color, t);
                 }
                 let text = if is_hot {
                     t.tooltip.text
@@ -3150,7 +3216,7 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
 
     // Values column: the records open at the cursor.
     let (value, value_color) = match data {
-        _ if cells.left_out => ("not stacked".into(), cells.muted),
+        _ if cells.left_out.is_some() => (cells.left_out.unwrap().into(), cells.muted),
         LaneData::Ready(g) => match cells.cursor {
             Some(c) => {
                 let (text, failed) = lane::value_text(g, c);

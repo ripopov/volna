@@ -346,8 +346,12 @@ impl Theme<Color> {
     /// fill and its dense band take the tint; X, Z, weak values, the cursor
     /// and markers keep theirs. `None` is the theme itself.
     pub fn inked(&self, tint: Option<Tint>) -> Self {
+        self.with_signal_ink(self.ink(tint))
+    }
+
+    /// Apply a resolved numeric group member colour to its individual row.
+    pub(crate) fn with_signal_ink(&self, ink: Color) -> Self {
         let mut t = *self;
-        let ink = self.ink(tint);
         t.wave_signal = ink;
         t.wave_high_fill = ink.with_alpha(self.wave_high_fill.a);
         t.wave_dense = ink.with_alpha(self.wave_dense.a);

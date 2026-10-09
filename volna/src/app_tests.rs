@@ -3578,3 +3578,98 @@ fn clicking_waveform_appearance_steppers_repaints_visible_panels(cx: &mut TestAp
         }
     }
 }
+
+/// The overlay action reaches the core through the Waves key context, and
+/// the native group popup exposes its drawing and amplitude choices.
+#[gpui_kit::test]
+fn shift_o_toggles_group_overlays_and_hosts_their_menu(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use volna_core::wave::model::MenuAction;
+    use volna_core::wave::{GroupStyle, MenuEntry};
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let window = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all(vec![0, 1, 2])), Some(window), cx);
+            let w = ws.app.panels.focused_waves_mut().unwrap();
+            w.selected = [0, 1, 2].into();
+            w.anchor = Some(0);
+            ws.dispatch(Command::Action(Action::GroupSelection), Some(window), cx);
+        })
+        .unwrap();
+    let mut vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("shift-o");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            let waves = ws.app.panels.focused_waves().unwrap();
+            assert!(waves.items()[0].group().unwrap().is_overlaid());
+            assert_eq!(waves.items()[0].height().multiple(), 3);
+            assert_eq!(ws.app.undo_label(), Some("Overlay Group 1"));
+            let panel = ws.app.panels.focused_id();
+            ws.dispatch(Command::OpenSignalMenu(panel), Some(window), cx);
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            assert!(ws.wave_menu.is_some());
+            let menu = ws
+                .app
+                .panels
+                .focused_waves()
+                .unwrap()
+                .menu
+                .as_ref()
+                .unwrap();
+            assert!(
+                menu.items()
+                    .find(|i| i.action == MenuAction::Overlaid)
+                    .unwrap()
+                    .checked
+            );
+            assert!(
+                menu.entries
+                    .iter()
+                    .any(|e| matches!(e, MenuEntry::Label(l) if l == "Shared range"))
+            );
+            let panel = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::MenuSelect(panel, MenuAction::Stack(false)),
+                Some(window),
+                cx,
+            );
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert_eq!(
+                ws.app.panels.focused_waves().unwrap().items()[0]
+                    .group()
+                    .unwrap()
+                    .style,
+                GroupStyle::Activity
+            );
+            let labels: Vec<_> = crate::palette::commands(&ws.app, "overlaid")
+                .into_iter()
+                .map(|(l, _)| l)
+                .collect();
+            assert!(labels.iter().any(|l| l == "Toggle Overlaid Lines"));
+        })
+        .unwrap();
+}
