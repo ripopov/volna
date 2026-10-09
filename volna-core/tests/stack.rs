@@ -4,7 +4,7 @@
 //! through the sum), stacking and unstacking with their undo steps and
 //! heights, the group menu, workspaces, the painted row (layer order, gaps,
 //! the undefined fill, the net line, cells, swatches and the readout) and
-//! the feature showcase's four stackable scopes.
+//! the feature and analog showcases' stackable scopes.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1277,6 +1277,86 @@ fn the_showcase_scopes_stack_bits_counts_and_signed_currents() {
     assert_eq!(sums.len(), 4, "{shown:?}");
     assert_eq!(sums[0], "Σ 3", "instructions in flight at 800 ns");
     assert_eq!(sums[2], "Σ X");
+}
+
+#[test]
+fn the_analog_showcase_stacks_related_contributions_and_preserves_gaps() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/analog_showcase.vtr");
+    assert!(std::fs::metadata(&path).unwrap().len() <= 128 * 1024);
+    let reader = vtr::Reader::open_with(
+        &path,
+        vtr::ReadOptions {
+            verify_crc: true,
+            ..vtr::ReadOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(reader.signal_count(), 38);
+    assert_eq!(reader.meta().timescale, -9);
+    assert_eq!(reader.time_range(), Some((0, 102_400)));
+    let real = |name: &str, t| {
+        let signal = reader.find_signal(name, '.').unwrap();
+        match reader.value_at(signal, t).unwrap().borrow() {
+            vtr::SignalValue::Real(value) => value,
+            _ => panic!("{name} is not a real"),
+        }
+    };
+    assert!(real("analog.edge_cases.dropout", 40_000).is_nan());
+    assert!(real("analog.edge_cases.dropout", 44_800).is_finite());
+    assert_eq!(real("analog.edge_cases.nonfinite", 64_000), f64::INFINITY);
+    assert_eq!(
+        real("analog.edge_cases.nonfinite", 67_200),
+        f64::NEG_INFINITY
+    );
+    assert_eq!(real("analog.edge_cases.spike", 51_300), 3.0);
+    assert!(real("analog.edge_cases.spike", 51_200).abs() <= 1.0);
+    assert_eq!(real("analog.edge_cases.late_start", 12_700), 0.0);
+    assert_ne!(real("analog.edge_cases.late_start", 12_800), 0.0);
+
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(path).open().unwrap());
+    pump(&mut app);
+    let (names, range) = stacked(&mut app, &["analog", "power"]);
+    assert_eq!(names, ["cpu_mw", "gpu_mw", "memory_mw", "io_mw"]);
+    assert!(range.0 == 0.0 && range.1 > 65.0, "{range:?}");
+    let (names, range) = stacked(&mut app, &["analog", "flows"]);
+    assert_eq!(
+        names,
+        ["solar_ma", "load_ma", "battery_ma", "regeneration_ma"]
+    );
+    assert!(range.0 < -40.0 && range.1 > 40.0, "{range:?}");
+    let (names, range) = stacked(&mut app, &["analog", "queues"]);
+    assert_eq!(names, ["rx_count", "tx_count", "dma_count"]);
+    assert!(range.0 >= 0.0 && range.1 > 20.0, "{range:?}");
+    let (names, range) = stacked(&mut app, &["analog", "activity"]);
+    assert_eq!(names, ["cpu_busy", "gpu_busy", "dma_busy", "io_busy"]);
+    assert_eq!(range, (0.0, 4.0));
+
+    let id = app.panels.focused_id();
+    app.panels.waves_mut(id).unwrap().fold_all(true);
+    cursor(&mut app, id, 51_200);
+    let shown = texts(frame(&mut app, id));
+    let sums: Vec<_> = shown.iter().filter(|s| s.starts_with('Σ')).collect();
+    assert_eq!(sums.len(), 4, "{shown:?}");
+    assert_eq!(sums[0], "Σ 69", "positive power contributions add up");
+    assert_eq!(sums[1], "Σ -18", "the net current includes negative layers");
+    assert_eq!(sums[2], "Σ X", "an unknown queue interrupts the stack");
+    assert_eq!(sums[3], "Σ 4", "all four units are busy");
+    cursor(&mut app, id, 56_000);
+    let shown = texts(frame(&mut app, id));
+    let sums: Vec<_> = shown.iter().filter(|s| s.starts_with('Σ')).collect();
+    assert_ne!(
+        sums[2], "Σ X",
+        "the queue stack recovers after the X window"
+    );
+    cursor(&mut app, id, 76_800);
+    let shown = texts(frame(&mut app, id));
+    let sums: Vec<_> = shown.iter().filter(|s| s.starts_with('Σ')).collect();
+    assert_eq!(
+        sums[2], "Σ X",
+        "a high-impedance queue also interrupts the stack"
+    );
 }
 
 #[test]

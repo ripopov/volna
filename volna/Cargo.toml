@@ -16,6 +16,10 @@ crate-type = ["cdylib", "rlib"]
 name = "volna"
 path = "src/main.rs"
 
+[[example]]
+name = "analog_showcase"
+path = "examples/analog_showcase.rs"
+
 [features]
 default = []
 
