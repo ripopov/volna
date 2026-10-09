@@ -60,6 +60,9 @@ pub enum Action {
     /// `M`: mark the focused panel's cursor, or open the name field of the
     /// marker already there.
     AddOrRenameMarker,
+    /// `Ctrl+1`–`Ctrl+6`: place or move this numbered marker at the focused
+    /// panel's cursor, preserving its name and attached reference.
+    SetMarker(crate::marker::MarkerId),
     /// `⇧M`: remove the marker at the focused panel's cursor.
     RemoveMarkerAtCursor,
     /// Palette only: remove every marker, as one undoable step.
@@ -164,6 +167,10 @@ impl Command {
             _ if name.starts_with("goToMarker") => {
                 let n = name.strip_prefix("goToMarker")?.parse::<u32>().ok()?;
                 Action::GoToMarker(crate::marker::MarkerId::new(n)?)
+            }
+            _ if name.starts_with("setMarker") => {
+                let n = name.strip_prefix("setMarker")?.parse::<u32>().ok()?;
+                Action::SetMarker(crate::marker::MarkerId::new(n)?)
             }
             _ => {
                 let index = name.strip_prefix("focusPanel")?.parse::<usize>().ok()?;
@@ -2284,7 +2291,10 @@ impl App {
         // Markers belong to the document; a timed panel only lends its cursor.
         if matches!(
             action,
-            Action::AddOrRenameMarker | Action::RemoveMarkerAtCursor | Action::RemoveAllMarkers
+            Action::AddOrRenameMarker
+                | Action::SetMarker(_)
+                | Action::RemoveMarkerAtCursor
+                | Action::RemoveAllMarkers
         ) {
             let cursor = self
                 .panels
@@ -2294,6 +2304,18 @@ impl App {
                 .and_then(|n| n.cursor(&self.doc));
             let changed = match (action, cursor) {
                 (Action::RemoveAllMarkers, _) => self.doc.remove_all_markers(),
+                (Action::SetMarker(id), Some(c)) => {
+                    if crate::marker::at(self.doc.markers(), c).is_some_and(|m| m.id != id) {
+                        self.announce("Another marker is at the cursor".into());
+                        false
+                    } else {
+                        self.doc.set_marker(id, c)
+                    }
+                }
+                (Action::SetMarker(_), None) => {
+                    self.announce("No cursor in this panel".into());
+                    false
+                }
                 (Action::AddOrRenameMarker, Some(c)) => {
                     match crate::marker::at(self.doc.markers(), c).map(|m| m.id) {
                         Some(id) => {
@@ -2431,6 +2453,7 @@ impl App {
                 | Action::PrevCycle
                 | Action::ToggleCycleOrigin
                 | Action::AddOrRenameMarker
+                | Action::SetMarker(_)
                 | Action::RemoveMarkerAtCursor
                 | Action::RemoveAllMarkers
                 | Action::NextMarker
@@ -2497,6 +2520,7 @@ impl App {
                 | Action::PrevCycle
                 | Action::ToggleCycleOrigin
                 | Action::AddOrRenameMarker
+                | Action::SetMarker(_)
                 | Action::RemoveMarkerAtCursor
                 | Action::RemoveAllMarkers
                 | Action::NextMarker
@@ -2556,6 +2580,7 @@ impl App {
                 | Action::PrevCycle
                 | Action::ToggleCycleOrigin
                 | Action::AddOrRenameMarker
+                | Action::SetMarker(_)
                 | Action::RemoveMarkerAtCursor
                 | Action::RemoveAllMarkers
                 | Action::NextMarker

@@ -298,6 +298,12 @@ fn hosts_reach_the_walk_by_name() {
     );
     assert_eq!(named("goToMarker0"), None);
     assert_eq!(named("goToMarker"), None);
+    assert_eq!(
+        named("setMarker6"),
+        Some(Command::Action(Action::SetMarker(id(6))))
+    );
+    assert_eq!(named("setMarker0"), None);
+    assert_eq!(named("setMarker"), None);
 }
 
 fn frame(app: &mut App) -> &volna_core::Scene {
@@ -461,4 +467,108 @@ fn the_tooltip_of_a_chip_has_the_full_name() {
     let texts: Vec<String> = frame(&mut app).texts().map(str::to_owned).collect();
     assert!(texts.iter().any(|t| t == "Marker 1"), "{texts:?}");
     assert!(texts.iter().any(|t| t == long), "{texts:?}");
+}
+
+#[test]
+fn numbered_placement_preserves_identity_name_and_reference_and_is_undoable() {
+    use volna_core::marker::Reference;
+    let mut app = app();
+    app.doc.shared.cursor = Some(120);
+    app.handle(Command::Action(Action::SetMarker(id(6))));
+    assert_eq!(app.doc.markers()[0].id, id(6));
+    assert_eq!(app.undo_label(), Some("Add marker 6"));
+    app.handle(Command::Undo);
+    assert!(app.doc.markers().is_empty());
+    app.handle(Command::Redo);
+    assert_eq!(app.doc.markers()[0].time, 120);
+
+    app.handle(Command::Action(Action::AddOrRenameMarker));
+    let edit = app.text_edit().unwrap();
+    app.handle(Command::CommitText(edit.target, Some("response".into())));
+    app.doc.set_reference(Some(Reference::Marker(id(6))));
+    app.doc.shared.cursor = Some(160);
+    app.handle(Command::Action(Action::SetMarker(id(2))));
+    app.doc.shared.cursor = Some(180);
+    app.handle(Command::Action(Action::SetMarker(id(6))));
+    let moved = app.doc.markers().to_vec();
+    assert_eq!(
+        moved.iter().map(|m| m.id).collect::<Vec<_>>(),
+        [id(2), id(6)]
+    );
+    assert_eq!(moved[1].label.as_deref(), Some("response"));
+    assert_eq!(app.doc.reference_time(), Some(180));
+    assert_eq!(app.undo_label(), Some("Move marker 6"));
+    assert!(app.text_edit().is_none());
+    app.handle(Command::Undo);
+    assert_eq!(app.doc.markers()[0].time, 120);
+    assert_eq!(app.doc.markers()[0].label.as_deref(), Some("response"));
+    assert_eq!(app.doc.reference_time(), Some(120));
+    app.handle(Command::Redo);
+    assert_eq!(app.doc.markers(), moved);
+    assert_eq!(app.doc.reference_time(), Some(180));
+
+    app.doc.shared.cursor = Some(140);
+    app.handle(Command::Action(Action::AddOrRenameMarker));
+    assert_eq!(
+        volna_core::marker::at(app.doc.markers(), 140).unwrap().id,
+        id(1)
+    );
+    app.handle(Command::Action(Action::GoToMarker(id(6))));
+    assert_eq!(app.doc.shared.cursor, Some(180));
+}
+
+#[test]
+fn numbered_placement_requires_a_cursor_and_refuses_occupied_times_without_an_edit() {
+    let mut app = app();
+    app.doc.shared.cursor = None;
+    let before = app.undo_label().map(str::to_owned);
+    app.handle(Command::Action(Action::SetMarker(id(1))));
+    assert!(app.doc.markers().is_empty());
+    assert_eq!(said(&app).as_deref(), Some("No cursor in this panel"));
+    assert_eq!(app.undo_label().map(str::to_owned), before);
+    for (n, time) in [(1, 120), (2, 160)] {
+        app.doc.shared.cursor = Some(time);
+        app.handle(Command::Action(Action::SetMarker(id(n))));
+    }
+    let before = app.doc.markers().to_vec();
+    for n in [2, 1, 6] {
+        app.handle(Command::Action(Action::SetMarker(id(n))));
+        assert_eq!(app.doc.markers(), before);
+        assert_eq!(app.undo_label(), Some("Add marker 2"));
+    }
+    assert_eq!(
+        said(&app).as_deref(),
+        Some("Another marker is at the cursor")
+    );
+    app.handle(Command::Undo);
+    assert_eq!(app.doc.markers().len(), 1);
+}
+
+#[test]
+fn numbered_placement_uses_the_focused_panels_unlinked_cursor() {
+    let mut app = app();
+    app.doc.shared.cursor = Some(120);
+    let a = app.panels.focused_id();
+    app.handle(Command::Panels(PanelsCommand::Split {
+        panel: a,
+        axis: Axis::Vertical,
+    }));
+    let b = app.panels.focused_id();
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: b,
+        dim: LinkDim::Cursor,
+    }));
+    app.panels
+        .waves_mut(b)
+        .unwrap()
+        .set_cursor(&mut app.doc, Some(180));
+    let local = app.panels.waves(b).unwrap().cursor(&app.doc).unwrap();
+    assert_ne!(local, 120);
+    app.handle(Command::Action(Action::SetMarker(id(3))));
+    assert_eq!(app.doc.markers()[0].time, local);
+    assert_eq!(app.doc.shared.cursor, Some(120));
+    app.handle(Command::Panels(PanelsCommand::Focus(a)));
+    app.handle(Command::Action(Action::SetMarker(id(3))));
+    assert_eq!(app.doc.markers()[0].time, 120);
+    assert_eq!(app.panels.waves(b).unwrap().cursor(&app.doc), Some(local));
 }

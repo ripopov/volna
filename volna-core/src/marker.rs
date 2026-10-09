@@ -23,9 +23,9 @@ use crate::wave::viewport::Viewport;
 use web_time::Instant;
 
 /// A marker's number: what its chip shows and a digit key will reach. It
-/// is the lowest free positive number when the marker is created and never
-/// changes while the marker exists, so removing marker 2 frees 2 for the
-/// next one. Workspaces store it as a plain positive integer.
+/// is chosen explicitly or allocated as the lowest free positive number,
+/// and never changes while the marker exists. Removing marker 2 frees 2
+/// for reuse. Workspaces store it as a plain positive integer.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -381,6 +381,7 @@ pub fn menu(doc: &Document, hit: &LaneHit) -> Option<Vec<MenuEntry>> {
             let m = markers.get(ix)?;
             let id = m.id;
             let digit = (id.get() <= 9).then(|| id.to_string());
+            let place = (id.get() <= 6).then(|| format!("Ctrl+{id}"));
             vec![
                 MenuEntry::Label(format!("Marker {}", name(m))),
                 item(LaneVerb::GoTo(id), "Go to Marker", digit.as_deref()),
@@ -392,7 +393,11 @@ pub fn menu(doc: &Document, hit: &LaneHit) -> Option<Vec<MenuEntry>> {
                 ),
                 item(LaneVerb::Copy(id), "Copy as Text", None),
                 MenuEntry::Separator,
-                item(LaneVerb::MoveToCursor(id), "Move to Cursor", None),
+                item(
+                    LaneVerb::MoveToCursor(id),
+                    "Move to Cursor",
+                    place.as_deref(),
+                ),
                 item(LaneVerb::Remove(id), "Remove Marker", None),
             ]
         }

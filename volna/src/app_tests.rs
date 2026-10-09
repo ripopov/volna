@@ -2066,6 +2066,96 @@ fn marker_walk_keys_move_the_cursor(cx: &mut TestAppContext) {
     assert_eq!(state(&mut vcx), (Some(far), Some("No marker 9".into())));
 }
 
+/// Numbered placement and jumps use the same marker identities; panel focus
+/// has a separate modifier so placing marker 2 keeps the active panel.
+#[gpui_kit::test]
+fn ctrl_digits_place_and_move_markers_while_bare_digits_jump(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use volna_core::panels::{Axis, PanelsCommand};
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let window = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    let (a, b, start, step) = window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all(vec![0])), Some(window), cx);
+            let (lo, hi) = ws.app.doc.limits();
+            let a = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::Panels(PanelsCommand::Split {
+                    panel: a,
+                    axis: Axis::Vertical,
+                }),
+                Some(window),
+                cx,
+            );
+            let b = ws.app.panels.focused_id();
+            ws.dispatch(Command::Panels(PanelsCommand::Focus(a)), Some(window), cx);
+            (a, b, lo, (hi - lo) / 10)
+        })
+        .unwrap();
+    let mut vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.run_until_parked();
+    for n in (1..=6).rev() {
+        let time = start + step * n as u64;
+        window
+            .update(&mut vcx, |ws, _, _| ws.app.doc.shared.cursor = Some(time))
+            .unwrap();
+        vcx.simulate_keystrokes(&format!("ctrl-{n}"));
+        window
+            .update(&mut vcx, |ws, _, _| {
+                let marker = ws
+                    .app
+                    .doc
+                    .markers()
+                    .iter()
+                    .find(|m| m.id.get() == n)
+                    .unwrap();
+                assert_eq!(marker.time, time);
+                assert_eq!(ws.app.panels.focused_id(), a);
+            })
+            .unwrap();
+    }
+    let moved = start + step * 8;
+    window
+        .update(&mut vcx, |ws, _, _| ws.app.doc.shared.cursor = Some(moved))
+        .unwrap();
+    vcx.simulate_keystrokes("ctrl-6");
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert_eq!(ws.app.doc.markers().len(), 6);
+            assert_eq!(ws.app.undo_label(), Some("Move marker 6"));
+            ws.app.doc.shared.cursor = Some(start);
+        })
+        .unwrap();
+    for n in 1..=6 {
+        vcx.simulate_keystrokes(&n.to_string());
+        window
+            .update(&mut vcx, |ws, _, _| {
+                assert_eq!(
+                    ws.app.doc.shared.cursor,
+                    Some(if n == 6 { moved } else { start + step * n })
+                );
+                assert_eq!(ws.app.panels.focused_id(), a);
+            })
+            .unwrap();
+    }
+    vcx.simulate_keystrokes("ctrl-alt-2");
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert_eq!(ws.app.panels.focused_id(), b)
+        })
+        .unwrap();
+}
+
 /// `M` on a marker, or a double-click on its chip, opens a name field over
 /// the chip; the field keeps the keys the panel binds, and `↵` names it.
 #[gpui_kit::test]

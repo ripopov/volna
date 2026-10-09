@@ -97,6 +97,12 @@ pub(crate) fn commands(app: &CoreApp, query: &str) -> Vec<(String, Box<dyn Actio
             .into_iter()
             .map(|(label, action)| (label.to_owned(), action)),
     );
+    for n in 1..=6 {
+        all.push((
+            format!("Place or Move Marker {n} at Cursor"),
+            Box::new(app::SetMarker { n }),
+        ));
+    }
     if let Some(choices) = app.clock_choices() {
         let clock = |command| Box::new(app::ClockAction { command }) as Box<dyn Action>;
         if let Some(cycle) = query.split_whitespace().find_map(|w| w.parse::<i64>().ok()) {

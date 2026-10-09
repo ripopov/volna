@@ -42,6 +42,18 @@ Workspace files store panel structure, views, markers, and row choices. The
 native frontend writes them atomically. Incompatible workspace versions are
 discarded. Settings and recent items live separately in the config directory.
 
+### Marker shortcuts
+
+In waveform and pipeline panels, **Ctrl+1–6** places the numbered marker at
+that panel's cursor, or moves it there if it exists. Moving preserves the
+marker's name and measurement reference. Another marker at the same time
+blocks placement. Each placement or move is one undoable step.
+
+**1–9** jumps to the corresponding marker; **.** and **,** walk markers in
+time order, and **`** returns from a jump. **M** adds the lowest free marker
+number or names the marker at the cursor. **Ctrl+Alt+1–9** focuses panels;
+**Cmd+1–9** also focuses panels on macOS.
+
 ### Undo and redo
 
 Cockpit edits use the core journal: row, panel, marker, and workspace edits

@@ -1407,10 +1407,20 @@ impl Document {
     /// Mark `time` with the lowest free number; `None` when a marker is
     /// already there.
     pub fn add_marker(&mut self, time: u64) -> Option<MarkerId> {
-        if marker::at(&self.markers, time).is_some() {
-            return None;
-        }
         let id = marker::free_id(&self.markers)?;
+        self.set_marker(id, time).then_some(id)
+    }
+
+    /// Place marker `id` at `time`, or move it there while preserving its
+    /// name and attached reference. Refused when another marker is there;
+    /// returns whether the markers changed.
+    pub fn set_marker(&mut self, id: MarkerId, time: u64) -> bool {
+        if self.markers.iter().any(|m| m.id == id) {
+            return self.move_marker(id, time);
+        }
+        if marker::at(&self.markers, time).is_some() {
+            return false;
+        }
         let ix = self.markers.partition_point(|m| m.time < time);
         self.markers.update(|markers| {
             markers.insert(
@@ -1421,8 +1431,7 @@ impl Document {
                     label: None,
                 },
             )
-        });
-        Some(id)
+        })
     }
 
     /// Move marker `id` to `time`, keeping the list in time order; a

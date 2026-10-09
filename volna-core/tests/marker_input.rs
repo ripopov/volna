@@ -264,7 +264,7 @@ fn a_chips_menu_lists_its_verbs_with_their_keys_and_each_works() {
             ("Rename…".into(), key("double-click")),
             ("Measure from Here".into(), key("Alt-click")),
             ("Copy as Text".into(), None),
-            ("Move to Cursor".into(), None),
+            ("Move to Cursor".into(), key("Ctrl+2")),
             ("Remove Marker".into(), None),
         ]
     );

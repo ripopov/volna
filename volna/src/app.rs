@@ -140,6 +140,13 @@ pub struct GoToMarker {
     pub n: u32,
 }
 
+/// `Ctrl+1`–`Ctrl+6`: place or move marker `n` at the focused panel's cursor.
+#[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
+#[action(namespace = waves, no_json)]
+pub struct SetMarker {
+    pub n: u32,
+}
+
 /// Colour the focused panel's selected rows (the palette's `Color: …`).
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
@@ -379,23 +386,23 @@ pub fn init(cx: &mut App) {
     }
     cx.bind_keys([
         KeyBinding::new("cmd-1", FocusPanel1, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-1", FocusPanel1, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-1", FocusPanel1, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-2", FocusPanel2, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-2", FocusPanel2, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-2", FocusPanel2, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-3", FocusPanel3, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-3", FocusPanel3, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-3", FocusPanel3, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-4", FocusPanel4, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-4", FocusPanel4, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-4", FocusPanel4, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-5", FocusPanel5, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-5", FocusPanel5, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-5", FocusPanel5, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-6", FocusPanel6, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-6", FocusPanel6, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-6", FocusPanel6, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-7", FocusPanel7, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-7", FocusPanel7, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-7", FocusPanel7, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-8", FocusPanel8, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-8", FocusPanel8, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-8", FocusPanel8, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-9", FocusPanel9, Some("Workspace && !Embedded")),
-        KeyBinding::new("ctrl-9", FocusPanel9, Some("Workspace && !Embedded")),
+        KeyBinding::new("ctrl-alt-9", FocusPanel9, Some("Workspace && !Embedded")),
     ]);
     cx.bind_keys([
         KeyBinding::new("cmd-s", SaveWorkspace, Some("Workspace && !Embedded")),
@@ -497,6 +504,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-right", NextEdge, Some("Waves")),
         KeyBinding::new("shift-left", PrevEdge, Some("Waves")),
         KeyBinding::new("m", AddOrRenameMarker, Some("Waves")),
+        KeyBinding::new("ctrl-1", SetMarker { n: 1 }, Some("Waves && !Table")),
+        KeyBinding::new("ctrl-2", SetMarker { n: 2 }, Some("Waves && !Table")),
+        KeyBinding::new("ctrl-3", SetMarker { n: 3 }, Some("Waves && !Table")),
+        KeyBinding::new("ctrl-4", SetMarker { n: 4 }, Some("Waves && !Table")),
+        KeyBinding::new("ctrl-5", SetMarker { n: 5 }, Some("Waves && !Table")),
+        KeyBinding::new("ctrl-6", SetMarker { n: 6 }, Some("Waves && !Table")),
         KeyBinding::new("shift-m", RemoveMarkerAtCursor, Some("Waves")),
         KeyBinding::new("r", SetReference, Some("Waves && !Table")),
         KeyBinding::new("shift-r", ClearReference, Some("Waves && !Table")),
@@ -2438,6 +2451,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, action: &GoToMarker, window, cx| {
                 if let Some(id) = volna_core::marker::MarkerId::new(action.n) {
                     this.dispatch(Command::Action(Action::GoToMarker(id)), Some(window), cx)
+                }
+            }))
+            .on_action(cx.listener(|this, action: &SetMarker, window, cx| {
+                if let Some(id) = volna_core::marker::MarkerId::new(action.n) {
+                    this.dispatch(Command::Action(Action::SetMarker(id)), Some(window), cx)
                 }
             }))
             .on_action(cx.listener(|this, action: &SetTint, window, cx| {
