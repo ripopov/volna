@@ -583,13 +583,9 @@ impl Panel for CanvasPanelView {
             .kind
             .nav()?
             .link;
-        let link_button = |name, linked, dim, tooltip: &'static str| {
+        let link_button = |name, icon, linked, dim, tooltip: &'static str| {
             Button::new(name)
-                .icon(if linked {
-                    IconName::Link
-                } else {
-                    IconName::Unlink
-                })
+                .icon(icon)
                 .ghost()
                 .xsmall()
                 .selected(linked)
@@ -608,12 +604,14 @@ impl Panel for CanvasPanelView {
         let mut buttons = vec![
             link_button(
                 "link-view",
+                IconName::Scan,
                 link.viewport,
                 LinkDim::Viewport,
                 "Follow shared viewport (L)",
             ),
             link_button(
                 "link-cursor",
+                IconName::Crosshair,
                 link.cursor,
                 LinkDim::Cursor,
                 "Follow shared cursor (Shift+L)",
