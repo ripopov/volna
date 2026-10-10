@@ -20,6 +20,10 @@ path = "src/main.rs"
 name = "analog_showcase"
 path = "examples/analog_showcase.rs"
 
+[[example]]
+name = "gpu_transaction_trace"
+path = "examples/gpu_transaction_trace.rs"
+
 [features]
 default = []
 

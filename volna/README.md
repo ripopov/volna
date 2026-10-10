@@ -33,6 +33,42 @@ The launcher accepts VTR or FST paths, multiple traces, and saved
 `.volna.json` workspaces. `--no-workspace` disables workspace reads and writes;
 `--config-dir DIR` chooses the settings directory.
 
+## GPU transaction example
+
+[`examples/gpu_transaction_trace.rs`](examples/gpu_transaction_trace.rs) generates
+and reads back the checked-in
+[`examples/gpu_transaction_trace.vtr`](examples/gpu_transaction_trace.vtr).
+Its static hardware streams model two SMs with four warp slots each; two grids
+reuse those slots for 16 logical warps, each with exactly 5,000 instructions
+(80,000 total). Select a `MemoryPacket` under
+`gpu.memory_subsystem.illustrative_l3.requests` and follow its transaction parents
+through L2, L1, an LSU request, instruction, warp, workgroup, grid, and bounded
+command-stream execution. Hardware paths and logical TX ancestry are independent.
+
+From the workspace root:
+
+```sh
+# Regenerate the delivered recording, close it, and verify it through Reader.
+cargo run --locked -p volna --example gpu_transaction_trace
+# Or write elsewhere without replacing the example asset.
+cargo run --locked -p volna --example gpu_transaction_trace -- /tmp/gpu_transaction_trace.vtr
+# Open the recording in the viewer.
+cargo run --locked -p volna -- volna/examples/gpu_transaction_trace.vtr
+# Round-trip test uses a temporary directory; only instruction counts are golden.
+cargo test --locked -p volna --example gpu_transaction_trace
+```
+
+The trace includes pipelined arithmetic, coalesced memory requests, cache hits and
+misses, DRAM and translation service, conflicted shared-memory accesses,
+asynchronous matrix/DMA jobs, waits, and workgroup barriers. The generator prints
+a readback summary and an actual packet-to-command-stream parent chain.
+This is an educational deterministic schedule, not a GPU performance model:
+one synthetic cycle equals one nanosecond, issue selection is strict round-robin,
+and cache residency is scripted. In particular, the **illustrative L3** is an
+intentional departure from modern NVIDIA GPUs, which normally expose L2 as the
+last-level GPU cache. Per-SM matrix/DMA placement, resource counts, and latencies
+are illustrative; the source documents the assumptions. No GPU runtime is needed.
+
 ## Architecture
 
 The frontend translates GPUI input into `volna_core::Command` values and
