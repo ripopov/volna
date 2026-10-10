@@ -193,12 +193,9 @@ pub struct PipelineModel {
     pub nav: NavState,
     /// The row axis at interface zoom 1.0.
     pub rows: Tween<RowView>,
-    /// Row height the two-axis zoom stops growing rows at, in design pixels:
+    /// Maximum square-cell size for pipeline zoom, in design pixels:
     /// [`ROW_PX_CAP`], or a taller height set by a rows-only zoom.
     pub row_cap: f32,
-    /// The aspect (`ln` row height − `ln` pixels per time unit) the two-axis
-    /// zoom keeps while an axis is at a limit; see [`super::zoom`].
-    aspect: Option<f64>,
     /// Design pixels, zoom applied at layout.
     pub label_width: f32,
     pub hover: Option<Hit>,
@@ -222,7 +219,6 @@ impl PipelineModel {
             nav,
             rows: Tween::new(RowView::default()),
             row_cap: ROW_PX_CAP,
-            aspect: None,
             label_width: LABEL_W_DEFAULT,
             hover: None,
             drag: None,
@@ -242,7 +238,6 @@ impl PipelineModel {
             nav: self.nav.clone_view(),
             rows: Tween::new(self.rows.target()),
             row_cap: self.row_cap,
-            aspect: self.aspect,
             label_width: self.label_width,
             palette: self.palette.clone(),
             ..Self::new(self.track.clone(), self.nav.link)
@@ -752,7 +747,7 @@ impl PipelineModel {
             .unwrap_or(1.0)
     }
 
-    /// The range of the two-axis zoom: time from the whole trace with its
+    /// Independent box-zoom limits: time from the whole trace with its
     /// margins to [`CYCLE_PX_MAX`] per cycle; rows from where every row fits
     /// (no lower than the opening height when they all fit anyway) to the
     /// panel's cap.
@@ -783,13 +778,15 @@ impl PipelineModel {
         }
     }
 
-    /// Adopt the aspect on screen unless an axis is at a limit, where the
-    /// one from before it stopped is kept so the path can be walked back.
-    fn update_aspect(&mut self, bounds: &ZoomBox, at: ZoomPoint) -> f64 {
-        match self.aspect {
-            Some(aspect) if !bounds.is_interior(at) => aspect,
-            _ => *self.aspect.insert(at.aspect()),
-        }
+    /// Shared square-size limits. The smaller fit scale lets both the trace
+    /// and the rows fit, with spare space on the less populated axis.
+    fn square_size_limits(&self, doc: &Document, cycle_units: f64) -> (f64, f64) {
+        let z = f64::from(self.layout.zoom);
+        let cap = f64::from(self.row_cap) * z;
+        let time_fit = self.cells_w() / self.fit_viewport(doc).width() * cycle_units;
+        let row_fit = self.fit_row_px(doc).min(f64::from(ROW_PX_DEFAULT) * z);
+        let lo = time_fit.min(row_fit).clamp(f64::from(ROW_PX_MIN) * z, cap);
+        (lo.ln(), cap.ln())
     }
 
     /// The normalized, cells-clipped box and whether it is large enough to fit.
@@ -845,40 +842,28 @@ impl PipelineModel {
         rows.row_px = (f64::from(rows.row_px) * factor) as f32;
         rows.top = row - f64::from(self.cells_h()) / (2.0 * f64::from(rows.row_px));
         self.set_rows(doc, rows, Some(now));
-        self.aspect = Some(
-            self.zoom_point(&self.nav.viewport_state(doc).target(), self.rows_target())
-                .aspect(),
-        );
     }
 
-    /// Immediate time-axis-only zoom matching the waveform panel's modified
-    /// wheel gesture. The local row view and follow mode are unaffected.
-    fn zoom_time_at(&mut self, doc: &mut Document, p: Point, factor: f64) {
-        let x = f64::from((p.x - self.layout.cells.left()).max(0.0));
-        self.nav.zoom_at(doc, x, self.cells_w(), factor);
-        self.aspect = None;
-    }
-
-    /// Walk the two-axis zoom path by `factor` (> 1 zooms in) about a panel
+    /// Restore square cells and zoom by `factor` (> 1 zooms in) about a panel
     /// position; animated when `now` is given, otherwise immediate.
     pub fn zoom_about(&mut self, doc: &mut Document, p: Point, factor: f64, now: Option<Instant>) {
         let x = f64::from((p.x - self.layout.cells.left()).max(0.0));
         let y = (p.y - self.layout.cells.top()).max(0.0);
-        self.zoom_path(doc, Some((x, y)), factor, now);
+        self.zoom_square(doc, Some((x, y)), factor, now);
     }
 
-    /// One step along the zoom path, anchored at cells-relative `(x, y)`, or
-    /// for time at the visible cursor (else the centre) and for rows at the
-    /// middle when `anchor` is `None`. An axis that reaches its fit snaps to
-    /// the fit position so the whole trace, or every row, is on screen.
-    fn zoom_path(
+    /// Normalize rectangular cells, then scale both axes about the same
+    /// cells-relative anchor. Keyboard zoom uses the visible cursor (else
+    /// the time centre) and the vertical centre. Animated inputs accumulate
+    /// against their targets; immediate gestures use the displayed view.
+    fn zoom_square(
         &mut self,
         doc: &mut Document,
         anchor: Option<(f64, f32)>,
         factor: f64,
         now: Option<Instant>,
     ) {
-        if !(self.laid_out() && factor.is_finite() && factor > 0.0) {
+        if !(self.laid_out() && factor.is_finite() && factor > 0.0) || factor == 1.0 {
             return;
         }
         self.suspend_follow();
@@ -888,40 +873,72 @@ impl PipelineModel {
         } else {
             self.nav.viewport(doc)
         };
-        let mut rows = self.rows_base(animated);
-        let bounds = self.zoom_box(doc, &viewport);
-        let from = self.zoom_point(&viewport, rows);
-        let aspect = self.update_aspect(&bounds, from);
-        let to = zoom::walk(from, bounds, aspect, factor.ln());
+        let rows = self.rows_base(animated);
         let w = self.cells_w();
-        let h = self.cells_h();
-        let time_factor = (to.time - from.time).exp();
-        if to.time < from.time && ZoomBox::at_lo(to.time, bounds.time) {
-            let fit = self.fit_viewport(doc);
-            match now {
-                Some(now) => self.nav.animate_to(doc, fit, now),
-                None => self.nav.jump_to(doc, fit),
-            }
-        } else if to.time != from.time {
-            match (anchor, now) {
-                (Some((x, _)), Some(now)) => self.nav.zoom_target_at(doc, x, w, time_factor, now),
-                (Some((x, _)), None) => self.nav.zoom_at(doc, x, w, time_factor),
-                (None, Some(now)) => self.nav.zoom_center(doc, w, time_factor, now),
-                (None, None) => self.nav.zoom_at(doc, w * 0.5, w, time_factor),
-            }
+        let (x, y) = anchor.unwrap_or_else(|| {
+            let x = self
+                .nav
+                .cursor(doc)
+                .map(|t| viewport.x_of(t as f64, w))
+                .filter(|x| (0.0..=w).contains(x))
+                .unwrap_or(w * 0.5);
+            (x, self.cells_h() * 0.5)
+        });
+        let cycle_units = self.cycle_units(doc, viewport.time_at(x, w));
+        let size = self.square_size_limits(doc, cycle_units);
+        let from = self.zoom_point(&viewport, rows);
+        let to = zoom::square_zoom(from, cycle_units, size, factor.ln());
+        if factor < 1.0 && to.rows <= size.0 + 1e-9 {
+            self.fit_square(doc, now);
+            return;
         }
-        if to.rows < from.rows && ZoomBox::at_lo(to.rows, bounds.rows) {
-            rows.row_px = to.rows.exp() as f32;
-            rows.top = -self.fit_margin_px() / f64::from(rows.row_px);
-        } else if to.rows != from.rows {
-            let y = anchor.map_or(h * 0.5, |(_, y)| y);
-            rows.zoom_about(
-                y,
-                (to.rows - from.rows).exp(),
-                h,
-                self.row_count(doc),
-                self.layout.zoom,
-            );
+        self.set_square_view(
+            doc,
+            (viewport, rows),
+            to.rows.exp(),
+            cycle_units,
+            (x, y),
+            now,
+        );
+    }
+
+    /// Apply a square size while retaining the time and fractional row at
+    /// the anchor, subject to position clamps. Derive the row height from
+    /// the representable time window so navigation's precision floor never
+    /// lets the two axes diverge at large timestamps.
+    fn set_square_view(
+        &mut self,
+        doc: &mut Document,
+        from: (Viewport, RowView),
+        side: f64,
+        cycle_units: f64,
+        anchor: (f64, f32),
+        now: Option<Instant>,
+    ) {
+        let (viewport, mut rows) = from;
+        let w = self.cells_w();
+        let (x, y) = anchor;
+        let width = w * cycle_units / side;
+        let time = viewport.time_at(x, w);
+        let start = time - width * (x / w);
+        let mut target = Viewport {
+            start,
+            end: start + width,
+        };
+        target.clamp_preserving_width(doc.limits());
+        let side = w * cycle_units / target.width();
+        rows.zoom_about(
+            y,
+            side / f64::from(rows.row_px),
+            self.cells_h(),
+            self.row_count(doc),
+            self.layout.zoom,
+        );
+        let mode = doc.navigation.animation;
+        let state = self.nav.viewport_state_mut(doc);
+        match now {
+            Some(now) => state.animate_to(target, now, mode),
+            None => state.set(target),
         }
         self.set_rows(doc, rows, now);
     }
@@ -946,7 +963,6 @@ impl PipelineModel {
         let target = (current * factor).clamp(lo, hi);
         rows.zoom_about(y, target / current, self.cells_h(), self.row_count(doc), z);
         self.row_cap = (rows.row_px / z).max(ROW_PX_CAP);
-        self.aspect = None;
         self.set_rows(doc, rows, now);
     }
 
@@ -972,37 +988,44 @@ impl PipelineModel {
         let factor = f64::from(ROW_PX_DEFAULT * z) / f64::from(rows.row_px);
         rows.zoom_about(h * 0.5, factor, h, self.row_count(doc), z);
         self.row_cap = ROW_PX_CAP;
-        self.aspect = None;
         self.set_rows(doc, rows, Some(now));
     }
 
     pub fn zoom_in(&mut self, doc: &mut Document, now: Instant) {
-        self.zoom_path(doc, None, 2.0, Some(now));
+        self.zoom_square(doc, None, 2.0, Some(now));
     }
 
     pub fn zoom_out(&mut self, doc: &mut Document, now: Instant) {
-        self.zoom_path(doc, None, 0.5, Some(now));
+        self.zoom_square(doc, None, 0.5, Some(now));
     }
 
-    /// Zoom Fit: the whole trace with its margins and every row, shrinking
-    /// rows only when they do not all fit already. The aspect from before is
-    /// kept, so zooming back in returns to a readable view.
+    /// Fit the whole trace and every row with square cells. The less
+    /// populated axis retains empty space rather than stretching its cells.
     pub fn zoom_fit(&mut self, doc: &mut Document, now: Instant) {
         if !self.laid_out() {
             return self.nav.zoom_fit(doc, self.cells_w(), 0.0, now);
         }
-        let viewport = self.nav.viewport_state(doc).target();
-        let mut rows = self.rows_target();
-        let bounds = self.zoom_box(doc, &viewport);
-        self.update_aspect(&bounds, self.zoom_point(&viewport, rows));
+        self.fit_square(doc, Some(now));
+    }
+
+    /// Center both axes when the shared fit limit is reached, so pointer
+    /// anchoring cannot leave rows or time off screen at the overview scale.
+    fn fit_square(&mut self, doc: &mut Document, now: Option<Instant>) {
+        self.suspend_follow();
         let fit = self.fit_viewport(doc);
-        self.nav.animate_to(doc, fit, now);
-        if self.row_count(doc) > 0 {
-            self.suspend_follow();
-            rows.row_px = (f64::from(rows.row_px).min(self.fit_row_px(doc))) as f32;
-            rows.top = -self.fit_margin_px() / f64::from(rows.row_px);
-            self.set_rows(doc, rows, Some(now));
-        }
+        let cycle_units = self.cycle_units(doc, (fit.start + fit.end) * 0.5);
+        let side = self.square_size_limits(doc, cycle_units).0.exp();
+        let h = self.cells_h();
+        let mut rows = self.rows_target();
+        rows.top = self.row_count(doc) as f64 * 0.5 - f64::from(h) / (2.0 * f64::from(rows.row_px));
+        self.set_square_view(
+            doc,
+            (fit, rows),
+            side,
+            cycle_units,
+            (self.cells_w() * 0.5, h * 0.5),
+            now,
+        );
     }
 
     pub fn zoom_to_cursor(&mut self, doc: &mut Document, now: Instant) {
@@ -1039,7 +1062,12 @@ impl PipelineModel {
     fn pan_px(&mut self, doc: &mut Document, dx: f32, dy: f32) {
         if dx != 0.0 {
             let w = self.cells_w();
-            self.nav.pan_px(doc, f64::from(dx), w);
+            let mut viewport = self.nav.viewport(doc);
+            let dt = f64::from(dx) / w * viewport.width();
+            viewport.start += dt;
+            viewport.end += dt;
+            viewport.clamp_preserving_width(doc.limits());
+            self.nav.viewport_state_mut(doc).set(viewport);
         }
         if dy != 0.0 {
             self.suspend_follow();
@@ -1390,19 +1418,14 @@ impl PipelineModel {
         }
     }
 
-    /// Ctrl/⌘+wheel (and a browser pinch, which arrives as one) walks the
-    /// two-axis zoom path, or zooms time only over the time header and
-    /// rulers; Alt+wheel zooms rows only; a plain wheel scrolls rows and pans
-    /// time with its horizontal delta; Shift+wheel pans time. Every host
-    /// behaves the same, whether its deltas are a wheel's or a trackpad's.
+    /// Ctrl/⌘+wheel restores and zooms square cells over both the body and
+    /// the rulers. Alt+wheel adjusts only row height; a plain wheel scrolls
+    /// rows and pans time with its horizontal delta; Shift+wheel pans time.
+    /// Wheel and trackpad deltas use the same scale and navigation rules.
     fn wheel(&mut self, doc: &mut Document, p: Point, dx: f32, dy: f32, modifiers: Modifiers) {
         let factor = 2f64.powf(f64::from(dy) / 120.0);
         if modifiers.control || modifiers.platform {
-            if p.y < self.layout.cells.top() {
-                self.zoom_time_at(doc, p, factor);
-            } else {
-                self.zoom_about(doc, p, factor, None);
-            }
+            self.zoom_about(doc, p, factor, None);
         } else if modifiers.alt {
             let y = (p.y - self.layout.cells.top()).max(0.0);
             self.zoom_rows_at(doc, y, factor, None);

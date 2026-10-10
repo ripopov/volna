@@ -141,6 +141,28 @@ impl Viewport {
         }
         self.end = self.start + w;
     }
+
+    /// Clamp position and minimum width while allowing a window wider than
+    /// the trace. Pipeline square cells can need this extra empty time space.
+    /// A wide window must contain the trace; a narrower one keeps the usual
+    /// edge space. Neither case changes the requested scale.
+    pub(crate) fn clamp_preserving_width(&mut self, limits: (u64, u64)) {
+        let fit = Self::fit(limits);
+        if !(self.start.is_finite()
+            && self.end.is_finite()
+            && self.width().is_finite()
+            && self.width() > 0.0)
+        {
+            *self = fit;
+        }
+        let width = self
+            .width()
+            .max(min_width(self.start.abs().max(self.end.abs())));
+        let left = fit.start - fit.width() * EDGE_SPACE;
+        let right = fit.end + fit.width() * EDGE_SPACE - width;
+        self.start = self.start.clamp(left.min(right), left.max(right));
+        self.end = self.start + width;
+    }
 }
 
 impl Lerp for Viewport {
@@ -193,6 +215,33 @@ mod tests {
         };
         v.clamp((0, 1000));
         assert!((v.width() - MIN_WIDTH).abs() < 1e-9);
+    }
+
+    #[test]
+    fn position_clamp_preserves_wide_windows_and_contains_the_trace() {
+        for width in [2000.0, 10_000.0] {
+            for start in [-20_000.0, 0.0, 20_000.0] {
+                let mut v = Viewport {
+                    start,
+                    end: start + width,
+                };
+                v.clamp_preserving_width((0, 1000));
+                assert_eq!(v.width(), width);
+                assert!(v.start <= 0.0 && v.end >= 1000.0);
+            }
+        }
+        let mut narrow = Viewport {
+            start: -5000.0,
+            end: -4500.0,
+        };
+        narrow.clamp_preserving_width((0, 1000));
+        assert_eq!(
+            narrow,
+            Viewport {
+                start: -200.0,
+                end: 300.0
+            }
+        );
     }
 
     #[test]

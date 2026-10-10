@@ -133,7 +133,9 @@ pub fn paint(
             } else {
                 0.0
             };
-            let gap = if row_px >= EDGE_MIN_PX { z(1.0) } else { 0.0 };
+            // Equal insets on both axes keep a one-cycle primary stage
+            // square when cycle width equals row height.
+            let gap = 2.0 * pad;
             let border = row_px >= EDGE_MIN_PX;
             let show_text = row_px >= TEXT_MIN_PX;
             let cell_font = (row_px * 0.62).clamp(z(6.0), t.mono_size);

@@ -101,7 +101,13 @@ impl Lerp for RowView {
     fn lerp(&self, to: &Self, t: f64) -> Self {
         Self {
             top: self.top + (to.top - self.top) * t,
-            row_px: self.row_px + (to.row_px - self.row_px) * t as f32,
+            // Interpolate rows per pixel, matching the time units per pixel
+            // interpolated by Viewport. Uniform zoom then preserves square
+            // cells and the fractional row at its anchor during animation.
+            row_px: (1.0
+                / (1.0 / f64::from(self.row_px)
+                    + (1.0 / f64::from(to.row_px) - 1.0 / f64::from(self.row_px)) * t))
+                as f32,
         }
     }
 

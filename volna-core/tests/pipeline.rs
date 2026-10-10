@@ -550,7 +550,7 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
         let (mut app, _, _, pipeline) = opened(200);
         pump(&mut app);
         let theme = Theme::one_dark().zoomed(zoom);
-        // Rows short enough to double without reaching the 24 px cap.
+        // Begin rectangular, with enough room to zoom the nearest square.
         app.panels
             .pipeline_mut(pipeline)
             .unwrap()
@@ -569,9 +569,10 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
                 l.time_at(&p.nav.viewport(&app.doc), pointer.x),
                 l.rows.row_at(pointer.y - l.cells.top()),
                 l.rows.row_px,
+                p.nav.viewport(&app.doc).width(),
             )
         };
-        // Ctrl/Cmd+wheel over the cells walks the two-axis zoom, immediately.
+        // Ctrl/Cmd+wheel restores square cells and applies its step immediately.
         app.handle(Command::Pointer(
             pipeline,
             PointerEvent::Wheel {
@@ -598,7 +599,11 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
         };
         assert!((before.0 - after.0).abs() < 1e-6, "time under the pointer");
         assert!((before.1 - after.1).abs() < 1e-6, "row under the pointer");
-        assert!((after.2 - before.2 * 2.0).abs() < 1e-3, "rows doubled");
+        let cycle_px = f64::from(cells.width()) / before.3;
+        let nearest = (cycle_px * f64::from(before.2)).sqrt();
+        let expected = (nearest * 2.0).min(24.0 * f64::from(zoom));
+        assert!((f64::from(after.2) - expected).abs() < 1e-4);
+        assert_square_cells(&mut app, pipeline, &theme, 1.0);
         assert_eq!(
             app.panels.pipeline(pipeline).unwrap().rows.value.row_px,
             after.2 / zoom,
@@ -696,7 +701,7 @@ fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
     );
     assert!(p.rows.value.top > rows_before.top);
     assert_eq!(p.rows.value.row_px, rows_before.row_px);
-    // Ctrl over the time header zooms only time, exactly like the wave panel.
+    // Ctrl over the time header also restores square cells.
     let viewport_before = p.nav.viewport(&app.doc);
     let anchor_x = cells.left() + 200.0;
     let time_before = p.last_layout().time_at(&viewport_before, anchor_x);
@@ -721,16 +726,20 @@ fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
     );
     let p = app.panels.pipeline(pipeline).unwrap();
     let viewport_after = p.nav.viewport(&app.doc);
-    assert!((viewport_after.width() - viewport_before.width() / 2.0).abs() < 1e-6);
+    let side = ((f64::from(cells.width()) / viewport_before.width()
+        * f64::from(rows_before.row_px))
+    .sqrt()
+        * 2.0)
+        .min(24.0);
+    assert!((f64::from(cells.width()) / viewport_after.width() - side).abs() < 1e-6);
     assert!(
         (p.last_layout().time_at(&viewport_after, anchor_x) - time_before).abs() < 1e-6,
         "time under the pointer"
     );
-    assert_eq!(p.rows.value, rows_before);
-    assert_eq!(p.follow, volna_core::pipeline::FollowActivity::Following);
+    assert!((f64::from(p.rows.value.row_px) - side).abs() < 1e-5);
+    assert_eq!(p.follow, volna_core::pipeline::FollowActivity::Suspended);
     let rows_before = p.rows.value;
-    // Keyboard: ↓ scrolls rows, = walks the two-axis zoom: rows stop at the
-    // 24 px cap and time takes the rest of the step.
+    // Keyboard: ↓ scrolls rows; = scales square cells up to their shared cap.
     app.handle_at(Command::Action(Action::MoveSelectionDown), now);
     app.tick(now + Duration::from_secs(1));
     let p = app.panels.pipeline(pipeline).unwrap();
@@ -740,9 +749,8 @@ fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
     app.handle_at(Command::Action(Action::ZoomIn), now);
     app.tick(now + Duration::from_secs(1));
     let p = app.panels.pipeline(pipeline).unwrap();
-    // A cycle (one time unit here) stops at 120 px.
-    let expected = (width / 2.0).max(f64::from(cells.width()) / 120.0);
-    assert!(expected > width / 2.0, "this step reaches the cycle cap");
+    // A cycle and a row stop together at 24 px.
+    let expected = (width / 2.0).max(f64::from(cells.width()) / 24.0);
     assert!((p.nav.viewport(&app.doc).width() - expected).abs() < 1e-6);
     assert!((p.rows.value.row_px - (row_px * 2.0).min(24.0)).abs() < 1e-3);
 }
@@ -1252,11 +1260,11 @@ fn box_zoom_retains_alt_and_special_region_hit_precedence() {
 }
 
 #[test]
-fn box_zoom_adopts_its_aspect_for_subsequent_wheel_zoom() {
+fn wheel_zoom_restores_squares_after_box_zoom() {
     let theme = Theme::one_dark();
     let (mut app, id, cells) = box_view(&theme);
     let now = Instant::now();
-    // Establish a remembered wheel aspect, then change time through the linked view.
+    // Establish square cells, then change time through the linked view.
     wheel_with(&mut app, id, in_box(cells, 0.5, 0.5), 0.0, 120.0, ctrl());
     app.doc
         .shared
@@ -1282,8 +1290,14 @@ fn box_zoom_adopts_its_aspect_for_subsequent_wheel_zoom() {
     let row_px = app.panels.pipeline(id).unwrap().rows.value.row_px;
     assert!((row_px - 24.0).abs() < 1e-5);
     wheel_with(&mut app, id, in_box(cells, 0.5, 0.5), 0.0, -120.0, ctrl());
-    assert!((app.doc.shared.viewport.value.width() - time * 2.0).abs() < 1e-5);
-    assert!((app.panels.pipeline(id).unwrap().rows.value.row_px - row_px * 0.5).abs() < 1e-5);
+    let nearest = (f64::from(cells.width()) / time * f64::from(row_px))
+        .sqrt()
+        .min(24.0);
+    assert!(
+        (f64::from(app.panels.pipeline(id).unwrap().rows.value.row_px) - nearest * 0.5).abs()
+            < 1e-5
+    );
+    assert_square_cells(&mut app, id, &theme, 1.0);
 }
 
 /// Visible time width and painted row height after a frame.
@@ -1300,89 +1314,286 @@ fn same_scales(a: (f64, f32), b: (f64, f32)) -> bool {
     (a.0 / b.0 - 1.0).abs() < 1e-6 && (a.1 / b.1 - 1.0).abs() < 1e-4
 }
 
-/// The shade quads over the time or rows outside the trace.
-fn shades(app: &mut App, id: PanelId, theme: &Theme) -> Vec<Rect> {
-    let scene = app.render_panel(id, theme, &mut MonoMeasure);
-    scene
-        .quads()
-        .filter(|(_, color)| *color == theme.wave_outside)
-        .map(|(rect, _)| rect)
-        .collect()
+/// Verify painted row height against a cycle of the stream clock.
+fn assert_square_cells(app: &mut App, id: PanelId, theme: &Theme, period: f64) {
+    let (time, row_px) = scales(app, id, theme);
+    let width = f64::from(app.panels.pipeline(id).unwrap().last_layout().cells.width());
+    let cycle_px = width / time * period;
+    assert!(
+        (cycle_px / f64::from(row_px) - 1.0).abs() < 1e-5,
+        "cycle width {cycle_px} differs from row height {row_px}"
+    );
 }
 
 #[test]
-fn zoom_out_ends_at_the_whole_trace_and_every_row_and_walks_back() {
-    use volna_core::nav::Lerp;
+fn pipeline_wheel_restores_nearest_squares_after_linked_waveform_zoom() {
     use volna_core::wave::viewport::Viewport;
-    for zoom in [1.0f32, 2.0] {
-        let theme = Theme::one_dark().zoomed(zoom);
-        let start = || {
-            let (mut app, _, _, pipeline) = opened(10_000);
-            pump(&mut app);
-            app.doc.shared.viewport.set(Viewport {
-                start: 5000.0,
-                end: 5064.0,
-            });
-            (app, pipeline)
-        };
-        let (mut app, pipeline) = start();
-        let cells = cells(&mut app, pipeline, &theme);
-        let pointer = point(cells.left() + cells.width() * 0.4, cells.top() + 100.0);
-        let mut path = vec![scales(&mut app, pipeline, &theme)];
-        loop {
-            wheel_with(&mut app, pipeline, pointer, 0.0, -120.0, ctrl());
-            let next = scales(&mut app, pipeline, &theme);
-            let last = *path.last().unwrap();
-            if same_scales(next, last) {
-                break;
+    for zoom in [1.0, 2.0] {
+        for wave_delta in [-120.0, 120.0] {
+            for pipeline_delta in [-30.0, 30.0] {
+                let (mut app, _, waves, pipeline) = opened(1000);
+                pump(&mut app);
+                let theme = Theme::one_dark().zoomed(zoom);
+                let cells = cells(&mut app, pipeline, &theme);
+                let side = 8.0 * f64::from(zoom);
+                let width = f64::from(cells.width()) / side;
+                app.doc.shared.viewport.set(Viewport {
+                    start: 500.0 - width * 0.5,
+                    end: 500.0 + width * 0.5,
+                });
+                app.panels
+                    .pipeline_mut(pipeline)
+                    .unwrap()
+                    .rows
+                    .set(RowView {
+                        top: 200.0,
+                        row_px: 8.0,
+                    });
+                assert_square_cells(&mut app, pipeline, &theme, 1.0);
+                frame(&mut app, waves, &theme);
+                let wave_area = app.panels.waves(waves).unwrap().last_layout().waves;
+                wheel_with(
+                    &mut app,
+                    waves,
+                    in_box(wave_area, 0.5, 0.5),
+                    0.0,
+                    wave_delta,
+                    ctrl(),
+                );
+                let stretched = scales(&mut app, pipeline, &theme);
+                let cycle_px = f64::from(cells.width()) / stretched.0;
+                assert!((cycle_px / f64::from(stretched.1) - 1.0).abs() > 0.1);
+                let pointer = in_box(cells, 0.5, 0.5);
+                let p = app.panels.pipeline(pipeline).unwrap();
+                let time = p
+                    .nav
+                    .viewport(&app.doc)
+                    .time_at(f64::from(cells.width()) * 0.5, f64::from(cells.width()));
+                let row = p.rows.value.zoomed(zoom).row_at(cells.height() * 0.5);
+                let expected = (cycle_px * f64::from(stretched.1)).sqrt()
+                    * 2.0f64.powf(f64::from(pipeline_delta) / 120.0);
+                wheel_with(&mut app, pipeline, pointer, 0.0, pipeline_delta, ctrl());
+                assert_square_cells(&mut app, pipeline, &theme, 1.0);
+                let restored = scales(&mut app, pipeline, &theme);
+                assert!((f64::from(restored.1) - expected).abs() < 1e-4);
+                let p = app.panels.pipeline(pipeline).unwrap();
+                assert!(
+                    (p.nav
+                        .viewport(&app.doc)
+                        .time_at(f64::from(cells.width()) * 0.5, f64::from(cells.width()))
+                        - time)
+                        .abs()
+                        < 1e-6
+                );
+                assert!((p.last_layout().rows.row_at(cells.height() * 0.5) - row).abs() < 1e-5);
+                // Subsequent small deltas scale the restored square directly.
+                wheel_with(&mut app, pipeline, pointer, 0.0, -pipeline_delta, ctrl());
+                assert_square_cells(&mut app, pipeline, &theme, 1.0);
+                let next = scales(&mut app, pipeline, &theme);
+                let nearest = (cycle_px * f64::from(stretched.1)).sqrt();
+                assert!((f64::from(next.1) - nearest).abs() < 1e-4);
             }
-            path.push(next);
-            assert!(path.len() < 64, "zoom-out never ends");
-        }
-        // Every notch but the one that reaches the end halves at least one
-        // axis: no notch is lost to an axis that already stopped.
-        for pair in path.windows(2).take(path.len() - 2) {
-            let (a, b) = (pair[0], pair[1]);
-            let time = (b.0 / a.0).ln();
-            let rows = f64::from(a.1 / b.1).ln();
-            assert!(
-                (time.max(rows) - std::f64::consts::LN_2).abs() < 1e-4,
-                "{a:?} -> {b:?}"
-            );
-        }
-        // The end is the whole trace with 12 px margins and every row.
-        let (limits, margin) = (app.doc.limits(), 12.0 * zoom);
-        let p = app.panels.pipeline(pipeline).unwrap();
-        let l = p.last_layout().clone();
-        let fit = Viewport::fit_px(limits, f64::from(l.cells.width()), f64::from(margin));
-        assert!(p.nav.viewport(&app.doc).approx_eq(&fit));
-        assert!((l.row_y(0) - (l.cells.top() + margin)).abs() < 0.01);
-        assert!((l.row_y(10_000) - (l.cells.bottom() - margin)).abs() < 0.01);
-        // Shade frames the trace: left, right, above and below.
-        let quads = shades(&mut app, pipeline, &theme);
-        assert_eq!(quads.len(), 4, "{quads:?}");
-        for q in &quads {
-            assert!((q.width().min(q.height()) - margin).abs() < 1.0, "{q:?}");
-        }
-        // Short of the end (whose last notch is cut short), zooming back in
-        // retraces the same scales: rows first, then both axes.
-        let (mut app, pipeline) = start();
-        assert!(same_scales(scales(&mut app, pipeline, &theme), path[0]));
-        let full = path.len() - 2;
-        for expected in &path[1..=full] {
-            wheel_with(&mut app, pipeline, pointer, 0.0, -120.0, ctrl());
-            assert!(same_scales(scales(&mut app, pipeline, &theme), *expected));
-        }
-        for expected in path[..full].iter().rev() {
-            wheel_with(&mut app, pipeline, pointer, 0.0, 120.0, ctrl());
-            let now = scales(&mut app, pipeline, &theme);
-            assert!(same_scales(now, *expected), "{now:?} != {expected:?}");
         }
     }
 }
 
 #[test]
-fn zoom_in_stops_at_readable_rows_and_wide_cycles_and_row_only_zoom_raises_the_cap() {
+fn animated_square_zoom_keeps_cells_square_and_accumulates_targets() {
+    use volna_core::settings::Animation;
+    use volna_core::wave::viewport::Viewport;
+    for linked in [true, false] {
+        let (mut app, _, _, pipeline) = opened(1000);
+        pump(&mut app);
+        let theme = Theme::one_dark();
+        if !linked {
+            app.handle(Command::Panels(PanelsCommand::ToggleLink {
+                panel: pipeline,
+                dim: LinkDim::Viewport,
+            }));
+        }
+        let cells = cells(&mut app, pipeline, &theme);
+        app.doc.navigation.animation = Animation::On;
+        let p = app.panels.pipeline_mut(pipeline).unwrap();
+        let width = f64::from(cells.width()) / 4.0;
+        p.nav.viewport_state_mut(&mut app.doc).set(Viewport {
+            start: 500.0 - width * 0.5,
+            end: 500.0 + width * 0.5,
+        });
+        p.rows.set(RowView {
+            top: 300.0,
+            row_px: 4.0,
+        });
+        assert_square_cells(&mut app, pipeline, &theme, 1.0);
+        let now = Instant::now();
+        app.handle_at(Command::Action(Action::ZoomIn), now);
+        app.tick(now + Duration::from_millis(30));
+        assert_square_cells(&mut app, pipeline, &theme, 1.0);
+        let intermediate = scales(&mut app, pipeline, &theme).1;
+        assert!(intermediate > 4.0 && intermediate < 8.0);
+        app.handle_at(
+            Command::Action(Action::ZoomIn),
+            now + Duration::from_millis(30),
+        );
+        app.tick(now + Duration::from_millis(60));
+        assert_square_cells(&mut app, pipeline, &theme, 1.0);
+        app.tick(now + Duration::from_secs(1));
+        assert_square_cells(&mut app, pipeline, &theme, 1.0);
+        assert!((scales(&mut app, pipeline, &theme).1 - 16.0).abs() < 1e-5);
+    }
+}
+
+#[test]
+fn square_cells_use_the_stream_clock_period_instead_of_time_units() {
+    for zoom in [1.0, 2.0] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../volna/examples/pipeline_demo.vtr");
+        let session = OpenSpec::Path(path).open().unwrap();
+        let mut app = App::new();
+        app.set_session(session.clone());
+        let stream = scope(session.as_ref(), &["TOP", "tb", "core", "pipeline"]);
+        app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
+            stream,
+        )])));
+        pump(&mut app);
+        let pipeline = app.panels.focused_id();
+        let theme = Theme::one_dark().zoomed(zoom);
+        let cells = cells(&mut app, pipeline, &theme);
+        let before = scales(&mut app, pipeline, &theme);
+        // The demo stream uses a 10 ns clock, rather than one time unit per cycle.
+        let nearest = (f64::from(cells.width()) / before.0 * 10.0 * f64::from(before.1))
+            .sqrt()
+            .min(24.0 * f64::from(zoom));
+        wheel_with(
+            &mut app,
+            pipeline,
+            in_box(cells, 0.5, 0.5),
+            0.0,
+            30.0,
+            ctrl(),
+        );
+        assert_square_cells(&mut app, pipeline, &theme, 10.0);
+        let expected = (nearest * 2.0f64.powf(0.25)).min(24.0 * f64::from(zoom));
+        let actual = scales(&mut app, pipeline, &theme).1;
+        assert!(
+            (f64::from(actual) - expected).abs() < 1e-4,
+            "zoom {zoom}: expected {expected}, got {actual}, before {before:?}, cells {cells:?}"
+        );
+    }
+}
+
+#[test]
+fn one_cycle_primary_stage_fills_are_square_at_readable_scales() {
+    use volna_core::wave::viewport::Viewport;
+    for zoom in [1.0, 2.0] {
+        for side in [6.0, 12.0, 24.0] {
+            let (mut app, _, _, pipeline) = opened(200);
+            pump(&mut app);
+            let theme = Theme::one_dark().zoomed(zoom);
+            let cells = cells(&mut app, pipeline, &theme);
+            let width = f64::from(cells.width()) / f64::from(side * zoom);
+            app.doc.shared.viewport.set(Viewport {
+                start: 0.0,
+                end: width,
+            });
+            app.panels
+                .pipeline_mut(pipeline)
+                .unwrap()
+                .rows
+                .set(RowView {
+                    top: 0.0,
+                    row_px: side,
+                });
+            frame(&mut app, pipeline, &theme);
+            let p = app.panels.pipeline(pipeline).unwrap();
+            let fill = p.palette().style("F", &theme).fill;
+            let quads: Vec<_> = app
+                .scene()
+                .quads()
+                .filter(|(rect, color)| {
+                    *color == fill
+                        && rect.left() > cells.left()
+                        && rect.right() < cells.right()
+                        && rect.top() > cells.top()
+                        && rect.bottom() < cells.bottom()
+                })
+                .map(|(rect, _)| rect)
+                .collect();
+            assert!(!quads.is_empty());
+            for rect in quads {
+                assert!((rect.width() - rect.height()).abs() < 0.001, "{rect:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn square_zoom_stops_at_fit_and_retraces_its_scales() {
+    use volna_core::wave::viewport::Viewport;
+    for zoom in [1.0f32, 2.0] {
+        let theme = Theme::one_dark().zoomed(zoom);
+        let (mut app, _, _, pipeline) = opened(10_000);
+        pump(&mut app);
+        let cells = cells(&mut app, pipeline, &theme);
+        // Begin square, well away from either shared limit.
+        app.doc.shared.viewport.set(Viewport {
+            start: 5000.0,
+            end: 5000.0 + f64::from(cells.width()) / (16.0 * f64::from(zoom)),
+        });
+        app.panels
+            .pipeline_mut(pipeline)
+            .unwrap()
+            .rows
+            .set(RowView {
+                top: 5000.0,
+                row_px: 16.0,
+            });
+        let pointer = point(cells.left() + cells.width() * 0.4, cells.top() + 100.0);
+        let mut path = vec![scales(&mut app, pipeline, &theme)];
+        loop {
+            wheel_with(&mut app, pipeline, pointer, 0.0, -120.0, ctrl());
+            assert_square_cells(&mut app, pipeline, &theme, 1.0);
+            let next = scales(&mut app, pipeline, &theme);
+            if same_scales(next, *path.last().unwrap()) {
+                break;
+            }
+            path.push(next);
+            assert!(path.len() < 64, "zoom-out never ends");
+        }
+        // Every full step doubles visible time and halves row height.
+        for pair in path.windows(2).take(path.len() - 2) {
+            assert!(same_scales(pair[1], (pair[0].0 * 2.0, pair[0].1 * 0.5)));
+        }
+        let p = app.panels.pipeline(pipeline).unwrap();
+        let layout = p.last_layout();
+        let expected_fit = (layout.cells.height() - 24.0 * zoom) / 10_000.0;
+        assert!((layout.rows.row_px - expected_fit).abs() < 1e-5);
+        assert!(p.nav.viewport(&app.doc).width() > app.doc.limits().1 as f64);
+        assert!(layout.row_y(0) >= layout.cells.top() - 0.01);
+        assert!(layout.row_y(10_000) <= layout.cells.bottom() + 0.01);
+        // The final step is cut short; all preceding scales retrace exactly.
+        let full = path.len() - 2;
+        app.doc.shared.viewport.set(Viewport {
+            start: 5000.0,
+            end: 5000.0 + path[full].0,
+        });
+        app.panels
+            .pipeline_mut(pipeline)
+            .unwrap()
+            .rows
+            .set(RowView {
+                top: 0.0,
+                row_px: path[full].1 / zoom,
+            });
+        for expected in path[..full].iter().rev() {
+            wheel_with(&mut app, pipeline, pointer, 0.0, 120.0, ctrl());
+            let actual = scales(&mut app, pipeline, &theme);
+            assert!(same_scales(actual, *expected), "{actual:?} != {expected:?}");
+        }
+    }
+}
+
+#[test]
+fn square_zoom_stops_both_axes_at_the_row_cap_and_alt_wheel_can_raise_it() {
     for zoom in [1.0f32, 2.0] {
         let (mut app, _, _, pipeline) = opened(200);
         pump(&mut app);
@@ -1395,7 +1606,7 @@ fn zoom_in_stops_at_readable_rows_and_wide_cycles_and_row_only_zoom_raises_the_c
             last = scales(&mut app, pipeline, &theme);
         }
         let px_per_cycle = f64::from(cells.width()) / last.0;
-        assert!((px_per_cycle - 120.0 * f64::from(zoom)).abs() < 1e-6);
+        assert!((px_per_cycle - 24.0 * f64::from(zoom)).abs() < 1e-6);
         assert!((last.1 - 24.0 * zoom).abs() < 1e-4);
         // Alt+wheel zooms rows only, up to 48 px; that height becomes the cap.
         for _ in 0..3 {
@@ -1411,9 +1622,18 @@ fn zoom_in_stops_at_readable_rows_and_wide_cycles_and_row_only_zoom_raises_the_c
         assert_eq!(app.panels.pipeline(pipeline).unwrap().row_cap, 48.0);
         wheel_with(&mut app, pipeline, pointer, 0.0, -120.0, ctrl());
         let out = scales(&mut app, pipeline, &theme);
-        assert!(same_scales(out, (tall.0 * 2.0, tall.1 / 2.0)), "{out:?}");
+        let nearest = (24.0f64 * 48.0).sqrt() * f64::from(zoom);
+        assert!((f64::from(out.1) - nearest * 0.5).abs() < 1e-4);
+        assert_square_cells(&mut app, pipeline, &theme, 1.0);
         wheel_with(&mut app, pipeline, pointer, 0.0, 120.0, ctrl());
-        assert!(same_scales(scales(&mut app, pipeline, &theme), tall));
+        let restored = scales(&mut app, pipeline, &theme);
+        assert!((f64::from(restored.1) - nearest).abs() < 1e-4);
+        assert_square_cells(&mut app, pipeline, &theme, 1.0);
+        // Continue to the raised shared cap.
+        wheel_with(&mut app, pipeline, pointer, 0.0, 120.0, ctrl());
+        let tall = scales(&mut app, pipeline, &theme);
+        assert!((tall.1 - 48.0 * zoom).abs() < 1e-4);
+        assert_square_cells(&mut app, pipeline, &theme, 1.0);
         // The Row Height actions step rows and reset them to 18 px.
         let now = Instant::now();
         app.handle_at(Command::Action(Action::DecreaseRowHeight), now);
@@ -1488,42 +1708,38 @@ fn plain_wheel_scrolls_rows_and_shift_or_sideways_wheel_pans_time() {
 }
 
 #[test]
-fn zoom_fit_shrinks_rows_only_when_they_do_not_fit_and_wheel_in_restores_them() {
+fn zoom_fit_keeps_square_cells_and_fits_short_and_tall_traces() {
     use volna_core::pipeline::FollowActivity;
-    // 16 and 64 cycles across: inside the 120 px per cycle cap.
-    for (n, fits, cycles) in [(10u64, true, 16.0), (10_000, false, 64.0)] {
-        let (mut app, _, _, pipeline) = opened(n);
-        pump(&mut app);
-        let theme = Theme::one_dark();
-        let cells = cells(&mut app, pipeline, &theme);
-        app.doc
-            .shared
-            .viewport
-            .set(volna_core::wave::viewport::Viewport {
-                start: 0.0,
-                end: cycles,
-            });
-        let before = scales(&mut app, pipeline, &theme);
-        app.panels.pipeline_mut(pipeline).unwrap().follow = FollowActivity::Following;
-        let now = Instant::now();
-        app.handle_at(Command::Action(Action::ZoomFit), now);
-        app.tick(now + Duration::from_secs(1));
-        let fitted = scales(&mut app, pipeline, &theme);
-        let p = app.panels.pipeline(pipeline).unwrap();
-        assert_eq!(p.follow, FollowActivity::Suspended, "rows moved");
-        let l = p.last_layout().clone();
-        assert!((l.row_y(0) - (l.cells.top() + 12.0)).abs() < 0.01);
-        if fits {
-            assert_eq!(fitted.1, before.1, "rows that fit keep their height");
-        } else {
-            assert!((l.row_y(n as usize) - (l.cells.bottom() - 12.0)).abs() < 0.01);
-            // From the fit, zooming in grows rows first, back towards the
-            // aspect the view had before.
-            let pointer = point(cells.left() + 100.0, cells.top() + 100.0);
+    for zoom in [1.0, 2.0] {
+        for n in [10u64, 10_000] {
+            let (mut app, _, _, pipeline) = opened(n);
+            pump(&mut app);
+            let theme = Theme::one_dark().zoomed(zoom);
+            let cells = cells(&mut app, pipeline, &theme);
+            app.panels.pipeline_mut(pipeline).unwrap().follow = FollowActivity::Following;
+            let now = Instant::now();
+            app.handle_at(Command::Action(Action::ZoomFit), now);
+            app.tick(now + Duration::from_secs(1));
+            assert_square_cells(&mut app, pipeline, &theme, 1.0);
+            let p = app.panels.pipeline(pipeline).unwrap();
+            assert_eq!(p.follow, FollowActivity::Suspended);
+            let l = p.last_layout();
+            let viewport = p.nav.viewport(&app.doc);
+            let (a, b) = app.doc.limits();
+            assert!(viewport.start <= a as f64 && viewport.end >= b as f64);
+            assert!(l.row_y(0) >= l.cells.top() - 0.01);
+            assert!(l.row_y(n as usize) <= l.cells.bottom() + 0.01);
+            let fitted = scales(&mut app, pipeline, &theme);
+            let pointer = in_box(cells, 0.5, 0.5);
             wheel_with(&mut app, pipeline, pointer, 0.0, 120.0, ctrl());
             let next = scales(&mut app, pipeline, &theme);
-            assert_eq!(next.0, fitted.0, "time waits");
-            assert!((next.1 / fitted.1 - 2.0).abs() < 1e-3);
+            let side = (fitted.1 * 2.0).min(24.0 * zoom);
+            assert!((next.1 - side).abs() < 1e-4);
+            assert_square_cells(&mut app, pipeline, &theme, 1.0);
+            // Horizontal pan must retain the scale even with spare time space.
+            wheel_with(&mut app, pipeline, pointer, 40.0, 0.0, Modifiers::default());
+            assert_square_cells(&mut app, pipeline, &theme, 1.0);
+            assert!(same_scales(scales(&mut app, pipeline, &theme), next));
         }
     }
 }
