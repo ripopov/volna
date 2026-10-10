@@ -555,9 +555,10 @@ tables with the duplicated boundary time removed.
 ## 7. TX_BLOCK (kind 5)
 
 Transactions are appended to a block when they end (or when the file is
-closed, with status *open*), so blocks are ordered by end time and their
-begin-time ranges may overlap. Relations are appended when they are
-recorded.
+closed, with status *open*). The reference writer preserves `end_tx` call
+order, not timestamp order: both begin and end times may go backwards
+between transactions, including across block boundaries. Block time ranges
+may overlap. Relations are appended when they are recorded.
 
 ### 7.1 Layout
 
@@ -610,14 +611,24 @@ attribute, exactly the columns implied by its tag are read.
 ### 7.2 Semantics
 
 * Transaction ids are `u64` >= 1, unique within the file; the reference
-  writer assigns them in begin order. Id 0 as a relation endpoint means
+  writer assigns them in `begin_tx` call order, not begin-timestamp order.
+  Log records and clock stretches share this id space.
+  Id 0 as a relation endpoint means
   "outside this file".
 * `status`: 0 unset, 1 ok, 2 error, 3 aborted (squashed / flushed),
-  4 open (never ended before close; `end` is then the last time known to
-  the writer). `kind`: 0 unspecified, 1 internal, 2 server, 3 client,
+  4 open (never ended before close; the reference writer uses its current
+  waveform time for `end`, clamped to `begin`). `kind`: 0 unspecified,
+  1 internal, 2 server, 3 client,
   4 producer, 5 consumer (OpenTelemetry span kinds).
 * `end >= begin`; stage `end >= stage.begin`; an open stage is closed at the
   transaction's end when read.
+* Transaction timestamps need not be monotonic and are independent of the
+  reference writer's waveform time (`set_time`). This permits temporally
+  decoupled TLM producers to record effective simulation times (kernel time
+  plus local offset) in production order. The reference writer clamps
+  transaction and stage ends to their respective begins. At file close,
+  unfinished transactions use the current `set_time` value, clamped to
+  their begin, rather than the largest transaction timestamp recorded.
 * Events and stages belong to one transaction and may lie outside its
   `[begin, end]` interval only if the producer chose so.
 * Relations are directed `from -> to` with a free-form kind string and
@@ -641,6 +652,12 @@ id. *Transactions in a time window*: blocks with `t_min <= window end` and
 `t_max >= window start`. *Relations from/to an id*: blocks whose
 `rel_min/max` range contains it. *Transactions of a generator*: blocks
 whose generator list contains it.
+
+The reference reader's `visit_transactions` visits transactions in file
+order, preserving their order within each block; it does not sort by
+timestamp. Time-window queries test each candidate block's bounds and each
+transaction's interval, so they also support out-of-order timestamps.
+Consumers requiring chronological iteration must sort the results.
 
 ### 7.4 Clocks
 

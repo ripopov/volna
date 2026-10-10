@@ -10,6 +10,14 @@ implemented.
 See the [`volna-core` guide](../volna-core/README.md) for the frontend contract,
 headless tests, persistence model, and undo journal.
 
+VTR transactions may be recorded with out-of-order timestamps, as in
+temporally decoupled TLM simulations. Volna's loading layer sorts each
+generator's transactions by `(begin, end, transaction ID)` before building
+viewer indexes. The waveform panel positions intervals at their recorded
+timestamps and assigns overlapping intervals to subrows; producer call
+order does not determine their horizontal position. The raw VTR reader
+itself retains file order.
+
 ## Build and run
 
 Use Rust 1.97.1 or newer and the platform libraries required by GPUI. From the

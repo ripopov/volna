@@ -84,8 +84,15 @@ registers use four-state logic. Use `add_var` with
 or choose `LogicStates::Two` or `LogicStates::Nine` for other logic alphabets. Scalar `emit_bit` takes a `Logic` value
 such as `Logic::One` or `Logic::X`.
 
-`Writer` accepts non-decreasing waveform times; transaction/log timestamps
-have their own ordering rules. `Reader` is `Send + Sync`. Do not modify or
+`Writer` accepts non-decreasing waveform times through `set_time`.
+Transaction and log timestamps are independent of that time and may arrive
+out of order, including from temporally decoupled TLM simulations.
+Transactions are stored in `end_tx` call order, and `Reader::visit_transactions`
+returns file order without timestamp sorting. Time-window queries still find
+matching intervals. Consumers needing chronological iteration must sort;
+see [transaction semantics and reading](docs/SPEC.md#72-semantics).
+
+`Reader` is `Send + Sync`. Do not modify or
 truncate a file while it is memory-mapped by a reader; see the safety contract
 in `Reader::open_with`. Explicitly call `Writer::close` to observe write errors
 rather than relying on `Drop`.
