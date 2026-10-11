@@ -77,13 +77,14 @@ fi
 
 # rustc reports the native libraries required by a staticlib for the selected
 # toolchain and target. Cargo can reuse a fresh artifact without repeating this
-# note, so retain it alongside that artifact for subsequent installs.
-if ! "${cargo_cmd[@]}" rustc "${build_args[@]}" -- --print native-static-libs >"$build_log" 2>&1; then
+# note, so retain it alongside that artifact for subsequent installs. Remove
+# terminal colors from the diagnostic because CI may request colored Cargo output.
+if ! CARGO_TERM_COLOR=never "${cargo_cmd[@]}" rustc "${build_args[@]}" -- --print native-static-libs >"$build_log" 2>&1; then
     cat "$build_log" >&2
     die 'Cargo could not build vtr-capi'
 fi
 cat "$build_log" >&2
-native_libs=$(sed -n 's/.*native-static-libs: //p' "$build_log" | tail -n 1)
+native_libs=$(sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' "$build_log" | sed -n 's/.*native-static-libs: //p' | tail -n 1)
 native_file="$target_dir/$profile/vtr-native-static-libs"
 if [[ -n $native_libs ]]; then
     printf '%s\n' "$native_libs" >"$native_file"
