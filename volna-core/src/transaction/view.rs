@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
+use crate::clock::{Clock, ClockView, format_position};
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::data::text::{
     PREVIEW_BYTES, Radix, attribute_value_min_bytes, format_attribute, format_attribute_radix,
@@ -25,6 +26,68 @@ use volna_trace::data::transactions::{
 pub const VIEW_BYTES: usize = 128 * 1024;
 /// Attributes above this count get a filter box in the frontends.
 pub const FILTER_THRESHOLD: usize = 8;
+
+fn clock_time(clock: Option<&Clock>, time: u64) -> Option<String> {
+    let clock = clock?;
+    let timeline = clock.timeline()?;
+    let at = timeline.cycle_at(time)?;
+    Some(format!(
+        "{} {}",
+        clock.name,
+        format_position(&ClockView::default(), timeline, &at)
+    ))
+}
+
+fn clock_duration(clock: Option<&Clock>, begin: u64, end: u64) -> Option<String> {
+    let timeline = clock?.timeline()?;
+    let first = timeline.cycle_at(begin)?;
+    let last = timeline.cycle_at(end)?;
+    if first.stopped || last.stopped {
+        return None;
+    }
+    let cycles = (last.cycle as f64 + last.fraction) - (first.cycle as f64 + first.fraction);
+    if cycles.fract().abs() < 1e-9 {
+        Some(format!("{cycles:.0} clk"))
+    } else {
+        Some(format!("{cycles:.2} clk"))
+    }
+}
+
+#[cfg(test)]
+mod clock_readout_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::clock::{ClockState, ClockTimeline};
+    use crate::trace::TraceId;
+
+    #[test]
+    fn linked_clock_formats_positions_and_elapsed_cycles() {
+        let clock = Clock {
+            trace: TraceId::A,
+            track: TrackRef(1),
+            path: "cpu.clock".into(),
+            name: "clock".into(),
+            state: ClockState::Ready(Arc::new(
+                ClockTimeline::new(vec![(10, 50, 10)], false).unwrap(),
+            )),
+        };
+        assert_eq!(
+            clock_time(Some(&clock), 25).as_deref(),
+            Some("clock 1 + 0.50")
+        );
+        assert_eq!(
+            clock_duration(Some(&clock), 20, 45).as_deref(),
+            Some("2.50 clk")
+        );
+        assert_eq!(
+            clock_duration(Some(&clock), 20, 30).as_deref(),
+            Some("1 clk")
+        );
+        assert_eq!(clock_time(Some(&clock), 5), None);
+    }
+}
+
 /// Attribute keys carrying a folded FTR phase.
 const PHASES: [&str; 2] = ["record", "end"];
 
@@ -304,7 +367,15 @@ pub fn view(
         TrackKind::Stream { .. } => Vec::new(),
     };
     let base = doc.time_base();
-    let time = |t: u64| format_time(t as f64, base);
+    let clock = doc
+        .clocks
+        .linked(track)
+        .filter(|clock| clock.timeline().is_some());
+    let time = |t: u64| clock_time(clock, t).unwrap_or_else(|| format_time(t as f64, base));
+    let elapsed = |begin: u64, end: u64| {
+        clock_duration(clock, begin, end)
+            .unwrap_or_else(|| format_time(end.saturating_sub(begin) as f64, base))
+    };
     let palette = generator.palette();
     let limit = prefs.detail_items.clamp(1, 1000);
 
@@ -339,9 +410,9 @@ pub fn view(
         begin_text: budget.text(&time(tx.begin)),
         end_text: budget.text(&if open { "open".into() } else { time(tx.end) }),
         duration_text: budget.text(&if open {
-            format!("≥ {}", time(duration))
+            format!("≥ {}", elapsed(tx.begin, tx.end))
         } else {
-            time(duration)
+            elapsed(tx.begin, tx.end)
         }),
     };
 
@@ -361,7 +432,7 @@ pub fn view(
         generator.stage_order(identity.ordinal),
         limit,
         duration,
-        &time,
+        (&time, &elapsed),
         &mut budget,
     );
     let mut events = events(tx, limit, &time, &mut budget);
@@ -710,9 +781,10 @@ fn stages(
     order: &[usize],
     limit: usize,
     lifetime: u64,
-    time: &impl Fn(u64) -> String,
+    formatters: (&impl Fn(u64) -> String, &impl Fn(u64, u64) -> String),
     budget: &mut Budget,
 ) -> Section<StageRow> {
+    let (time, elapsed) = formatters;
     let primary = palette.primary_lane();
     let mut rows = Vec::new();
     for &index in order.iter().take(limit) {
@@ -745,7 +817,7 @@ fn stages(
                 Some(end) => time(end),
                 None => "open".into(),
             }),
-            duration_text: budget.text(&time(duration)),
+            duration_text: budget.text(&elapsed(stage.begin, end)),
             attributes: chips(&stage.attributes, limit, budget),
             attributes_total,
         });

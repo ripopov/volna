@@ -1014,15 +1014,12 @@ fn stage_row(
         )
         .child(
             div()
-                .w(t.px(150.0))
+                .w(t.px(72.0))
                 .flex_none()
                 .font_family(t.mono_font)
                 .text_size(px(t.ui_size_small))
                 .text_color(t.panel.text_muted)
-                .child(SharedString::from(format!(
-                    "{} → {} · {}",
-                    row.begin_text, row.end_text, row.duration_text
-                ))),
+                .child(SharedString::from(row.duration_text.clone())),
         )
         .into_any_element()
 }
