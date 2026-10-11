@@ -1303,6 +1303,129 @@ fn pipeline_box_zoom_captures_outside_release_and_ignores_double_click_open(
         .unwrap();
 }
 
+#[gpui_kit::test]
+fn pipeline_label_double_click_pans_and_cell_double_click_opens_details(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, VisualTestContext};
+    use volna_core::pipeline::FollowActivity;
+    use volna_core::wave::viewport::Viewport;
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let window = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    window
+        .update(cx, |ws, _, cx| {
+            ws.open_path(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/examples/pipeline_showcase.vtr"
+                )
+                .into(),
+                cx,
+            );
+        })
+        .unwrap();
+    let mut vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.run_until_parked();
+    let panel = window
+        .update(&mut vcx, |ws, window, cx| {
+            let track = ws.app.pipeline_streams()[0].1;
+            ws.dispatch(Command::OpenPipeline { track }, Some(window), cx);
+            let panel = ws.app.panels.focused_id();
+            ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
+            ws.app.panels.pipeline_mut(panel).unwrap().follow = FollowActivity::Off;
+            panel
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let (row, begin, label, cell) = window
+        .update(&mut vcx, |ws, _, _| {
+            let pipeline = ws.app.panels.pipeline(panel).unwrap();
+            let layout = pipeline.last_layout();
+            let row = (layout.row_range.start + 10).min(layout.row_range.end - 1);
+            let volna_core::pipeline::Rows::Ready(set) = pipeline.rows(&ws.app.doc) else {
+                panic!("loaded pipeline")
+            };
+            let begin = set.get(row).unwrap().1.begin;
+            let y = layout.row_y(row) + layout.rows.row_px * 0.5;
+            (
+                row,
+                begin,
+                (layout.labels.left() + 20.0, y),
+                (layout.cells.left() + 40.0, y),
+            )
+        })
+        .unwrap();
+    let initial = Viewport {
+        start: 200.0,
+        end: 400.0,
+    };
+    window
+        .update(&mut vcx, |ws, _, _| {
+            ws.app
+                .panels
+                .pipeline_mut(panel)
+                .unwrap()
+                .nav
+                .viewport_state_mut(&mut ws.app.doc)
+                .set(initial);
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    let at = |(x, y)| gpui_kit::point(gpui_kit::px(x), gpui_kit::px(y));
+    let modifiers = Modifiers::default();
+    vcx.simulate_mouse_move(at(label), None, modifiers);
+    vcx.simulate_event(MouseDownEvent {
+        button: MouseButton::Left,
+        position: at(label),
+        modifiers,
+        click_count: 2,
+        first_mouse: false,
+    });
+    vcx.simulate_event(MouseUpEvent {
+        button: MouseButton::Left,
+        position: at(label),
+        modifiers,
+        click_count: 2,
+    });
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            let pipeline = ws.app.panels.pipeline(panel).unwrap();
+            let viewport = pipeline.nav.viewport(&ws.app.doc);
+            assert_eq!(pipeline.selected_row(&ws.app.doc), Some(row));
+            assert_eq!(ws.app.panels.iter().count(), 1);
+            assert!((viewport.width() - initial.width()).abs() < 1e-6);
+            assert!(
+                (viewport.x_of_tick(begin, pipeline.last_layout().cells_width_f64()) - 32.0).abs()
+                    < 1e-5
+            );
+        })
+        .unwrap();
+    vcx.simulate_mouse_move(at(cell), None, modifiers);
+    vcx.simulate_event(MouseDownEvent {
+        button: MouseButton::Left,
+        position: at(cell),
+        modifiers,
+        click_count: 2,
+        first_mouse: false,
+    });
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert_eq!(ws.app.panels.iter().count(), 2);
+            assert!(ws.app.panels.focused().kind.transaction().is_some());
+        })
+        .unwrap();
+}
+
 impl RootWindow {
     fn update<R>(
         &self,

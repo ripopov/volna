@@ -1063,8 +1063,7 @@ impl Workspace {
         .detach();
     }
 
-    /// Keep the GPUI popup in step with the core's menu: a wave row's or a
-    /// Markers or Measure lane's (`App::menu`).
+    /// Keep the GPUI popup in step with the core's panel context menu.
     fn sync_wave_menu(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         let panel = self.app.panels.focused_id();
         let Some(m) = self.app.menu() else {

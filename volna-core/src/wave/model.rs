@@ -563,6 +563,8 @@ pub enum MenuAction {
     FoldAll(bool),
     /// A choice of a Markers or Measure lane menu (`WaveMenuKind::Lane`).
     Lane(crate::marker::LaneVerb),
+    /// Pan a pipeline panel to the start of the named row.
+    PipelineStart(usize),
     /// Colour the menu's rows; `None` is Default.
     Tint(Option<Tint>),
     /// Draw the menu's groups as stacked areas (`true`) or as activity.
@@ -618,10 +620,12 @@ pub enum WaveMenuKind {
     /// A Markers or Measure lane menu, which the app holds for any timed
     /// panel (`App::menu`); `row` counts the menus opened, so each is new.
     Lane,
+    /// A pipeline transaction label menu, also held by the app.
+    PipelineLabel,
 }
 
-/// A format-badge or signal-name menu. The frontend shows its own popup widget
-/// at the panel position and reports the typed choice.
+/// A panel context menu. The frontend shows its own popup widget at the panel
+/// position and reports the typed choice.
 #[derive(Clone, Debug)]
 pub struct WaveMenu {
     pub kind: WaveMenuKind,

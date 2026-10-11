@@ -30,6 +30,8 @@ pub const LABEL_ATTRIBUTE: &str = "vtr.label";
 const DRAG_THRESHOLD_PX: f32 = 3.0;
 /// Minimum width and height of a box zoom, in design pixels.
 const BOX_ZOOM_MIN_PX: f32 = 4.0;
+/// Space before a transaction start after navigating from its label.
+const START_MARGIN_PX: f64 = 32.0;
 /// Rows scrolled by one keyboard step.
 pub const SCROLL_ROWS: f64 = 3.0;
 /// Row height factor of one Increase/Decrease Row Height step.
@@ -304,6 +306,17 @@ impl PipelineModel {
         set.row_of(selection.track.item, selection.id)
     }
 
+    /// A readable transaction label under `p`, excluding the resize handle.
+    pub fn label_row_at(&self, doc: &Document, p: Point) -> Option<usize> {
+        if !self.layout.labels.contains(p) || self.layout.is_overview() {
+            return None;
+        }
+        match self.hit_at(p, doc) {
+            Some(Hit::Row(row)) if row < self.row_count(doc) => Some(row),
+            _ => None,
+        }
+    }
+
     /// Make row `row` the document selection. Returns whether it changed.
     pub fn select_row(&mut self, doc: &mut Document, panel: PanelId, row: usize) -> bool {
         let selection = {
@@ -376,6 +389,29 @@ impl PipelineModel {
             },
             now,
         );
+        true
+    }
+
+    /// Pan the time axis to a row's begin time, retaining its width and row
+    /// position. The small leading margin keeps the first cycle visible.
+    pub fn pan_to_row_start(&mut self, doc: &mut Document, row: usize, now: Instant) -> bool {
+        let begin = match self.rows(doc) {
+            Rows::Ready(set) => set.get(row).map(|(_, tx)| tx.begin),
+            _ => None,
+        };
+        let Some(begin) = begin else { return false };
+        let width_px = self.cells_w();
+        let margin_px = (START_MARGIN_PX * f64::from(self.layout.zoom)).min(width_px * 0.1);
+        let mut target = self.nav.viewport_state(doc).target();
+        let width = target.width();
+        target.start = begin as f64 - width * margin_px / width_px;
+        target.end = target.start + width;
+        target.clamp_preserving_width(doc.limits());
+        self.suspend_follow();
+        let mode = doc.navigation.animation;
+        self.nav
+            .viewport_state_mut(doc)
+            .animate_to(target, now, mode);
         true
     }
 
@@ -1279,10 +1315,7 @@ impl PipelineModel {
                 return;
             }
             // A readable label selects its row without moving the cursor.
-            if layout.labels.contains(p)
-                && !layout.is_overview()
-                && let Some(row) = layout.row_at(p.y)
-            {
+            if let Some(row) = self.label_row_at(doc, p) {
                 self.select_row(doc, panel, row);
                 return;
             }

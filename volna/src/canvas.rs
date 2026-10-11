@@ -670,14 +670,23 @@ impl PanelCanvas {
                     window,
                     cx,
                 );
-                // A second click on a record-bearing panel opens what the
-                // first click selected; the core decides where.
+                // Pipeline labels navigate to their record's start. Other
+                // record-bearing areas open what the first click selected.
+                let label_row = {
+                    let app = &ws.read(cx).app;
+                    app.panels
+                        .pipeline(panel)
+                        .and_then(|p| p.label_row_at(&app.doc, cpoint(ev.position)))
+                };
                 let selects = ws.read(cx).app.panels.get(panel).is_some_and(|p| {
-                    p.kind.pipeline().is_some_and(|p| {
+                    p.kind.pipeline().is_some_and(|pipeline| {
+                        let layout = pipeline.last_layout();
                         !matches!(
-                            p.drag,
+                            pipeline.drag,
                             Some(volna_core::pipeline::model::Drag::BoxZoom { .. })
-                        )
+                        ) && layout.cells.contains(cpoint(ev.position))
+                            && !layout.is_overview()
+                            && layout.row_at(cpoint(ev.position).y).is_some()
                     }) || p.kind.table().is_some()
                         || p.kind.waves().is_some_and(|w| w.pressed_record)
                 });
@@ -781,6 +790,18 @@ impl PanelCanvas {
                     // The field now has the keys; the panel's own
                     // focus-on-press must not take them back.
                     window.prevent_default();
+                } else if ev.click_count >= 2
+                    && button == volna_core::geometry::MouseButton::Left
+                    && let Some(row) = label_row
+                {
+                    ws.update(cx, |ws, cx| {
+                        ws.dispatch_if_current(
+                            generation,
+                            Command::PanToTransactionStart { panel, row },
+                            Some(window),
+                            cx,
+                        )
+                    });
                 } else if ev.click_count >= 2
                     && button == volna_core::geometry::MouseButton::Left
                     && selects

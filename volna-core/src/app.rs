@@ -26,7 +26,9 @@ use crate::theme::Theme;
 use crate::trace::{TraceId, Traced};
 use crate::transaction::{TransactionCommand, TransactionModel};
 use crate::wave::layout::WaveLayout;
-use crate::wave::model::{MenuAction, PointerEvent, WaveMenu, WaveMenuKind, WaveRow};
+use crate::wave::model::{
+    MenuAction, MenuEntry, MenuItem, PointerEvent, WaveMenu, WaveMenuKind, WaveRow,
+};
 use crate::wave::timeline::format_time;
 use volna_trace::data::Member;
 use volna_trace::data::transactions::{TrackRef, TransactionRef};
@@ -307,6 +309,12 @@ pub enum Command {
     /// not pinned, or open one beside the panel that asked.
     ShowTransaction {
         from: PanelId,
+    },
+    /// Pan a pipeline to the start of one of its transaction rows without
+    /// changing its time scale.
+    PanToTransactionStart {
+        panel: PanelId,
+        row: usize,
     },
     Transaction(PanelId, TransactionCommand),
     /// The focused panel's clocks: rulers, the selected clock and go-to-cycle.
@@ -682,10 +690,10 @@ pub struct App {
     announcement: Option<String>,
     /// The marker whose name field is open, over its chip in this panel.
     marker_edit: Option<(PanelId, crate::marker::MarkerId)>,
-    /// The open Markers or Measure lane menu and the panel it belongs to.
-    lane_menu: Option<(PanelId, WaveMenu)>,
-    /// Lane menus opened so far; each new one gets a new `row`.
-    lane_menus: usize,
+    /// An open menu owned by the app rather than by a wave panel.
+    transient_menu: Option<(PanelId, WaveMenu)>,
+    /// Each transient menu gets a distinct `row` for popup identity.
+    transient_menus: usize,
     /// Whole-window frame timing the frontend samples from its toolkit.
     pub frames: crate::frames::FrameStats,
     pub(crate) events: Vec<Event>,
@@ -721,8 +729,8 @@ impl App {
             history: Default::default(),
             announcement: None,
             marker_edit: None,
-            lane_menu: None,
-            lane_menus: 0,
+            transient_menu: None,
+            transient_menus: 0,
             frames: Default::default(),
             events: Vec::new(),
             text: TextCache::default(),
@@ -790,7 +798,7 @@ impl App {
         self.history.clear();
         self.announcement = None;
         self.marker_edit = None;
-        self.lane_menu = None;
+        self.transient_menu = None;
         if let Err(e) = self.panels.reset() {
             self.events.push(Event::Notice(e.to_string()));
         }
@@ -807,7 +815,7 @@ impl App {
         self.history.clear();
         self.announcement = None;
         self.marker_edit = None;
-        self.lane_menu = None;
+        self.transient_menu = None;
         self.sync_lane_tracks();
         self.sync_analog_summaries();
         self.drag = None;
@@ -1293,10 +1301,14 @@ impl App {
             Command::Pointer(id, ev) => {
                 if matches!(ev, PointerEvent::Down { .. }) && self.panels.get(id).is_some() {
                     self.panel_command(PanelsCommand::Focus(id));
-                    if self.lane_menu.take().is_some() {
+                    if self.transient_menu.take().is_some() {
                         self.changed();
                     }
                     if self.lane_press(id, ev) {
+                        self.changed();
+                        return;
+                    }
+                    if self.pipeline_label_press(id, ev) {
                         self.changed();
                         return;
                     }
@@ -1341,6 +1353,13 @@ impl App {
                 cursor,
             } => self.select_transaction(panel, track, id, cursor),
             Command::ShowTransaction { from } => self.show_transaction(from),
+            Command::PanToTransactionStart { panel, row } => {
+                if let Some(pipeline) = self.panels.pipeline_mut(panel)
+                    && pipeline.pan_to_row_start(&mut self.doc, row, now)
+                {
+                    self.changed();
+                }
+            }
             Command::Clocks(command) => self.clock_command(command),
             Command::Transaction(panel, command) => {
                 let Self { panels, doc, .. } = self;
@@ -1442,8 +1461,32 @@ impl App {
                 self.changed();
             }
             Command::MenuSelect(panel, MenuAction::Lane(verb)) => {
-                if self.lane_menu.take().is_some_and(|(p, _)| p == panel) {
+                let valid = self.transient_menu.as_ref().is_some_and(|(owner, menu)| {
+                    *owner == panel
+                        && menu.kind == WaveMenuKind::Lane
+                        && menu
+                            .items()
+                            .any(|item| item.action == MenuAction::Lane(verb))
+                });
+                if valid {
+                    self.transient_menu = None;
                     self.lane_verb(panel, verb, now);
+                    self.changed();
+                }
+            }
+            Command::MenuSelect(panel, MenuAction::PipelineStart(row)) => {
+                let valid = self.transient_menu.as_ref().is_some_and(|(owner, menu)| {
+                    *owner == panel
+                        && menu.kind == WaveMenuKind::PipelineLabel
+                        && menu
+                            .items()
+                            .any(|item| item.action == MenuAction::PipelineStart(row))
+                });
+                if valid {
+                    self.transient_menu = None;
+                    if let Some(pipeline) = self.panels.pipeline_mut(panel) {
+                        pipeline.pan_to_row_start(&mut self.doc, row, now);
+                    }
                     self.changed();
                 }
             }
@@ -1515,8 +1558,12 @@ impl App {
                 if let Some(w) = self.panels.waves_mut(panel) {
                     w.menu_dismiss();
                 }
-                if self.lane_menu.as_ref().is_some_and(|(p, _)| *p == panel) {
-                    self.lane_menu = None;
+                if self
+                    .transient_menu
+                    .as_ref()
+                    .is_some_and(|(p, _)| *p == panel)
+                {
+                    self.transient_menu = None;
                 }
                 self.changed();
             }
@@ -2900,10 +2947,10 @@ impl App {
     }
 
     /// The context menu the frontend should show for the focused panel: an
-    /// open lane menu, else the focused wave panel's row menu.
+    /// open lane or pipeline-label menu, else the focused wave panel's row menu.
     pub fn menu(&self) -> Option<&WaveMenu> {
         let panel = self.panels.focused_id();
-        match &self.lane_menu {
+        match &self.transient_menu {
             Some((p, menu)) if *p == panel => Some(menu),
             _ => self.panels.focused_waves()?.menu.as_ref(),
         }
@@ -2954,12 +3001,12 @@ impl App {
                 if let Some(w) = self.panels.waves_mut(panel) {
                     w.menu_dismiss();
                 }
-                self.lane_menus += 1;
-                self.lane_menu = Some((
+                self.transient_menus += 1;
+                self.transient_menu = Some((
                     panel,
                     WaveMenu {
                         kind: WaveMenuKind::Lane,
-                        row: self.lane_menus,
+                        row: self.transient_menus,
                         position,
                         entries,
                     },
@@ -2979,6 +3026,45 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// Right-clicking a readable pipeline label selects its transaction and
+    /// offers the same navigation as a double-click on that label.
+    fn pipeline_label_press(&mut self, panel: PanelId, ev: PointerEvent) -> bool {
+        let PointerEvent::Down {
+            position,
+            button: MouseButton::Right,
+            ..
+        } = ev
+        else {
+            return false;
+        };
+        let Some(row) = self
+            .panels
+            .pipeline(panel)
+            .and_then(|pipeline| pipeline.label_row_at(&self.doc, position))
+        else {
+            return false;
+        };
+        if let Some(pipeline) = self.panels.pipeline_mut(panel) {
+            pipeline.select_row(&mut self.doc, panel, row);
+        }
+        self.transient_menus += 1;
+        self.transient_menu = Some((
+            panel,
+            WaveMenu {
+                kind: WaveMenuKind::PipelineLabel,
+                row: self.transient_menus,
+                position,
+                entries: vec![MenuEntry::Item(MenuItem {
+                    action: MenuAction::PipelineStart(row),
+                    label: "Go to start".into(),
+                    badge: Some("double-click".into()),
+                    checked: false,
+                })],
+            },
+        ));
+        true
     }
 
     /// Carry out a lane menu's choice in `panel`.
