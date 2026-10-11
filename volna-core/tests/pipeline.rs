@@ -12,7 +12,7 @@ use volna_core::geometry::{Modifiers, MouseButton, Point, Rect, point};
 use volna_core::nav::LinkDim;
 use volna_core::panels::{Layout, PanelId, PanelsCommand};
 use volna_core::pipeline::{Hit, PipelineModel, RowView, Rows, TrackSource};
-use volna_core::scene::{MonoMeasure, Prim};
+use volna_core::scene::{FontRole, MonoMeasure, Prim};
 use volna_core::session::LoadRequest;
 use volna_core::sidebar::Key;
 use volna_core::wave::PointerEvent;
@@ -30,6 +30,10 @@ const STAGES: [&str; 3] = ["F", "D", "X"];
 /// one left open), an unrecognized stream with one stage-less record, and a
 /// counter signal on the same cycle time base.
 fn fixture(n: u64) -> Arc<dyn Session> {
+    fixture_with_stages(n, &STAGES)
+}
+
+fn fixture_with_stages(n: u64, stages: &[&str]) -> Arc<dyn Session> {
     use vtr::{Direction, ScopeType, SignalKind, TxStatus, Value, VarType};
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
@@ -62,7 +66,7 @@ fn fixture(n: u64) -> Arc<dyn Session> {
     let lane0 = w.intern("0");
     let lane1 = w.intern("1");
     let stl = w.intern("stl");
-    let names: Vec<_> = STAGES.iter().map(|s| w.intern(s)).collect();
+    let names: Vec<_> = stages.iter().map(|s| w.intern(s)).collect();
     for i in 0..n {
         let tx = w.begin_tx(insn, i).unwrap();
         let caption = format!("{:08x}: op{i}", 0x1000 + 4 * i);
@@ -404,6 +408,66 @@ fn cells(app: &mut App, id: PanelId, theme: &Theme) -> Rect {
     match app.layout_panel(id, BOUNDS, theme, 1.0).unwrap() {
         PanelLayout::Pipeline(l) => l.cells,
         PanelLayout::Waves(_) | PanelLayout::Table(_) => panic!("not a pipeline panel"),
+    }
+}
+
+#[test]
+fn narrow_pipeline_stages_show_the_prefix_that_fits() {
+    use volna_core::wave::viewport::Viewport;
+
+    let session = fixture_with_stages(2, &["fetch", "decode", "execute"]);
+    let mut app = App::new();
+    app.set_session(session.clone());
+    pump(&mut app);
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
+        scope(session.as_ref(), &["cpu", "thread0"]),
+    )])));
+    pump(&mut app);
+    let panel = app.panels.focused_id();
+    let theme = Theme::one_dark();
+    frame(&mut app, panel, &theme);
+    let layout = app.panels.pipeline(panel).unwrap().last_layout();
+    let row_px = layout.rows.row_px;
+    let font_size = (row_px * 0.62).clamp(6.0, theme.mono_size);
+    let char_width = font_size * 0.6;
+    let gap = if row_px >= 8.0 { 3.0 } else { 1.0 };
+    let cells_width = layout.cells.width();
+
+    for (chars, expected) in [
+        (0, vec![]),
+        (1, vec!["f", "d", "e"]),
+        (2, vec!["fe", "de", "ex"]),
+        (8, vec!["fetch", "decode", "execute"]),
+    ] {
+        let cell_width = gap + 4.0 + (chars as f32 + 0.5) * char_width;
+        app.panels
+            .pipeline_mut(panel)
+            .unwrap()
+            .nav
+            .viewport_state_mut(&mut app.doc)
+            .set(Viewport {
+                start: 0.0,
+                end: f64::from(cells_width / cell_width),
+            });
+        frame(&mut app, panel, &theme);
+        let layout = app.panels.pipeline(panel).unwrap().last_layout();
+        let cells = layout.cells;
+        let first_row_y = layout.row_y(0);
+        let labels: Vec<_> = app
+            .scene()
+            .prims
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Text {
+                    origin,
+                    text,
+                    font: FontRole::Mono,
+                    ..
+                } if cells.contains(*origin) && origin.y == first_row_y => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels, expected, "space for {chars} characters");
     }
 }
 

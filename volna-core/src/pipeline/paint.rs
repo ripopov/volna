@@ -27,6 +27,43 @@ const LABEL_MIN_PX: f32 = 7.0;
 const DASH_PX: f32 = 3.0;
 /// Hatch spacing inside a flushed instruction's hollow cells.
 const HOLLOW_HATCH_PX: f32 = 3.0;
+/// Total horizontal clearance around a stage name inside its cell.
+const CELL_TEXT_PAD_PX: f32 = 4.0;
+
+/// Keep the longest leading part of a stage name that fits the cell. Widths
+/// come from the frontend so the text never reaches the adjacent stage.
+fn fitting_stage_label(
+    p: &mut TextPainter<'_>,
+    name: &str,
+    font_size: f32,
+    available: f32,
+) -> Option<(String, f32)> {
+    if available <= 0.0 {
+        return None;
+    }
+    let first_end = name.chars().next()?.len_utf8();
+    let first_width = p.width(&name[..first_end], FontRole::Mono, font_size);
+    if first_width > available {
+        return None;
+    }
+    if first_end == name.len() {
+        return Some((name.to_owned(), first_width));
+    }
+    let full_width = p.width(name, FontRole::Mono, font_size);
+    if full_width <= available {
+        return Some((name.to_owned(), full_width));
+    }
+    let mut fit = (name[..first_end].to_owned(), first_width);
+    for (start, ch) in name.char_indices().skip(1) {
+        let prefix = &name[..start + ch.len_utf8()];
+        let width = p.width(prefix, FontRole::Mono, font_size);
+        if width > available {
+            break;
+        }
+        fit = (prefix.to_owned(), width);
+    }
+    Some(fit)
+}
 
 /// The two short segments of an arrow head at the `to` end of a segment.
 fn arrow_head(from: Point, to: Point, size: f32) -> [[Point; 2]; 2] {
@@ -235,16 +272,20 @@ pub fn paint(
                             });
                         }
                         last_right = Some(last_right.map_or(xb, |r: f32| r.max(xb)));
-                        if show_text && xb - xa >= z(14.0) {
-                            let w = p.width(&stage.name, FontRole::Mono, cell_font);
-                            if xb - xa >= w + z(4.0) {
-                                cell_texts.push((
-                                    point(snap((xa + xb - w) / 2.0), y),
-                                    row_px,
-                                    stage.name.clone(),
-                                    if flushed { t.editor.text } else { style.text },
-                                ));
-                            }
+                        if show_text
+                            && let Some((label, w)) = fitting_stage_label(
+                                &mut p,
+                                &stage.name,
+                                cell_font,
+                                xb - xa - z(CELL_TEXT_PAD_PX),
+                            )
+                        {
+                            cell_texts.push((
+                                point(snap((xa + xb - w) / 2.0), y),
+                                row_px,
+                                label,
+                                if flushed { t.editor.text } else { style.text },
+                            ));
                         }
                     }
                     if tx.stages.is_empty() {
