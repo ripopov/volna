@@ -3,7 +3,8 @@
 //! Regenerate: cargo run --locked -p volna --example gpu_transaction_trace
 //! An optional argument replaces examples/gpu_transaction_trace.vtr in this crate.
 //!
-//! One cycle is one nanosecond, not a measured GPU clock. Two sequential grids
+//! A synthetic 1 GHz clock gives each one-nanosecond cycle a rising edge.
+//! Two sequential grids
 //! each run two workgroups of four 32-lane warps, reusing eight hardware slots.
 //! Each warp runs 50 iterations of a 100-instruction tiled arithmetic loop.
 //! Resource paths are static; logical ownership lives exclusively in TX parents.
@@ -41,8 +42,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 use vtr::{
-    NodeId, ReadOptions, Reader, ScopeType, StrId, Timescale, Transaction, TxId, TxKind, TxQuery,
-    TxStatus, Value, Writer, WriterOptions,
+    ClockId, NodeData, NodeId, NodeKind, ReadOptions, Reader, ScopeType, StrId, Timescale,
+    Transaction, TxId, TxKind, TxQuery, TxStatus, Value, Writer, WriterOptions,
 };
 
 const GRIDS: usize = 2;
@@ -51,6 +52,7 @@ const PARTITIONS: usize = 2;
 const SLOTS: usize = 2;
 const WARPS: usize = PARTITIONS * SLOTS;
 const INSTRUCTIONS: u64 = 5_000;
+const CLOCK_PATH: &str = "gpu.clock";
 
 // A fixed vocabulary keeps interning out of the emission loop.
 macro_rules! vocabulary {
@@ -121,6 +123,7 @@ struct Sm {
     barrier: NodeId,
 }
 struct Hardware {
+    clock: ClockId,
     queue: [NodeId; 4],
     assignment: NodeId,
     sms: Vec<Sm>,
@@ -141,12 +144,18 @@ fn stream<const N: usize>(
     name: &str,
     generators: [&str; N],
 ) -> vtr::Result<[NodeId; N]> {
-    let s = w.add_stream(Some(parent), name, "TRANSACTION")?;
+    let s = transaction_stream(w, parent, name)?;
     let mut ids = [NodeId(0); N];
     for (id, name) in ids.iter_mut().zip(generators) {
         *id = w.add_generator(s, name)?;
     }
     Ok(ids)
+}
+fn transaction_stream(w: &mut Writer, parent: NodeId, name: &str) -> vtr::Result<NodeId> {
+    let stream = w.add_stream(Some(parent), name, "TRANSACTION")?;
+    let path = w.intern(CLOCK_PATH);
+    w.node_attr(stream, "vtr.clock", Value::Str(path))?;
+    Ok(stream)
 }
 fn cache(
     w: &mut Writer,
@@ -156,7 +165,7 @@ fn cache(
     last: bool,
 ) -> vtr::Result<Cache> {
     let c = scope(w, parent, name)?;
-    let requests = w.add_stream(Some(c), "requests", "TRANSACTION")?;
+    let requests = transaction_stream(w, c, "requests")?;
     let packet = w.add_generator(requests, "MemoryPacket")?;
     let fill = w.add_generator(requests, "CacheFill")?;
     let writeback = if last {
@@ -173,6 +182,8 @@ fn cache(
 }
 fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
     let gpu = w.add_scope(None, "gpu", ScopeType::Generic, "synthetic_simt")?;
+    let clock = w.add_clock(Some(gpu), "clock")?;
+    w.clock_run(clock, 0, 1)?;
     let cp = scope(w, gpu, "command_processor")?;
     let queue = stream(
         w,
@@ -263,6 +274,7 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
     let [dram] = stream(w, mc, "dram_channel[0]", ["DramCommand"])?;
     let dram_endpoint = w.intern("gpu.memory_subsystem.memory_controller[0]");
     Ok(Hardware {
+        clock,
         queue,
         assignment,
         sms,
@@ -1109,7 +1121,7 @@ fn barrier(
 fn generate(path: &Path) -> vtr::Result<()> {
     let mut w = Writer::builder().timescale(Timescale::Nanoseconds)
         .writer_name("Volna synthetic GPU transaction example")
-        .comment("Educational, not cycle accurate: 1 cycle = 1 ns. Illustrative L3 is not NVIDIA architecture; matrix/DMA placement and all timing are synthetic. See gpu_transaction_trace.rs.")
+        .comment("Educational, not cycle accurate: synthetic 1 GHz clock, 1 cycle = 1 ns. Illustrative L3 is not NVIDIA architecture; matrix/DMA placement and all timing are synthetic. See gpu_transaction_trace.rs.")
         .options(WriterOptions { background: false, ..WriterOptions::default() }).create(path)?;
     let h = hardware(&mut w)?;
     let n = Names::new(&mut w);
@@ -1246,7 +1258,7 @@ fn generate(path: &Path) -> vtr::Result<()> {
         dispatch = end + 64;
     }
     e.end(command, dispatch)?;
-    // Explicit completion is independent of waveform time (never advanced here).
+    e.w.clock_stop(h.clock, dispatch)?;
     assert_eq!(e.w.open_tx_count(), 0);
     e.w.close()
 }
@@ -1276,10 +1288,30 @@ fn readback(path: &Path) -> anyhow::Result<()> {
             ..ReadOptions::default()
         },
     )?;
+    let clock = rd.find_clock(CLOCK_PATH).context("GPU clock is missing")?;
+    for stream in rd.hierarchy().nodes_of_kind(NodeKind::Stream) {
+        if let NodeData::Stream { kind } = rd.hierarchy().node_data(stream) {
+            if rd.str(kind) == "TRANSACTION" {
+                ensure!(
+                    rd.stream_clock(stream) == Some(clock),
+                    "{} does not use the GPU clock",
+                    rd.full_path(stream, ".")
+                );
+            }
+        }
+    }
+    let timeline = rd.clock(clock)?;
+    let stretches = timeline.stretches();
+    ensure!(
+        stretches.len() == 1 && stretches[0].begin == 0 && stretches[0].period == 1,
+        "GPU clock must run at 1 GHz from time zero"
+    );
     let mut counts = BTreeMap::<TxId, u64>::new();
     let mut warps = BTreeMap::new();
     let mut packet = None;
+    let mut last_tx_end = 0;
     rd.visit_transactions(&TxQuery::default(), |tx| {
+        last_tx_end = last_tx_end.max(tx.end);
         match rd.str(rd.hierarchy().name(tx.generator)) {
             "Instruction" => {
                 *counts.entry(tx.parent.unwrap_or(0)).or_default() += 1;
@@ -1294,6 +1326,10 @@ fn readback(path: &Path) -> anyhow::Result<()> {
         }
         true
     })?;
+    ensure!(
+        stretches[0].end >= last_tx_end,
+        "GPU clock stops before the last transaction"
+    );
     ensure!(
         warps.len() == GRIDS * SMS * WARPS,
         "unexpected logical warp population"
