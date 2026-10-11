@@ -852,7 +852,7 @@ fn waveform_spacing_applies_live_without_changing_row_geometry() {
             value: Value::Number(spacing),
         }));
         let scene = frame(&mut app, id);
-        let points = stroke_points(&scene, real);
+        let points = stroke_points(scene, real);
         assert!(!points.is_empty());
         assert!(
             points

@@ -1290,14 +1290,14 @@ fn readback(path: &Path) -> anyhow::Result<()> {
     )?;
     let clock = rd.find_clock(CLOCK_PATH).context("GPU clock is missing")?;
     for stream in rd.hierarchy().nodes_of_kind(NodeKind::Stream) {
-        if let NodeData::Stream { kind } = rd.hierarchy().node_data(stream) {
-            if rd.str(kind) == "TRANSACTION" {
-                ensure!(
-                    rd.stream_clock(stream) == Some(clock),
-                    "{} does not use the GPU clock",
-                    rd.full_path(stream, ".")
-                );
-            }
+        if let NodeData::Stream { kind } = rd.hierarchy().node_data(stream)
+            && rd.str(kind) == "TRANSACTION"
+        {
+            ensure!(
+                rd.stream_clock(stream) == Some(clock),
+                "{} does not use the GPU clock",
+                rd.full_path(stream, ".")
+            );
         }
     }
     let timeline = rd.clock(clock)?;

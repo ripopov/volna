@@ -31,7 +31,7 @@ The GPUI viewer requires its platform SDK and display libraries; see the
 cargo build --workspace --locked
 cargo test --workspace --locked                 # unit, integration, and rustdoc tests
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
@@ -39,6 +39,15 @@ CI runs these automated, headless checks. To select the library, use
 `cargo test -p vtr`; VTR alone requires Rust 1.97.1 or newer. See the
 [crate guide](vtr/README.md),
 [format specification](vtr/docs/SPEC.md), and [design rationale](vtr/docs/RATIONALE.md).
+
+To run the CI Clippy check before each push, enable the tracked Git hook once
+per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+The hook checks the current working tree with the same Clippy command as CI.
 
 ## Documentation website
 
