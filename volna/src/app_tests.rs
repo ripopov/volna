@@ -105,8 +105,13 @@ fn scope_rows_show_their_signal_count_in_both_themes(cx: &mut TestAppContext) {
     init(cx);
     let window = cx.add_window(Workspace::new);
     let trace = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/picorv32.vtr");
+    // A cached activity sidecar replaces the signal count with a meter. Keep
+    // this count-only specimen independent of previously opened examples.
+    let directory = tempfile::tempdir().unwrap();
+    let specimen = directory.path().join("picorv32.vtr");
+    std::fs::copy(trace, &specimen).unwrap();
     window
-        .update(cx, |ws, _, cx| ws.open_path(trace.into(), cx))
+        .update(cx, |ws, _, cx| ws.open_path(specimen.clone(), cx))
         .unwrap();
     let mut vcx = VisualTestContext::from_window(window.into(), cx);
     vcx.run_until_parked();

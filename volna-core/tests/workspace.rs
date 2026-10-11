@@ -810,7 +810,7 @@ fn row_heights_round_trip_and_restore_tall_row_geometry() {
     assert_eq!(row_heights(&restored), [1, 3, 8]);
     assert_eq!(value(&restored), saved);
     let id = restored.panels.focused_id();
-    restored.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1200.0, 800.0), &theme);
+    restored.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1200.0, 800.0), &theme, 1.0);
     let layout = restored.panels.focused_waves().unwrap().last_layout();
     let top = layout.names.top();
     assert_eq!(
@@ -1280,8 +1280,13 @@ fn a_shared_timeline_divider_drag_schedules_an_autosave() {
     app.handle_at(Command::Action(Action::SplitDown), now);
     let second = app.panels.focused_id();
     let theme = volna_core::Theme::one_dark();
-    app.layout_panel(second, Rect::from_xywh(0.0, 0.0, 1200.0, 600.0), &theme)
-        .unwrap();
+    app.layout_panel(
+        second,
+        Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
+        &theme,
+        1.0,
+    )
+    .unwrap();
     let split = app.panels.waves(second).unwrap().last_layout().values_split;
     let position = point(split.left() + split.width() / 2.0, split.top() + 100.0);
     app.handle_at(

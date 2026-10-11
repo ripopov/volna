@@ -136,7 +136,7 @@ fn app() -> (tempfile::NamedTempFile, App, PanelId) {
 
 fn frame(app: &mut App, id: PanelId) -> &Scene {
     let theme = Theme::one_dark();
-    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1400.0, 700.0), &theme)
+    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1400.0, 700.0), &theme, 1.0)
         .unwrap();
     app.render_panel(id, &theme, &mut MonoMeasure)
 }

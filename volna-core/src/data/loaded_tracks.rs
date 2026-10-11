@@ -46,12 +46,18 @@ impl StageCensus {
         &mut self,
         stages: &'a [TransactionStage],
         index: &mut StageIndex<'a>,
+        reservation: &mut Option<volna_trace::remote::memory::Reservation>,
         checkpoint: &mut impl FnMut() -> F,
-    ) {
+    ) -> anyhow::Result<()> {
         let mut lane = 0;
         for stage in stages {
             checkpoint().await;
             if self.lanes.get(lane).is_none_or(|l| l.lane != stage.lane) {
+                if !index.lanes.contains_key(stage.lane.as_str())
+                    && let Some(r) = reservation
+                {
+                    r.grow_object("the generator view", 512 + stage.lane.len() as u64 * 4)?;
+                }
                 lane = *index.lanes.entry(&stage.lane).or_insert_with(|| {
                     self.lanes.push(LaneCensus {
                         lane: stage.lane.clone(),
@@ -71,6 +77,13 @@ impl StageCensus {
             let name = if census.names.get(hint).is_some_and(|n| n.name == stage.name) {
                 hint
             } else {
+                if !index
+                    .names
+                    .contains_key(&(stage.lane.as_str(), stage.name.as_str()))
+                    && let Some(r) = reservation
+                {
+                    r.grow_object("the generator view", 512 + stage.name.len() as u64 * 4)?;
+                }
                 *index
                     .names
                     .entry((&stage.lane, &stage.name))
@@ -90,6 +103,7 @@ impl StageCensus {
         for lane in index.touched.drain(..) {
             index.cursors[lane] = (0, 0);
         }
+        Ok(())
     }
 
     fn bytes(&self) -> u64 {
@@ -116,6 +130,7 @@ pub struct LoadedGenerator {
     stage_census: StageCensus,
     palette: crate::pipeline::palette::StagePalette,
     stage_order: Vec<Vec<usize>>,
+    pub(crate) row_index: Option<crate::pipeline::occupancy::RowIndex>,
     _reservation: Option<volna_trace::remote::memory::Reservation>,
     _placed_reservation: Option<volna_trace::remote::memory::Reservation>,
 }
@@ -147,17 +162,16 @@ impl LoadedGenerator {
         mut checkpoint: impl FnMut() -> F,
     ) -> anyhow::Result<Self> {
         let transactions = raw.transactions();
-        // Include census vector growth and the borrowed lane/name hash indexes.
+        // Record arrays and stage ordinals grow with occurrences. Census and
+        // palette storage grow with distinct names, admitted when first seen.
         let mut upper = (transactions.len() as u64)
             .saturating_mul(128)
             .saturating_add(256);
         for tx in transactions {
             checkpoint().await;
-            for stage in &tx.stages {
-                checkpoint().await;
-                upper =
-                    upper.saturating_add((stage.lane.len() + stage.name.len()) as u64 * 4 + 1024);
-            }
+            upper = upper.saturating_add(
+                (tx.stages.len() as u64).saturating_mul(std::mem::size_of::<usize>() as u64),
+            );
         }
         let mut reservation = budget
             .map(|b| b.reserve_object("the generator view", upper))
@@ -200,8 +214,8 @@ impl LoadedGenerator {
         for tx in transactions {
             checkpoint().await;
             stage_census
-                .add(&tx.stages, &mut index, &mut checkpoint)
-                .await;
+                .add(&tx.stages, &mut index, &mut reservation, &mut checkpoint)
+                .await?;
         }
         drop(index);
         let median_lifetime = {
@@ -225,6 +239,7 @@ impl LoadedGenerator {
             checkpoint().await;
             let mut lanes = HashMap::new();
             for stage in &tx.stages {
+                checkpoint().await;
                 let rank = lanes.len() + 1;
                 lanes.entry(stage.lane.as_str()).or_insert(rank);
             }
@@ -253,8 +268,15 @@ impl LoadedGenerator {
             + (sub_rows.capacity() * std::mem::size_of::<u16>()) as u64
             + stage_census.bytes();
         if let Some(r) = &mut reservation {
-            r.shrink(r.bytes().saturating_sub(bytes))?;
+            anyhow::ensure!(
+                bytes <= r.bytes(),
+                "generator view allocation exceeded admission"
+            );
+            r.shrink(r.bytes() - bytes)?;
         }
+        let row_index =
+            crate::pipeline::occupancy::RowIndex::build(transactions, budget, &mut checkpoint)
+                .await;
         Ok(Self {
             raw,
             sub_rows,
@@ -263,11 +285,13 @@ impl LoadedGenerator {
             stage_census,
             palette,
             stage_order,
+            row_index,
             _reservation: reservation,
             _placed_reservation: None,
         })
     }
     pub(crate) fn scale_times(&mut self, scale: u64) -> anyhow::Result<()> {
+        anyhow::ensure!(scale > 0, "timeline scale must be positive");
         let raw = &self.raw;
         let budget = self
             ._placed_reservation
@@ -285,26 +309,33 @@ impl LoadedGenerator {
             .iter()
             .filter_map(|tx| raw.parent(tx.id).map(|p| (tx.id, p)))
             .collect();
-        let time = |t: &mut u64| *t = t.saturating_mul(scale);
+        // Strict scaling preserves canonical row order. Saturating lifetimes
+        // can reorder records by ID; saturating stages can invent edge events.
+        let time = |t: &mut u64| -> anyhow::Result<()> {
+            *t = t
+                .checked_mul(scale)
+                .ok_or_else(|| anyhow::anyhow!("transaction time exceeds the session timeline"))?;
+            Ok(())
+        };
         let attributes = |attrs: &mut volna_trace::data::transactions::Attributes| {
             for (key, value) in attrs {
                 scale_attribute(key, value, scale);
             }
         };
         for tx in &mut transactions {
-            time(&mut tx.begin);
-            time(&mut tx.end);
+            time(&mut tx.begin)?;
+            time(&mut tx.end)?;
             for a in &mut tx.attributes {
                 scale_attribute(&a.key, &mut a.value, scale);
             }
             for event in &mut tx.events {
-                time(&mut event.time);
+                time(&mut event.time)?;
                 attributes(&mut event.attributes);
             }
             for stage in &mut tx.stages {
-                time(&mut stage.begin);
+                time(&mut stage.begin)?;
                 if let Some(end) = &mut stage.end {
-                    time(end);
+                    time(end)?;
                 }
                 attributes(&mut stage.attributes);
             }
@@ -320,6 +351,9 @@ impl LoadedGenerator {
             relations,
         )?);
         self.median_lifetime = self.median_lifetime.saturating_mul(scale);
+        if let Some(index) = &mut self.row_index {
+            index.scale_times(scale);
+        }
         self._placed_reservation = reservation;
         Ok(())
     }
@@ -484,6 +518,26 @@ mod tests {
         let loaded = LoadedGenerator::new(TrackRef(1), records, HashMap::new(), vec![]).unwrap();
         let rows: Vec<u16> = (0..4).map(|i| loaded.sub_row(i)).collect();
         assert_eq!(rows, [0, 1, 2, 0]);
+    }
+
+    #[test]
+    fn unrepresentable_placement_keeps_the_source_and_indexes_unchanged() {
+        let mut record = tx(1, 1, 3);
+        record.stages.push(TransactionStage {
+            name: "outlier".into(),
+            lane: "0".into(),
+            begin: u64::MAX,
+            end: Some(u64::MAX),
+            attributes: vec![],
+        });
+        let mut prepared =
+            LoadedGenerator::new(TrackRef(1), vec![record], HashMap::new(), vec![]).unwrap();
+        let source = prepared.raw.clone();
+        assert!(prepared.scale_times(2).is_err());
+        assert!(Arc::ptr_eq(&prepared.raw, &source));
+        assert_eq!(prepared.transactions()[0].begin, 1);
+        assert_eq!(prepared.median_lifetime(), 2);
+        assert!(prepared.row_index.is_some());
     }
 
     #[test]

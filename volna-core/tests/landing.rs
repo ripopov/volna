@@ -62,10 +62,10 @@ fn the_whole_landing_run_follows_the_rendering_rules() {
     let bounds = Rect::from_xywh(0.0, 0.0, 1200.0, 640.0);
     let (first, last) = app.doc.limits();
     let render = |app: &mut App| {
-        app.layout_panel(PanelId(1), bounds, &theme).unwrap();
+        app.layout_panel(PanelId(1), bounds, &theme, 1.0).unwrap();
         app.render_panel(PanelId(1), &theme, &mut MonoMeasure);
         pump(app);
-        app.layout_panel(PanelId(1), bounds, &theme).unwrap();
+        app.layout_panel(PanelId(1), bounds, &theme, 1.0).unwrap();
         let scene = app.render_panel(PanelId(1), &theme, &mut MonoMeasure);
         let texts: Vec<String> = scene.texts().map(str::to_owned).collect();
         let quads: Vec<_> = scene.quads().collect();
@@ -124,7 +124,7 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
     let theme = Theme::one_dark();
     let bounds = Rect::from_xywh(0.0, 0.0, 900.0, 420.0);
     for id in [1, 2, 4] {
-        app.layout_panel(PanelId(id), bounds, &theme).unwrap();
+        app.layout_panel(PanelId(id), bounds, &theme, 1.0).unwrap();
         app.render_panel(PanelId(id), &theme, &mut MonoMeasure);
     }
     pump(&mut app);
@@ -138,7 +138,7 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         .count();
     assert_eq!(signals, 16);
     assert_eq!(waves.loaded_count(), signals, "every signal row loaded");
-    app.layout_panel(PanelId(1), bounds, &theme).unwrap();
+    app.layout_panel(PanelId(1), bounds, &theme, 1.0).unwrap();
     let texts: Vec<String> = app
         .render_panel(PanelId(1), &theme, &mut MonoMeasure)
         .texts()

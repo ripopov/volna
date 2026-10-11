@@ -40,7 +40,7 @@ fn pump(app: &mut App) {
 
 fn frame(app: &mut App, id: PanelId) {
     let theme = Theme::one_dark();
-    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1200.0, 600.0), &theme)
+    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1200.0, 600.0), &theme, 1.0)
         .unwrap();
     app.render_panel(id, &theme, &mut MonoMeasure);
 }

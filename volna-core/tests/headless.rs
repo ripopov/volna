@@ -81,6 +81,7 @@ fn frame(app: &mut App, theme: &Theme) {
         app.panels.focused_id(),
         Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
         theme,
+        1.0,
     );
     app.render_panel(app.panels.focused_id(), theme, &mut MonoMeasure);
 }

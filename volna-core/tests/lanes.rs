@@ -51,7 +51,7 @@ fn frame(app: &mut App, id: PanelId) -> &volna_core::scene::Scene {
 
 fn frame_w(app: &mut App, id: PanelId, width: f32) -> &volna_core::scene::Scene {
     let theme = Theme::one_dark();
-    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, width, 600.0), &theme)
+    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, width, 600.0), &theme, 1.0)
         .unwrap();
     app.render_panel(id, &theme, &mut MonoMeasure)
 }

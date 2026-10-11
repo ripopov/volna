@@ -7776,6 +7776,8 @@ dependencies = [
  "bincode",
  "gethostname",
  "log",
+ "num-rational",
+ "num-traits",
  "percent-encoding",
  "serde",
  "serde_json",

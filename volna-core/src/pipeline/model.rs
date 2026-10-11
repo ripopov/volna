@@ -3,8 +3,6 @@
 //! input rule that mutates it. Data is the document's loaded track; the model
 //! never copies records.
 
-use std::sync::Arc;
-
 use web_time::Instant;
 
 use super::layout::{LABEL_W_DEFAULT, LABEL_W_MAX, LABEL_W_MIN, LayoutInput, PipelineLayout};
@@ -12,7 +10,6 @@ use super::palette::StagePalette;
 use super::rows::{ROW_PX_DEFAULT, ROW_PX_MAX, ROW_PX_MIN, RowView};
 use super::zoom::{self, CYCLE_PX_MAX, ROW_PX_CAP, ZoomBox, ZoomPoint};
 use crate::clock::ClockKey;
-use crate::data::loaded_tracks::LoadedGenerator;
 use crate::document::{Document, TrackLoadState, TxSelection};
 use crate::geometry::{Modifiers, MouseButton, Point, Rect};
 use crate::marker::LaneHit;
@@ -77,6 +74,8 @@ impl TrackSource {
 /// What the pointer is over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
+    /// Aggregate ink can have several contributors; it has no unique record.
+    Overview,
     Activity(super::ActivityCommand),
     Row(usize),
     Cell {
@@ -133,59 +132,7 @@ pub enum Rows<'a> {
     Unavailable,
 }
 
-/// The concatenated transaction slices of a loaded track, generator by
-/// generator in catalog order, each in the resident (begin, end, id) order.
-pub struct RowSet<'a> {
-    generators: &'a [Arc<LoadedGenerator>],
-    starts: Vec<usize>,
-    len: usize,
-}
-
-impl<'a> RowSet<'a> {
-    fn new(generators: &'a [Arc<LoadedGenerator>]) -> Self {
-        let mut starts = Vec::with_capacity(generators.len());
-        let mut len = 0;
-        for g in generators {
-            starts.push(len);
-            len += g.transactions().len();
-        }
-        Self {
-            generators,
-            starts,
-            len,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn generators(&self) -> &'a [Arc<LoadedGenerator>] {
-        self.generators
-    }
-
-    /// The row of one record, when this track holds its generator.
-    pub fn row_of(&self, generator: TrackRef, id: TransactionRef) -> Option<usize> {
-        let g = self
-            .generators
-            .iter()
-            .position(|c| c.generator() == generator)?;
-        Some(self.starts[g] + self.generators[g].transaction_ordinal(id)?)
-    }
-
-    /// Row `row` as its generator index and record.
-    pub fn get(&self, row: usize) -> Option<(usize, &'a Transaction)> {
-        if row >= self.len {
-            return None;
-        }
-        let g = self.starts.partition_point(|&start| start <= row) - 1;
-        Some((g, &self.generators[g].transactions()[row - self.starts[g]]))
-    }
-}
+pub use super::row_set::RowSet;
 
 pub struct PipelineModel {
     pub follow: super::FollowActivity,
@@ -468,6 +415,9 @@ impl PipelineModel {
 
     /// Text for the status bar about what the pointer is over.
     pub fn hover_text(&self, doc: &Document) -> Option<String> {
+        if self.hover == Some(Hit::Overview) {
+            return Some("Pipeline presence · zoom in to inspect records".into());
+        }
         let (row, stage) = match self.hover? {
             Hit::Row(row) => (row, None),
             Hit::Cell { row, stage } => (row, Some(stage)),
@@ -516,6 +466,7 @@ impl PipelineModel {
         doc: &Document,
         theme: &Theme,
         metadata_width: Option<f32>,
+        device_scale: f64,
     ) -> &PipelineLayout {
         let (row_count, failed) = match self.rows(doc) {
             Rows::Ready(set) => (set.len(), false),
@@ -542,6 +493,7 @@ impl PipelineModel {
                 }),
             viewport: self.nav.viewport(doc),
             failed,
+            device_scale,
         };
         self.layout = PipelineLayout::compute(input);
         if let Some(Drag::BoxZoom { cells, zoom, .. }) = self.drag
@@ -640,6 +592,9 @@ impl PipelineModel {
             return Some(Hit::Header);
         }
         let row = layout.row_at(p.y)?;
+        if layout.is_overview() {
+            return Some(Hit::Overview);
+        }
         if layout.labels.contains(p) {
             return Some(Hit::Row(row));
         }
@@ -1191,11 +1146,15 @@ impl PipelineModel {
                 }) = drag
                     && self.layout.cells.contains(start)
                 {
-                    // A click on a row selects it and puts the cursor on the
-                    // cycle under the pointer; below the rows, cursor only.
+                    // Readable rows select a record. Aggregate ink and empty
+                    // space set the cursor and clear the record selection.
                     let cycle = self.cycle_at(doc, start.x);
                     self.nav.set_cursor(doc, Some(cycle));
-                    match self.layout.row_at(start.y) {
+                    match self
+                        .layout
+                        .row_at(start.y)
+                        .filter(|_| !self.layout.is_overview())
+                    {
                         Some(row) => {
                             self.select_row(doc, panel, row);
                         }
@@ -1319,9 +1278,9 @@ impl PipelineModel {
             if ruler.is_some() {
                 return;
             }
-            // The label column has no time under the pointer, so a click
-            // there selects the row without moving the cursor.
+            // A readable label selects its row without moving the cursor.
             if layout.labels.contains(p)
+                && !layout.is_overview()
                 && let Some(row) = layout.row_at(p.y)
             {
                 self.select_row(doc, panel, row);

@@ -124,7 +124,7 @@ fn app() -> (tempfile::NamedTempFile, App, PanelId) {
 
 fn frame(app: &mut App, id: PanelId) -> &Scene {
     let theme = Theme::one_dark();
-    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1400.0, 700.0), &theme)
+    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1400.0, 700.0), &theme, 1.0)
         .unwrap();
     app.render_panel(id, &theme, &mut MonoMeasure)
 }
@@ -308,7 +308,7 @@ fn the_format_menu_draws_and_ranges_and_the_signal_menu_toggles() {
     };
     let open_format = |app: &mut App, row: usize| {
         let theme = Theme::one_dark();
-        app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1400.0, 700.0), &theme);
+        app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1400.0, 700.0), &theme, 1.0);
         let w = app.panels.waves_mut(id).unwrap();
         let p = w
             .last_layout()

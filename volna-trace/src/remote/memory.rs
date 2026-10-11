@@ -171,6 +171,17 @@ impl Reservation {
         self.bytes = total;
         Ok(())
     }
+
+    /// Admit additional storage for one object before growing its allocations.
+    /// Both the total pool and the current per-object limit apply.
+    pub fn grow_object(&mut self, what: &str, bytes: u64) -> anyhow::Result<()> {
+        let total = self
+            .bytes
+            .checked_add(bytes)
+            .ok_or_else(|| anyhow::anyhow!("memory size overflow"))?;
+        check_object(what, total, self.budget.object_limit(), "retry")?;
+        self.grow(bytes)
+    }
 }
 
 #[cfg(test)]
@@ -220,6 +231,22 @@ mod tests {
         drop(child);
         assert_eq!(budget.used(), 50);
         drop(parent);
+        assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn object_growth_checks_live_limits_before_changing_admission() {
+        let budget = MemoryBudget::new(100);
+        budget.set_object_limit(20);
+        let mut held = budget.reserve_object("view", 10).unwrap();
+        assert!(held.grow_object("view", 11).is_err());
+        assert_eq!(budget.used(), 10);
+        held.grow_object("view", 10).unwrap();
+        assert_eq!(budget.used(), 20);
+        budget.set_object_limit(100);
+        assert!(held.grow_object("view", 81).is_err());
+        assert_eq!(budget.used(), 20);
+        drop(held);
         assert_eq!(budget.used(), 0);
     }
 }

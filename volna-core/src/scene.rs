@@ -10,6 +10,10 @@ use std::collections::HashMap;
 use crate::color::Color;
 use crate::geometry::{CursorIcon, Point, Rect};
 use crate::icons::IconName;
+use std::sync::Arc;
+
+mod presence;
+pub use presence::PresenceMask;
 
 /// A typeface role. The theme names the family and size for each role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -22,6 +26,13 @@ pub enum FontRole {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prim {
+    /// One mask texel per physical pixel in `rect`, with opaque `color` ink.
+    /// Frontends own image conversion, upload and bounded texture lifetime.
+    Presence {
+        rect: Rect,
+        mask: Arc<PresenceMask>,
+        color: Color,
+    },
     /// Filled rectangle with optional rounded corners and a 1 px-style border.
     Quad {
         rect: Rect,
@@ -66,6 +77,32 @@ pub struct Scene {
 }
 
 impl Scene {
+    pub(crate) fn presence(&mut self, rect: Rect, mask: PresenceMask, color: Color) {
+        const RUN_LIMIT: usize = 4096;
+        let color = color.with_alpha(1.0);
+        let mut runs = Vec::new();
+        runs.extend(mask.runs().take(RUN_LIMIT + 1));
+        if runs.len() > RUN_LIMIT {
+            self.prims.push(Prim::Presence {
+                rect,
+                mask: Arc::new(mask),
+                color,
+            });
+            return;
+        }
+        let pixel = rect.width() / mask.width() as f32;
+        for (y, x) in runs {
+            self.fill(
+                Rect::from_xywh(
+                    rect.left() + x.start as f32 * pixel,
+                    rect.top() + y as f32 * pixel,
+                    x.len() as f32 * pixel,
+                    pixel,
+                ),
+                color,
+            );
+        }
+    }
     pub fn clear(&mut self) {
         self.prims.clear();
         self.cursors.clear();
@@ -205,5 +242,33 @@ pub struct MonoMeasure;
 impl TextMeasure for MonoMeasure {
     fn text_width(&mut self, text: &str, _font: FontRole, size: f32) -> f32 {
         text.chars().count() as f32 * size * 0.6
+    }
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    #[test]
+    fn fragmented_output_is_one_mask_and_solid_output_is_bounded_runs() {
+        let rect = Rect::from_xywh(0.0, 0.0, 128.0, 32.0);
+        let color = Color::rgb(0x123456);
+        let mut scene = Scene::default();
+        let mut mask = PresenceMask::new(256, 64);
+        mask.fill(0..256, 0..64);
+        scene.presence(rect, mask, color);
+        assert_eq!(scene.prims.len(), 64);
+        assert!(scene.quads().all(|(r, c)| r.height() == 0.5 && c == color));
+        scene.clear();
+        let mut mask = PresenceMask::new(256, 64);
+        for y in 0..64 {
+            for x in (0..256).step_by(2) {
+                mask.fill(x..x + 1, y..y + 1);
+            }
+        }
+        scene.presence(rect, mask, color);
+        assert!(
+            matches!(scene.prims.as_slice(),[Prim::Presence { rect:r,mask,color:c }] if *r==rect && *c==color && mask.runs().count()==8192)
+        );
     }
 }

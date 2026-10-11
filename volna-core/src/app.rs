@@ -2632,20 +2632,29 @@ impl App {
     }
 
     /// Lay a canvas panel out in `bounds`; the result feeds hit regions.
-    /// `None` for panels the core does not paint.
+    /// `device_scale` is physical pixels per logical pixel, independent of theme zoom.
+    /// Invalid scales use 1.0. `None` for panels the core does not paint.
     pub fn layout_panel(
         &mut self,
         id: PanelId,
         bounds: Rect,
         theme: &Theme,
+        device_scale: f64,
     ) -> Option<PanelLayout<'_>> {
+        let device_scale = if device_scale.is_finite() && device_scale > 0.0 {
+            device_scale
+        } else {
+            1.0
+        };
         self.doc.clocks.defaults = self.pipeline_clocks();
         self.panels.sync_timeline_dividers();
         let metadata = self.panels.timeline_metadata(id, bounds, theme.zoom);
         let doc = &self.doc;
         Some(match &mut self.panels.get_mut(id)?.kind {
             PanelKind::Waves(w) => PanelLayout::Waves(w.layout(bounds, doc, theme, metadata)),
-            PanelKind::Pipeline(p) => PanelLayout::Pipeline(p.layout(bounds, doc, theme, metadata)),
+            PanelKind::Pipeline(p) => {
+                PanelLayout::Pipeline(p.layout(bounds, doc, theme, metadata, device_scale))
+            }
             PanelKind::Table(table) => PanelLayout::Table(table.layout(bounds, theme)),
             _ => return None,
         })

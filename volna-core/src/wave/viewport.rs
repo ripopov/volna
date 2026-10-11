@@ -64,6 +64,14 @@ impl Viewport {
         width_px / self.width()
     }
 
+    /// Map an exact recorded tick without rounding its absolute timestamp to
+    /// f64. Subtraction at an integer origin preserves nearby late-time events.
+    pub fn x_of_tick(&self, time: u64, width_px: f64) -> f64 {
+        let origin = self.start.floor() as i128;
+        let relative = (i128::from(time) - origin) as f64 - (self.start - origin as f64);
+        relative / self.width() * width_px
+    }
+
     pub fn time_at(&self, x_px: f64, width_px: f64) -> f64 {
         self.start + x_px / width_px * self.width()
     }
@@ -182,6 +190,20 @@ impl Lerp for Viewport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_ticks_stay_distinct_after_a_late_integer_origin() {
+        for origin in [1u64 << 60, u64::MAX - 8191] {
+            let view = Viewport {
+                start: origin as f64,
+                end: origin as f64 + 4096.0,
+            };
+            assert_eq!(
+                view.x_of_tick(origin + 2, 4096.0) - view.x_of_tick(origin + 1, 4096.0),
+                1.0
+            );
+        }
+    }
 
     #[test]
     fn zoom_keeps_anchor() {

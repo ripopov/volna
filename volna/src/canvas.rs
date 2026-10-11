@@ -17,6 +17,70 @@ use volna_core::wave::PointerEvent;
 
 use crate::app::{ShapedCache, TextStyleKey, Workspace, to_modifiers};
 use crate::theme::{Theme, canvas_theme, core_theme, hsla, theme};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
+
+/// Keep two submissions per panel alive. GPUI owns the atlas, and obsolete
+/// images are explicitly removed before the next submission to bound it.
+#[derive(Default)]
+pub(crate) struct PresenceImages {
+    panels: HashMap<volna_core::panels::PanelId, VecDeque<Vec<Arc<gpui_kit::RenderImage>>>>,
+}
+
+impl PresenceImages {
+    fn begin(
+        &mut self,
+        panel: volna_core::panels::PanelId,
+        panels: &volna_core::panels::Panels,
+        window: &mut Window,
+    ) {
+        self.panels.retain(|id, frames| {
+            if panels.get(*id).is_some() {
+                return true;
+            }
+            for image in frames.drain(..).flatten() {
+                window.drop_image(image).ok();
+            }
+            false
+        });
+        let frames = self.panels.entry(panel).or_default();
+        if frames.len() == 2 {
+            for image in frames.pop_front().unwrap() {
+                window.drop_image(image).ok();
+            }
+        }
+    }
+
+    fn finish(
+        &mut self,
+        panel: volna_core::panels::PanelId,
+        images: Vec<Arc<gpui_kit::RenderImage>>,
+    ) {
+        self.panels.entry(panel).or_default().push_back(images);
+    }
+}
+
+fn presence_image(
+    width: usize,
+    height: usize,
+    runs: impl Iterator<Item = (usize, std::ops::Range<usize>)>,
+    color: volna_core::Color,
+) -> gpui_kit::RenderImage {
+    let [r, g, b, a] = color.to_rgba8();
+    let mut image = image::RgbaImage::new(width as u32, height as u32);
+    let bytes: &mut [u8] = image.as_mut();
+    // RenderImage's upload format is BGRA, despite the image crate's container name.
+    for (y, x) in runs {
+        let start = (y * width + x.start) * 4;
+        let end = (y * width + x.end) * 4;
+        for pixel in bytes[start..end].chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[b, g, r, a]);
+        }
+    }
+    gpui_kit::RenderImage::new(vec![image::Frame::new(image)])
+}
 
 pub struct PanelCanvas {
     ws: Entity<Workspace>,
@@ -207,6 +271,7 @@ fn paint_prims(
     i: &mut usize,
     t: &Theme,
     shaped: &mut ShapedCache,
+    images: &mut Vec<Arc<gpui_kit::RenderImage>>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -214,6 +279,19 @@ fn paint_prims(
         let prim = &prims[*i];
         *i += 1;
         match prim {
+            Prim::Presence { rect, mask, color } => {
+                let image = Arc::new(presence_image(
+                    mask.width(),
+                    mask.height(),
+                    mask.runs(),
+                    *color,
+                ));
+                let bounds = gbounds(*rect);
+                window
+                    .paint_image(bounds, bounds, Default::default(), image.clone(), 0, false)
+                    .ok();
+                images.push(image);
+            }
             Prim::Quad {
                 rect,
                 fill: color,
@@ -293,7 +371,7 @@ fn paint_prims(
                     bounds: gbounds(*rect),
                 };
                 window.with_content_mask(Some(mask), |window| {
-                    paint_prims(prims, i, t, shaped, window, cx)
+                    paint_prims(prims, i, t, shaped, images, window, cx)
                 });
             }
             Prim::PopClip => return,
@@ -395,7 +473,12 @@ impl Element for PanelCanvas {
         let t = self.core_theme(cx);
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         let rects = self.ws.update(cx, |ws, _| {
-            match ws.app.layout_panel(self.panel, cbounds(bounds), &t) {
+            match ws.app.layout_panel(
+                self.panel,
+                cbounds(bounds),
+                &t,
+                f64::from(window.scale_factor()),
+            ) {
                 Some(PanelLayout::Waves(layout)) => {
                     let mut rects = vec![layout.names_split, layout.values_split];
                     rects.extend(layout.badges.iter().map(|(_, b)| *b));
@@ -492,15 +575,27 @@ impl Element for PanelCanvas {
         let core = self.core_theme(cx);
         // Build the display list, then paint it. The scene buffer and the
         // shaped-text cache live on the workspace so they persist across frames.
-        let (mut scene, mut shaped) = self.ws.update(cx, |ws, _| {
+        let (mut scene, mut shaped, mut presence_images) = self.ws.update(cx, |ws, _| {
             let mut scene = std::mem::take(&mut ws.scene);
             let mut measure = GpuiMeasure { window, theme: &t };
             ws.app
                 .render_panel_into(self.panel, &core, &mut measure, &mut scene);
-            (scene, std::mem::take(&mut ws.shaped))
+            let mut images = std::mem::take(&mut ws.presence_images);
+            images.begin(self.panel, &ws.app.panels, window);
+            (scene, std::mem::take(&mut ws.shaped), images)
         });
         let mut i = 0;
-        paint_prims(&scene.prims, &mut i, &t, &mut shaped, window, cx);
+        let mut images = Vec::new();
+        paint_prims(
+            &scene.prims,
+            &mut i,
+            &t,
+            &mut shaped,
+            &mut images,
+            window,
+            cx,
+        );
+        presence_images.finish(self.panel, images);
         // Pointer shapes.
         if let Some(icon) = scene.window_cursor {
             window.set_window_cursor_style(cursor_style(icon));
@@ -516,6 +611,7 @@ impl Element for PanelCanvas {
         self.ws.update(cx, |ws, _| {
             ws.scene = scene;
             ws.shaped = shaped;
+            ws.presence_images = presence_images;
             if let Some(panel) = ws.app.panels.get_mut(self.panel) {
                 panel.record_paint();
             }
@@ -778,5 +874,122 @@ impl PanelCanvas {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    #[test]
+    fn mask_upload_preserves_bgra_ink_and_transparent_gaps() {
+        let image = presence_image(
+            3,
+            2,
+            [(0, 1..3), (1, 0..1)].into_iter(),
+            volna_core::Color::rgb(0x123456),
+        );
+        assert_eq!(image.size(0).width.0, 3);
+        assert_eq!(image.size(0).height.0, 2);
+        assert_eq!(
+            image.as_bytes(0).unwrap(),
+            &[
+                0, 0, 0, 0, 0x56, 0x34, 0x12, 255, 0x56, 0x34, 0x12, 255, 0x56, 0x34, 0x12, 255, 0,
+                0, 0, 0, 0, 0, 0, 0,
+            ]
+        );
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod presence_atlas_tests {
+    use gpui_kit::{TestAppContext, VisualTestContext};
+    use volna_core::{
+        app::Command,
+        pipeline::{FollowActivity, RowView},
+        wave::viewport::Viewport,
+    };
+
+    #[gpui_kit::test]
+    fn fragmented_pipeline_uploads_and_releases_obsolete_atlas_images(cx: &mut TestAppContext) {
+        let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+        let mut writer = vtr::Writer::create(file.path()).unwrap();
+        let stream = writer.add_stream(None, "pipeline", "PIPELINE").unwrap();
+        let generator = writer.add_generator(stream, "instruction").unwrap();
+        let name = writer.intern("stage");
+        let lane = writer.intern("0");
+        for row in 0..600 {
+            let tx = writer.begin_tx(generator, row).unwrap();
+            for column in 0..80 {
+                writer
+                    .tx_stage(tx, name, lane, column * 24, column * 24, &[])
+                    .unwrap();
+            }
+            writer.end_tx(tx, row + 1, vtr::TxStatus::Ok).unwrap();
+        }
+        writer.set_time(2000).unwrap();
+        writer.close().unwrap();
+        cx.update(crate::init_app);
+        let host = cx.add_window(crate::app::Workspace::new);
+        host.update(cx, |ws, _, cx| ws.open_path(file.path().into(), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let panel = host
+            .update(cx, |ws, window, cx| {
+                ws.dispatch(
+                    Command::OpenPipeline {
+                        track: ws.app.pipeline_streams()[0].1,
+                    },
+                    Some(window),
+                    cx,
+                );
+                ws.app.panels.focused_id()
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut vcx = VisualTestContext::from_window(host.into(), cx);
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.0), gpui_kit::px(800.0)));
+        let mut first = None;
+        for frame in 0..4 {
+            host.update(&mut vcx, |ws, _, cx| {
+                let end = ws.app.doc.limits().1 as f64;
+                let phase = frame as f64 * 0.125 * end / 2000.0;
+                ws.app.doc.shared.viewport.set(Viewport {
+                    start: phase,
+                    end: end + phase,
+                });
+                let pipeline = ws.app.panels.pipeline_mut(panel).unwrap();
+                pipeline.follow = FollowActivity::Off;
+                pipeline.rows.set(RowView {
+                    top: 0.0,
+                    row_px: 0.5,
+                });
+                cx.notify();
+            })
+            .unwrap();
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            host.update(&mut vcx, |ws, window, _| {
+                let frames = ws
+                    .presence_images
+                    .panels
+                    .get(&panel)
+                    .expect("painted pipeline");
+                assert!(frames.len() <= 2);
+                let latest = frames.back().unwrap();
+                assert_eq!(latest.len(), 1, "fragmented output uses one image");
+                assert!(window.has_image_atlas_entry(&latest[0]));
+                if frame == 0 {
+                    first = Some(latest[0].clone());
+                }
+                if frame >= 2 {
+                    assert!(!window.has_image_atlas_entry(first.as_ref().unwrap()));
+                }
+            })
+            .unwrap();
+        }
     }
 }

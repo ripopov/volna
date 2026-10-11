@@ -33,6 +33,41 @@ prepare layouts and toolkit-neutral `Scene` drawing commands; the frontend
 paints the scene and hosts native window controls and dialogs. Local and remote
 sessions use the same data contract.
 
+Hosts pass the window's physical pixels per logical pixel to each
+`App::layout_panel` call. This factor is independent of interface zoom. A
+`Prim::Presence` carries a bit mask with one texel per physical pixel in its
+rectangle. The host converts it to an opaque ink image, paints it without
+rescaling, and releases obsolete image resources. GPU handles and image formats
+belong entirely to the host.
+
+## Pipeline overview
+
+Below two physical pixels per row, the pipeline paints opaque presence in the
+canvas text color. Every stage contributes its natural time interval across the
+whole source row, including overlay stages. Stageless transactions contribute
+their lifetime. Half-open intervals preserve gaps; zero-duration stages occupy
+their containing pixel. Open, aborted, error and unset records all contribute.
+Aborted rows also leave ticks in the label column. Aggregate hover has no unique
+record identity; zooming in restores stage colors, labels, lanes and selection.
+
+Each immutable prepared generator owns a row hierarchy, shared by stream and
+generator panels. Sixteen-row leaves and internal nodes retain closed geometry
+bounds, lifetime counts and optional exact unions capped at 32 fragments. A
+summary is used only when its entire row range fits one physical pixel inside
+the clip. A nonempty geometry bound alone can establish presence only when both
+axes fit inside one physical pixel. Otherwise queries descend to children and
+source stages. Stage bounds are independent of transaction lifetimes, since
+stages can extend outside them.
+
+Nodes and unions occupy flat arrays without copied transactions. Each index
+is limited to 64 MiB and charged to the existing admission pool; refused unions
+or indexes use exact source refinement. Construction uses the load worker's
+cooperative checkpoints. Placement scales the index with its immutable source;
+owner replacement replaces both. Every frame rasterizes its current viewport
+and physical phase. Output uses at most 4,096 occupied rectangle runs before
+switching to `Prim::Presence`, bounding the display list independently of gap
+count. Highly scattered stages can still require a source-sized query.
+
 ## Persistence and edits
 
 Workspace files capture panel layout, views, markers, and row choices. The

@@ -319,6 +319,7 @@ pub struct Workspace {
     /// Display list buffer and shaped-text cache, reused across frames.
     pub(crate) scene: Scene,
     pub(crate) shaped: ShapedCache,
+    pub(crate) presence_images: crate::canvas::PresenceImages,
     /// Hide the native-style title bar (used inside the VS Code webview).
     pub embedded: bool,
     /// The command line chose the workspace policy; `workspace.autosave` is ignored.
@@ -833,6 +834,7 @@ impl Workspace {
             on_waves: None,
             scene: Scene::default(),
             shaped: ShapedCache::default(),
+            presence_images: Default::default(),
             embedded: false,
             cli_policy: false,
             menu_generation: None,

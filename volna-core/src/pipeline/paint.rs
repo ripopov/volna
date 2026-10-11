@@ -2,9 +2,8 @@
 //! transaction with a cell per stage on the primary lane and a band per
 //! overlay stage, plus the shared timeline header, cursor and markers.
 //!
-//! Cost per frame is O(painted rows × stages per row): the painter walks the
-//! visible row range, skips transactions and stages outside the time window,
-//! and below two pixels per row paints density steps of several rows.
+//! Detailed rows retain stage geometry. Overview rows query exact opaque
+//! presence from immutable row hierarchies at the current physical-pixel phase.
 
 use crate::color::Color;
 use crate::document::Document;
@@ -124,8 +123,6 @@ pub fn paint(
     match &rows {
         Rows::Ready(set) if !set.is_empty() => {
             let row_px = layout.rows.row_px;
-            let step = layout.row_step;
-            let rh = row_px * step as f32;
             let pad = if row_px >= 8.0 {
                 z(1.5)
             } else if row_px >= 4.0 {
@@ -136,97 +133,131 @@ pub fn paint(
             // Equal insets on both axes keep a one-cycle primary stage
             // square when cycle width equals row height.
             let gap = 2.0 * pad;
-            let border = row_px >= EDGE_MIN_PX;
-            let show_text = row_px >= TEXT_MIN_PX;
-            let cell_font = (row_px * 0.62).clamp(z(6.0), t.mono_size);
-            let palette = model.palette();
-            let primary = palette.primary_lane();
-            let flush_tint = t.wave_flush;
-            let band = t.editor.text.with_alpha(0.28);
-            let band_edge = t.editor.text.with_alpha(0.5);
             let wave_wf = column.width_f64();
-            let x_of = |time: u64| cells.left() + viewport.x_of(time as f64, wave_wf) as f32;
-            // Text is measured outside the clip closure; positions are exact.
-            let mut cell_texts: Vec<(Point, f32, String, Color)> = Vec::new();
-            let mut open_edges: Vec<[Point; 2]> = Vec::new();
-            // A density step shows the flush of any of its rows.
-            let flushed_in = |r: usize| {
-                (r..(r + step).min(set.len())).any(|i| {
-                    set.get(i)
-                        .is_some_and(|(_, tx)| tx.status == TxStatus::Aborted)
-                })
-            };
-            for r in layout.row_range.clone().step_by(step) {
-                let Some((_, tx)) = set.get(r) else { continue };
-                let y = layout.row_y(r);
-                let row_rect = Rect::new(point(cells.left(), y), size(cells.width(), rh));
-                if flushed_in(r) {
-                    p.scene
-                        .clipped(cells, |scene| scene.fill(row_rect, flush_tint));
-                }
-                if hover_row == Some(r) {
-                    p.scene
-                        .clipped(cells, |scene| scene.fill(row_rect, t.wave_row_hover));
-                }
-                if (tx.end as f64) < viewport.start || (tx.begin as f64) > viewport.end {
-                    continue;
-                }
-                let mut last_right: Option<f32> = None;
-                let mut painted_any = false;
-                for stage in &tx.stages {
-                    let sb = stage.begin;
-                    let se = PipelineModel::stage_end(tx, stage);
-                    if (se as f64) <= viewport.start || (sb as f64) >= viewport.end {
-                        if se == sb && (sb as f64) >= viewport.start && (sb as f64) <= viewport.end
-                        {
-                            // A zero-length stage at the window edge still counts.
-                        } else {
-                            continue;
-                        }
+            let x_of = |time: u64| cells.left() + viewport.x_of_tick(time, wave_wf) as f32;
+            let map =
+                super::raster::PixelMap::new(cells, viewport, layout.rows, layout.device_scale);
+            if layout.is_overview() {
+                let mask = set.presence(&map);
+                p.scene
+                    .clipped(cells, |scene| scene.presence(map.rect, mask, t.editor.text));
+            } else {
+                let border = row_px >= EDGE_MIN_PX;
+                let show_text = row_px >= TEXT_MIN_PX;
+                let cell_font = (row_px * 0.62).clamp(z(6.0), t.mono_size);
+                let palette = model.palette();
+                let primary = palette.primary_lane();
+                let band = t.editor.text.with_alpha(0.28);
+                let band_edge = t.editor.text.with_alpha(0.5);
+                // Text is measured outside the clip closure; positions are exact.
+                let mut cell_texts = Vec::new();
+                let mut open_edges = Vec::new();
+                for r in layout.row_range.clone() {
+                    let Some((_, tx)) = set.get(r) else { continue };
+                    let y = layout.row_y(r);
+                    let row_rect = Rect::new(point(cells.left(), y), size(cells.width(), row_px));
+                    if tx.status == TxStatus::Aborted {
+                        p.scene
+                            .clipped(cells, |scene| scene.fill(row_rect, t.wave_flush));
                     }
-                    let mut xa = x_of(sb) + gap / 2.0;
-                    let mut xb = x_of(se) - gap / 2.0;
-                    if xb - xa < 1.0 {
-                        xa = xa.min(xb);
-                        xb = xa + 1.0;
+                    if hover_row == Some(r) {
+                        p.scene
+                            .clipped(cells, |scene| scene.fill(row_rect, t.wave_row_hover));
                     }
-                    painted_any = true;
-                    if stage.lane != primary {
-                        let ya = y + rh * 0.55;
-                        let yb = y + rh - pad;
-                        let rect = Rect::from_xywh(xa, ya, xb - xa, (yb - ya).max(1.0));
-                        p.scene.clipped(cells, |scene| {
-                            scene.fill(rect, band);
-                            if border {
-                                scene.fill(Rect::from_xywh(xa, ya, xb - xa, 1.0), band_edge);
-                            }
-                        });
+                    if tx.stages.is_empty()
+                        && ((tx.end as f64) < viewport.start || (tx.begin as f64) > viewport.end)
+                    {
                         continue;
                     }
-                    let style = palette.style(&stage.name, t);
-                    let rect = Rect::from_xywh(xa, y + pad, xb - xa, (rh - 2.0 * pad).max(1.0));
-                    let flushed = tx.status == TxStatus::Aborted && step == 1;
-                    if flushed {
-                        // Hollow: "fetched, never retired" in any colour vision. The
-                        // outline takes whichever of fill and edge stands out more.
-                        let ink = if contrast(style.fill, t.editor.bg)
-                            >= contrast(style.edge, t.editor.bg)
-                        {
-                            style.fill
+                    let mut last_right: Option<f32> = None;
+                    for stage in &tx.stages {
+                        let sb = stage.begin;
+                        let se = PipelineModel::stage_end(tx, stage);
+                        // A zero-length stage at the window edge still counts.
+                        let visible = if sb == se {
+                            (sb as f64) >= viewport.start && (sb as f64) <= viewport.end
                         } else {
-                            style.edge
+                            (se as f64) > viewport.start && (sb as f64) < viewport.end
                         };
-                        p.scene.clipped(cells, |scene| {
-                            scene.quad(rect, Color::TRANSPARENT, 0.0, 1.0, ink);
-                            marks::hatch_with(
-                                scene,
-                                rect,
-                                cells.left(),
-                                z(HOLLOW_HATCH_PX).max(2.0),
-                                ink.with_alpha(0.55),
-                            );
-                        });
-                    } else {
+                        if !visible {
+                            continue;
+                        }
+                        let mut xa = x_of(sb) + gap / 2.0;
+                        let mut xb = x_of(se) - gap / 2.0;
+                        if xb - xa < 1.0 {
+                            xa = xa.min(xb);
+                            xb = xa + 1.0;
+                        }
+                        if stage.lane != primary {
+                            let ya = y + row_px * 0.55;
+                            let yb = y + row_px - pad;
+                            let rect = Rect::from_xywh(xa, ya, xb - xa, (yb - ya).max(1.0));
+                            p.scene.clipped(cells, |scene| {
+                                scene.fill(rect, band);
+                                if border {
+                                    scene.fill(Rect::from_xywh(xa, ya, xb - xa, 1.0), band_edge);
+                                }
+                            });
+                            continue;
+                        }
+                        let style = palette.style(&stage.name, t);
+                        let rect =
+                            Rect::from_xywh(xa, y + pad, xb - xa, (row_px - 2.0 * pad).max(1.0));
+                        let flushed = tx.status == TxStatus::Aborted;
+                        if flushed {
+                            // Hollow: "fetched, never retired" in any colour vision. The
+                            // outline takes whichever of fill and edge stands out more.
+                            let ink = if contrast(style.fill, t.editor.bg)
+                                >= contrast(style.edge, t.editor.bg)
+                            {
+                                style.fill
+                            } else {
+                                style.edge
+                            };
+                            p.scene.clipped(cells, |scene| {
+                                scene.quad(rect, Color::TRANSPARENT, 0.0, 1.0, ink);
+                                marks::hatch_with(
+                                    scene,
+                                    rect,
+                                    cells.left(),
+                                    z(HOLLOW_HATCH_PX).max(2.0),
+                                    ink.with_alpha(0.55),
+                                );
+                            });
+                        } else {
+                            let (border_w, border_c) = if border && xb - xa >= 3.0 {
+                                (1.0, style.edge)
+                            } else {
+                                (0.0, Color::TRANSPARENT)
+                            };
+                            p.scene.clipped(cells, |scene| {
+                                scene.quad(rect, style.fill, 0.0, border_w, border_c)
+                            });
+                        }
+                        last_right = Some(last_right.map_or(xb, |r: f32| r.max(xb)));
+                        if show_text && xb - xa >= z(14.0) {
+                            let w = p.width(&stage.name, FontRole::Mono, cell_font);
+                            if xb - xa >= w + z(4.0) {
+                                cell_texts.push((
+                                    point(snap((xa + xb - w) / 2.0), y),
+                                    row_px,
+                                    stage.name.clone(),
+                                    if flushed { t.editor.text } else { style.text },
+                                ));
+                            }
+                        }
+                    }
+                    if tx.stages.is_empty() {
+                        // A transaction without stages is one cell over its lifetime.
+                        let style = t.stage_fallback();
+                        let mut xa = x_of(tx.begin) + gap / 2.0;
+                        let mut xb = x_of(tx.end) - gap / 2.0;
+                        if xb - xa < 1.0 {
+                            xa = xa.min(xb);
+                            xb = xa + 1.0;
+                        }
+                        let rect =
+                            Rect::from_xywh(xa, y + pad, xb - xa, (row_px - 2.0 * pad).max(1.0));
                         let (border_w, border_c) = if border && xb - xa >= 3.0 {
                             (1.0, style.edge)
                         } else {
@@ -235,60 +266,28 @@ pub fn paint(
                         p.scene.clipped(cells, |scene| {
                             scene.quad(rect, style.fill, 0.0, border_w, border_c)
                         });
+                        last_right = Some(xb);
                     }
-                    last_right = Some(last_right.map_or(xb, |r: f32| r.max(xb)));
-                    if show_text && xb - xa >= z(14.0) {
-                        let w = p.width(&stage.name, FontRole::Mono, cell_font);
-                        if xb - xa >= w + z(4.0) {
-                            cell_texts.push((
-                                point(snap((xa + xb - w) / 2.0), y),
-                                rh,
-                                stage.name.clone(),
-                                if flushed { t.editor.text } else { style.text },
-                            ));
+                    if tx.status == TxStatus::Open
+                        && let Some(xr) = last_right
+                    {
+                        let x = snap(xr) + 0.5;
+                        let mut yy = y + pad;
+                        let bottom = y + row_px - pad;
+                        while yy < bottom {
+                            let end = (yy + z(DASH_PX)).min(bottom);
+                            open_edges.push([point(x, yy), point(x, end)]);
+                            yy = end + z(DASH_PX);
                         }
                     }
                 }
-                if !painted_any && tx.stages.is_empty() {
-                    // A transaction without stages is one cell over its lifetime.
-                    let style = t.stage_fallback();
-                    let mut xa = x_of(tx.begin) + gap / 2.0;
-                    let mut xb = x_of(tx.end) - gap / 2.0;
-                    if xb - xa < 1.0 {
-                        xa = xa.min(xb);
-                        xb = xa + 1.0;
+                p.scene.clipped(cells, |scene| {
+                    for (origin, height, text, color) in cell_texts {
+                        scene.text(origin, height, text, FontRole::Mono, cell_font, color);
                     }
-                    let rect = Rect::from_xywh(xa, y + pad, xb - xa, (rh - 2.0 * pad).max(1.0));
-                    let (border_w, border_c) = if border && xb - xa >= 3.0 {
-                        (1.0, style.edge)
-                    } else {
-                        (0.0, Color::TRANSPARENT)
-                    };
-                    p.scene.clipped(cells, |scene| {
-                        scene.quad(rect, style.fill, 0.0, border_w, border_c)
-                    });
-                    last_right = Some(xb);
-                }
-                if tx.status == TxStatus::Open
-                    && let Some(xr) = last_right
-                {
-                    let x = snap(xr) + 0.5;
-                    let mut yy = y + pad;
-                    let bottom = y + rh - pad;
-                    while yy < bottom {
-                        let end = (yy + z(DASH_PX)).min(bottom);
-                        open_edges.push([point(x, yy), point(x, end)]);
-                        yy = end + z(DASH_PX);
-                    }
-                }
+                    scene.lines(open_edges, t.editor.text, 1.0);
+                });
             }
-            let text_color_default = t.editor.text;
-            p.scene.clipped(cells, |scene| {
-                for (origin, height, text, color) in cell_texts {
-                    scene.text(origin, height, text, FontRole::Mono, cell_font, color);
-                }
-                scene.lines(open_edges, text_color_default, 1.0);
-            });
 
             // -- the selection: an outline, and its relations as arrows ----------
             if let Some(row) = selected_row {
@@ -398,19 +397,18 @@ pub fn paint(
                     }
                 });
             } else {
-                let mut ticks = Vec::new();
-                for r in layout.row_range.clone().step_by(step) {
-                    if flushed_in(r) {
-                        ticks.push(Rect::new(
-                            point(labels.left(), layout.row_y(r)),
-                            size(z(2.0), rh.max(1.0)),
-                        ));
-                    }
-                }
-                let color = t.editor.error;
+                let ticks = set.aborted_presence(&map);
                 p.scene.clipped(labels, |scene| {
-                    for tick in ticks {
-                        scene.fill(tick, color);
+                    for (y, _) in ticks.runs() {
+                        scene.fill(
+                            Rect::from_xywh(
+                                labels.left(),
+                                map.rect.top() + y as f32 / layout.device_scale as f32,
+                                z(2.0),
+                                1.0 / layout.device_scale as f32,
+                            ),
+                            t.editor.error,
+                        );
                     }
                 });
             }

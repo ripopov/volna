@@ -128,7 +128,7 @@ fn pump(app: &mut App) {
 const BOUNDS: Rect = Rect::from_xywh(0.0, 0.0, 1200.0, 600.0);
 
 fn frame(app: &mut App, id: PanelId, theme: &Theme) {
-    app.layout_panel(id, BOUNDS, theme).unwrap();
+    app.layout_panel(id, BOUNDS, theme, 1.0).unwrap();
     app.render_panel(id, theme, &mut MonoMeasure);
 }
 
@@ -401,7 +401,7 @@ fn activity_keeps_long_overlaps_points_and_generator_row_offsets() {
 }
 
 fn cells(app: &mut App, id: PanelId, theme: &Theme) -> Rect {
-    match app.layout_panel(id, BOUNDS, theme).unwrap() {
+    match app.layout_panel(id, BOUNDS, theme, 1.0).unwrap() {
         PanelLayout::Pipeline(l) => l.cells,
         PanelLayout::Waves(_) | PanelLayout::Table(_) => panic!("not a pipeline panel"),
     }
@@ -1007,11 +1007,11 @@ fn box_zoom_tiny_boxes_escape_and_resizing_cancel_without_clicking() {
             match cancel {
                 1 => app.handle_at(Command::Action(Action::ClearSelection), now),
                 2 => {
-                    app.layout_panel(id, Rect::from_xywh(30.0, 20.0, 1200.0, 600.0), &theme)
+                    app.layout_panel(id, Rect::from_xywh(30.0, 20.0, 1200.0, 600.0), &theme, 1.0)
                         .unwrap();
                 }
                 3 => {
-                    app.layout_panel(id, BOUNDS, &theme.zoomed(zoom * 1.1))
+                    app.layout_panel(id, BOUNDS, &theme.zoomed(zoom * 1.1), 1.0)
                         .unwrap();
                 }
                 _ => {}
@@ -1745,7 +1745,7 @@ fn zoom_fit_keeps_square_cells_and_fits_short_and_tall_traces() {
 }
 
 fn marker_lane(app: &mut App, id: PanelId, theme: &Theme) -> volna_core::wave::overlay::MarkerLane {
-    match app.layout_panel(id, BOUNDS, theme).unwrap() {
+    match app.layout_panel(id, BOUNDS, theme, 1.0).unwrap() {
         PanelLayout::Waves(l) => l.marker_lane.clone(),
         PanelLayout::Pipeline(l) => l.marker_lane.clone(),
         PanelLayout::Table(_) => panic!("a table panel has no time axis"),
@@ -2074,7 +2074,30 @@ fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
 }
 
 #[test]
-fn density_mode_bounds_the_painted_rows_by_pixels() {
+fn each_layout_uses_its_own_device_scale() {
+    let (mut app, _, _, pipeline) = opened(1000);
+    pump(&mut app);
+    let theme = Theme::one_dark();
+    app.panels
+        .pipeline_mut(pipeline)
+        .unwrap()
+        .rows
+        .set(RowView {
+            top: 0.0,
+            row_px: 1.0,
+        });
+    for (scale, expected) in [(3.0, 3.0), (1.25, 1.25), (f64::NAN, 1.0), (0.0, 1.0)] {
+        let Some(PanelLayout::Pipeline(layout)) = app.layout_panel(pipeline, BOUNDS, &theme, scale)
+        else {
+            panic!("pipeline layout");
+        };
+        assert_eq!(layout.device_scale, expected);
+        assert_eq!(layout.is_overview(), expected < 2.0);
+    }
+}
+
+#[test]
+fn overview_uses_physical_pixel_presence_with_bounded_output() {
     let (mut app, _, _, pipeline) = opened(10_000);
     pump(&mut app);
     let theme = Theme::one_dark();
@@ -2088,35 +2111,66 @@ fn density_mode_bounds_the_painted_rows_by_pixels() {
         });
     app.handle(Command::Action(Action::ZoomFit));
     app.tick(Instant::now() + Duration::from_secs(1));
-    frame(&mut app, pipeline, &theme);
-    let p = app.panels.pipeline(pipeline).unwrap();
-    let layout = p.last_layout().clone();
-    assert_eq!(layout.row_step, 4);
-    assert_eq!(layout.rows.top, 0.0);
-    // Every quad of a painted row lies within its density step.
-    let step_px = layout.rows.row_px * layout.row_step as f32;
-    let mut steps: Vec<i64> = app
+    app.layout_panel(
+        pipeline,
+        Rect::from_xywh(0.37, 0.23, BOUNDS.width(), BOUNDS.height()),
+        &theme,
+        1.25,
+    )
+    .unwrap();
+    app.render_panel(pipeline, &theme, &mut MonoMeasure);
+    let layout = app.panels.pipeline(pipeline).unwrap().last_layout().clone();
+    assert!(layout.is_overview());
+    assert_eq!(layout.device_scale, 1.25);
+    // Outward-rounded physical pixels must still respect the logical cells clip.
+    let mut clips = Vec::new();
+    for prim in &app.scene().prims {
+        match prim {
+            Prim::PushClip(rect) => clips.push(*rect),
+            Prim::PopClip => {
+                clips.pop().unwrap();
+            }
+            Prim::Presence { .. } => assert!(clips.contains(&layout.cells)),
+            Prim::Quad { rect, fill, .. }
+                if *fill == theme.editor.text && rect.height() <= 0.81 =>
+            {
+                assert!(clips.contains(&layout.cells));
+            }
+            _ => {}
+        }
+    }
+    let runs: Vec<_> = app
         .scene()
         .quads()
-        .filter(|(rect, _)| layout.cells.contains(rect.origin) && rect.height() <= 2.5)
-        .map(|(rect, _)| ((rect.top() - layout.cells.top()) / step_px).floor() as i64)
+        .filter(|(rect, color)| *color == theme.editor.text && rect.height() <= 0.81)
         .collect();
-    steps.sort_unstable();
-    steps.dedup();
-    assert!(!steps.is_empty());
     assert!(
-        steps.len() <= (layout.cells.height() / 2.0) as usize + 1,
-        "{} painted rows",
-        steps.len()
+        !runs.is_empty()
+            || app
+                .scene()
+                .prims
+                .iter()
+                .any(|p| matches!(p, Prim::Presence { .. }))
     );
-    // Flushed rows are ticks in the label column when labels cannot be read.
-    let ticks = app
-        .scene()
-        .quads()
-        .filter(|(rect, color)| *color == theme.editor.error && layout.labels.contains(rect.origin))
-        .count();
-    assert_eq!(ticks, 1);
+    assert!(runs.len() <= 4096);
     assert!(!app.scene().texts().any(|t| t.starts_with("00001004")));
+    let position = point(
+        layout.cells.left() + layout.cells.width() * 0.5,
+        layout.cells.top() + 2.0,
+    );
+    app.handle(Command::Pointer(pipeline, PointerEvent::Move { position }));
+    assert_eq!(
+        app.panels.pipeline(pipeline).unwrap().hover,
+        Some(Hit::Overview)
+    );
+    assert_eq!(
+        app.panels
+            .pipeline(pipeline)
+            .unwrap()
+            .hover_text(&app.doc)
+            .as_deref(),
+        Some("Pipeline presence · zoom in to inspect records")
+    );
 }
 
 #[test]
@@ -2853,9 +2907,8 @@ fn half_million_rows_load_lay_out_and_paint() {
         match window {
             None => {
                 app.handle_at(Command::Action(Action::ZoomFit), volna_core::Instant::now());
-                for _ in 0..200 {
-                    frame(&mut app, id, &theme);
-                }
+                app.tick(volna_core::Instant::now() + Duration::from_secs(1));
+                frame(&mut app, id, &theme);
             }
             Some(w) => app
                 .doc
@@ -2941,7 +2994,7 @@ fn the_pipeline_measures_from_the_reference_like_the_waves() {
         frame(&mut app, id, &theme);
         assert!(app.scene().texts().any(|t| t == "R → cursor"));
     }
-    let cells_top = match app.layout_panel(pipeline, BOUNDS, &theme).unwrap() {
+    let cells_top = match app.layout_panel(pipeline, BOUNDS, &theme, 1.0).unwrap() {
         PanelLayout::Pipeline(l) => l.cells.top(),
         _ => unreachable!(),
     };
@@ -3081,9 +3134,14 @@ fn dock_timelines(
 fn timeline_frames(app: &mut App, waves: PanelId, pipeline: PanelId, width: f32, theme: &Theme) {
     // Different vertical origins reproduce a stacked dock. Pipeline goes first
     // to ensure alignment never depends on the order canvases are laid out.
-    app.layout_panel(pipeline, Rect::from_xywh(25.0, 350.0, width, 300.0), theme)
-        .unwrap();
-    app.layout_panel(waves, Rect::from_xywh(25.0, 20.0, width, 300.0), theme)
+    app.layout_panel(
+        pipeline,
+        Rect::from_xywh(25.0, 350.0, width, 300.0),
+        theme,
+        1.0,
+    )
+    .unwrap();
+    app.layout_panel(waves, Rect::from_xywh(25.0, 20.0, width, 300.0), theme, 1.0)
         .unwrap();
 }
 
@@ -3347,8 +3405,13 @@ fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans
     app.handle(Command::Panels(PanelsCommand::Focus(inactive)));
     timeline_frames(&mut app, inactive, pipeline, 1200.0, &theme);
     assert_eq!(aligned_metadata(&app, inactive, pipeline), 620.0);
-    app.layout_panel(side, Rect::from_xywh(1240.0, 20.0, 500.0, 600.0), &theme)
-        .unwrap();
+    app.layout_panel(
+        side,
+        Rect::from_xywh(1240.0, 20.0, 500.0, 600.0),
+        &theme,
+        1.0,
+    )
+    .unwrap();
     assert!(
         !app.panels
             .waves(side)

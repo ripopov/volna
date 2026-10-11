@@ -21,6 +21,8 @@ url = "2"
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+num-rational = "0.4"
+num-traits = "0.2"
 
 [features]
 # Test fixtures (`volna_core::testing`) for this crate's integration tests and

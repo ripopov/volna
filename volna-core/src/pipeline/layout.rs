@@ -1,5 +1,5 @@
 //! Pixel layout of the pipeline panel for one frame: the header, the label
-//! column, the cells area, the visible row range and density step, and the
+//! column, the cells area, the visible row range, and the
 //! small interactive rectangles (label divider, Markers lane chips, retry). Pure:
 //! computed from the panel bounds and model state, then read by both the
 //! painter and the input handlers so a click lands on exactly what was drawn.
@@ -19,14 +19,13 @@ pub const LABEL_W_DEFAULT: f32 = 190.0;
 const SPLITTER_TOLERANCE: f32 = 4.0;
 const RETRY_W: f32 = 72.0;
 const RETRY_H: f32 = 22.0;
-/// Rows thinner than this are painted in density steps of at least this height.
-pub const DENSITY_PX: f32 = 2.0;
+/// Rows thinner than two physical pixels use opaque aggregate presence.
+pub const OVERVIEW_PX: f64 = 2.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct PipelineLayout {
     pub activity_controls: Vec<(super::ActivityCommand, Rect, String)>,
-    /// Activity in this frame's time window, computed once per layout: it visits
-    /// every record in the window, which is every record when zoomed out.
+    /// Lifetime activity in this frame's time window.
     pub activity: super::activity::Activity,
     pub bounds: Rect,
     pub header: Rect,
@@ -40,10 +39,9 @@ pub struct PipelineLayout {
     pub label_split: Rect,
     /// The row view this frame paints with, row height at the interface zoom.
     pub rows: RowView,
-    /// Rows that touch the cells area, aligned to `row_step`.
+    /// Source rows that touch the cells area.
     pub row_range: Range<usize>,
-    /// Paint every `row_step`-th row at `row_step` rows' combined height.
-    pub row_step: usize,
+    pub device_scale: f64,
     pub row_count: usize,
     pub zoom: f32,
     /// The Markers lane below the rulers, across the whole panel.
@@ -74,6 +72,7 @@ pub struct LayoutInput<'a> {
     pub measuring: Option<Measuring>,
     pub viewport: Viewport,
     pub failed: bool,
+    pub device_scale: f64,
 }
 
 impl PipelineLayout {
@@ -113,13 +112,7 @@ impl PipelineLayout {
         );
         let mut rows = input.rows.zoomed(zoom);
         rows.clamp(rows_h, input.row_count, zoom);
-        let row_step = if rows.row_px < DENSITY_PX {
-            (DENSITY_PX / rows.row_px).ceil().max(1.0) as usize
-        } else {
-            1
-        };
         let first = rows.top.floor().max(0.0) as usize;
-        let first = first / row_step * row_step;
         let last = ((rows.top + f64::from(rows_h / rows.row_px)).ceil().max(0.0) as usize)
             .min(input.row_count);
         let row_range = first.min(last)..last;
@@ -157,7 +150,7 @@ impl PipelineLayout {
             label_split,
             rows,
             row_range,
-            row_step,
+            device_scale: input.device_scale,
             row_count: input.row_count,
             zoom,
             marker_lane,
@@ -172,6 +165,10 @@ impl PipelineLayout {
         }
         let row = self.rows.row_at(y - self.cells.top()).floor();
         (row >= 0.0 && (row as usize) < self.row_count).then_some(row as usize)
+    }
+
+    pub fn is_overview(&self) -> bool {
+        f64::from(self.rows.row_px) * self.device_scale < OVERVIEW_PX
     }
 
     /// Top of row `ix` in the panel's coordinate space.
@@ -221,17 +218,18 @@ mod tests {
                 end: 100.0,
             },
             failed: false,
+            device_scale: 1.0,
         })
     }
 
     #[test]
-    fn rectangles_scale_with_zoom_and_density_steps_bound_the_row_count() {
+    fn rectangles_scale_with_zoom_and_preserve_source_rows() {
         for zoom in [1.0f32, 2.0] {
             let l = layout(zoom, 20.0, 1000);
             assert_eq!(l.labels.width(), 190.0 * zoom);
             assert_eq!(l.cells.left(), 190.0 * zoom);
             assert_eq!(l.rows.row_px, 20.0 * zoom);
-            assert_eq!(l.row_step, 1);
+            assert!(!l.is_overview());
             assert_eq!(l.row_range.start, 3);
             let visible = ((332.0 - (32.0 + LANE_H) * zoom) / (20.0 * zoom)).ceil() as usize;
             assert_eq!(l.row_range.end, 3 + visible);
@@ -242,9 +240,8 @@ mod tests {
             assert_eq!(l.label_split.width(), 8.0 * zoom);
         }
         let dense = layout(1.0, 0.5, 100_000);
-        assert_eq!(dense.row_step, 4);
-        assert_eq!(dense.row_range.start, 0);
-        assert!(dense.row_range.len() / dense.row_step <= 300 / 2 + 1);
+        assert!(dense.is_overview());
+        assert_eq!(dense.row_range.start, 3);
         let few = layout(1.0, 20.0, 5);
         assert_eq!(few.row_range, 0..5);
         assert_eq!(few.rows.top, 0.0, "rows that fit start at the top edge");

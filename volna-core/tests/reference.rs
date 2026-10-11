@@ -46,7 +46,7 @@ fn said(app: &App) -> Option<String> {
 
 fn frame<'a>(app: &'a mut App, theme: &Theme) -> &'a volna_core::Scene {
     let id = app.panels.focused_id();
-    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1200.0, 600.0), theme);
+    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1200.0, 600.0), theme, 1.0);
     app.render_panel(id, theme, &mut volna_core::scene::MonoMeasure)
 }
 

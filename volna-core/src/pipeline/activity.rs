@@ -32,9 +32,8 @@ pub struct Activity {
 
 impl PipelineModel {
     pub fn activity(&self, doc: &Document) -> Activity {
-        let mut result = Activity::default();
         let Rows::Ready(set) = self.rows(doc) else {
-            return result;
+            return Activity::default();
         };
         let view = self.nav.viewport(doc);
         let anchor = self
@@ -48,51 +47,7 @@ impl PipelineModel {
             .target()
             .zoomed(self.last_layout().zoom.max(f32::EPSILON));
         let visible = f64::from(self.last_layout().cells.height() / rows.row_px);
-        let center = rows.top + visible * 0.5;
-        let mut best = (f64::INFINITY, f64::INFINITY);
-        let mut offset = 0;
-        for generator in set.generators() {
-            let records = generator.transactions();
-            result.earlier |= records
-                .first()
-                .is_some_and(|tx| (tx.begin as f64) < view.start);
-            result.later |= records
-                .last()
-                .is_some_and(|tx| (tx.begin as f64) > view.end);
-            // The inclusive owner query preserves long overlaps and point events.
-            generator
-                .visit_window_ordinals(
-                    view.start.max(0.0).floor() as u64,
-                    view.end.max(0.0).ceil() as u64,
-                    |ordinal, tx| {
-                        if (tx.end as f64) < view.start || (tx.begin as f64) > view.end {
-                            return true;
-                        }
-                        let row = offset + ordinal;
-                        if row as f64 + 1.0 <= rows.top {
-                            result.above += 1;
-                            result.nearest_above = Some(row);
-                        } else if row as f64 >= rows.top + visible {
-                            result.below += 1;
-                            result.nearest_below.get_or_insert(row);
-                        } else {
-                            result.visible += 1;
-                        }
-                        let distance = (tx.begin as f64 - anchor)
-                            .max(anchor - tx.end as f64)
-                            .max(0.0);
-                        let score = (distance, (row as f64 + 0.5 - center).abs());
-                        if score < best {
-                            best = score;
-                            result.target = Some(row);
-                        }
-                        true
-                    },
-                )
-                .expect("ordered viewport");
-            offset += records.len();
-        }
-        result
+        set.activity(view, rows.top..rows.top + visible, anchor)
     }
 
     pub fn activity_command(&mut self, doc: &Document, command: ActivityCommand) {

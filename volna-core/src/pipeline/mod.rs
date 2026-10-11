@@ -6,8 +6,11 @@ pub mod activity;
 pub use activity::{Activity, ActivityCommand, FollowActivity};
 pub mod layout;
 pub mod model;
+pub(crate) mod occupancy;
 pub mod paint;
 pub mod palette;
+mod raster;
+mod row_set;
 pub mod rows;
 pub mod zoom;
 
