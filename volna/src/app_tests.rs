@@ -16,6 +16,114 @@ fn init(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn parent_graph_button_loads_ancestors_and_vertices_open_details(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+    use volna_core::{
+        panels::PanelsCommand,
+        testing::a,
+        transaction::{ParentTraceState, SectionKey, TransactionCommand},
+    };
+    use volna_trace::data::transactions::TransactionRef;
+    init(cx);
+    for dark in [true, false] {
+        for width in [900.0, 360.0] {
+            let mut workspace = None;
+            let root = cx.add_window(|window, cx| {
+                let ws = cx.new(|cx| Workspace::new(window, cx));
+                workspace = Some(ws.clone());
+                gpui_kit::component::Root::new(ws, window, cx)
+            });
+            let window = RootWindow {
+                root,
+                workspace: workspace.unwrap(),
+            };
+            let mut vcx = VisualTestContext::from_window(root.into(), cx);
+            vcx.simulate_resize(size(px(width), px(1000.0)));
+            let panel = window
+                .update(&mut vcx, |ws, window, cx| {
+                    let session = OpenSpec::Path(
+                        concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/examples/pipeline_showcase.vtr"
+                        )
+                        .into(),
+                    )
+                    .open()
+                    .unwrap();
+                    let track = session
+                        .tracks()
+                        .iter()
+                        .find(|t| t.path.join(".") == "soc.l2.bus.read")
+                        .unwrap()
+                        .id;
+                    ws.set_session(session, cx);
+                    ws.app.sidebar_visible = false;
+                    let origin = ws.app.panels.focused_id();
+                    ws.dispatch(
+                        Command::SelectTransaction {
+                            panel: origin,
+                            track: a(track),
+                            id: TransactionRef(34),
+                            cursor: None,
+                        },
+                        Some(window),
+                        cx,
+                    );
+                    ws.dispatch(Command::ShowTransaction { from: origin }, Some(window), cx);
+                    let panel = ws.app.panels.focused_id();
+                    ws.dispatch(
+                        Command::Panels(PanelsCommand::Close(origin)),
+                        Some(window),
+                        cx,
+                    );
+                    for key in SectionKey::ALL {
+                        ws.dispatch(
+                            Command::Transaction(panel, TransactionCommand::Collapse(key, true)),
+                            Some(window),
+                            cx,
+                        );
+                    }
+                    crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                    panel
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(vcx.debug_bounds("tx-parent-graph").is_none());
+            let button = vcx
+                .debug_bounds("tx-trace-parents")
+                .expect("on-demand trace button");
+            vcx.simulate_click(button.center(), Modifiers::default());
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let graph = vcx.debug_bounds("tx-parent-graph").expect("parent graph");
+            let root_node = vcx.debug_bounds("tx-parent-node-0").expect("oldest parent");
+            let current = vcx
+                .debug_bounds("tx-parent-node-1")
+                .expect("selected transaction");
+            assert!(graph.size.width > px(0.0) && graph.size.width <= px(width));
+            assert!(root_node.bottom() < current.top());
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let parents = ws.app.panels.transaction(panel).unwrap().parents();
+                    assert_eq!(parents.state(), &ParentTraceState::Ready);
+                    assert_eq!(parents.nodes().len(), 2);
+                })
+                .unwrap();
+            vcx.simulate_click(root_node.center(), Modifiers::default());
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let model = ws.app.panels.transaction(panel).unwrap();
+                    assert_eq!(model.shown().unwrap().id, TransactionRef(33));
+                    assert_eq!(model.parents().state(), &ParentTraceState::Idle);
+                })
+                .unwrap();
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn desktop_startup_hosts_workspace_and_dialogs(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     use gpui_kit::component::WindowExt as _;

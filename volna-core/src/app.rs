@@ -953,6 +953,9 @@ impl App {
                 for table in self.panels.iter_mut().filter_map(|p| p.kind.table_mut()) {
                     table.refresh(&self.doc);
                 }
+                for (_, model) in self.panels.transactions_mut() {
+                    model.refresh_parents(&mut self.doc);
+                }
                 self.changed();
             }
             Some(Delivered::Signals(trace, results)) => {

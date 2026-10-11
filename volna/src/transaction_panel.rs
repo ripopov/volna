@@ -17,14 +17,14 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    Render, SharedString, Subscription, WeakEntity, Window, div, px, relative,
+    Render, SharedString, Subscription, WeakEntity, Window, div, px, relative, uniform_list,
 };
 use volna_core::Command;
 use volna_core::panels::{PanelId, PanelsCommand};
 use volna_core::transaction::view::FILTER_THRESHOLD;
 use volna_core::transaction::{
-    AttrRow, Chip, EventRow, RefRole, RefRow, Section, StageRow, TransactionCommand, TxPanelState,
-    TxView,
+    AttrRow, Chip, EventRow, ParentTraceState, RefRole, RefRow, Section, StageRow,
+    TransactionCommand, TxPanelState, TxView,
 };
 
 use crate::app::Workspace;
@@ -33,6 +33,8 @@ use crate::ui::{Icon, IconName};
 
 /// Height of one lifeline lane, in design pixels.
 const LANE_PX: f32 = 18.0;
+/// One parent vertex and its incoming edge, in design pixels.
+const PARENT_ROW_PX: f32 = 88.0;
 
 pub(crate) struct TransactionPanelView {
     ws: WeakEntity<Workspace>,
@@ -455,6 +457,7 @@ impl TransactionPanelView {
         body = body.child(self.section(&t, &view.stages, cx, stage_row));
         body = body.child(self.section(&t, &view.events, cx, event_row));
         body = body.child(self.related(&t, &view.related, cx));
+        body = body.child(self.parents(&t, cx));
         if view.truncated_bytes {
             body = body.child(
                 div()
@@ -466,6 +469,223 @@ impl TransactionPanelView {
             );
         }
         body.into_any_element()
+    }
+
+    fn parents(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> AnyElement {
+        let Some(owner) = self.ws.upgrade() else {
+            return div().into_any_element();
+        };
+        let (state, count) = {
+            let ws = owner.read(cx);
+            let Some(model) = ws.app.panels.transaction(self.id) else {
+                return div().into_any_element();
+            };
+            (
+                model.parents().state().clone(),
+                model.parents().nodes().len(),
+            )
+        };
+        let mut actions = div().flex().items_center().gap_1().flex_wrap().child(
+            Button::new("tx-trace-parents")
+                .debug_selector(|| "tx-trace-parents".into())
+                .label(if matches!(state, ParentTraceState::Failed(_)) {
+                    "Retry tracing parents"
+                } else {
+                    "Trace parents"
+                })
+                .icon(gpui_kit::component::Icon::empty().path(IconName::Workflow.path()))
+                .small()
+                .disabled(matches!(
+                    state,
+                    ParentTraceState::Loading | ParentTraceState::Ready
+                ))
+                .tooltip("Load the full parent chain and show its graph")
+                .on_click(cx.listener(|view, _, window, cx| {
+                    view.dispatch(TransactionCommand::TraceParents, window, cx)
+                })),
+        );
+        if state != ParentTraceState::Idle {
+            actions = actions.child(
+                Button::new("tx-clear-parents")
+                    .label(if state == ParentTraceState::Loading {
+                        "Cancel"
+                    } else {
+                        "Hide graph"
+                    })
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.dispatch(TransactionCommand::ClearParents, window, cx)
+                    })),
+            );
+        }
+        let mut element = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .border_t_1()
+            .border_color(t.border_variant)
+            .child(actions);
+        match state {
+            ParentTraceState::Idle => {}
+            ParentTraceState::Loading => {
+                element = element.child(
+                    div()
+                        .text_size(px(t.ui_size_small))
+                        .text_color(t.panel.text_muted)
+                        .child(SharedString::from(format!(
+                            "Tracing parents… {count} transactions found"
+                        ))),
+                );
+            }
+            ParentTraceState::Failed(error) => {
+                element = element.child(
+                    div()
+                        .text_size(px(t.ui_size_small))
+                        .text_color(t.editor.error)
+                        .child(SharedString::from(error)),
+                );
+            }
+            ParentTraceState::Ready => {
+                element = element
+                    .child(
+                        div()
+                            .text_size(px(t.ui_size_small))
+                            .text_color(t.panel.text_muted)
+                            .child(SharedString::from(if count == 1 {
+                                "This transaction has no parents.".into()
+                            } else {
+                                format!(
+                                    "{} parents · oldest first · arrows point to children",
+                                    count - 1
+                                )
+                            })),
+                    )
+                    .child(
+                        uniform_list(
+                            "tx-parent-graph",
+                            count,
+                            cx.processor(move |view, range: std::ops::Range<usize>, _, cx| {
+                                view.parent_rows(range, cx)
+                            }),
+                        )
+                        .debug_selector(|| "tx-parent-graph".into())
+                        .h(t.px(PARENT_ROW_PX * count.min(4) as f32))
+                        .w_full()
+                        .min_w_0()
+                        .flex_none(),
+                    );
+            }
+        }
+        element.into_any_element()
+    }
+
+    /// Virtualize vertices so a complete chain does not build every UI element
+    /// at once. Reverse the traversal's child-first order for the graph.
+    fn parent_rows(
+        &self,
+        range: std::ops::Range<usize>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let t = *theme(cx);
+        let Some(owner) = self.ws.upgrade() else {
+            return Vec::new();
+        };
+        let ws = owner.read(cx);
+        let Some(model) = ws.app.panels.transaction(self.id) else {
+            return Vec::new();
+        };
+        let nodes = model.parents().nodes();
+        range
+            .filter_map(|index| {
+                let node = nodes.get(nodes.len().checked_sub(index + 1)?)?;
+                let (track, id) = (node.track, node.id);
+                let selected = index + 1 == nodes.len();
+                let mut row = div()
+                    .id(("tx-parent-row", index))
+                    .h(t.px(PARENT_ROW_PX))
+                    .w_full()
+                    .flex()
+                    .flex_col();
+                let mut edge = div()
+                    .h(t.px(24.0))
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .items_center();
+                if index > 0 {
+                    edge = edge
+                        .child(div().w(px(1.0)).flex_1().bg(t.panel.icon_muted))
+                        .child(
+                            Icon::new(IconName::ChevronDown)
+                                .size(t.px(12.0))
+                                .color(t.panel.icon_muted),
+                        );
+                }
+                row = row.child(edge).child(
+                    Button::new(("tx-parent-node", index))
+                        .debug_selector(move || format!("tx-parent-node-{index}"))
+                        .accessibility_label(format!(
+                            "Transaction #{}: {}{}",
+                            id.0,
+                            node.label,
+                            if selected {
+                                ", selected transaction"
+                            } else {
+                                ""
+                            }
+                        ))
+                        .outline()
+                        .selected(selected)
+                        .w_full()
+                        .h(t.px(64.0))
+                        .min_w_0()
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap_0p5()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .font_family(t.mono_font)
+                                                .flex_none()
+                                                .child(SharedString::from(format!("#{}", id.0))),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_ellipsis()
+                                                .child(SharedString::from(node.label.clone())),
+                                        )
+                                        .when(selected, |element| {
+                                            element.child(tag(&t, "current"))
+                                        }),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(t.ui_size_small))
+                                        .text_color(t.panel.text_muted)
+                                        .text_ellipsis()
+                                        .child(SharedString::from(node.path.clone())),
+                                ),
+                        )
+                        .tooltip(format!("{} · #{} · {}", node.path, id.0, node.label))
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.dispatch(TransactionCommand::Jump { track, id }, window, cx)
+                        })),
+                );
+                Some(row.into_any_element())
+            })
+            .collect()
     }
 
     /// A timing tile; Begin and End move the shared cursor.

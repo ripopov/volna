@@ -7,6 +7,10 @@ complete-object remote protocol used by `volna-server`. Pipeline, table, and
 transaction panels inspect runtime records from VTR. VDB attachment is not
 implemented.
 
+In Transaction details, **Trace parents** after **Related** loads the full parent
+chain on demand and displays a clickable graph. Click a node to open its details;
+cancel tracing or hide the graph when finished.
+
 See the [`volna-core` guide](../volna-core/README.md) for the frontend contract,
 headless tests, persistence model, and undo journal.
 

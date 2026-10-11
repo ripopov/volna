@@ -1,12 +1,13 @@
 //! `TransactionModel`: the state of a Transaction panel. It holds which
 //! record it shows, whether it is pinned to it, the records it has shown
-//! before, and the reader's per-panel preferences. Data is the document's
-//! loaded track; the model never copies records.
+//! before, the reader's per-panel preferences, and on-demand ancestry. Data is
+//! the document's loaded track; the model never copies records.
 
 use std::collections::BTreeMap;
 
 use web_time::Instant;
 
+use super::parents::{ParentTrace, ParentTraceState};
 use super::view::{SectionKey, TxView, VIEW_BYTES, ViewPrefs};
 use crate::data::text::{COPY_BYTES, Radix};
 use crate::document::{Document, TrackLoadState, TxSelection};
@@ -17,7 +18,8 @@ use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{TrackRef, TransactionRef};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
-/// Bytes a Transaction panel admits: one prepared view.
+/// Bytes reserved for one prepared view. Parent graph vertices admit their
+/// storage separately, so this reservation does not bound the chain length.
 pub const PANEL_BYTES: u64 = VIEW_BYTES as u64;
 /// Records Back and Forward step through.
 pub const MAX_HISTORY: usize = 64;
@@ -71,6 +73,10 @@ pub enum TransactionCommand {
     Radix(String),
     Collapse(SectionKey, bool),
     Filter(String),
+    /// Resolve the full structural parent chain, loading generators on demand.
+    TraceParents,
+    /// Hide the graph or cancel its traversal and release its track holds.
+    ClearParents,
 }
 
 pub struct TransactionModel {
@@ -93,6 +99,7 @@ pub struct TransactionModel {
     refused: Option<String>,
     budget: MemoryBudget,
     _reservation: Option<Reservation>,
+    parents: ParentTrace,
 }
 
 impl TransactionModel {
@@ -113,6 +120,7 @@ impl TransactionModel {
             refused: None,
             budget,
             _reservation: None,
+            parents: ParentTrace::default(),
         }
     }
 
@@ -130,6 +138,14 @@ impl TransactionModel {
 
     pub fn shown(&self) -> Option<&ShownRecord> {
         self.history.get(self.cursor)
+    }
+
+    pub fn parents(&self) -> &ParentTrace {
+        &self.parents
+    }
+
+    pub(crate) fn refresh_parents(&mut self, doc: &mut Document) {
+        self.parents.refresh(doc, &self.budget);
     }
 
     /// Resolve an interaction's recorded attribute index without retaining a
@@ -152,6 +168,12 @@ impl TransactionModel {
     /// A trace is closing: forget its records, and release its track if
     /// the shown record was one of them.
     pub(crate) fn forget_trace(&mut self, doc: &mut Document, trace: crate::trace::TraceId) {
+        if self
+            .shown()
+            .is_some_and(|record| record.track.trace() == trace)
+        {
+            self.parents.clear(doc);
+        }
         let shown = self.shown().cloned();
         self.history.retain(|r| r.track.trace() != trace);
         self.cursor = shown
@@ -308,6 +330,7 @@ impl TransactionModel {
         if !self.attached {
             return;
         }
+        self.parents.clear(doc);
         if let Some(track) = self.retained.take() {
             doc.release_track(track);
         }
@@ -344,6 +367,7 @@ impl TransactionModel {
         if self.shown() == Some(&record) || !self.hold(doc, record.track.track()) {
             return false;
         }
+        self.parents.clear(doc);
         self.history.truncate(self.cursor + 1);
         self.history.push(record);
         if self.history.len() > MAX_HISTORY {
@@ -363,6 +387,7 @@ impl TransactionModel {
         if !self.hold(doc, track) {
             return false;
         }
+        self.parents.clear(doc);
         self.cursor = cursor;
         if let Some(selection) = self.shown().and_then(|shown| shown.selection(panel)) {
             doc.select(Some(selection));
@@ -448,6 +473,33 @@ impl TransactionModel {
         now: Instant,
     ) -> bool {
         match command {
+            TransactionCommand::TraceParents => {
+                if !self.attached
+                    || self.refused.is_some()
+                    || matches!(
+                        self.parents.state(),
+                        ParentTraceState::Loading | ParentTraceState::Ready
+                    )
+                {
+                    return false;
+                }
+                let Some((track, id)) = self
+                    .shown()
+                    .and_then(|shown| Some((shown.track.track()?, shown.id)))
+                else {
+                    return false;
+                };
+                if doc.resident_generator(track).is_none() {
+                    return false;
+                }
+                self.parents.start(doc, &self.budget, track, id);
+                true
+            }
+            TransactionCommand::ClearParents => {
+                let changed = *self.parents.state() != ParentTraceState::Idle;
+                self.parents.clear(doc);
+                changed
+            }
             TransactionCommand::Jump { track, id } => {
                 let Some(path) = track_path(doc, track) else {
                     return false;
