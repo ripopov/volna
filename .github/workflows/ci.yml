@@ -8,6 +8,37 @@ permissions:
   contents: read
 
 jobs:
+  vtr-capi-install:
+    name: Install and consume VTR C API (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - name: Install and link an external C consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/vtr-capi"
+          ./vtr-capi/install.sh --target-dir "$out/target" --prefix "$out/prefix"
+          ./vtr-capi/install.sh --target-dir "$out/target" --prefix "$out/prefix"
+          cp vtr-capi/tests/c_smoke.c "$out/c_smoke.c"
+          export PKG_CONFIG_PATH="$out/prefix/lib/pkgconfig"
+          cc -std=c99 -Wall -Wextra -Werror -O1 \
+            $(pkg-config --cflags vtr) "$out/c_smoke.c" \
+            $(pkg-config --static --libs vtr) -o "$out/c_smoke"
+          "$out/c_smoke" "$out/trace.vtr"
+          ./vtr-capi/install.sh --target-dir "$out/target-debug" --prefix "$out/prefix-debug" --debug
+          export PKG_CONFIG_PATH="$out/prefix-debug/lib/pkgconfig"
+          cc -std=c99 -Wall -Wextra -Werror -O1 \
+            $(pkg-config --cflags vtr) "$out/c_smoke.c" \
+            $(pkg-config --static --libs vtr) -o "$out/c_smoke_debug"
+          "$out/c_smoke_debug" "$out/trace-debug.vtr"
+          "$out/c_smoke" "$out/trace-again.vtr"
+          test -z "$(git status --porcelain)"
+
   test:
     name: Test (${{ matrix.os }}, Rust ${{ matrix.rust }})
     runs-on: ${{ matrix.os }}
