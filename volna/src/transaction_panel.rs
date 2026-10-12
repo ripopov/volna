@@ -17,7 +17,8 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    Render, SharedString, Subscription, WeakEntity, Window, div, px, relative, uniform_list,
+    Render, SharedString, Subscription, WeakEntity, Window, actions, div, px, relative,
+    uniform_list,
 };
 use volna_core::Command;
 use volna_core::panels::{PanelId, PanelsCommand};
@@ -35,6 +36,21 @@ use crate::ui::{Icon, IconName};
 const LANE_PX: f32 = 18.0;
 /// One parent vertex and its incoming edge, in design pixels.
 const PARENT_ROW_PX: f32 = 88.0;
+
+actions!(transaction, [Back, Forward]);
+
+#[cfg(target_os = "macos")]
+const BACK_TOOLTIP: &str = "Back (⌘[)";
+#[cfg(target_os = "macos")]
+const FORWARD_TOOLTIP: &str = "Forward (⌘])";
+#[cfg(all(not(target_os = "macos"), not(target_family = "wasm")))]
+const BACK_TOOLTIP: &str = "Back (Alt+←)";
+#[cfg(all(not(target_os = "macos"), not(target_family = "wasm")))]
+const FORWARD_TOOLTIP: &str = "Forward (Alt+→)";
+#[cfg(target_family = "wasm")]
+const BACK_TOOLTIP: &str = "Back (Alt+← / ⌘[)";
+#[cfg(target_family = "wasm")]
+const FORWARD_TOOLTIP: &str = "Forward (Alt+→ / ⌘])";
 
 pub(crate) struct TransactionPanelView {
     ws: WeakEntity<Workspace>,
@@ -176,26 +192,8 @@ impl Panel for TransactionPanelView {
         use gpui_kit::assets::IconName as KitIcon;
         let owner = self.ws.upgrade()?;
         let model = owner.read(cx).app.panels.transaction(self.id)?;
-        let (back, forward, pinned) = (model.can_go_back(), model.can_go_forward(), model.pinned());
+        let pinned = model.pinned();
         Some(vec![
-            Button::new("tx-back")
-                .icon(KitIcon::ChevronLeft)
-                .ghost()
-                .xsmall()
-                .tooltip("Back (Alt+←)")
-                .when(!back, |button| button.disabled(true))
-                .on_click(cx.listener(|view, _, window, cx| {
-                    view.dispatch(TransactionCommand::Back, window, cx)
-                })),
-            Button::new("tx-forward")
-                .icon(KitIcon::ChevronRight)
-                .ghost()
-                .xsmall()
-                .tooltip("Forward (Alt+→)")
-                .when(!forward, |button| button.disabled(true))
-                .on_click(cx.listener(|view, _, window, cx| {
-                    view.dispatch(TransactionCommand::Forward, window, cx)
-                })),
             Button::new("tx-pin")
                 .icon(KitIcon::Pin)
                 .ghost()
@@ -220,7 +218,7 @@ impl Render for TransactionPanelView {
         let Some(owner) = self.ws.upgrade() else {
             return div().into_any_element();
         };
-        let (state, follows, revealable) = {
+        let (state, follows, revealable, back, forward) = {
             let ws = owner.read(cx);
             let Some(model) = ws.app.panels.transaction(self.id) else {
                 return div().into_any_element();
@@ -243,7 +241,13 @@ impl Render for TransactionPanelView {
                         .pipeline_showing(&ws.app.doc, track, id)
                         .is_some()
                 });
-            (model.state(&ws.app.doc), follows, revealable)
+            (
+                model.state(&ws.app.doc),
+                follows,
+                revealable,
+                model.can_go_back(),
+                model.can_go_forward(),
+            )
         };
         let body = match state {
             TxPanelState::Ready(view) => self.render_view(*view, revealable, window, cx),
@@ -261,7 +265,7 @@ impl Render for TransactionPanelView {
             TxPanelState::Failed(error) => notice(&t, "Cannot load the record", &error),
             TxPanelState::Refused(error) => notice(&t, "Not admitted", &error),
         };
-        let header = div()
+        let follows = div()
             .flex()
             .items_center()
             .gap_2()
@@ -273,6 +277,9 @@ impl Render for TransactionPanelView {
             .when_some(follows, |element, text| {
                 element.child(
                     div()
+                        .debug_selector(|| "tx-follows".into())
+                        .min_w_0()
+                        .text_ellipsis()
                         .px_1p5()
                         .py_0p5()
                         .rounded_sm()
@@ -281,6 +288,49 @@ impl Render for TransactionPanelView {
                         .child(SharedString::from(text)),
                 )
             });
+        let navigation = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_3()
+            .pb_1()
+            .child(
+                Button::new("tx-back")
+                    .debug_selector(|| "tx-back".into())
+                    .icon(gpui_kit::assets::IconName::ChevronLeft)
+                    .label("Back")
+                    .ghost()
+                    .xsmall()
+                    .tooltip(BACK_TOOLTIP)
+                    .disabled(!back)
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        window.focus(&view.focus, cx);
+                        view.dispatch(TransactionCommand::Back, window, cx);
+                    })),
+            )
+            .child(
+                Button::new("tx-forward")
+                    .debug_selector(|| "tx-forward".into())
+                    .icon(gpui_kit::assets::IconName::ChevronRight)
+                    .label("Forward")
+                    .ghost()
+                    .xsmall()
+                    .tooltip(FORWARD_TOOLTIP)
+                    .disabled(!forward)
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        window.focus(&view.focus, cx);
+                        view.dispatch(TransactionCommand::Forward, window, cx);
+                    })),
+            );
+        let header = div()
+            .debug_selector(|| "tx-header".into())
+            .flex()
+            .flex_col()
+            .flex_none()
+            .border_b_1()
+            .border_color(t.border_variant)
+            .child(follows)
+            .child(navigation);
         div()
             .id(("transaction-panel", self.id.0))
             .size_full()
@@ -292,19 +342,17 @@ impl Render for TransactionPanelView {
             .text_color(t.editor.text)
             .track_focus(&self.focus)
             .key_context("Transaction")
+            .on_action(cx.listener(|view, _: &Back, window, cx| {
+                view.dispatch(TransactionCommand::Back, window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &Forward, window, cx| {
+                view.dispatch(TransactionCommand::Forward, window, cx);
+            }))
             .on_key_down(
                 cx.listener(|view, event: &gpui_kit::KeyDownEvent, window, cx| {
                     let key = event.keystroke.key.as_str();
                     let modifiers = crate::app::to_modifiers(event.keystroke.modifiers);
-                    if event.keystroke.modifiers.alt && (key == "left" || key == "right") {
-                        let command = if key == "left" {
-                            TransactionCommand::Back
-                        } else {
-                            TransactionCommand::Forward
-                        };
-                        view.dispatch(command, window, cx);
-                        cx.stop_propagation();
-                    } else if key.eq_ignore_ascii_case("c") && modifiers.secondary() {
+                    if key.eq_ignore_ascii_case("c") && modifiers.secondary() {
                         view.copy(cx);
                         cx.stop_propagation();
                     } else if key == "escape" {
@@ -339,6 +387,7 @@ impl TransactionPanelView {
         let muted = t.panel.text_muted;
         let identity = &view.identity;
         let mut breadcrumb = div()
+            .debug_selector(|| "tx-record-path".into())
             .flex()
             .items_center()
             .gap_1()
@@ -440,18 +489,23 @@ impl TransactionPanelView {
                     .on_click(cx.listener(|view, _, _, cx| view.copy(cx))),
             );
 
-        let mut body = div().flex_1().min_h_0().overflow_y_scrollbar().child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .p_3()
-                .child(breadcrumb)
-                .child(title)
-                .child(tiles)
-                .child(self.lifeline(&t, &view, cx))
-                .child(actions),
-        );
+        let mut body = div()
+            .debug_selector(|| "tx-body".into())
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scrollbar()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .child(breadcrumb)
+                    .child(title)
+                    .child(tiles)
+                    .child(self.lifeline(&t, &view, cx))
+                    .child(actions),
+            );
 
         body = body.child(self.attributes(&t, &view, cx));
         body = body.child(self.section(&t, &view.stages, cx, stage_row));
@@ -680,6 +734,7 @@ impl TransactionPanelView {
                         )
                         .tooltip(format!("{} · #{} · {}", node.path, id.0, node.label))
                         .on_click(cx.listener(move |view, _, window, cx| {
+                            window.focus(&view.focus, cx);
                             view.dispatch(TransactionCommand::Jump { track, id }, window, cx)
                         })),
                 );
@@ -1033,6 +1088,7 @@ impl TransactionPanelView {
         };
         div()
             .id(("tx-ref", index))
+            .debug_selector(move || format!("tx-ref-{index}"))
             .flex()
             .items_center()
             .gap_2()
@@ -1041,6 +1097,7 @@ impl TransactionPanelView {
             .cursor_pointer()
             .hover(|style| style.bg(t.hover.bg))
             .on_click(cx.listener(move |view, _, window, cx| {
+                window.focus(&view.focus, cx);
                 view.dispatch(TransactionCommand::Jump { track, id }, window, cx)
             }))
             .child(

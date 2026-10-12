@@ -557,6 +557,22 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("f2", RenameGroup, Some("Waves")),
         KeyBinding::new("alt-left", FoldGroupDeep, Some("Waves")),
         KeyBinding::new("alt-right", UnfoldGroupDeep, Some("Waves")),
+        KeyBinding::new(
+            "alt-left",
+            crate::transaction_panel::Back,
+            Some("Transaction"),
+        ),
+        KeyBinding::new(
+            "alt-right",
+            crate::transaction_panel::Forward,
+            Some("Transaction"),
+        ),
+        KeyBinding::new("cmd-[", crate::transaction_panel::Back, Some("Transaction")),
+        KeyBinding::new(
+            "cmd-]",
+            crate::transaction_panel::Forward,
+            Some("Transaction"),
+        ),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus(menus(&[], None, None, None));

@@ -16,7 +16,7 @@ fn init(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn parent_graph_button_loads_ancestors_and_vertices_open_details(cx: &mut TestAppContext) {
+fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
     use volna_core::{
         panels::PanelsCommand,
@@ -89,6 +89,35 @@ fn parent_graph_button_loads_ancestors_and_vertices_open_details(cx: &mut TestAp
                 .unwrap();
             vcx.run_until_parked();
             vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let navigation = |vcx: &mut VisualTestContext| {
+                window
+                    .update(vcx, |ws, _, _| {
+                        let model = ws.app.panels.transaction(panel).unwrap();
+                        (
+                            model.shown().unwrap().id.0,
+                            model.can_go_back(),
+                            model.can_go_forward(),
+                        )
+                    })
+                    .unwrap()
+            };
+            let click = |vcx: &mut VisualTestContext, selector: &'static str| {
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                let bounds = vcx.debug_bounds(selector).expect(selector);
+                vcx.simulate_click(bounds.center(), Modifiers::default());
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+            };
+            assert_eq!(navigation(&mut vcx), (34, false, false));
+            click(&mut vcx, "tx-back");
+            click(&mut vcx, "tx-forward");
+            assert_eq!(navigation(&mut vcx), (34, false, false));
+            let header = vcx.debug_bounds("tx-header").unwrap();
+            let back = vcx.debug_bounds("tx-back").unwrap();
+            let forward = vcx.debug_bounds("tx-forward").unwrap();
+            let body = vcx.debug_bounds("tx-body").unwrap();
+            assert!(header.bottom() <= body.top());
+            assert!(back.left() >= header.left() && forward.right() <= header.right());
             assert!(vcx.debug_bounds("tx-parent-graph").is_none());
             let button = vcx
                 .debug_bounds("tx-trace-parents")
@@ -119,6 +148,78 @@ fn parent_graph_button_loads_ancestors_and_vertices_open_details(cx: &mut TestAp
                     assert_eq!(model.parents().state(), &ParentTraceState::Idle);
                 })
                 .unwrap();
+            assert_eq!(navigation(&mut vcx), (33, true, false));
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let follows = vcx.debug_bounds("tx-follows").unwrap();
+            assert!(follows.bottom() <= vcx.debug_bounds("tx-back").unwrap().top());
+            click(&mut vcx, "tx-back");
+            assert_eq!(navigation(&mut vcx), (34, false, true));
+            click(&mut vcx, "tx-back");
+            assert_eq!(navigation(&mut vcx), (34, false, true));
+            click(&mut vcx, "tx-forward");
+            assert_eq!(navigation(&mut vcx), (33, true, false));
+            click(&mut vcx, "tx-forward");
+            assert_eq!(navigation(&mut vcx), (33, true, false));
+            for (back, forward) in [("alt-left", "alt-right"), ("cmd-[", "cmd-]")] {
+                vcx.simulate_keystrokes(back);
+                vcx.run_until_parked();
+                assert_eq!(navigation(&mut vcx), (34, false, true));
+                vcx.simulate_keystrokes(forward);
+                vcx.run_until_parked();
+                assert_eq!(navigation(&mut vcx), (33, true, false));
+            }
+            // Following a Related link after Back replaces the forward branch.
+            click(&mut vcx, "tx-back");
+            window
+                .update(&mut vcx, |ws, window, cx| {
+                    ws.dispatch(
+                        Command::Transaction(
+                            panel,
+                            TransactionCommand::Collapse(SectionKey::Related, false),
+                        ),
+                        Some(window),
+                        cx,
+                    );
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            click(&mut vcx, "tx-ref-0");
+            assert_eq!(navigation(&mut vcx), (33, true, false));
+            vcx.simulate_keystrokes("alt-right");
+            vcx.run_until_parked();
+            assert_eq!(navigation(&mut vcx), (33, true, false));
+
+            // The header stays outside the scrolling record body.
+            window
+                .update(&mut vcx, |ws, window, cx| {
+                    for key in SectionKey::ALL {
+                        ws.dispatch(
+                            Command::Transaction(panel, TransactionCommand::Collapse(key, false)),
+                            Some(window),
+                            cx,
+                        );
+                    }
+                })
+                .unwrap();
+            vcx.simulate_resize(size(px(width), px(480.0)));
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let before = vcx.debug_bounds("tx-back").unwrap();
+            let body = vcx.debug_bounds("tx-body").unwrap();
+            let record = vcx.debug_bounds("tx-record-path").unwrap();
+            let scroll_at = gpui_kit::point(body.center().x, before.bottom() + px(60.0));
+            vcx.simulate_mouse_move(scroll_at, None, Modifiers::default());
+            vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+                position: scroll_at,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.0), px(-300.0))),
+                ..Default::default()
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            assert_eq!(vcx.debug_bounds("tx-back").unwrap(), before);
+            assert!(vcx.debug_bounds("tx-record-path").unwrap().top() < record.top());
+            click(&mut vcx, "tx-back");
+            assert_eq!(navigation(&mut vcx), (34, false, true));
         }
     }
 }

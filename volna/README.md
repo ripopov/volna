@@ -11,6 +11,10 @@ In Transaction details, **Trace parents** after **Related** loads the full paren
 chain on demand and displays a clickable graph. Click a node to open its details;
 cancel tracing or hide the graph when finished.
 
+The fixed Transaction header provides **Back** and **Forward** navigation through
+visited records. Use **Alt+←/→** on Windows and Linux or **⌘[/]** on macOS;
+shortcuts apply to the focused detail panel.
+
 See the [`volna-core` guide](../volna-core/README.md) for the frontend contract,
 headless tests, persistence model, and undo journal.
 
