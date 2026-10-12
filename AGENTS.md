@@ -4,6 +4,11 @@ Write comments and documentation for maintainers who have never seen the prompts
 
 A useful review test is: If the conversation disappeared, would this comment still help someone understand or safely change the code?
 
+# Testing
+
+Do not add trivial unit tests that merely mirror static declarations or
+configuration. Focus tests on meaningful behavior, edge cases, and nontrivial invariants.
+
 # Staging and commits
 
 Stage completed changes. Commit only when explicitly requested by the user.
