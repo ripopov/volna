@@ -28,6 +28,8 @@ pub(crate) struct Stamp {
     filter: String,
     wave: Option<WaveStamp>,
     pipeline: Option<PipelineStamp>,
+    /// A selection can change every unpinned panel, not just the focused one.
+    transactions: Vec<(PanelId, Option<crate::transaction::ShownRecord>)>,
 }
 #[derive(PartialEq)]
 struct PipelineStamp {
@@ -148,6 +150,11 @@ impl Stamp {
                 row_cap: p.row_cap,
                 label_width: p.label_width,
             }),
+            transactions: app
+                .panels
+                .iter()
+                .filter_map(|p| Some((p.id, p.kind.transaction()?.shown().cloned())))
+                .collect(),
         })
     }
 }

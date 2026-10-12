@@ -604,41 +604,46 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
 }
 
 #[test]
-fn a_restored_pinned_panel_loads_without_another_track_consumer() {
-    let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
-    let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-    let pinned = show(&mut app, pipeline, insn, 33);
-    app.handle(Command::Transaction(pinned, TransactionCommand::Pin(true)));
-    app.handle(Command::Panels(
-        volna_core::panels::PanelsCommand::CloseOthers(pinned),
-    ));
-    assert_eq!(app.panels.len(), 1);
-    let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+fn a_restored_panel_loads_without_another_track_consumer() {
+    for pinned in [false, true] {
+        let (mut app, session, pipeline) =
+            with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
+        let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+        let panel = show(&mut app, pipeline, insn, 33);
+        app.handle(Command::Transaction(panel, TransactionCommand::Pin(pinned)));
+        app.handle(Command::Panels(
+            volna_core::panels::PanelsCommand::CloseOthers(panel),
+        ));
+        assert_eq!(app.panels.len(), 1);
+        let saved =
+            Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
 
-    let mut restored = App::new();
-    restored.set_session(session);
-    let plan = saved
-        .prepare(
-            &restored,
-            "file:///tmp/trace.vtr",
-            "file:///tmp/trace.vtr.volna.json",
-        )
-        .unwrap();
-    assert!(plan.commit(&mut restored).unwrap().notices.is_empty());
-    pump(&mut restored);
-    assert_eq!(view(&restored, pinned).identity.id, TransactionRef(33));
+        let mut restored = App::new();
+        restored.set_session(session);
+        let plan = saved
+            .prepare(
+                &restored,
+                "file:///tmp/trace.vtr",
+                "file:///tmp/trace.vtr.volna.json",
+            )
+            .unwrap();
+        assert!(plan.commit(&mut restored).unwrap().notices.is_empty());
+        pump(&mut restored);
+        assert_eq!(view(&restored, panel).identity.id, TransactionRef(33));
+        assert_eq!(restored.panels.transaction(panel).unwrap().pinned(), pinned);
 
-    // Close and undo use the same adoption path as restore. The last owner
-    // releases the generator; reopening loads it again under the saved ID.
-    restored.handle(Command::Panels(volna_core::panels::PanelsCommand::Close(
-        pinned,
-    )));
-    assert!(restored.doc.resident_generator(a(insn)).is_none());
-    restored.handle(Command::Undo);
-    pump(&mut restored);
-    assert_eq!(view(&restored, pinned).identity.id, TransactionRef(33));
-    restored.handle(Command::Redo);
-    assert!(restored.doc.resident_generator(a(insn)).is_none());
+        // Close and undo use the same adoption path as restore. The last owner
+        // releases the generator; reopening loads it again under the saved ID.
+        restored.handle(Command::Panels(volna_core::panels::PanelsCommand::Close(
+            panel,
+        )));
+        assert!(restored.doc.resident_generator(a(insn)).is_none());
+        restored.handle(Command::Undo);
+        pump(&mut restored);
+        assert_eq!(view(&restored, panel).identity.id, TransactionRef(33));
+        restored.handle(Command::Redo);
+        assert!(restored.doc.resident_generator(a(insn)).is_none());
+    }
 }
 
 #[test]
@@ -660,10 +665,10 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["kind"] == "transaction" && p["pinned"].is_object())
+        .find(|p| p["kind"] == "transaction" && p["pinned"] == true)
         .unwrap()
         .clone();
-    assert_eq!(entry["pinned"]["id"], 33);
+    assert_eq!(entry["record"]["id"], 33);
     assert_eq!(entry["radix"]["pc"], "hex");
 
     let mut restored = App::new();
@@ -683,18 +688,13 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
     assert_eq!(v.identity.id, TransactionRef(33));
     assert_eq!(v.attributes.rows[1].value, "0x80000060");
     assert!(v.events.collapsed);
-    // An unpinned panel restores empty and waits for the next selection.
-    assert!(matches!(
-        restored
-            .panels
-            .transaction(free)
-            .unwrap()
-            .state(&restored.doc),
-        TxPanelState::Empty
-    ));
-    select(&mut restored, pipeline, insn, 4);
+    // The unpinned panel keeps its displayed record and follows new selections.
     assert_eq!(view(&restored, free).identity.id, TransactionRef(4));
-    assert_eq!(view(&restored, pinned).identity.id, TransactionRef(33));
+    for id in [33, 4] {
+        select(&mut restored, pipeline, insn, id);
+        assert_eq!(view(&restored, free).identity.id, TransactionRef(id));
+        assert_eq!(view(&restored, pinned).identity.id, TransactionRef(33));
+    }
 }
 
 #[test]

@@ -71,7 +71,8 @@ fn opened(session: Arc<dyn Session>) -> App {
 /// What undo must restore exactly: the workspace capture without
 /// navigation (focus, active tabs, sash sizes, viewports, cursors,
 /// scrolling, column widths, selection, folds, the selected clock,
-/// pipeline row zoom, transaction sections) or chrome (the sidebar).
+/// pipeline row zoom, transaction sections and unpinned records) or chrome
+/// (the sidebar).
 fn projection(app: &App) -> Value {
     let bytes = Workspace::capture(app, volna_core::testing::paths("trace.vtr"), None)
         .unwrap()
@@ -108,6 +109,7 @@ fn projection(app: &App) -> Value {
                 strip_folds(&mut p["rows"]);
             }
             "pipeline" => _ = p.remove("rows"),
+            "transaction" if p["pinned"] == false => _ = p.remove("record"),
             _ => {}
         }
         if let Some(clocks) = p.get_mut("clocks").and_then(Value::as_object_mut) {

@@ -1,7 +1,7 @@
 //! The landing fixture restores its checked-in
-//! workspace over its checked-in trace without a notice, shows every panel
-//! kind with data, and saves back to the same bytes. Regenerate both with
-//! the landing trace fixture.
+//! workspace over its checked-in trace without a notice, loads its data panels,
+//! reuses its transaction panel for selections, and saves back to the same bytes.
+//! Regenerate both with the landing trace fixture.
 
 use std::path::PathBuf;
 
@@ -11,7 +11,8 @@ use volna_core::pipeline::Rows;
 use volna_core::scene::MonoMeasure;
 use volna_core::transaction::TxPanelState;
 use volna_core::workspace::Workspace;
-use volna_core::{App, Instant, Theme};
+use volna_core::{App, Command, Instant, Theme};
+use volna_trace::data::transactions::TransactionRef;
 use volna_trace::session::OpenSpec;
 
 fn examples() -> PathBuf {
@@ -154,10 +155,9 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         Rows::Ready(rows) => assert_eq!(rows.len(), 420),
         _ => panic!("the pipeline rows are not ready"),
     }
-    let tx = app.panels.transaction(PanelId(3)).unwrap();
-    assert!(tx.pinned());
-    match tx.state(&app.doc) {
+    match app.panels.transaction(PanelId(3)).unwrap().state(&app.doc) {
         TxPanelState::Ready(view) => {
+            assert_eq!(view.identity.id, TransactionRef(245));
             assert!(
                 view.identity
                     .label
@@ -170,7 +170,7 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
                 "the device read has related records"
             );
         }
-        _ => panic!("the pinned record is not ready"),
+        _ => panic!("the initial record is not ready"),
     }
     assert_eq!(
         app.panels
@@ -196,4 +196,27 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         String::from_utf8(saved).unwrap(),
         "rerun examples/landing_workspace.rs"
     );
+
+    let (track, id) = match app.panels.pipeline(PanelId(2)).unwrap().rows(&app.doc) {
+        Rows::Ready(rows) => {
+            let record = rows.get(191).unwrap().1;
+            (volna_core::testing::a(record.generator), record.id)
+        }
+        _ => panic!("the pipeline rows are not ready"),
+    };
+    assert_ne!(id, TransactionRef(245));
+    app.handle(Command::SelectTransaction {
+        panel: PanelId(2),
+        track,
+        id,
+        cursor: None,
+    });
+    app.handle(Command::ShowTransaction { from: PanelId(2) });
+    pump(&mut app);
+    assert_eq!(app.panels.focused_id(), PanelId(3));
+    assert_eq!(app.panels.len(), 4, "reuse the existing transaction panel");
+    match app.panels.transaction(PanelId(3)).unwrap().state(&app.doc) {
+        TxPanelState::Ready(view) => assert_eq!(view.identity.id, id),
+        _ => panic!("the selected record is not ready"),
+    }
 }

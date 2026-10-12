@@ -274,17 +274,17 @@ impl TransactionModel {
         self.prefs.detail_items = value.clamp(1, 1000);
     }
 
-    /// Install a record without a document (workspace restore); the track is
-    /// retained when the panel attaches.
-    pub(crate) fn restore(&mut self, record: ShownRecord, pinned: bool, prefs: ViewPrefs) {
-        self.history = vec![record];
+    /// Install the saved view without a document; a displayed record's track
+    /// is retained when the panel attaches.
+    pub(crate) fn restore(&mut self, record: Option<ShownRecord>, pinned: bool, prefs: ViewPrefs) {
+        self.history = record.into_iter().collect();
         self.cursor = 0;
         self.pinned = pinned;
         self.restore_prefs(prefs);
     }
 
     /// The reader's saved choices, keeping the resolved item limit.
-    pub(crate) fn restore_prefs(&mut self, prefs: ViewPrefs) {
+    fn restore_prefs(&mut self, prefs: ViewPrefs) {
         let detail_items = self.prefs.detail_items;
         self.prefs = ViewPrefs {
             detail_items,

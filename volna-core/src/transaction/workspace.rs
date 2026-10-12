@@ -9,9 +9,9 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 
-/// A pinned transaction panel remembers exactly which record it froze on.
+/// The record displayed by a transaction panel, independent of its pin state.
 #[derive(Serialize, Deserialize)]
 struct SavedRecord {
     #[serde(default, skip_serializing_if = "TraceId::is_a")]
@@ -20,16 +20,17 @@ struct SavedRecord {
     id: u64,
 }
 
-/// A transaction panel: the reader's choices, and the record when pinned.
-/// An unpinned panel restores empty and waits for the next selection.
+/// A transaction panel remembers its displayed record without requiring a pin.
+/// Unpinned panels resume following document selections after restoration.
 #[derive(Serialize, Deserialize)]
 struct TransactionPanel {
     id: PanelId,
     kind: String,
     version: u32,
     title: Option<String>,
+    pinned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pinned: Option<SavedRecord>,
+    record: Option<SavedRecord>,
     #[serde(default)]
     collapsed: Vec<String>,
     #[serde(default)]
@@ -47,16 +48,12 @@ pub(crate) fn save(
         kind: "transaction".into(),
         version: VERSION,
         title,
-        pinned: model
-            .pinned()
-            .then(|| {
-                shown.map(|record| SavedRecord {
-                    trace: record.track.trace(),
-                    track: record.track.path().to_vec(),
-                    id: record.id.0,
-                })
-            })
-            .flatten(),
+        pinned: model.pinned(),
+        record: shown.map(|record| SavedRecord {
+            trace: record.track.trace(),
+            track: record.track.path().to_vec(),
+            id: record.id.0,
+        }),
         collapsed: model
             .prefs()
             .collapsed
@@ -87,40 +84,37 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             .ok_or_else(|| anyhow::anyhow!("unknown radix {name:?}"))?;
         prefs.radix.insert(key.clone(), radix);
     }
-    let record = match saved.pinned {
-        Some(pinned) => {
-            ensure!(!pinned.track.is_empty(), "empty transaction track path");
-            let trace = pinned.trace;
+    let record = match saved.record {
+        Some(record) => {
+            ensure!(!record.track.is_empty(), "empty transaction track path");
+            let trace = record.trace;
             let found = ctx
                 .traces
                 .tracks(trace)
                 .iter()
-                .find(|t| t.path == pinned.track);
+                .find(|t| t.path == record.track);
             let track = match found {
                 Some(t) => TrackSource::Resolved {
                     track: Traced::new(trace, t.id),
-                    path: pinned.track,
+                    path: record.track,
                 },
                 None => {
                     ctx.report
-                        .push(format!("Missing transaction track: {:?}", pinned.track));
+                        .push(format!("Missing transaction track: {:?}", record.track));
                     TrackSource::Unresolved {
                         trace,
-                        path: pinned.track,
+                        path: record.track,
                     }
                 }
             };
             Some(ShownRecord {
                 track,
-                id: volna_trace::data::transactions::TransactionRef(pinned.id),
+                id: volna_trace::data::transactions::TransactionRef(record.id),
             })
         }
         None => None,
     };
-    match record {
-        Some(record) => model.restore(record, true, prefs),
-        None => model.restore_prefs(prefs),
-    }
+    model.restore(record, saved.pinned, prefs);
     Ok(Panel {
         id: saved.id,
         title: crate::history::Journaled::new(saved.title),
