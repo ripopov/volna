@@ -490,71 +490,47 @@ impl Workspace {
                                 .w(px(1.0))
                                 .bg(t.border_variant)
                         });
-                        let row = row
-                            .relative()
-                            .children(guides)
-                            .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
-                            .child(chevron)
-                            .child(Icon::new(icon).size(t.px(14.0)).color(tint.color(&t)))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    // A scope none of whose signals can change in the view is faint.
-                                    .when(quiet && !selected, |name| {
-                                        name.text_color(colors.text_placeholder)
-                                    })
-                                    .child(name),
-                            )
-                            .when_some(stream_tag(&scope), |row, tag| {
-                                row.child(
+                        let row =
+                            row.relative()
+                                .children(guides)
+                                .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
+                                .child(chevron)
+                                .child(Icon::new(icon).size(t.px(14.0)).color(tint.color(&t)))
+                                .child(
                                     div()
-                                        .flex_none()
-                                        .max_w(t.px(90.0))
+                                        .flex_1()
+                                        .min_w_0()
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .text_ellipsis()
-                                        .px_1()
-                                        .rounded_sm()
-                                        .bg(t.badge.bg)
-                                        .text_color(t.badge.text)
-                                        .text_size(px(t.ui_size_small))
-                                        .child(SharedString::from(tag.to_owned())),
-                                )
-                            })
-                            .when_some(size.filter(|_| activity.is_none()), |row, size| {
-                                row.child(
-                                    div()
-                                        .debug_selector(move || format!("scope-size-{trace}-{id}"))
-                                        .flex_none()
-                                        .pl_1()
-                                        .text_size(px(t.ui_size_small))
-                                        .text_color(colors.text_placeholder)
-                                        .child(SharedString::from(size.label())),
-                                )
-                            })
-                            .when_some(activity, |row, a| {
-                                row.child(
-                                    div()
-                                        .debug_selector(move || {
-                                            format!("scope-activity-{trace}-{id}")
+                                        // A scope none of whose signals can change in the view is faint.
+                                        .when(quiet && !selected, |name| {
+                                            name.text_color(colors.text_placeholder)
                                         })
-                                        .flex_none()
-                                        .pl_1()
-                                        .text_size(px(t.ui_size_small))
-                                        .text_color(colors.text_placeholder)
-                                        .child(SharedString::from(a.label())),
+                                        .child(name),
                                 )
-                                .child(
-                                    activity_meter(a, &t).debug_selector(move || {
+                                .when_some(stream_tag(&scope), |row, tag| {
+                                    row.child(
+                                        div()
+                                            .flex_none()
+                                            .max_w(t.px(90.0))
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .px_1()
+                                            .rounded_sm()
+                                            .bg(t.badge.bg)
+                                            .text_color(t.badge.text)
+                                            .text_size(px(t.ui_size_small))
+                                            .child(SharedString::from(tag.to_owned())),
+                                    )
+                                })
+                                .when_some(activity, |row, a| {
+                                    row.child(activity_meter(a, &t).debug_selector(move || {
                                         format!("scope-meter-{trace}-{id}")
-                                    }),
-                                )
-                            })
-                            .context_menu(scope_menu);
+                                    }))
+                                })
+                                .context_menu(scope_menu);
                         Some(row.into_any_element())
                     })
                     .collect()

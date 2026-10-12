@@ -304,18 +304,17 @@ fn loads_run_on_the_executor_and_fill_rows(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-/// Scope rows gain a right-aligned signal count once the count after open
-/// is delivered on the executor, in light and dark themes alike.
+/// Scope rows remain free of inline counts when signal totals are ready
+/// but no activity index is available, in light and dark themes alike.
 #[gpui_kit::test]
-fn scope_rows_show_their_signal_count_in_both_themes(cx: &mut TestAppContext) {
+fn scope_rows_without_activity_hide_counts_in_both_themes(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     use volna_core::sidebar::{ScopeTreeModel, TreeNode};
     use volna_core::trace::Traced;
     init(cx);
     let window = cx.add_window(Workspace::new);
     let trace = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/picorv32.vtr");
-    // A cached activity sidecar replaces the signal count with a meter. Keep
-    // this count-only specimen independent of previously opened examples.
+    // A fresh copy has no cached activity sidecar from previously opened examples.
     let directory = tempfile::tempdir().unwrap();
     let specimen = directory.path().join("picorv32.vtr");
     std::fs::copy(trace, &specimen).unwrap();
@@ -340,6 +339,11 @@ fn scope_rows_show_their_signal_count_in_both_themes(cx: &mut TestAppContext) {
             )
             .expect("counted after open");
             assert!(size.signals > 0 && size.variables >= size.signals);
+            assert!(
+                ws.app
+                    .scope_activity(TreeNode::scope(Traced::new(TraceId::A, root)))
+                    .is_none()
+            );
             root
         })
         .unwrap();
@@ -361,21 +365,21 @@ fn scope_rows_show_their_signal_count_in_both_themes(cx: &mut TestAppContext) {
         let row = vcx
             .debug_bounds(Box::leak(format!("scope-row-A-{root}").into_boxed_str()))
             .expect("root scope row");
-        let count = vcx
-            .debug_bounds(Box::leak(format!("scope-size-A-{root}").into_boxed_str()))
-            .expect("signal count on the row");
-        assert!(count.size.width > gpui_kit::px(0.0), "{appearance:?}");
+        assert!(row.size.width > gpui_kit::px(0.0), "{appearance:?}");
         assert!(
-            count.left() > row.center().x && count.right() <= row.right(),
-            "{appearance:?}: the count sits at the row's right, {count:?} in {row:?}"
+            vcx.debug_bounds(Box::leak(format!("scope-size-A-{root}").into_boxed_str()))
+                .is_none(),
+            "{appearance:?}: signal totals belong in the tooltip"
         );
-        assert!(row.top() <= count.top() && count.bottom() <= row.bottom());
+        assert!(
+            vcx.debug_bounds(Box::leak(format!("scope-meter-A-{root}").into_boxed_str()))
+                .is_none()
+        );
     }
 }
 
-/// With an activity index beside the trace, scope rows show how many of
-/// their signals change in the view and a meter instead of the size alone,
-/// in light and dark themes alike.
+/// With an activity index beside the trace, scope rows show an activity
+/// meter without inline counts in light and dark themes alike.
 #[gpui_kit::test]
 fn scope_rows_show_activity_meters_in_both_themes(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -441,15 +445,14 @@ fn scope_rows_show_activity_meters_in_both_themes(cx: &mut TestAppContext) {
         vcx.update(|window, cx| window.draw(cx).clear(cx));
         let mut bounds = |name: String| vcx.debug_bounds(Box::leak(name.into_boxed_str()));
         let row = bounds(format!("scope-row-A-{root}")).expect("root scope row");
-        let count = bounds(format!("scope-activity-A-{root}")).expect("changing of total");
         let meter = bounds(format!("scope-meter-A-{root}")).expect("meter");
         assert!(
             bounds(format!("scope-size-A-{root}")).is_none(),
-            "the count replaces the size"
+            "the meter replaces the size"
         );
         assert!(
-            count.left() > row.center().x && count.right() <= meter.left(),
-            "{appearance:?}: {count:?} {meter:?}"
+            bounds(format!("scope-activity-A-{root}")).is_none(),
+            "activity counts are available in the tooltip"
         );
         assert!(
             meter.right() <= row.right() && meter.size.width > gpui_kit::px(20.0),
@@ -517,12 +520,10 @@ fn feature_showcase_workspace_restores_with_scope_activity_meters(cx: &mut TestA
         })
         .unwrap();
     vcx.update(|window, cx| window.draw(cx).clear(cx));
-    for part in ["scope-activity", "scope-meter"] {
-        let bounds = vcx
-            .debug_bounds(Box::leak(format!("{part}-A-{soc}").into_boxed_str()))
-            .expect("activity count and meter are rendered after restore");
-        assert!(bounds.size.width > gpui_kit::px(0.0));
-    }
+    let bounds = vcx
+        .debug_bounds(Box::leak(format!("scope-meter-A-{soc}").into_boxed_str()))
+        .expect("activity meter is rendered after restore");
+    assert!(bounds.size.width > gpui_kit::px(0.0));
 }
 
 #[gpui_kit::test]
