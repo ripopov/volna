@@ -178,7 +178,6 @@ fn fst_conversion_matches_shared_histories_including_aliases_and_raw_values() {
             assert_eq!(x.len(), y.len(), "{name}: {}", a.full_name(id));
             for i in 0..x.len() {
                 assert_eq!(x.time(i), y.time(i));
-                // Comparing bit patterns also covers NaN and signed zero reals.
                 match (x.value(Some(i)), y.value(Some(i))) {
                     (
                         volna_trace::data::WaveValue::Real(a),

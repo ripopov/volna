@@ -1,8 +1,7 @@
 //! Immutable activity indexes and reader-side sidecar access.
+
 use crate::remote::memory::{MemoryBudget, Reservation};
 
-/// An immutable activity index and the admission that follows its last shared
-/// owner, including classifications queued after its session closes.
 #[derive(Debug)]
 pub struct ActivityIndex {
     pub(crate) index: vtr::activity::Index,
@@ -16,8 +15,6 @@ impl std::ops::Deref for ActivityIndex {
     }
 }
 
-/// A session's activity index, when one valid for its trace was found
-/// beside the trace or in the user cache as the session opened.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn find_index(
     trace: &std::path::Path,
@@ -33,16 +30,12 @@ pub(crate) fn find_index(
     })
 }
 
-/// A recording that can build its missing activity index beside its reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ActivityBuildInfo {
     pub bytes: u64,
     pub format: vtr::activity::SourceFormat,
 }
 
-/// The owning session's source identity and shared, immutable activity index.
-/// A late-built index pays for itself; an index found at open is included in
-/// the session's initial resident-byte admission.
 pub(crate) struct ActivitySource {
     pub path: std::path::PathBuf,
     pub identity: vtr::activity::Identity,
@@ -110,8 +103,6 @@ impl ActivitySource {
             anyhow::bail!("activity build cancelled");
         }
         let sidecar = vtr::activity::Sidecar::new(&self.path, &self.identity, cache_dir);
-        // A persistent sibling lock coordinates separate server processes.
-        // Never unlink it: a waiter must lock the same inode as a new client.
         #[cfg(not(target_family = "wasm"))]
         let _lock = {
             let mut locked = None;
@@ -145,7 +136,6 @@ impl ActivitySource {
             }
             locked.ok_or_else(|| anyhow::anyhow!("cannot lock the activity sidecar"))?
         };
-        // Another process may have published while this one waited.
         let path = if let Some((path, index)) = sidecar.load(&self.identity) {
             drop(index);
             path

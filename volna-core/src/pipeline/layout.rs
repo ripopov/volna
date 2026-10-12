@@ -1,8 +1,6 @@
-//! Pixel layout of the pipeline panel for one frame: the header, the label
-//! column, the cells area, the visible row range, and the
-//! small interactive rectangles (label divider, Markers lane chips, retry). Pure:
-//! computed from the panel bounds and model state, then read by both the
-//! painter and the input handlers so a click lands on exactly what was drawn.
+//! Pixel layout of the pipeline panel for one frame: the header, the label column, the
+//! cells area, the visible row range, and the small interactive rectangles (label divider,
+//! Markers lane chips, retry).
 
 use std::ops::Range;
 
@@ -12,63 +10,45 @@ use crate::marker::Marker;
 use crate::wave::overlay::{LANE_H, MarkerLane, Measuring, SpanClocks, marker_lane};
 use crate::wave::viewport::Viewport;
 
-// Design-time sizes in logical pixels at zoom 1.0.
 pub const LABEL_W_MIN: f32 = 60.0;
 pub const LABEL_W_MAX: f32 = 420.0;
 pub const LABEL_W_DEFAULT: f32 = 190.0;
 const SPLITTER_TOLERANCE: f32 = 4.0;
 const RETRY_W: f32 = 72.0;
 const RETRY_H: f32 = 22.0;
-/// Rows thinner than two physical pixels use opaque aggregate presence.
 pub const OVERVIEW_PX: f64 = 2.0;
 
 #[derive(Clone, Debug, Default)]
 pub struct PipelineLayout {
     pub activity_controls: Vec<(super::ActivityCommand, Rect, String)>,
-    /// Lifetime activity in this frame's time window.
     pub activity: super::activity::Activity,
     pub bounds: Rect,
     pub header: Rect,
-    /// Clock ruler rows below the header, across the whole panel (empty without rulers).
     pub rulers: Rect,
-    /// The label column below the header.
     pub labels: Rect,
-    /// The cells area below the header, right of the labels.
     pub cells: Rect,
-    /// Grab zone of the label divider.
     pub label_split: Rect,
-    /// The row view this frame paints with, row height at the interface zoom.
     pub rows: RowView,
-    /// Source rows that touch the cells area.
     pub row_range: Range<usize>,
     pub device_scale: f64,
     pub row_count: usize,
     pub zoom: f32,
-    /// The Markers lane below the rulers, across the whole panel.
     pub marker_lane: MarkerLane,
-    /// The retry button of a failed load.
     pub retry: Option<Rect>,
 }
 
 #[derive(Clone, Copy)]
 pub struct LayoutInput<'a> {
     pub bounds: Rect,
-    /// Dock-resolved pixel width; bypasses independent label sizing.
     pub metadata_width: Option<f32>,
-    /// Already zoomed (the theme's `timeline_height`).
     pub header_h: f32,
-    /// Already zoomed height of all clock ruler rows.
     pub ruler_h: f32,
     pub zoom: f32,
-    /// Design pixels; multiplied by `zoom`.
     pub label_width: f32,
-    /// Design pixels; its row height is multiplied by `zoom`.
     pub rows: RowView,
     pub row_count: usize,
     pub markers: &'a [Marker],
-    /// Labels the spans between markers.
     pub spans: SpanClocks<'a>,
-    /// Adds the Measure lane under the Markers lane.
     pub measuring: Option<Measuring>,
     pub viewport: Viewport,
     pub failed: bool,
@@ -158,7 +138,6 @@ impl PipelineLayout {
         }
     }
 
-    /// Row under `y`, when it exists.
     pub fn row_at(&self, y: f32) -> Option<usize> {
         if y < self.cells.top() || y >= self.cells.bottom() {
             return None;
@@ -171,7 +150,6 @@ impl PipelineLayout {
         f64::from(self.rows.row_px) * self.device_scale < OVERVIEW_PX
     }
 
-    /// Top of row `ix` in the panel's coordinate space.
     pub fn row_y(&self, ix: usize) -> f32 {
         self.cells.top() + self.rows.y_of(ix as f64)
     }
@@ -180,12 +158,10 @@ impl PipelineLayout {
         f64::from(self.cells.width()).max(1.0)
     }
 
-    /// Ruler row under `p` when the panel shows `count` rulers.
     pub fn ruler_at(&self, p: Point, count: usize) -> Option<usize> {
         crate::wave::layout::ruler_row(self.rulers, p, count)
     }
 
-    /// Time under panel x, in the cells area's viewport.
     pub fn time_at(&self, viewport: &Viewport, x: f32) -> f64 {
         viewport.time_at(f64::from(x - self.cells.left()), self.cells_width_f64())
     }

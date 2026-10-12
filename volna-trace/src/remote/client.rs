@@ -1,5 +1,4 @@
-//! One remote connection's complete-object queue. The host sends returned
-//! commands, drives bounded steps, and delivers complete results to the caller.
+//! One remote connection's complete-object queue.
 
 use super::ClientStep;
 use super::activity::ActivityTransfer;
@@ -51,10 +50,6 @@ enum Active<Tag> {
     },
 }
 
-/// Queues Open, signal and track loads for one connection and runs one
-/// command at a time; signal requests are deduplicated and split into
-/// [`MAX_BATCH`] batches. Hosts send each [`ClientStep<Tag>`] acknowledgement and
-/// deliver its result before [`take_command`](Self::take_command).
 pub struct RemoteClient<Tag = u64> {
     session: Option<u64>,
     request: u64,
@@ -67,7 +62,6 @@ pub struct RemoteClient<Tag = u64> {
 }
 
 impl<Tag: Copy> RemoteClient<Tag> {
-    /// A connection that opens the recording of tag `tag`.
     pub fn new(
         tag: Tag,
         generation: u64,
@@ -93,14 +87,10 @@ impl<Tag: Copy> RemoteClient<Tag> {
         })
     }
 
-    /// The server's identity for the open recording, once it is open.
     pub fn session(&self) -> Option<u64> {
         self.session
     }
 
-    /// Submit the same work item used by the local executor. Rejected work
-    /// and empty signal loads return an immediate completion in `Err`, with
-    /// the caller's correlation; accepted work completes through `accept` or `step`.
     pub fn submit(&mut self, request: LoadRequest<Tag>) -> Result<(), LoadResult<Tag>> {
         if !self.connected || self.session.is_none() || self.session != request.remote_id() {
             return Err(request.fail(anyhow::anyhow!(
@@ -165,8 +155,6 @@ impl<Tag: Copy> RemoteClient<Tag> {
         Ok(())
     }
 
-    /// Call after sending the preceding step's ACK and delivering its result.
-    /// At most one command is active, regardless of how many loads are queued.
     pub fn take_command(&mut self) -> anyhow::Result<Option<Packet>> {
         if let Some(open) = self.opening.take() {
             return Ok(Some(open));
@@ -322,15 +310,10 @@ impl<Tag: Copy> RemoteClient<Tag> {
         Ok(Some(packet))
     }
 
-    /// Filter queued demand without exposing a viewer or cancelling active protocol responses.
     pub fn retain_queued(&mut self, mut wanted: impl FnMut(&mut LoadRequest<Tag>) -> bool) {
         self.queued.retain_mut(|queued| wanted(&mut queued.job));
     }
 
-    /// Consume one decoded packet from the active response. Send returned
-    /// acknowledgements before reading another packet; schedule `step()` on a
-    /// later executor turn after a yield. On an error, disconnect to release
-    /// private builders and deliver failures for all pending work.
     pub fn accept(&mut self, packet: Packet) -> anyhow::Result<ClientStep<Tag>> {
         let step = match self
             .active
@@ -349,8 +332,6 @@ impl<Tag: Copy> RemoteClient<Tag> {
         self.accept_step(step)
     }
 
-    /// Resume decoding after [`ClientStep::Yield`], without reading another
-    /// transport packet. Treat the returned step as an `accept()` result.
     pub fn step(&mut self) -> anyhow::Result<ClientStep<Tag>> {
         let step = match self
             .active
@@ -479,8 +460,6 @@ impl<Tag: Copy> RemoteClient<Tag> {
         Ok(step)
     }
 
-    /// Fail unfinished loads on transport/decode failure. Previously delivered
-    /// objects remain with their consumers and work without this connection.
     pub fn disconnect(&mut self, message: &str) -> Vec<LoadResult<Tag>> {
         self.connected = false;
         self.opening = None;

@@ -1,22 +1,4 @@
 //! Stacked areas: a group drawn as one area whose layers are its signals.
-//!
-//! Every signal below a stacked group that reads as a number is a layer: a
-//! bit counts 0 or 1, a vector or real the number its row's format reads
-//! ([`Translator::numeric_kind`]), the same number its plot would draw.
-//! List order is stack order, so the last layer sits on the baseline.
-//! Positive parts stack up from zero and negative parts down from it.
-//! Where a layer is undefined (X, Z, or no value yet), the layers below it
-//! are drawn and the sum reads X; a missing value is never read as zero.
-//!
-//! Members change at different times, so a stack is built on the union of
-//! their change times, never by sample index. Views with few changes draw
-//! every step of that union exactly; busier views draw one pixel column
-//! each, with every layer's time-weighted mean over the column ([`frame`]).
-//! Means over one span add up, so the stack's top is the column's mean
-//! total. Long layers read those means from an [`IntegralSummary`], so a
-//! frame costs O(layers × width) instead of its visible changes. The
-//! whole-trace scale comes from one merged walk over the layers
-//! ([`TotalSummary`]), on the load worker when they are long.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -27,35 +9,19 @@ use crate::wave::analog::{self, EXACT_RATIO, Sample};
 use crate::wave::viewport::Viewport;
 use volna_trace::data::{SignalHistory, SignalShape};
 
-/// Layers that change at most this often in total get their whole-trace
-/// scale from a walk on the UI thread; longer ones build it on the load
-/// worker.
 pub const WALK_MAX: usize = super::group::WALK_MAX;
-/// The merged walk sums changes incrementally and recomposes every this
-/// many instants, so rounding cannot drift.
 const RECOMPOSE_EVERY: u32 = 256;
-/// Changes per block of an [`IntegralSummary`].
 pub const INTEGRAL_BLOCK: usize = 64;
-/// A stack whose layers change more often than [`WALK_MAX`] in all gets an
-/// [`IntegralSummary`] for each layer with at least this many changes;
-/// shorter layers are cheap to walk.
 pub const INTEGRAL_MIN_CHANGES: usize = analog::SUMMARY_MIN_CHANGES;
-/// A layer with more visible changes than this many per pixel column reads
-/// its column means from its summary instead of walking them.
 const SUMMARY_PER_COLUMN: usize = 16;
 
-/// How a member counts in a stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Reading {
-    /// A one-bit signal: 0 or 1, whatever its format.
     Bit,
-    /// A vector or real, as its row's format reads it.
     Number(NumericKind),
 }
 
 impl Reading {
-    /// How a row of `shape` shown with `tr` counts, or `None` when it has no
-    /// number (text, strings, events): such a row is left out.
     pub fn of(shape: SignalShape, tr: &dyn Translator) -> Option<Self> {
         let kind = analog::numeric_kind(shape, tr)?;
         Some(if shape == SignalShape::Bit {
@@ -65,7 +31,6 @@ impl Reading {
         })
     }
 
-    /// Whether every number it reads is a whole number.
     pub fn is_integer(self) -> bool {
         matches!(
             self,
@@ -73,7 +38,6 @@ impl Reading {
         )
     }
 
-    /// Value `i` of `h` (the value before the first change when `None`).
     pub fn sample(self, h: &dyn SignalHistory, i: Option<usize>) -> Sample {
         let Self::Number(kind) = self else {
             return analog::sample(h, NumericKind::Unsigned, i);
@@ -82,17 +46,12 @@ impl Reading {
     }
 }
 
-/// A member of a stacked group, read as a number.
 #[derive(Clone)]
 pub struct Layer {
-    /// The member's entry in its panel.
     pub entry: usize,
     pub history: Arc<dyn SignalHistory>,
     pub reading: Reading,
-    /// Its integral summary, when one matching the history and reading is
-    /// resident.
     pub summary: Option<Arc<IntegralSummary>>,
-    /// A summary for this long history is still building.
     pub building: bool,
 }
 
@@ -107,7 +66,6 @@ impl Layer {
         }
     }
 
-    /// With `summary` when it summarizes this history read this way.
     pub fn with_summary(mut self, summary: Option<Arc<IntegralSummary>>) -> Self {
         self.summary = summary.filter(|s| s.matches(&self.history, self.reading));
         self
@@ -117,14 +75,11 @@ impl Layer {
         self.reading.sample(self.history.as_ref(), i)
     }
 
-    /// The value held at `t`.
     pub fn at(&self, t: u64) -> Sample {
         self.sample(self.history.index_at(t))
     }
 }
 
-/// What a [`TotalSummary`] summarizes: each layer's history and reading, in
-/// list order.
 pub type Key = Vec<(usize, Reading)>;
 
 pub fn key(layers: &[Layer]) -> Key {
@@ -134,21 +89,13 @@ pub fn key(layers: &[Layer]) -> Key {
         .collect()
 }
 
-/// Where one instant (or one column's means) of a stack reaches.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Composed {
-    /// Top of the positive parts drawn; zero when there are none.
     pub top: f64,
-    /// Bottom of the negative parts drawn; zero when there are none.
     pub bottom: f64,
-    /// Some layer is undefined: it and the layers above it are not drawn.
     pub undefined: bool,
 }
 
-/// Stack `values` (in list order) from the baseline up, calling
-/// `band(layer, low, high)` for every part drawn: positive parts go up
-/// from the top so far, negative ones down from the bottom so far, until
-/// the first undefined layer.
 pub fn compose(values: &[Sample], mut band: impl FnMut(usize, f64, f64)) -> Composed {
     let mut c = Composed::default();
     for (k, v) in values.iter().enumerate().rev() {
@@ -170,7 +117,6 @@ pub fn compose(values: &[Sample], mut band: impl FnMut(usize, f64, f64)) -> Comp
     c
 }
 
-/// The sum of `values`, or `None` when one is undefined: the sum reads X.
 pub fn total(values: &[Sample]) -> Option<f64> {
     values.iter().try_fold(0.0, |sum, v| match v {
         Sample::Value(v) => Some(sum + v),
@@ -178,12 +124,10 @@ pub fn total(values: &[Sample]) -> Option<f64> {
     })
 }
 
-/// Each layer's value at `t`, in list order.
 pub fn values_at(layers: &[Layer], t: u64) -> Vec<Sample> {
     layers.iter().map(|l| l.at(t)).collect()
 }
 
-/// The last change at or before `t`, `None` before the first (or before 0).
 fn index_at(h: &dyn SignalHistory, t: f64) -> Option<usize> {
     if t < 0.0 {
         return None;
@@ -191,7 +135,6 @@ fn index_at(h: &dyn SignalHistory, t: f64) -> Option<usize> {
     h.index_at(t.floor() as u64)
 }
 
-/// Every layer's changes inside `vp`.
 pub fn visible_changes(layers: &[Layer], vp: &Viewport) -> usize {
     layers
         .iter()
@@ -199,48 +142,34 @@ pub fn visible_changes(layers: &[Layer], vp: &Viewport) -> usize {
         .sum()
 }
 
-/// What a stacked row draws in one frame of `width` pixel columns.
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
-    /// Every step exactly (`true`), or one pixel column each.
     pub exact: bool,
-    /// Each span's left and right edge in pixels from the plot's left: a
-    /// step between two changes, or a column `x..x + 1`.
     pub spans: Vec<(f64, f64)>,
-    /// Layer values per span, in list order: the values held during a
-    /// step, or each layer's mean over a column.
     values: Vec<Sample>,
     layers: usize,
-    /// Per column, the layers' changes inside it after its first instant:
-    /// its values are means only where there are some. Empty when exact.
     changes: Vec<u32>,
     waiting: bool,
 }
 
 impl Frame {
-    /// The layer values of span `span`.
     pub fn values(&self, span: usize) -> &[Sample] {
         &self.values[span * self.layers..(span + 1) * self.layers]
     }
 
-    /// The layers' changes inside column `span` after its first instant;
-    /// none for a step.
     pub fn changes(&self, span: usize) -> u32 {
         self.changes.get(span).copied().unwrap_or(0)
     }
 
-    /// The span under `x` pixels from the plot's left.
     pub fn span_at(&self, x: f64) -> Option<usize> {
         let i = self.spans.partition_point(|s| s.1 <= x);
         (i < self.spans.len() && self.spans[i].0 <= x).then_some(i)
     }
 
-    /// Too many changes to walk before the layers' summaries are ready.
     pub fn waiting(&self) -> bool {
         self.waiting
     }
 
-    /// The lowest and highest point the frame draws, with the baseline.
     pub fn extent(&self) -> (f64, f64) {
         (0..self.spans.len()).fold((0.0, 0.0), |(lo, hi), s| {
             let c = compose(self.values(s), |_, _, _| {});
@@ -249,10 +178,6 @@ impl Frame {
     }
 }
 
-/// The frame of `layers` over `vp` in `width` columns: every step when the
-/// layers change at most a quarter as often as there are columns, else
-/// one time-weighted mean per layer and column. Its allocations are
-/// bounded by the width.
 pub fn frame(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     if width == 0 || vp.width() <= 0.0 || layers.is_empty() {
         return Frame {
@@ -264,7 +189,6 @@ pub fn frame(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     if visible as f64 <= width as f64 * EXACT_RATIO {
         return steps(layers, vp, width);
     }
-    // A long layer whose summary builds waits rather than walk on the UI thread.
     let waiting = layers.iter().any(|l| {
         l.building
             && l.summary.is_none()
@@ -280,7 +204,6 @@ pub fn frame(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     columns(layers, vp, width)
 }
 
-/// Every step of the layers' merged changes inside `vp`.
 pub fn steps(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     let w = width as f64;
     let mut times: Vec<u64> = Vec::new();
@@ -312,7 +235,6 @@ pub fn steps(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
         }
         for (l, i) in layers.iter().zip(&mut at) {
             let h = l.history.as_ref();
-            // Up to the last change at `ta`, of several at one time.
             while let Some(next) =
                 Some(i.map_or(0, |i| i + 1)).filter(|&n| n < h.len() && h.time(n) as f64 <= ta)
             {
@@ -325,12 +247,6 @@ pub fn steps(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     frame
 }
 
-/// Each layer's time-weighted mean over each pixel column of `vp`: from
-/// its [`IntegralSummary`] when it has one and changes more than 16 times
-/// per column in view, O(width × (log n + block)), else by walking its
-/// changes inside the view once, O(visible changes + width). A layer
-/// undefined for any part of a column is undefined there, so a short X
-/// survives any zoom.
 pub fn columns(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     let n = layers.len();
     let w = width as f64;
@@ -346,14 +262,11 @@ pub fn columns(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
             let mut density = 0;
             for c in 0..width {
                 let (ta, tb) = (vp.time_at(c as f64, w), vp.time_at((c + 1) as f64, w));
-                // Columns change about as often as their neighbours: start
-                // the search where the last column's density says.
                 let guess = ia.map(|i| i + density);
                 let ib = index_before(h, tb, guess).max(ia);
                 density = changes_between(ia, ib);
                 values[c * n + k] = prefixes.mean(ia, ib, ta, tb);
                 changes[c] += (changes_between(ia, ib)) as u32;
-                // The next column starts where this one ends.
                 ia = match ib {
                     Some(ib) if tb >= 0.0 => h.index_at_hint(tb.floor() as u64, ib),
                     _ => index_at(h, tb),
@@ -412,7 +325,6 @@ pub fn columns(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     }
 }
 
-/// The last change strictly before `t`, searching from `hint`.
 fn index_before(h: &dyn SignalHistory, t: f64, hint: Option<usize>) -> Option<usize> {
     if t <= 0.0 {
         return None;
@@ -432,8 +344,6 @@ fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     }
 }
 
-/// A sum kept with Kahan's compensation, so long prefix sums stay exact to
-/// the last bits.
 #[derive(Clone, Copy, Default)]
 struct Kahan {
     sum: f64,
@@ -449,21 +359,11 @@ impl Kahan {
     }
 }
 
-/// Per block of [`INTEGRAL_BLOCK`] changes of one history read one way, the
-/// integral of its values over their spans since its first change, and how
-/// many of those spans are undefined for a while: about 0.19 bytes per
-/// change. A column's mean is then the difference of two prefixes, each a
-/// block entry and at most half a block read from the history. Built on the
-/// load worker for the long layers of a stack; the document shares it
-/// between panels and releases it (and its memory reservation) with the
-/// history. One-bit members get one too, since they have no analog summary.
 pub struct IntegralSummary {
     reading: Reading,
     history: usize,
     len: usize,
-    /// `integral[m]`: the sum of every span of changes `0..64 m`.
     integral: Vec<f64>,
-    /// `undefined[m]`: how many of those spans are undefined and last.
     undefined: Vec<u32>,
     _reservation: volna_trace::remote::memory::Reservation,
 }
@@ -479,9 +379,6 @@ impl std::fmt::Debug for IntegralSummary {
 }
 
 impl IntegralSummary {
-    /// One pass over `h` read as `reading`. The span of change `j` is its
-    /// value from its time to the next change's; the last change's span is
-    /// open and never summed.
     pub fn build(
         h: &Arc<dyn SignalHistory>,
         reading: Reading,
@@ -530,21 +427,16 @@ impl IntegralSummary {
         self.reading
     }
 
-    /// Identity of the summarized history.
     pub fn identity(&self) -> usize {
         self.history
     }
 
-    /// Whether this summarizes `h` read as `reading`.
     pub fn matches(&self, h: &Arc<dyn SignalHistory>, reading: Reading) -> bool {
         self.reading == reading
             && self.history == analog::history_identity(h)
             && self.len == h.len()
     }
 
-    /// The sum of the spans of changes `0..k` (`k < len`) and how many of
-    /// them are undefined: the nearer block entry, corrected by at most half
-    /// a block of spans read from `h`.
     pub fn prefix(&self, h: &dyn SignalHistory, k: usize) -> (f64, u32) {
         let span = |j: usize| {
             let dur = (h.time(j + 1) - h.time(j)) as f64;
@@ -557,7 +449,6 @@ impl IntegralSummary {
         let m = (k / INTEGRAL_BLOCK).min(self.integral.len() - 1);
         let up = m + 1;
         if k % INTEGRAL_BLOCK > INTEGRAL_BLOCK / 2 && up < self.integral.len() {
-            // Nearer the next block: subtract the spans up to it.
             let (mut sum, mut count) = (self.integral[up], self.undefined[up]);
             for j in k..up * INTEGRAL_BLOCK {
                 let (v, u) = span(j);
@@ -575,8 +466,6 @@ impl IntegralSummary {
         (sum, count)
     }
 
-    /// The mean over `[ta, tb)` of `h`, where `ia` holds at `ta` and `ib` is
-    /// the last change before `tb`; undefined when any part of it is.
     pub fn mean(
         &self,
         h: &dyn SignalHistory,
@@ -589,9 +478,6 @@ impl IntegralSummary {
     }
 }
 
-/// Prefixes of one summarized history read left to right: a prefix just
-/// after the last one continues it instead of reading a block entry, so a
-/// column that starts where the previous one ended reads almost nothing.
 struct Prefixes<'a> {
     summary: &'a IntegralSummary,
     h: &'a dyn SignalHistory,
@@ -653,16 +539,10 @@ impl<'a> Prefixes<'a> {
     }
 }
 
-/// A layer's integral summary, as the document holds it.
 pub enum IntegralLoad {
-    Building {
-        history: usize,
-    },
+    Building { history: usize },
     Ready(Arc<IntegralSummary>),
-    /// Refused (the memory budget); the painter walks the changes instead.
-    Failed {
-        history: usize,
-    },
+    Failed { history: usize },
 }
 
 impl IntegralLoad {
@@ -674,22 +554,15 @@ impl IntegralLoad {
     }
 }
 
-/// What the pointer reads over a stacked row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Readout {
-    /// The span read: a step, or a column whose values are means.
     pub span: usize,
-    /// Each layer's value (or mean), in list order.
     pub values: Vec<Sample>,
-    /// Their sum, `None` when a layer is undefined.
     pub total: Option<f64>,
-    /// The layer whose part is under the pointer.
     pub hot: Option<usize>,
 }
 
 impl Readout {
-    /// A layer's share of the stack: its size over the sum of every
-    /// layer's size, so negative parts count too.
     pub fn share(&self, layer: usize) -> Option<f64> {
         let Sample::Value(v) = self.values.get(layer)? else {
             return None;
@@ -706,8 +579,6 @@ impl Readout {
     }
 }
 
-/// What the pointer at `x` pixels from the plot's left and at value
-/// `value` (on the plot's scale) reads from `frame`.
 pub fn readout(frame: &Frame, x: f64, value: f64) -> Option<Readout> {
     let span = frame.span_at(x)?;
     let values = frame.values(span).to_vec();
@@ -725,9 +596,6 @@ pub fn readout(frame: &Frame, x: f64, value: f64) -> Option<Readout> {
     })
 }
 
-/// The next time after `from` (or before it, with `forward == false`)
-/// where the stack's sum changes, stepping over changes that cancel out.
-/// Gives up after `limit` candidate times.
 pub fn total_edge(layers: &[Layer], from: u64, forward: bool, limit: usize) -> Option<u64> {
     let sum_at = |t: u64| {
         let values = values_at(layers, t);
@@ -754,8 +622,6 @@ pub fn total_edge(layers: &[Layer], from: u64, forward: bool, limit: usize) -> O
     None
 }
 
-/// A scale from `lo` to `hi` rounded out to clean numbers, always holding
-/// zero: 1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 times a power of ten.
 pub fn clean_range((lo, hi): (f64, f64)) -> (f64, f64) {
     fn up(x: f64) -> f64 {
         if x <= 0.0 || !x.is_finite() {
@@ -774,16 +640,10 @@ pub fn clean_range((lo, hi): (f64, f64)) -> (f64, f64) {
     if hi > lo { (lo, hi) } else { (0.0, 1.0) }
 }
 
-/// Every change of the layers' histories: a stack of at most [`WALK_MAX`]
-/// is walked on the UI thread.
 pub fn changes(layers: &[Layer]) -> usize {
     layers.iter().map(|l| l.history.len()).sum()
 }
 
-/// The layers' changes in time order, one instant at a time, with the
-/// values held after each: what the whole-trace walk and the peaks of a
-/// view share. Sums of the defined values are kept incrementally and
-/// recomputed every [`RECOMPOSE_EVERY`] instants, so rounding cannot drift.
 struct Merge<'a> {
     layers: &'a [Layer],
     at: Vec<Option<usize>>,
@@ -796,8 +656,6 @@ struct Merge<'a> {
 }
 
 impl<'a> Merge<'a> {
-    /// The values held at `at`, each layer's last change at or before it
-    /// (`None` before a layer's first).
     fn new(layers: &'a [Layer], at: Vec<Option<usize>>) -> Self {
         let values: Vec<Sample> = layers.iter().zip(&at).map(|(l, &i)| l.sample(i)).collect();
         let mut heap = BinaryHeap::with_capacity(layers.len());
@@ -832,12 +690,10 @@ impl<'a> Merge<'a> {
                 });
     }
 
-    /// The time of the next change, if any.
     fn next(&self) -> Option<u64> {
         self.heap.peek().map(|Reverse((t, _))| *t)
     }
 
-    /// Apply every change at the next change time and return that time.
     fn step(&mut self) -> Option<u64> {
         let t = self.next()?;
         while let Some(&Reverse((tk, k))) = self.heap.peek() {
@@ -872,12 +728,10 @@ impl<'a> Merge<'a> {
         Some(t)
     }
 
-    /// The sum of the values held, `None` when one is undefined.
     fn total(&self) -> Option<f64> {
         (self.undefined == 0).then_some(self.pos + self.neg)
     }
 
-    /// The top and bottom of the stack held.
     fn reach(&self) -> (f64, f64) {
         if self.undefined == 0 {
             (self.pos, self.neg)
@@ -888,8 +742,6 @@ impl<'a> Merge<'a> {
     }
 }
 
-/// The lowest and highest value of a column's total, `None` where it is
-/// undefined throughout.
 pub type Peak = Option<(f64, f64)>;
 
 fn widen(peak: &mut Peak, v: f64) {
@@ -899,10 +751,6 @@ fn widen(peak: &mut Peak, v: f64) {
     });
 }
 
-/// The total's lowest and highest value in each of `width` pixel columns of
-/// `vp`, from a merged walk over the layers' changes in view:
-/// O(visible changes × log layers + width). Exact; the peak band of a view
-/// with few changes.
 pub fn peaks(layers: &[Layer], vp: &Viewport, width: usize) -> Vec<Peak> {
     let w = width as f64;
     let t0 = vp.time_at(0.0, w);
@@ -914,7 +762,6 @@ pub fn peaks(layers: &[Layer], vp: &Viewport, width: usize) -> Vec<Peak> {
     let mut out = vec![None; width];
     for (c, peak) in out.iter_mut().enumerate() {
         let (ta, tb) = (vp.time_at(c as f64, w), vp.time_at((c + 1) as f64, w));
-        // A change at the column's first instant replaces what held before.
         while merge.next().is_some_and(|t| (t as f64) <= ta) {
             merge.step();
         }
@@ -931,33 +778,19 @@ pub fn peaks(layers: &[Layer], vp: &Viewport, width: usize) -> Vec<Peak> {
     out
 }
 
-/// Time blocks of a [`TotalSummary`]'s finest level, at most.
 const TOTAL_BLOCKS: u64 = 1 << 16;
-/// Each coarser level of a [`TotalSummary`] merges this many blocks.
 const TOTAL_FANOUT: usize = 16;
 
-/// What one merged walk over a stack's layers gives: the lowest bottom and
-/// highest top it reaches over the whole trace, which set its scale, and
-/// the total's lowest and highest value per block of time, with coarser
-/// levels of 16 blocks above, for the peak band of busy views. No summary
-/// of the members can give those, because the maximum of a sum is not the
-/// sum of the maxima. Built on the load worker for long layers; the
-/// document shares it between the panels that stack the same signals the
-/// same way and charges it to the memory budget.
 pub struct TotalSummary {
     key: Key,
     range: (f64, f64),
     start: u64,
     shift: u32,
-    /// `levels[0]` has one extent per block of `1 << shift` ticks from
-    /// `start`; each level above merges [`TOTAL_FANOUT`] of the one below.
     levels: Vec<Vec<Peak>>,
     _reservation: volna_trace::remote::memory::Reservation,
 }
 
 impl TotalSummary {
-    /// Walk every change of `layers` in time order over the trace's time
-    /// range `span`: O(changes × log layers + blocks).
     pub fn build(
         layers: &[Layer],
         span: (u64, u64),
@@ -994,7 +827,6 @@ impl TotalSummary {
         )?;
         let block = |t: u64| ((t.clamp(start, end) - start) >> shift) as usize;
         let mut level: Vec<Peak> = vec![None; blocks];
-        // The total held from `since` up to (not including) `until`.
         let hold = |level: &mut [Peak], total: Option<f64>, since: u64, until: u64| {
             if let Some(v) = total
                 && until > since
@@ -1051,11 +883,6 @@ impl TotalSummary {
         (1u64 << self.shift) as f64 * (TOTAL_FANOUT as f64).powi(level as i32)
     }
 
-    /// The total's lowest and highest value in each of `width` columns of
-    /// `vp`, from the coarsest level whose blocks fit a column (the finest
-    /// when none does): a column reads the blocks it touches, so its band
-    /// may reach up to one block past it on either side, never below its
-    /// own peak.
     pub fn peaks(&self, vp: &Viewport, width: usize) -> Vec<Peak> {
         let mut out = vec![None; width];
         if width == 0 || vp.width() <= 0.0 {
@@ -1071,7 +898,6 @@ impl TotalSummary {
         let block_at = |t: f64| ((t - self.start as f64) / ticks).floor();
         for (c, peak) in out.iter_mut().enumerate() {
             let a = block_at(vp.time_at(c as f64, w)).max(0.0);
-            // The block holding the column's last instant.
             let b = block_at(vp.time_at((c + 1) as f64, w) - 1e-9 * ticks);
             if b < 0.0 || a >= level.len() as f64 {
                 continue;
@@ -1093,27 +919,21 @@ impl TotalSummary {
             + blocks * std::mem::size_of::<Peak>()) as u64
     }
 
-    /// The layers it summarizes (see [`key`]).
     pub fn key(&self) -> &Key {
         &self.key
     }
 
-    /// The lowest bottom and highest top over the whole trace, with zero.
     pub fn range(&self) -> (f64, f64) {
         self.range
     }
 }
 
-/// A stack's whole-trace summary, as the document holds it.
 pub enum TotalLoad {
     Building,
     Ready(Arc<TotalSummary>),
-    /// Refused (the memory budget); the scale follows the visible window.
     Failed,
 }
 
-/// A number as a stack's cells and labels show it: whole numbers plainly,
-/// others with three or four significant digits.
 pub fn number(v: f64) -> String {
     let v = if v == 0.0 { 0.0 } else { v };
     if v.fract() == 0.0 && v.abs() < 1e15 {

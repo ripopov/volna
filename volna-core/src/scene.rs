@@ -1,9 +1,4 @@
 //! The display list a canvas view produces and a frontend paints.
-//!
-//! Primitives carry resolved colours (the core theme resolves them) and font
-//! *roles*; a frontend maps roles to its own font handles. Text widths come back
-//! through [`TextMeasure`], cached per string in [`TextCache`] so the core never
-//! shapes the same label twice.
 
 use std::collections::HashMap;
 
@@ -15,7 +10,6 @@ use std::sync::Arc;
 mod presence;
 pub use presence::PresenceMask;
 
-/// A typeface role. The theme names the family and size for each role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FontRole {
     Ui,
@@ -26,14 +20,11 @@ pub enum FontRole {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prim {
-    /// One mask texel per physical pixel in `rect`, with opaque `color` ink.
-    /// Frontends own image conversion, upload and bounded texture lifetime.
     Presence {
         rect: Rect,
         mask: Arc<PresenceMask>,
         color: Color,
     },
-    /// Filled rectangle with optional rounded corners and a 1 px-style border.
     Quad {
         rect: Rect,
         fill: Color,
@@ -41,13 +32,11 @@ pub enum Prim {
         border_width: f32,
         border_color: Color,
     },
-    /// Stroked line segments of one colour.
     Lines {
         segments: Vec<[Point; 2]>,
         color: Color,
         width: f32,
     },
-    /// One line of text, vertically centred in a box of `height` starting at `origin`.
     Text {
         origin: Point,
         height: f32,
@@ -56,13 +45,11 @@ pub enum Prim {
         size: f32,
         color: Color,
     },
-    /// A monochrome icon fitted to `rect`.
     Icon {
         name: IconName,
         rect: Rect,
         color: Color,
     },
-    /// Clip subsequent primitives until the matching [`Prim::PopClip`].
     PushClip(Rect),
     PopClip,
 }
@@ -70,9 +57,7 @@ pub enum Prim {
 #[derive(Default, Debug)]
 pub struct Scene {
     pub prims: Vec<Prim>,
-    /// Regions that want a specific pointer shape when hovered.
     pub cursors: Vec<(Rect, CursorIcon)>,
-    /// A pointer shape that overrides everything (active drags).
     pub window_cursor: Option<CursorIcon>,
 }
 
@@ -175,7 +160,6 @@ impl Scene {
         self.prims.push(Prim::PopClip);
     }
 
-    /// Filled quads only, for tests.
     pub fn quads(&self) -> impl Iterator<Item = (Rect, Color)> + '_ {
         self.prims.iter().filter_map(|p| match p {
             Prim::Quad { rect, fill, .. } => Some((*rect, *fill)),
@@ -183,7 +167,6 @@ impl Scene {
         })
     }
 
-    /// Text runs only, for tests.
     pub fn texts(&self) -> impl Iterator<Item = &str> + '_ {
         self.prims.iter().filter_map(|p| match p {
             Prim::Text { text, .. } => Some(text.as_str()),
@@ -192,19 +175,12 @@ impl Scene {
     }
 }
 
-/// Implemented by a frontend with its text system.
 pub trait TextMeasure {
-    /// Advance width in logical pixels of `text` set in `font` at `size`.
     fn text_width(&mut self, text: &str, font: FontRole, size: f32) -> f32;
 }
 
-/// Width measurements keyed by string, role and size. Bounded: it is cleared
-/// when it grows past a few thousand entries, which only happens with a
-/// stream of unique labels (tick labels while panning), all cheap to remeasure.
 #[derive(Default)]
 pub struct TextCache {
-    /// By font and size bits, then by text, so a hit looks up the borrowed
-    /// text without allocating a key.
     map: HashMap<(FontRole, u32), HashMap<Box<str>, f32>>,
     len: usize,
 }
@@ -234,8 +210,6 @@ impl TextCache {
     }
 }
 
-/// Fixed-advance measurement for tests and headless use: every character is
-/// `0.6 × size` wide, which is close to a monospace face.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MonoMeasure;
 

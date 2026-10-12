@@ -1,48 +1,4 @@
-//! # VTR: Versatile Trace Record
-//!
-//! An open trace store for hardware simulation: signal waveforms, transaction
-//! streams, the elaborated design hierarchy and relations between
-//! transactions in one random-access file.
-//!
-//! * [`Writer`] — streaming writer usable from a running simulator
-//!   ([`writer`] has the ordering rules and value semantics).
-//! * [`Reader`] — random-access, memory-mapped reader, `Send + Sync`
-//!   ([`reader`] has the query guide and cost model).
-//!
-//! The data model:
-//! * **Hierarchy** ([`hierarchy`]): a forest of scopes, variables, streams,
-//!   generators and enum tables with typed [`Value`] attributes. A variable
-//!   names a signal ([`SignalId`]); aliases share one. [`census`] counts
-//!   the distinct signals below each scope.
-//! * **Waveforms** ([`signal`]): value changes of 2/4/9-state bit vectors,
-//!   reals and variable-length byte strings.
-//! * **Transactions** ([`txblock`]): intervals of a generator with
-//!   attributes, events, pipeline stages, a parent and a status, plus typed
-//!   relations between them. Log records ([`logblock`])
-//!   and clock stretches ([`clock`]) are transactions too.
-//!
-//! Strings are interned ([`StrId`]); every fallible call returns
-//! [`Result`]. There is no global state: all settings are in
-//! [`WriterOptions`] and [`ReadOptions`]. `block`, `container`, `varint` and
-//! `xform` are format internals, public for inspection tools. The file format
-//! is specified in `vtr/docs/SPEC.md` in the repository.
-//!
-//! VTR contains runtime data and identity only. Design-source mappings and
-//! presentation belong in a separate VDB layer; this crate does not depend
-//! on VDB, a viewer, or a simulator integration. Log-site source provenance
-//! is the sole exception.
-//!
-//! # Writing and reading a waveform
-//!
-//! ```rust
-#![doc = include_str!("../examples/waveform.rs")]
-//! ```
-//!
-//! # Transactions
-//!
-//! ```rust
-#![doc = include_str!("../examples/transactions.rs")]
-//! ```
+//! VTR: random-access storage for simulation waveforms, transactions, and hierarchy.
 
 pub mod activity;
 pub mod block;

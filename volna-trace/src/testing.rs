@@ -1,9 +1,4 @@
 //! Test fixtures, built only for tests and with the `testing` feature.
-//!
-//! [`ProceduralTrace`] computes its histories: change `i` happens at
-//! `i * period + jitter(i)` and its value is a hash of `i`, so a
-//! 100-million-transition signal costs no memory and the renderer's search
-//! path is exercised exactly as it would be on a file-backed history.
 
 use std::sync::Arc;
 
@@ -19,7 +14,6 @@ pub struct ProceduralTrace {
 }
 
 fn mix(mut x: u64) -> u64 {
-    // splitmix64 finaliser
     x = x.wrapping_add(0x9e3779b97f4a7c15);
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
@@ -28,15 +22,10 @@ fn mix(mut x: u64) -> u64 {
 
 #[derive(Clone, Copy)]
 enum Pattern {
-    /// Toggles every change.
     Clock,
-    /// Pseudo-random bit, mostly stable.
     RandomBit,
-    /// Increments by one per change.
     Counter,
-    /// Pseudo-random vector.
     RandomVector,
-    /// Occasional `x`/`z` values.
     Glitchy,
 }
 
@@ -147,10 +136,9 @@ impl SignalHistory for ProceduralHistory {
 }
 
 impl ProceduralTrace {
-    /// A trace whose busiest signal has `transitions` changes.
     pub fn new(transitions: usize) -> Self {
         let transitions = transitions.max(2);
-        let period = 10u64; // time units per clock half-period
+        let period = 10u64;
         let mut hierarchy = crate::data::HierarchyBuilder::default();
         let top = hierarchy.push_scope("synth".into(), "module".into(), None);
         hierarchy.push_scope("core".into(), "module".into(), Some(top));
@@ -352,14 +340,11 @@ impl ProceduralTrace {
 }
 
 impl ProceduralTrace {
-    /// [`ProceduralTrace::new`] as a shared session.
     pub fn session(transitions: usize) -> Arc<dyn Session> {
         Arc::new(Self::new(transitions))
     }
 }
 
-/// A session that holds only `hierarchy`: its histories do not load. For
-/// tests of the hierarchy browser over a hand-built tree.
 pub fn hierarchy_session(hierarchy: impl Into<crate::data::Hierarchy>) -> Arc<dyn Session> {
     let hierarchy = hierarchy.into();
     struct Bare {

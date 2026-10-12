@@ -1,7 +1,5 @@
-//! The activity index builder runs in bounded memory:
-//! building a run eight times longer peaks at the same heap, within 24 bytes
-//! per signal plus the scans in flight. A counting allocator measures the
-//! heap, so this file holds a single test.
+//! The activity index builder runs in bounded memory: building a run eight times longer
+//! peaks at the same heap, within 24 bytes per signal plus the scans in flight.
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -47,7 +45,6 @@ static A: Counting = Counting;
 
 const SIGNALS: usize = 20_000;
 
-/// A design of `SIGNALS` signals, a tenth of them busy at any time, for `steps` time steps.
 fn write_trace(path: &std::path::Path, steps: usize) {
     let mut rng = StdRng::seed_from_u64(1);
     let opts = WriterOptions {
@@ -86,7 +83,6 @@ fn write_trace(path: &std::path::Path, steps: usize) {
     w.close().unwrap();
 }
 
-/// Peak heap bytes above the level before the build.
 fn build_peak(path: &std::path::Path, opts: &BuildOptions) -> (usize, activity::Summary) {
     let r = Reader::open(path).unwrap();
     let base = CURRENT.load(Ordering::Relaxed);
@@ -116,7 +112,6 @@ fn memory_does_not_grow_with_the_run() {
         s8.blocks >= 8 * s1.blocks - 8 && s8.changes > 7 * s1.changes,
         "the long run is eight times the short one"
     );
-    // A few dozen bytes per block are all that grows with the run.
     assert!(
         p8 <= p1 + p1 / 10 + 64 * s8.blocks as usize,
         "peak grew with the run: {p1} -> {p8}"
@@ -126,7 +121,6 @@ fn memory_does_not_grow_with_the_run() {
         "peak {p8} over 24 B/signal + {} in flight",
         opts.memory
     );
-    // A block that does not fit the limit is refused, naming it.
     let tight = BuildOptions {
         memory: 1 << 10,
         ..opts

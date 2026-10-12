@@ -1,28 +1,16 @@
 //! Design hierarchy: scopes, variables, streams, generators, enum tables.
-//!
-//! The hierarchy is a forest of nodes. Every node has a kind, an optional
-//! parent, a name and an ordered list of typed attributes. Nodes are stored
-//! append-only in `Hierarchy` sections; the node id is its position.
-//!
-//! A `Var` node names a signal: the variable that declares it carries
-//! `declares: Some(kind)`, aliases `None`. [`SignalKind`] fixes the storage;
-//! [`VarType`] is descriptive, except that [`VarType::Event`] gives a signal
-//! occurrence semantics (every emit is a change).
 
 use crate::error::{Error, Result};
 use crate::strings::StrId;
 use crate::value::{self, Value};
 use crate::varint::{self, Reader};
 
-/// Index of a hierarchy node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(pub u32);
 
-/// Index of a signal (value stream). Several variables may alias one signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SignalId(pub u32);
 
-/// Node kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum NodeKind {
@@ -46,9 +34,6 @@ impl NodeKind {
     }
 }
 
-/// Whether a node of kind `child` may sit under `parent` (`None` = a root).
-/// Scopes, vars, streams and enum tables go under a scope or at the root;
-/// a generator goes under a stream (SPEC section 5).
 pub fn parent_allowed(child: NodeKind, parent: Option<NodeKind>) -> bool {
     match child {
         NodeKind::Generator => parent == Some(NodeKind::Stream),
@@ -56,7 +41,6 @@ pub fn parent_allowed(child: NodeKind, parent: Option<NodeKind>) -> bool {
     }
 }
 
-/// Scope types. Values 0..=22 are identical to FST's `FST_ST_*` codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum ScopeType {
@@ -83,18 +67,11 @@ pub enum ScopeType {
     VhdlGenerate = 20,
     VhdlPackage = 21,
     SvArray = 22,
-    /// Generic container with no HDL meaning (e.g. an OpenTelemetry resource,
-    /// a SystemC module, a simulator component).
     Generic = 64,
-    /// SystemC `sc_module`.
     ScModule = 65,
-    /// OpenTelemetry resource.
     Resource = 66,
-    /// OpenTelemetry instrumentation scope.
     InstrumentationScope = 67,
-    /// A CPU core / hardware thread (pipeline traces).
     Core = 68,
-    /// Any code not listed above (preserved verbatim).
     Other(u16),
 }
 
@@ -106,7 +83,6 @@ impl ScopeType {
         }
     }
     fn fixed_code(self) -> u16 {
-        // Safe: all non-Other variants have explicit discriminants.
         match self {
             ScopeType::Module => 0,
             ScopeType::Task => 1,
@@ -209,8 +185,6 @@ impl ScopeType {
     }
 }
 
-/// Variable types. Values 0..=29 are identical to FST's `FST_VT_*` codes.
-/// Descriptive only: storage is fixed by [`SignalKind`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VarType {
     Event,
@@ -234,7 +208,6 @@ pub enum VarType {
     Port,
     SparseArray,
     RealTime,
-    /// Variable-length byte string.
     String,
     Bit,
     Logic,
@@ -244,9 +217,7 @@ pub enum VarType {
     Byte,
     Enum,
     ShortReal,
-    /// Generic bit vector (no HDL type).
     Bits,
-    /// Generic byte blob (variable length).
     Bytes,
     Other(u16),
 }
@@ -368,7 +339,6 @@ impl VarType {
     }
 }
 
-/// Port direction (identical to FST `FST_VD_*`). Unknown codes decode as `Implicit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Direction {
@@ -403,19 +373,14 @@ impl Direction {
     }
 }
 
-/// How a signal's values are encoded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SignalKind {
-    /// Bit vector with `width` bits and 2, 4 or 9 states per bit.
     Bits { width: u32, states: u8 },
-    /// IEEE 754 double.
     Real,
-    /// Variable-length byte string.
     VarLen,
 }
 
 impl SignalKind {
-    /// Declares a bit vector with a named logic alphabet.
     pub const fn bits(width: u32, states: crate::signal::LogicStates) -> Self {
         Self::Bits {
             width,
@@ -423,7 +388,6 @@ impl SignalKind {
         }
     }
 
-    /// Bytes used by one packed value (`None` for variable-length).
     pub fn packed_len(self) -> Option<usize> {
         match self {
             SignalKind::Bits { width, states } => Some(value::packed_len(width, states)),
@@ -431,7 +395,6 @@ impl SignalKind {
             SignalKind::VarLen => None,
         }
     }
-    /// Bits per value: 64 for `Real`, 0 for `VarLen`.
     pub fn width(self) -> u32 {
         match self {
             SignalKind::Bits { width, .. } => width,
@@ -439,7 +402,6 @@ impl SignalKind {
             SignalKind::VarLen => 0,
         }
     }
-    /// States per bit: 2, 4 or 9; 0 for `Real` and `VarLen`.
     pub fn states(self) -> u8 {
         match self {
             SignalKind::Bits { states, .. } => states,
@@ -481,28 +443,23 @@ impl SignalKind {
     }
 }
 
-/// Kind-specific node payload.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeData {
     Scope {
         scope_type: ScopeType,
-        /// Module/entity type name (FST "component"); empty if unknown.
         component: StrId,
     },
     Var {
         var_type: VarType,
         direction: Direction,
         signal: SignalId,
-        /// `Some` when this var declares a new signal, `None` for aliases.
         declares: Option<SignalKind>,
     },
     Stream {
-        /// Free-form stream kind (FTR "kind", e.g. "TRANSACTOR").
         kind: StrId,
     },
     Generator,
     EnumTable {
-        /// (literal, value) pairs; the value is the bit-string spelling.
         entries: Vec<(StrId, StrId)>,
     },
 }
@@ -519,8 +476,6 @@ impl NodeData {
     }
 }
 
-/// One hierarchy node (the value-level description; the reader stores nodes
-/// column-wise, see [`Hierarchy`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
     pub parent: Option<NodeId>,
@@ -534,7 +489,6 @@ impl Node {
         self.data.kind()
     }
 
-    /// True for a var that declares a new signal.
     pub fn declares_signal(&self) -> bool {
         matches!(
             self.data,
@@ -545,8 +499,6 @@ impl Node {
         )
     }
 
-    /// Serialises the node that gets id `index` while `next_signal` signals are declared
-    /// (parent and signal ids are stored relative to these, which keeps them small).
     pub fn encode(&self, index: u32, next_signal: u32, out: &mut Vec<u8>) {
         out.push(self.kind() as u8);
         varint::put_u64(out, self.parent.map(|p| (index - p.0) as u64).unwrap_or(0));
@@ -589,7 +541,6 @@ impl Node {
         value::encode_attrs(&self.attrs, out);
     }
 
-    /// Inverse of [`encode`](Self::encode).
     pub fn decode(r: &mut Reader, index: u32, next_signal: u32) -> Result<Node> {
         let kind = NodeKind::from_u8(r.u8()?)?;
         let parent = match r.u32()? {
@@ -659,18 +610,6 @@ impl Node {
 
 const NO_NODE: u32 = u32::MAX;
 
-/// Reader-side hierarchy: every node's fields in parallel arrays (a few bytes per
-/// node, decoded at a few nanoseconds each) plus derived indexes.
-///
-/// Per node: kind, parent, name and two kind-specific words:
-///
-/// | kind | word 0 | word 1 |
-/// |---|---|---|
-/// | scope | scope type code | component string |
-/// | var | `var_type \| direction << 16 \| declares << 24` | signal |
-/// | stream | kind string | - |
-/// | generator | - | - |
-/// | enum table | index into `enum_tables` | - |
 #[derive(Debug, Default)]
 pub struct Hierarchy {
     kind: Vec<u8>,
@@ -679,14 +618,10 @@ pub struct Hierarchy {
     w0: Vec<u32>,
     w1: Vec<u32>,
     enum_tables: Vec<Vec<(StrId, StrId)>>,
-    /// Node attributes: owning node per attribute (ascending) and the attributes themselves.
     attr_node: Vec<u32>,
     attr_kv: Vec<(StrId, Value)>,
-    /// Signal table, indexed by `SignalId`.
     pub signals: Vec<SignalKind>,
-    /// For every signal, the first var that declared it.
     pub signal_var: Vec<NodeId>,
-    /// Children in declaration order (CSR): `child_start[n]..child_start[n+1]` into `children`.
     child_start: Vec<u32>,
     children: Vec<u32>,
     roots: Vec<u32>,
@@ -698,7 +633,6 @@ impl Hierarchy {
         Self::default()
     }
 
-    /// Appends a hierarchy chunk (`first_node`, `count`, nodes...).
     pub fn add_chunk(&mut self, payload: &[u8]) -> Result<()> {
         let mut r = Reader::new(payload);
         let first = r.usize()?;
@@ -739,7 +673,6 @@ impl Hierarchy {
         Ok(())
     }
 
-    /// Appends one node (its id is the current length).
     #[inline]
     pub fn push(&mut self, node: Node) -> NodeId {
         let id = NodeId(self.len() as u32);
@@ -787,7 +720,6 @@ impl Hierarchy {
         id
     }
 
-    /// Builds the children index (idempotent).
     pub fn build_index(&mut self) {
         if self.indexed {
             return;
@@ -822,8 +754,6 @@ impl Hierarchy {
         self.indexed = true;
     }
 
-    /// Kind-specific declaration fields without copying attributes. Enum
-    /// tables are copied; use `enum_entries` to borrow them. Panics out of range.
     pub fn node_data(&self, id: NodeId) -> NodeData {
         let i = id.0 as usize;
         let (w0, w1) = (self.w0[i], self.w1[i]);
@@ -850,8 +780,6 @@ impl Hierarchy {
         }
     }
 
-    /// The node as a value (enum tables and attributes are copied; prefer
-    /// field accessors in loops). Panics when out of range.
     pub fn node(&self, id: NodeId) -> Node {
         Node {
             parent: self.parent(id),
@@ -881,26 +809,21 @@ impl Hierarchy {
         &self.children[self.child_start[i] as usize..self.child_start[i + 1] as usize]
     }
 
-    /// Signal of a var node (declaration or alias), `None` for other kinds.
     pub fn signal_of(&self, id: NodeId) -> Option<SignalId> {
         (self.kind(id) == NodeKind::Var).then(|| SignalId(self.w1[id.0 as usize]))
     }
 
-    /// Entries of an enum table node.
     pub fn enum_entries(&self, id: NodeId) -> Option<&[(StrId, StrId)]> {
         (self.kind(id) == NodeKind::EnumTable)
             .then(|| self.enum_tables[self.w0[id.0 as usize] as usize].as_slice())
     }
 
-    /// Attributes of a node in declaration order.
     pub fn attrs(&self, id: NodeId) -> &[(StrId, Value)] {
         let a = self.attr_node.partition_point(|&n| n < id.0);
         let b = self.attr_node.partition_point(|&n| n <= id.0);
         &self.attr_kv[a..b]
     }
 
-    /// Bytes retained by the declaration columns and their indexes. Excludes
-    /// nested attribute payloads; this is the raw hierarchy's allocation floor.
     pub fn resident_bytes(&self) -> u64 {
         use std::mem::size_of;
         (self.kind.capacity()
@@ -928,7 +851,6 @@ impl Hierarchy {
                 .sum::<usize>()) as u64
     }
 
-    /// Number of attributes on all nodes.
     pub fn attr_count(&self) -> usize {
         self.attr_kv.len()
     }
@@ -941,12 +863,10 @@ impl Hierarchy {
         self.kind.is_empty()
     }
 
-    /// Top-level nodes in declaration order. Requires [`build_index`](Self::build_index).
     pub fn roots(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.roots.iter().map(|&i| NodeId(i))
     }
 
-    /// Children of `id` in declaration order. Requires [`build_index`](Self::build_index).
     pub fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         let i = id.0 as usize;
         let (a, b) = if i + 1 < self.child_start.len() {
@@ -964,19 +884,15 @@ impl Hierarchy {
         self.signals.get(s.0 as usize).copied()
     }
 
-    /// Variable type of the signal's original declaration, independent of aliases.
-    /// Event and non-event aliases cannot refer to the same signal.
     pub fn signal_var_type(&self, s: SignalId) -> Option<VarType> {
         let node = self.signal_var.get(s.0 as usize)?;
         Some(VarType::from_code(self.w0[node.0 as usize] as u16))
     }
 
-    /// All node ids in declaration order.
     pub fn ids(&self) -> impl Iterator<Item = NodeId> {
         (0..self.len() as u32).map(NodeId)
     }
 
-    /// All nodes of a given kind in declaration order.
     pub fn nodes_of_kind(&self, kind: NodeKind) -> impl Iterator<Item = NodeId> + '_ {
         self.kind
             .iter()

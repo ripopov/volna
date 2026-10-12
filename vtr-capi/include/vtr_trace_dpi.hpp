@@ -1,21 +1,4 @@
 // vtr_trace_dpi.hpp - DPI bodies of the vtr_trace SystemVerilog package.
-//
-// Include this header in exactly one C++ file of a simulator integration (the
-// sink). It defines the package's DPI-C functions over a small interface the
-// sink implements, so a new package function changes this file and
-// vtr_trace.sv and nothing in any sink.
-//
-// The integration provides:
-//   * vtr_trace::runtime(): the Runtime of the calling simulation context,
-//     built over a Host (the context's time source and what $root names);
-//   * a vtr_trace::Sink, passed to Runtime::opened() when its file opens:
-//     the writer, the file's time unit, a map from instance path to
-//     hierarchy node and a warning log;
-//   * Runtime::closing() just before the file closes.
-// Declarations (clocks, trackers, key spaces) and each clock's latest run made
-// while no file is open are kept and replayed at open; item calls return at once
-// while no file is open. Trackers are vtr::Tracker objects (vtr_track.hpp), one
-// per declared tracker and open file: closing() drops their key tables.
 
 #ifndef VTR_TRACE_DPI_HPP
 #define VTR_TRACE_DPI_HPP
@@ -35,36 +18,25 @@
 
 namespace vtr_trace {
 
-/// A simulation context, whether or not a file is open.
 class Host {
 public:
     virtual ~Host() = default;
-    /// Current simulation time in units of 10^timePrecision() s.
     virtual uint64_t now() = 0;
     virtual int timePrecision() = 0;
-    /// Absolute instance path that $root stands for ("TOP" in Verilator, "" elsewhere).
     virtual std::string rootPath() = 0;
 };
 
-/// What a simulator integration provides for one open file.
 class Sink {
 public:
     virtual ~Sink() = default;
-    /// The open writer.
     virtual vtr_writer* writer() = 0;
-    /// The file's time unit as a power of ten seconds.
     virtual int timescale() = 0;
-    /// Hierarchy node of a '.'-separated absolute instance path, created when missing.
     virtual uint32_t scopeNode(const std::string& path) = 0;
-    /// A warning for the file's simulation log.
     virtual void warn(const std::string& text) = 0;
 };
 
-/// Resolves a package scope path against the calling instance `caller`
-/// (absolute, '.'-separated). Returns false for a path above the root.
 inline bool resolveScope(const std::string& caller, const std::string& root,
                          const std::string& path, std::string& out) {
-    // "/a.b": a scope of the file's own, outside the simulator's instance tree.
     if (!path.empty() && path[0] == '/') {
         out = path.substr(1);
         return !out.empty();
@@ -91,9 +63,6 @@ inline bool resolveScope(const std::string& caller, const std::string& root,
     return true;
 }
 
-/// Guards a Runtime. Every package call takes it, and in a single-threaded model it
-/// is never contended, so it is a spin lock rather than a mutex (a pthread mutex
-/// costs several times more per call); with --threads, holders keep it briefly.
 class SpinLock {
 public:
     void lock() {
@@ -105,8 +74,6 @@ private:
     std::atomic_flag m_flag = ATOMIC_FLAG_INIT;
 };
 
-/// Package state of one simulation context: handles, declarations kept for
-/// replay, and misuse counts.
 class Runtime {
 public:
     static constexpr uint32_t KIND_SHIFT = 24;
@@ -117,13 +84,10 @@ public:
     explicit Runtime(Host& host)
         : m_host{host} {}
 
-    // ---- Sink side ----------------------------------------------------------------------
 
-    /// A file opened: declare everything and replay each clock's latest run.
     void opened(Sink& sink) {
         const std::lock_guard<SpinLock> lock{m_mutex};
         m_sink = &sink;
-        // Both exponents are fixed while the file is open; every call converts with them.
         m_fileExp = sink.timescale();
         m_hostExp = m_host.timePrecision();
         for (Clock& c : m_clocks) {
@@ -133,18 +97,12 @@ public:
         for (Tracker& t : m_trackers) declare(t);
     }
 
-    /// The file is about to close: running clocks end at the current time, trackers
-    /// write the buffered attributes of their open items and drop their key tables
-    /// (the writer ends those items with status open), and the misuse counts go into
-    /// the simulation log. Declarations are kept.
     void closing() {
         const std::lock_guard<SpinLock> lock{m_mutex};
         if (!m_sink) return;
         bool running = false;
         for (const Clock& c : m_clocks) running |= c.running && c.id != VTR_NONE;
         for (const Tracker& t : m_trackers) running |= t.live && t.live->open_count() > 0;
-        // A stretch still running at close ends at its last edge at or before the writer's
-        // time, and open items end at that time.
         if (running) vtr_writer_set_time(m_sink->writer(), fileNow());
         std::vector<std::string> notes;
         for (Tracker& t : m_trackers) {
@@ -165,9 +123,7 @@ public:
         m_sink = nullptr;
     }
 
-    // ---- Package side -------------------------------------------------------------------
 
-    /// Current time in the file's unit (in the context's precision while no file is open).
     uint64_t now() {
         const std::lock_guard<SpinLock> lock{m_mutex};
         return m_sink ? fileNow() : m_host.now();
@@ -245,8 +201,6 @@ public:
         return (KIND_KEYSPACE << KIND_SHIFT) | static_cast<uint32_t>(m_spaces.size());
     }
 
-    /// Runs f(tracker, space, now) for a key space of a live tracker; returns f's result,
-    /// or 0 while no file is open and for a bad handle.
     template <typename F>
     int item(uint32_t sp, const char* fn, F f) {
         const std::lock_guard<SpinLock> lock{m_mutex};
@@ -256,7 +210,6 @@ public:
         return f(*m_trackers[r->tracker].live, r->space, fileNow());
     }
 
-    /// The same for two key spaces of one tracker (bind).
     template <typename F>
     int item2(uint32_t sp, uint32_t to, const char* fn, F f) {
         const std::lock_guard<SpinLock> lock{m_mutex};
@@ -272,7 +225,6 @@ public:
         return f(*m_trackers[a->tracker].live, a->space, b->space, fileNow());
     }
 
-    /// The same for two key spaces of any trackers (relate, parent).
     template <typename F>
     void link(uint32_t sa, uint32_t sb, const char* fn, F f) {
         const std::lock_guard<SpinLock> lock{m_mutex};
@@ -290,7 +242,6 @@ public:
         return t && t->live ? t->live->abort_all(fileNow()) : 0;
     }
 
-    /// A VTR_TX_* status from the package, or 0 (counted) when it is none.
     uint8_t status(char s, const char* fn) {
         const uint8_t v = static_cast<uint8_t>(s);
         if (v >= VTR_TX_STATUS_OK && v <= VTR_TX_STATUS_ABORTED) return v;
@@ -300,18 +251,17 @@ public:
     }
 
 private:
-    /// A declared tracker and, while a file is open, its vtr::Tracker.
     struct Tracker {
-        std::string scope;  // absolute instance path of the stream
+        std::string scope;
         std::string stream, kind, generator;
-        std::string clock;  // absolute clock path, or ""
+        std::string clock;
         std::vector<std::string> spaces;
         std::unique_ptr<vtr::Tracker> live;
         std::string path() const { return scope.empty() ? stream : scope + "." + stream; }
     };
     struct SpaceRef {
-        uint32_t tracker;  // index into m_trackers
-        uint32_t space;  // key space index within that tracker
+        uint32_t tracker;
+        uint32_t space;
     };
 
     Tracker* trackerOf(uint32_t handle, const char* fn) {
@@ -355,12 +305,12 @@ private:
     }
 
     struct Clock {
-        std::string scope;  // absolute instance path
+        std::string scope;
         std::string name;
-        uint32_t id = VTR_NONE;  // clock id in the open file
-        bool running = false;  // latest call was a run
-        bool started = false;  // that run reached the open file
-        uint64_t first = 0;  // first edge of the latest run, in the context's precision
+        uint32_t id = VTR_NONE;
+        bool running = false;
+        bool started = false;
+        uint64_t first = 0;
         uint64_t period = 0;
         int unit = 0;
         std::string path() const { return scope.empty() ? name : scope + "." + name; }
@@ -387,7 +337,6 @@ private:
         if (c.id == VTR_NONE) misuse(c.path() + ": " + vtr_last_error());
     }
 
-    /// The clock's latest run reaches the open file.
     void run(Clock& c) {
         if (c.id == VTR_NONE) return;
         uint64_t period;
@@ -400,15 +349,12 @@ private:
         c.started = check(vtr_writer_clock_run(m_sink->writer(), c.id, toFile(c.first), period), c.path());
     }
 
-    /// A context time in the file's unit.
     uint64_t toFile(uint64_t t) {
         uint64_t v;
         return m_hostExp == m_fileExp ? t : scale(t, m_hostExp, m_fileExp, v) ? v : t;
     }
     uint64_t fileNow() { return toFile(m_host.now()); }
 
-    /// Converts `value` x 10^unit s to units of 10^fileExp s with integers only; false
-    /// when the result is not whole or does not fit.
     static bool scale(uint64_t value, int unit, int fileExp, uint64_t& out) {
         uint64_t v = value;
         for (int e = unit; e > fileExp; --e) {
@@ -434,25 +380,22 @@ private:
     SpinLock m_mutex;
     Host& m_host;
     Sink* m_sink = nullptr;
-    int m_fileExp = 0, m_hostExp = 0;  // of the open file and the host (see opened())
+    int m_fileExp = 0, m_hostExp = 0;
     std::vector<Clock> m_clocks;
     std::vector<Tracker> m_trackers;
     std::vector<SpaceRef> m_spaces;
     std::map<std::string, uint64_t> m_misuse;
 };
 
-/// The Runtime of the calling simulation context; defined by the sink.
 Runtime& runtime();
 
-/// Absolute path of the instance making the current context import call.
 inline std::string callerScope() {
     const char* const name = svGetNameFromScope(svGetScope());
     return name ? name : "";
 }
 
-}  // namespace vtr_trace
+}
 
-// ---- DPI-C functions of package vtr_trace ------------------------------------------------
 
 extern "C" {
 
@@ -468,7 +411,6 @@ void vtr_clock_run(unsigned int c, unsigned long long period, int unit) {
 
 void vtr_clock_stop(unsigned int c) { vtr_trace::runtime().clockStop(c); }
 
-// ---- Trackers
 
 unsigned int vtr_tracker(const char* scope, const char* stream, const char* kind, const char* generator,
                          const char* clock) {
@@ -594,6 +536,6 @@ void vtr_item_parent(unsigned int sa, unsigned long long ka, unsigned int sb, un
     });
 }
 
-}  // extern "C"
+}
 
-#endif  // VTR_TRACE_DPI_HPP
+#endif

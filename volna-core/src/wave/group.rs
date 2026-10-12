@@ -1,15 +1,4 @@
-//! What a folded group shows: the activity of its signals merged into one
-//! row.
-//!
-//! Each pixel column counts the changes of every member inside it and
-//! records whether any member is undefined there. The painter draws the
-//! result in the bus shape without labels: a boundary per change, a band
-//! where a column holds several, the X colour where a member is undefined.
-//!
-//! Views with few changes walk the members' visible changes ([`walk`]).
-//! Busier views read a [`GroupSummary`]: per block of time, the members'
-//! change count and whether one is undefined, built once on the load worker
-//! for a folded group and shared by the panels that show it.
+//! What a folded group shows: the activity of its signals merged into one row.
 
 use std::sync::Arc;
 
@@ -17,24 +6,16 @@ use crate::wave::viewport::Viewport;
 use volna_trace::data::value_view::ValueView;
 use volna_trace::data::{Bit, SignalHistory, SignalShape};
 
-/// A view with at most this many member changes is walked directly; a
-/// folded group with more changes in total gets a [`GroupSummary`].
 pub const WALK_MAX: usize = 16_384;
-/// Blocks of the finest summary level, at most.
 const SUMMARY_BLOCKS: u64 = 1 << 20;
-/// Each coarser summary level merges this many blocks.
 const FANOUT: usize = 16;
 
-/// One pixel column of a folded group.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Column {
-    /// Changes of all members inside the column.
     pub changes: u32,
-    /// Some member holds an undefined value somewhere in the column.
     pub undefined: bool,
 }
 
-/// Whether value `i` of `h` is an undefined logic value (`x`, `u`, `w`).
 pub fn is_undefined(h: &dyn SignalHistory, i: Option<usize>) -> bool {
     match h.shape() {
         SignalShape::Event => false,
@@ -46,7 +27,6 @@ pub fn is_undefined(h: &dyn SignalHistory, i: Option<usize>) -> bool {
     }
 }
 
-/// Every member's changes inside `vp`.
 pub fn visible_changes(members: &[Arc<dyn SignalHistory>], vp: &Viewport) -> usize {
     let (start, end) = (vp.start.max(0.0) as u64, vp.end.max(0.0) as u64);
     members
@@ -59,15 +39,11 @@ pub fn visible_changes(members: &[Arc<dyn SignalHistory>], vp: &Viewport) -> usi
         .sum()
 }
 
-/// The column of `width` columns over `vp` that holds a change at `t`: a
-/// column ends at the time under its right edge, as the bus painter samples.
 fn column_of(vp: &Viewport, width: usize, t: u64) -> Option<usize> {
     let x = vp.x_of(t as f64, width as f64).ceil() - 1.0;
     (x >= 0.0 && x < width as f64).then_some(x as usize)
 }
 
-/// The merged activity of `members` in `width` pixel columns of `vp`, from
-/// their changes inside it: O(members × log(changes) + visible changes).
 pub fn walk(members: &[Arc<dyn SignalHistory>], vp: &Viewport, width: usize) -> Vec<Column> {
     let mut out = vec![Column::default(); width];
     if width == 0 || vp.width() <= 0.0 {
@@ -82,7 +58,6 @@ pub fn walk(members: &[Arc<dyn SignalHistory>], vp: &Viewport, width: usize) -> 
         } else {
             h.index_at(start as u64)
         };
-        // Columns from `from` on hold the value after change `i`.
         let mut from = 0usize;
         loop {
             let next = i.map_or(0, |i| i + 1);
@@ -108,11 +83,6 @@ pub fn walk(members: &[Arc<dyn SignalHistory>], vp: &Viewport, width: usize) -> 
     out
 }
 
-/// The members' changes and undefined stretches per block of `1 << shift`
-/// ticks from `start`, with coarser levels of `FANOUT` blocks above.
-/// Built on the load worker for a folded group whose members change more
-/// than [`WALK_MAX`] times; the document shares it between the panels that
-/// fold the same signals and charges it to the memory budget.
 pub struct GroupSummary {
     key: Vec<usize>,
     start: u64,
@@ -122,9 +92,7 @@ pub struct GroupSummary {
 }
 
 struct SummaryLevel {
-    /// Changes per block, saturating: only none, one and several matter.
     changes: Vec<u8>,
-    /// One bit per block: some member is undefined in it.
     undefined: Vec<u64>,
 }
 
@@ -147,7 +115,6 @@ impl SummaryLevel {
     }
 }
 
-/// Identity of a folded group's signals, in any order.
 pub fn key(members: &[Arc<dyn SignalHistory>]) -> Vec<usize> {
     let mut key: Vec<usize> = members
         .iter()
@@ -158,7 +125,6 @@ pub fn key(members: &[Arc<dyn SignalHistory>]) -> Vec<usize> {
 }
 
 impl GroupSummary {
-    /// Summarize `members` over the trace time range `range`.
     pub fn build(
         members: &[Arc<dyn SignalHistory>],
         range: (u64, u64),
@@ -239,14 +205,10 @@ impl GroupSummary {
                 .sum::<u64>()
     }
 
-    /// The identity of the signals it summarizes (see [`key`]).
     pub fn key(&self) -> &[usize] {
         &self.key
     }
 
-    /// Columns of `vp` from the coarsest level with at least one block per
-    /// column, or `None` when even the finest blocks are wider than a
-    /// column (the view is then short enough to [`walk`]).
     pub fn columns(&self, vp: &Viewport, width: usize) -> Option<Vec<Column>> {
         if width == 0 || vp.width() <= 0.0 {
             return Some(vec![Column::default(); width]);
@@ -263,7 +225,6 @@ impl GroupSummary {
         let block_at = |t: f64| ((t - self.start as f64) / ticks).floor();
         let mut out = vec![Column::default(); width];
         for (x, column) in out.iter_mut().enumerate() {
-            // Blocks that start inside the column's time span.
             let a = block_at(vp.time_at(x as f64, width as f64)) + 1.0;
             let b = block_at(vp.time_at((x + 1) as f64, width as f64));
             let (a, b) = (a.max(0.0) as usize, (b.max(-1.0) + 1.0) as usize);
@@ -271,7 +232,6 @@ impl GroupSummary {
                 column.changes = column.changes.saturating_add(u32::from(level.changes[blk]));
                 column.undefined |= level.is_undefined(blk);
             }
-            // A column inside one block reads the block it lies in.
             if a >= b
                 && let Some(blk) = (b.checked_sub(1)).filter(|&blk| blk < blocks)
             {
@@ -286,22 +246,16 @@ impl GroupSummary {
     }
 }
 
-/// A folded group's summary, as the document holds it.
 pub enum SummaryLoad {
     Building,
     Ready(Arc<GroupSummary>),
-    /// Refused (the memory budget); the painter walks the changes instead.
     Failed,
 }
 
-/// A folded group's value cell at the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reading {
-    /// Loaded member signals.
     pub members: usize,
-    /// Members that change exactly at the cursor.
     pub changed: usize,
-    /// Members whose value at the cursor is undefined.
     pub undefined: usize,
 }
 
@@ -320,7 +274,6 @@ impl Reading {
         reading
     }
 
-    /// "2 of 9 changed" on a change, otherwise "9 signals".
     pub fn text(&self) -> String {
         if self.changed > 0 {
             format!("{} of {} changed", self.changed, self.members)
@@ -367,7 +320,6 @@ mod tests {
             .filter(|(_, c)| c.changes > 0)
             .map(|(x, _)| x)
             .collect();
-        // A change at time t lands in the column that ends at t.
         assert_eq!(at, [9, 14, 19]);
         assert!(cols.iter().all(|c| !c.undefined));
     }
@@ -438,7 +390,6 @@ mod tests {
             let walked = walk(&members, &vp, width);
             let summed = summary.columns(&vp, width).expect("blocks fit the columns");
             let total = |c: &[Column]| c.iter().map(|c| c.changes).sum::<u32>();
-            // Blocks straddle column edges, so changes may move one column.
             for x in (0..width).step_by(10) {
                 let r = x.saturating_sub(1)..(x + 11).min(width);
                 let (a, b) = (total(&walked[r.clone()]), total(&summed[r]));
@@ -467,7 +418,6 @@ mod tests {
                 }
             }
         }
-        // Zoomed in past the finest blocks, the summary defers to a walk.
         assert!(summary.columns(&vp(50_000.0, 50_100.0), 800).is_none());
     }
 

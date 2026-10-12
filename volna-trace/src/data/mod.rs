@@ -1,5 +1,4 @@
-//! Recording data: signal values, complete histories and the
-//! hierarchy model. Sessions (`crate::session`) produce these.
+//! Recording data: signal values, complete histories and the hierarchy model.
 
 pub mod activity;
 pub mod compact;

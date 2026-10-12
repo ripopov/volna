@@ -3,8 +3,6 @@
 use super::viewport::Viewport;
 use volna_trace::data::TraceInfo;
 
-/// How a trace writes time: `10^timescale` seconds per unit, or a
-/// producer-named unit (`cycle`) that is never rescaled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TimeBase<'a> {
     pub timescale: i8,
@@ -19,7 +17,6 @@ impl<'a> TimeBase<'a> {
         }
     }
 
-    /// SI units without a producer name.
     pub fn si(timescale: i8) -> Self {
         Self {
             timescale,
@@ -30,7 +27,6 @@ impl<'a> TimeBase<'a> {
 
 const TICK_STEPS: [f64; 4] = [1.0, 2.0, 2.5, 5.0];
 
-/// SI units from femtoseconds to seconds, as (exponent, suffix).
 const UNITS: [(i32, &str); 6] = [
     (-15, "fs"),
     (-12, "ps"),
@@ -46,9 +42,6 @@ pub struct Tick {
     pub label: String,
 }
 
-/// Choose the display unit for a duration of `units` time units at `timescale`.
-/// Returns the unit exponent and suffix such that the value is in `[1, 1000)`
-/// where possible.
 fn choose_unit(units: f64, timescale: i8) -> (i32, &'static str) {
     if units <= 0.0 || !units.is_finite() {
         return UNITS
@@ -64,7 +57,6 @@ fn choose_unit(units: f64, timescale: i8) -> (i32, &'static str) {
             best = u;
         }
     }
-    // Never display finer than the file's own unit.
     if best.0 < timescale as i32 {
         best = UNITS
             .iter()
@@ -75,7 +67,6 @@ fn choose_unit(units: f64, timescale: i8) -> (i32, &'static str) {
     best
 }
 
-/// One time unit of `timescale`: `ns`, or `100 ps` between SI prefixes.
 pub fn unit_label(timescale: i8) -> String {
     let exp = i32::from(timescale);
     match UNITS.iter().rev().find(|(e, _)| *e <= exp) {
@@ -95,8 +86,6 @@ fn trim_float(v: f64, max_decimals: usize) -> String {
     }
 }
 
-/// Format an absolute time with an automatically chosen unit, e.g. `1.25 µs`,
-/// or in the producer's unit (`12 cycle`) when the trace names one.
 pub fn format_time(t: f64, base: TimeBase<'_>) -> String {
     if let Some(unit) = base.unit {
         return format!("{} {unit}", trim_float(t, 3));
@@ -114,14 +103,11 @@ pub fn format_time(t: f64, base: TimeBase<'_>) -> String {
     format!("{} {suffix}", trim_float(v, decimals))
 }
 
-/// Format a time in a fixed unit (used for tick labels so all share a unit).
 fn format_in_unit(t: f64, timescale: i8, exp: i32, decimals: usize) -> String {
     let v = t * 10f64.powi(timescale as i32 - exp);
     trim_float(v, decimals)
 }
 
-/// Tick step for a viewport: the smallest "nice" step that keeps labels at
-/// least `min_spacing_px` apart.
 fn tick_step(viewport: &Viewport, width_px: f64, min_spacing_px: f64) -> f64 {
     let max_ticks = (width_px / min_spacing_px).max(1.0);
     let raw = viewport.width() / max_ticks;
@@ -135,7 +121,6 @@ fn tick_step(viewport: &Viewport, width_px: f64, min_spacing_px: f64) -> f64 {
     10.0 * mag
 }
 
-/// Ticks (time and label) for the visible window. Labels share one unit.
 pub fn ticks<'a>(
     viewport: &Viewport,
     width_px: f64,
@@ -151,7 +136,6 @@ pub fn ticks<'a>(
         Some(unit) => (timescale as i32, unit),
         None => choose_unit(step, timescale),
     };
-    // Decimals needed to distinguish consecutive labels in this unit.
     let step_in_unit = step * 10f64.powi(timescale as i32 - exp);
     let decimals = if step_in_unit >= 1.0 {
         0
@@ -236,7 +220,6 @@ mod tests {
 
     #[test]
     fn sub_unit_decimals() {
-        // 0..2.5 ns viewport at ps resolution shows fractional ns labels.
         let v = Viewport {
             start: 0.0,
             end: 2500.0,

@@ -15,7 +15,6 @@ fn app() -> App {
     app.handle(Command::AddVars(a_all(vec![0, 1, 2])));
     app
 }
-/// Open [`TRACE`] as the procedural trace [`app`] shows.
 fn open(app: &mut App) {
     let spec = volna_trace::session::OpenSpec::Bytes {
         name: "trace.vtr".into(),
@@ -63,7 +62,6 @@ fn complete_round_trip_preserves_layout_rows_links_chrome_and_exact_times() {
     plan.commit(&mut app).unwrap();
     assert_eq!(value(&app), before);
     assert_eq!(app.doc.shared.cursor, Some(u64::MAX - 1));
-    // Restore keeps the saved number; a new marker takes the lowest free one.
     assert_eq!(app.doc.add_marker(10).map(|id| id.get()), Some(2));
     assert_eq!(
         app.doc
@@ -111,7 +109,6 @@ fn unknown_panel_payload_is_preserved_verbatim_including_large_integers() {
     assert_eq!(plan.report().notices.len(), 1);
     plan.commit(&mut app).unwrap();
     assert_eq!(capture(&app).panels[1].get(), raw);
-    // ID allocation after restore cannot collide with opaque panel identities.
     app.handle(Command::Action(Action::NewPanel));
     assert_eq!(app.panels.focused_id(), PanelId(1000));
 }
@@ -465,7 +462,6 @@ fn invalid_open_workspace_preserves_live_traces_views_and_save_destination() {
     app.handle(Command::Action(Action::SplitRight));
     volna_core::testing::complete_open(&mut app, ProceduralTrace::session(100));
 
-    // Start with an acknowledged workspace so no pending flush delays the restore.
     app.save_workspace(None);
     let (ticket, _) = emitted_save(&mut app);
     app.workspace_saved(ticket, None, Instant::now());
@@ -478,7 +474,6 @@ fn invalid_open_workspace_preserves_live_traces_views_and_save_destination() {
     let redo = app.redo_label().map(str::to_owned);
     let revision = app.workspace.scheduler.revision();
 
-    // The file parses, but its reversed viewport must be rejected before B is closed.
     let mut invalid = capture(&app);
     invalid.traces.retain(|trace| trace.letter == TraceId::A);
     invalid.shared.viewport.end = invalid.shared.viewport.start - 1.0;
@@ -577,8 +572,6 @@ fn assert_cancelled_workspace_trace_open_can_save(in_flight: bool) {
     let mut saved = capture(&app);
     let mut secondary = saved.traces[0].clone();
     secondary.letter = b;
-    // A native absolute path supplies the drive letter required by Windows
-    // file URIs. Cancellation happens before the file is opened.
     let directory = tempfile::tempdir().unwrap();
     secondary.path = url::Url::from_file_path(directory.path().join("other.vtr"))
         .unwrap()
@@ -593,8 +586,6 @@ fn assert_cancelled_workspace_trace_open_can_save(in_flight: bool) {
     assert!(app.doc.session(b).is_none());
     assert!(app.workspace.scheduler.outstanding().is_none());
 
-    // Taking the request simulates dispatch to a worker. Its result may
-    // arrive after cancellation; a queued request must instead be removed.
     let dispatched = if in_flight {
         let mut requests = app.take_requests();
         assert_eq!(requests.len(), 1);
@@ -792,7 +783,6 @@ fn row_heights_round_trip_and_restore_tall_row_geometry() {
     }
     assert_eq!(row_heights(&app), [1, 3, 8]);
     let saved = value(&app);
-    // The default height is implied; taller rows store their multiple.
     let rows = &saved["panels"][0]["rows"];
     assert!(rows[0].get("height").is_none());
     assert_eq!(
@@ -800,7 +790,6 @@ fn row_heights_round_trip_and_restore_tall_row_geometry() {
         (&json!(3), &json!(8))
     );
 
-    // Restore into a fresh session: heights, geometry and the file agree.
     let mut restored = App::new();
     restored.set_session(Arc::new(ProceduralTrace::new(100)));
     prepare(&saved, &restored)
@@ -869,8 +858,6 @@ fn restoring_app(policy: Persistence) -> App {
     app
 }
 
-/// During the research phase an older workspace is discarded, not migrated:
-/// restore starts fresh, keeps autosave running and overwrites the file.
 #[test]
 fn older_workspace_versions_are_discarded_and_overwritten() {
     let mut old = value(&app());
@@ -932,7 +919,6 @@ fn older_workspace_versions_are_discarded_and_overwritten() {
             volna_core::workspace::VERSION
         );
     }
-    // A newer or foreign file is not "older".
     let mut newer = value(&app());
     newer["version"] = json!(volna_core::workspace::VERSION + 1);
     assert!(!Workspace::is_outdated(

@@ -71,8 +71,6 @@ impl Rect {
     }
 }
 
-/// Keyboard modifiers. `platform` is Command on macOS and the Windows/Super
-/// key elsewhere; [`Modifiers::secondary`] is the platform's multi-select key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub shift: bool,
@@ -82,7 +80,6 @@ pub struct Modifiers {
 }
 
 impl Modifiers {
-    /// Command on macOS, Control elsewhere.
     pub fn secondary(&self) -> bool {
         if cfg!(target_os = "macos") {
             self.platform
@@ -99,18 +96,15 @@ pub enum MouseButton {
     Right,
 }
 
-/// Pointer shape a frontend should show over a region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CursorIcon {
     Default,
     PointingHand,
     ResizeLeftRight,
     ResizeUpDown,
-    /// A closed hand while a drag pans a canvas.
     Grabbing,
 }
 
-/// Round to whole logical pixels so 1 px lines are crisp at 1x and 2x.
 pub fn snap(v: f32) -> f32 {
     v.round()
 }

@@ -47,7 +47,6 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     let session = fixture();
     let mut app = App::new();
     app.set_session(session.clone());
-    // The open's own work: count scope sizes.
     for request in app.take_requests() {
         app.deliver(request.perform());
     }
@@ -68,7 +67,6 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
         app.take_requests().as_slice(),
         [LoadRequest::Track { .. }]
     ));
-    // Requeue through the ordinary pump after observing request shape.
     app.handle(Command::Table(panel, TableCommand::Cancel));
     app.handle(Command::Table(panel, TableCommand::Retry));
     pump(&mut app);
@@ -95,7 +93,6 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
             .starts_with("Generator\tID\tBegin\tEnd\tDuration\tStatus\n")
     );
 
-    // Selecting a row is a document-wide selection, not a private strip.
     let selection = app.doc.selection().expect("the row is the selection");
     assert_eq!(selection.origin, panel);
     assert_eq!(

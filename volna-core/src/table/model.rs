@@ -119,7 +119,6 @@ pub enum TableCommand {
 pub struct TableModel {
     pub source: TableSource,
     pub state: TableState,
-    /// The shown columns; journaled cockpit state (`volna/README.md`, "Undo and redo").
     pub columns: crate::history::Journaled<ColumnSet>,
     pub viewport: RowViewport,
     pub selected: Option<RowIdentity>,
@@ -138,7 +137,6 @@ pub struct TableModel {
 }
 
 impl TableModel {
-    /// Describe a detached panel. Admission and data retention happen in [`Self::attach`].
     pub fn new(source: TableSource, link: Link, budget: MemoryBudget) -> Self {
         let columns = match &source {
             TableSource::Generator(_) => ColumnSet::transactions_default(),
@@ -167,9 +165,6 @@ impl TableModel {
         }
     }
 
-    /// Copy only persistent panel choices. Source data is retained through the
-    /// document again when the split is installed; viewport and selection
-    /// intentionally reopen at row one.
     pub fn clone_view(&self) -> Self {
         let mut clone = Self::new(self.source.clone(), self.nav.link, self.budget.clone());
         clone.columns = self.columns.clone();
@@ -184,7 +179,6 @@ impl TableModel {
         if self.attached {
             return Ok(());
         }
-        // A panel reopened by undo reserves its memory again.
         if self._panel_reservation.is_none() {
             match self.budget.reserve(PANEL_BYTES) {
                 Ok(reservation) => {
@@ -253,8 +247,6 @@ impl TableModel {
         self.request = self.request.wrapping_add(1);
     }
 
-    /// Detach and return the panel's memory: it is closed and kept by the
-    /// undo journal. [`TableModel::attach`] reserves it again.
     pub(crate) fn park(&mut self, doc: &mut Document) {
         self.detach(doc);
         self._panel_reservation = None;
@@ -476,9 +468,6 @@ impl TableModel {
         Ok(None)
     }
 
-    /// Advance bounded cooperative work. Hosts call this through the ordinary
-    /// animation tick, so wasm and native never merge an unbounded axis in one
-    /// UI task; dropping the panel drops the builder and its reservation.
     pub fn tick(&mut self, now: Instant) -> bool {
         let changed = self.nav.tick(now);
         if self.axis_build.is_none() {
@@ -559,7 +548,6 @@ impl TableModel {
         }
     }
 
-    /// The session unit changed: a row selected by its time keeps it.
     pub(crate) fn retime(&mut self, by: crate::trace::Rescale) {
         if let Some(RowIdentity::SignalTime(time)) = &mut self.selected {
             crate::trace::Retime::retime(time, by);
@@ -605,8 +593,6 @@ impl TableModel {
         let Some((identity, time)) = self.identity_and_time(ordinal) else {
             return false;
         };
-        // A selected record is the document's, so every panel over the same
-        // generator highlights it and the transaction panel shows it.
         if let (RowIdentity::Transaction(id), Some(track)) =
             (&identity, self.source.generator_track())
         {
@@ -628,8 +614,6 @@ impl TableModel {
         true
     }
 
-    /// Adopt the document selection when it names a record of this table.
-    /// Returns whether the highlighted row changed.
     pub fn follow_selection(&mut self, doc: &Document) -> bool {
         let (Rows::Generator(_), Some(track)) = (&self.rows, self.source.generator_track()) else {
             return false;
@@ -646,8 +630,6 @@ impl TableModel {
         changed
     }
 
-    /// The laid-out row height, or the unzoomed default before the first
-    /// layout.
     fn row_px(&self) -> f32 {
         if self.layout.row_height > 0.0 {
             self.layout.row_height
@@ -740,7 +722,6 @@ impl TableModel {
         }
     }
 
-    /// Change the shown columns as an edit.
     fn edit_columns(&mut self, f: impl FnOnce(&mut ColumnSet) -> bool) -> bool {
         let mut columns = self.columns.get().clone();
         if !f(&mut columns) || !self.columns.set(columns) {
@@ -750,8 +731,6 @@ impl TableModel {
         true
     }
 
-    /// Hand the columns before the edits since the last call to the undo
-    /// journal, unless they cancelled out.
     pub(crate) fn take_edits(
         &mut self,
         panel: crate::panels::PanelId,
@@ -768,7 +747,6 @@ impl TableModel {
         }
     }
 
-    /// Install columns while undoing or redoing; returns the replaced ones.
     pub(crate) fn swap_columns(&mut self, columns: ColumnSet) -> ColumnSet {
         let old = self.columns.swap(columns);
         self.invalidate_window();
@@ -900,7 +878,6 @@ impl TableModel {
         self.drag.is_some()
     }
 
-    /// Drop pointer capture without finishing the drag.
     pub(crate) fn cancel_drag(&mut self) {
         self.drag = None;
     }
@@ -1196,8 +1173,6 @@ impl TableModel {
             .filter(|row| row.ordinal == ordinal)
     }
 
-    /// Semantic projection of only the recycled visible rows. No offscreen
-    /// source row is materialized for accessibility.
     pub fn accessible_rows(&self) -> impl Iterator<Item = AccessibleRow> + '_ {
         self.window.rows.iter().filter_map(|row| {
             let y =
@@ -1383,9 +1358,6 @@ fn bounded_view(value: ValueView<'_>, limit: usize) -> (String, bool) {
     }
 }
 
-/// Convert a normalized scrollbar coordinate to an exact row using integer
-/// arithmetic. Floating point only quantizes the finite pixel input; it never
-/// represents the possibly full-width `u64` logical row count.
 fn normalized_u64(offset: f32, track: f32, maximum: u64) -> u64 {
     if maximum == 0 || !offset.is_finite() || !track.is_finite() || track <= 0.0 {
         return 0;
@@ -1397,7 +1369,6 @@ fn normalized_u64(offset: f32, track: f32, maximum: u64) -> u64 {
     ((maximum as u128 * numerator as u128) / denominator as u128) as u64
 }
 
-/// The table owns the meaning and storage of its journaled properties.
 pub(crate) enum Prop {
     Columns(ColumnSet),
 }
@@ -1483,7 +1454,6 @@ mod tests {
             panic!()
         };
         assert_eq!(&**axis, &[1, 5, 10, 20, 30]);
-        // Four MiB panel reservation plus exactly 8 bytes per distinct time.
         assert_eq!(budget.used(), PANEL_BYTES + 5 * 8);
         drop(model);
         assert_eq!(budget.used(), 0);
@@ -1717,7 +1687,6 @@ mod tests {
 
     #[test]
     fn row_viewport_scrolls_until_the_last_row_is_whole() {
-        // 100 px fit four whole 24 px rows and a partial fifth.
         let mut viewport = RowViewport::default();
         viewport.scroll(f32::MAX / 2.0, 100, 100.0, 24.0);
         assert_eq!(viewport.top, 96);

@@ -1,7 +1,5 @@
-//! Native workspace and settings byte storage. File interpretation and target
-//! selection live in volna-core; writes use a temporary file in the
-//! destination directory. The config directory holds `settings.json`,
-//! `state.json`, the generated `settings.schema.json` and `themes/*.json`.
+//! Native workspace and settings byte storage.
+
 use anyhow::{Context, Result, ensure};
 use std::path::{Path, PathBuf};
 use volna_core::settings::{self, Host};
@@ -70,14 +68,10 @@ impl Store {
         self.config_dir.join(THEMES_DIR)
     }
 
-    /// The `$schema` value a fresh document points at; the schema file is
-    /// regenerated beside it on every start so external editors stay current.
     fn schema_uri() -> String {
         format!("./{SCHEMA_FILE}")
     }
 
-    /// `settings.json` text, `None` when absent. Errors are reported to the
-    /// core, which then never writes the file.
     fn read_settings(&self) -> Result<Option<String>> {
         match read_limited(&self.settings_path(), settings::store::MAX_BYTES)? {
             Some(bytes) => Ok(Some(
@@ -92,7 +86,6 @@ impl Store {
         atomic_write(&self.settings_path(), bytes)
     }
 
-    /// Regenerate the schema external editors read through `$schema`.
     fn write_schema(&self) -> Result<()> {
         std::fs::create_dir_all(&self.config_dir)?;
         let schema = serde_json::to_vec_pretty(&settings::schema::json_schema(Host::Native))?;
@@ -103,8 +96,6 @@ impl Store {
         atomic_write(&path, &schema)
     }
 
-    /// Recent lists. An unreadable or incompatible file yields empty lists and
-    /// disables writes so the file is never destroyed.
     fn state(&mut self) -> State {
         let path = self.config_dir.join(STATE_FILE);
         match read_limited(&path, volna_core::workspace::state::MAX_BYTES)
@@ -129,7 +120,6 @@ impl Store {
         atomic_write(&self.config_dir.join(STATE_FILE), &state.to_bytes())
     }
 
-    /// Palette names: the stems of `themes/*.json`, sorted.
     fn theme_names(&self) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(self.themes_dir())
             .into_iter()
@@ -147,8 +137,6 @@ impl Store {
         names
     }
 
-    /// Resolve `appearance.theme` to core themes while the system is dark
-    /// (`system_dark`) or light; built-in themes need no file.
     pub(crate) fn theme(&self, name: &str, system_dark: bool) -> Result<volna_core::theme::Themes> {
         if let Some(themes) = volna_core::theme::builtin::resolve(name, system_dark) {
             return Ok(themes);
@@ -164,8 +152,6 @@ impl Store {
         ))
     }
 
-    /// Watch the config directory (settings and themes). The callback runs on
-    /// the watcher thread with the paths that changed.
     fn watch(
         &self,
         callback: impl Fn(Vec<PathBuf>) + Send + 'static,
@@ -174,8 +160,6 @@ impl Store {
         std::fs::create_dir_all(&self.config_dir)?;
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                // Our own reads report access events; only content changes
-                // count, or every reload would trigger the next one.
                 use notify::EventKind;
                 if let Ok(event) = event
                     && matches!(
@@ -299,11 +283,6 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 impl crate::Workspace {
-    /// Install the byte store: read `settings.json`, read
-    /// `state.json`, derive the workspace policy and, when `watch` is set,
-    /// follow the config directory (tests keep their scheduler on one
-    /// thread). `policy` is the command line's choice; `Auto` follows
-    /// `workspace.autosave`.
     pub fn enable_native_persistence(
         &mut self,
         mut store: Store,
@@ -358,7 +337,6 @@ impl crate::Workspace {
         }
         cx.spawn(async move |this, cx| {
             while let Some(mut paths) = rx.next().await {
-                // Coalesce a burst (temporary file, rename) into one read.
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(50))
                     .await;
@@ -376,7 +354,6 @@ impl crate::Workspace {
         .detach();
     }
 
-    /// The watcher reported changes under the config directory.
     fn config_changed(&mut self, paths: &[PathBuf], cx: &mut gpui_kit::Context<Self>) {
         log::debug!("config directory changed: {paths:?}");
         let Some(store) = &self.native_store else {
@@ -394,13 +371,11 @@ impl crate::Workspace {
         if paths.iter().any(|p| p.starts_with(&themes_dir)) {
             let names = store.theme_names();
             self.app.set_theme_names(names);
-            // A changed palette file reloads the current theme.
             self.apply_theme_setting(cx);
         }
         self.after(None, cx);
     }
 
-    /// Write `settings.json` for a core write event.
     pub(crate) fn write_settings(&mut self, ticket: u64, bytes: Vec<u8>) {
         let result = self
             .native_store
@@ -414,7 +389,6 @@ impl crate::Workspace {
         );
     }
 
-    /// A trace finished opening: record it, or the workspace that named it.
     pub(crate) fn trace_opened(&mut self, trace_uri: String) {
         if self.native_store.is_none() {
             return;
@@ -445,7 +419,6 @@ impl crate::Workspace {
         }
     }
 
-    /// Reopen a recent trace or workspace by its path.
     pub(crate) fn open_recent(&mut self, entry: Recent, cx: &mut gpui_kit::Context<Self>) {
         match path_from_uri(&entry.uri) {
             Ok(path) => match entry.kind {
@@ -458,8 +431,6 @@ impl crate::Workspace {
         }
     }
 
-    /// While the start page shows, mark the recent files that are gone; once
-    /// per page appearance and list change, never per frame.
     pub(crate) fn check_recent(&mut self) {
         if !self.app.workspace.recent.enabled || self.app.doc.is_loaded() {
             return;
@@ -578,7 +549,6 @@ impl crate::Workspace {
             if self.app.doc.is_loaded()
                 && self.app.workspace.trace_uri.as_deref() == Some(trace_uri.as_str())
             {
-                // Its trace is already open: apply the workspace to it.
                 self.app.open_workspace(target, &bytes)?;
                 if self.native_store.is_some() {
                     self.app.remember_recent(Recent {
@@ -606,15 +576,12 @@ impl crate::Workspace {
 }
 
 pub struct Options {
-    /// The first opens; the others join it as traces B, C….
-    /// A workspace file opens alone.
     pub files: Vec<PathBuf>,
     pub policy: Persistence,
     pub config_dir: Option<PathBuf>,
     pub help: bool,
 }
 impl Options {
-    /// Command line wins over environment; no-workspace is an unconditional opt-out.
     pub fn parse(
         args: impl IntoIterator<Item = String>,
         workspace_env: Option<String>,
@@ -692,7 +659,6 @@ mod tests {
         assert_eq!(options.policy, Persistence::Disabled);
         assert_eq!(options.config_dir, Some(PathBuf::from("/tmp/volna-config")));
         assert_eq!(options.files, [PathBuf::from("trace.vtr")]);
-        // Several traces open together: the first, then the others beside it.
         let options =
             Options::parse(["cpu.vtr", "--", "dram.fst"].map(str::to_owned), None, None).unwrap();
         assert_eq!(
@@ -756,7 +722,6 @@ mod tests {
         assert!(store.theme("missing", true).is_err());
         store.write_settings(b"{}").unwrap();
         assert_eq!(store.read_settings().unwrap().as_deref(), Some("{}"));
-        // A broken state file is never overwritten.
         std::fs::write(store.config_dir.join(STATE_FILE), b"{\"version\":9}").unwrap();
         assert_eq!(store.state(), State::new());
         assert!(store.save_state(&State::new()).is_err());

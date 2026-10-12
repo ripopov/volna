@@ -1,34 +1,21 @@
-//! Scope activity: how many of each scope's
-//! signals change in a window, from the trace's activity index at once, and
-//! exactly once the signals the index leaves undecided are read.
-//!
-//! [`ActivityCounter`] holds every signal's census weights over the trace's
-//! scopes, built once per trace off the UI thread. [`ActivityCounts`] is one
-//! window's answer per scope; a frame costs one classification of every
-//! signal and one pass over the changing signals' weights and the scopes.
+//! Scope activity: how many of each scope's signals change in a window, from the trace's
+//! activity index at once, and exactly once the signals the index leaves undecided are
+//! read.
 
 use volna_trace::data::SignalRef;
 use volna_trace::data::source::{Hierarchy, ScopeId};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
-/// Every signal's census weights over one trace's scopes, so that the
-/// distinct signals of any set below every scope cost the set's variables
-/// plus one pass over the scopes.
 #[derive(Debug)]
 pub struct ActivityCounter {
     contributions: vtr::Contributions,
-    /// Census index → scope.
     order: Vec<ScopeId>,
     _reservation: Reservation,
 }
 
 impl ActivityCounter {
-    /// One recording census over the hierarchy in preorder.
     pub fn build(h: &Hierarchy, budget: &MemoryBudget) -> anyhow::Result<Self> {
         let signals = h.vars().map(|v| v.signal.0 as usize + 1).max().unwrap_or(0);
-        // Census owns scope/union-find stacks and up to two recorded weights
-        // per variable. Allow vector growth and the overlapping arrays made
-        // while grouping weights by signal; discard that scratch after build.
         let upper = super::admission::sum([
             super::admission::bytes::<[u8; 128]>(h.scope_count())?,
             super::admission::bytes::<[u8; 48]>(h.var_count())?,
@@ -69,7 +56,6 @@ impl ActivityCounter {
             + (self.order.capacity() * std::mem::size_of::<ScopeId>()) as u64
     }
 
-    /// Distinct signals of `signals` at or below every scope, by scope.
     fn count(&self, signals: impl IntoIterator<Item = u32>) -> Vec<u32> {
         let mut by_census = Vec::new();
         self.contributions.count(signals, &mut by_census);
@@ -86,32 +72,22 @@ fn counts_bytes(changing: &Vec<u32>, upper: &Vec<u32>, undecided: &Vec<SignalRef
         + undecided.capacity() * std::mem::size_of::<SignalRef>()) as u64
 }
 
-/// One window's activity per scope: the signals that change, and at most
-/// how many may while some are undecided.
 #[derive(Debug)]
 pub struct ActivityCounts {
-    /// The window in trace times, both ends included.
     pub window: (u64, u64),
-    /// Signals below each scope known to change, by scope.
     changing: Vec<u32>,
-    /// Changing or undecided, by scope; empty once exact.
     upper: Vec<u32>,
-    /// Signals the index cannot decide in this window, to read from the
-    /// trace; empty once exact.
     pub undecided: Vec<SignalRef>,
     _reservation: Reservation,
 }
 
 impl ActivityCounts {
-    /// What the index says about `window` (trace times).
     pub fn classify(
         index: &vtr::activity::Index,
         counter: &ActivityCounter,
         window: (u64, u64),
         budget: &MemoryBudget,
     ) -> anyhow::Result<Self> {
-        // Two classification lists can grow to twice their logical length;
-        // per-scope count scratch overlaps the changing and upper arrays.
         let upper = super::admission::sum([
             super::admission::bytes::<[u8; 16]>(index.signal_count() as usize)?,
             super::admission::bytes::<[u8; 16]>(counter.order.len())?,
@@ -138,8 +114,6 @@ impl ActivityCounts {
         })
     }
 
-    /// Admit the count arrays before resolving histories or projecting a
-    /// remote answer. The returned owner pays for both scratch and output.
     pub(crate) fn admit_resolution(
         &self,
         counter: &ActivityCounter,
@@ -155,8 +129,6 @@ impl ActivityCounts {
         )
     }
 
-    /// The exact counts once the undecided signals were read: `changed` are
-    /// those of them that change in the window. Admission covers count scratch.
     pub(crate) fn resolved(
         &self,
         counter: &ActivityCounter,
@@ -180,20 +152,16 @@ impl ActivityCounts {
         counts_bytes(&self.changing, &self.upper, &self.undecided)
     }
 
-    /// Whether every signal is decided.
     pub fn exact(&self) -> bool {
         self.undecided.is_empty()
     }
 
-    /// `(changing, upper)` below `scope`.
     pub fn get(&self, scope: ScopeId) -> Option<(u32, u32)> {
         let changing = *self.changing.get(scope)?;
         Some((changing, self.upper.get(scope).copied().unwrap_or(changing)))
     }
 }
 
-/// What a scope row shows of the activity in the viewport: of its `total`
-/// signals, `changing` change for sure and at most `upper` may.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopeActivity {
     pub changing: u32,
@@ -202,18 +170,14 @@ pub struct ScopeActivity {
 }
 
 impl ScopeActivity {
-    /// Nothing is left to read.
     pub fn exact(&self) -> bool {
         self.changing == self.upper
     }
 
-    /// No signal below the scope can change: the row is drawn faint.
     pub fn quiet(&self) -> bool {
         self.total > 0 && self.upper == 0
     }
 
-    /// The count column: `2,483 / 6,779`, or a range while signals are
-    /// read: `1,462–2,210 / 6,779`.
     pub fn label(&self) -> String {
         let total = super::sizes::grouped(self.total);
         match self.exact() {
@@ -226,8 +190,6 @@ impl ScopeActivity {
         }
     }
 
-    /// Shares of the scope's signals that change and that may: the
-    /// meter's solid and hatched lengths, in `0..=1`.
     pub fn shares(&self) -> (f32, f32) {
         match self.total {
             0 => (0.0, 0.0),
@@ -238,7 +200,6 @@ impl ScopeActivity {
         }
     }
 
-    /// The tooltip line: `2,483 of 6,779 signals change in the view`.
     pub fn detail(&self) -> String {
         let total = super::sizes::grouped(self.total);
         match self.exact() {
@@ -255,7 +216,6 @@ impl ScopeActivity {
     }
 }
 
-/// Estimated build duration from the compressed recording size.
 pub fn estimated_seconds(info: volna_trace::data::ActivityBuildInfo) -> u64 {
     let rate = match info.format {
         vtr::activity::SourceFormat::Vtr => 1 << 30,

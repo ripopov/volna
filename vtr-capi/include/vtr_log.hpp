@@ -1,29 +1,5 @@
-/*
- * vtr_log.hpp - header-only C++17 logging front end over the VTR C API.
- *
- *     vtr::LogStream log(writer, scope_node, "log");
- *     VTR_LOG(log, vtr::Severity::Info, sim_time, "AXI write addr={:#x} len={}", addr, len);
- *
- * The first execution of a VTR_LOG statement registers its call site (format
- * string, severity, argument types, file, line, function) as a generator of
- * the LOG stream; every execution then stores only the timestamp and the raw
- * argument values (a few bytes per message before compression). Formatting
- * happens in the reader (`vtr log file.vtr`, `vtr_log_rec_format`, or
- * vtr::format_log below).
- *
- * Placeholders follow the std::format / Rust subset documented in
- * vtr/docs/LOGGING.md: `{}`, `{1}`, `{:x}`, `{:#010x}`, `{:>8}`, `{:.3}`, `{{`.
- * The number of placeholders must equal the number of arguments; this is
- * checked at compile time.
- *
- * Argument mapping: bool -> BOOL; signed integers and enums -> I64; unsigned
- * -> U64; float/double -> F64; const char*, std::string, std::string_view ->
- * TEXT (deduplicated per block); vtr::interned{id} -> STR; vtr::bytes -> BYTES;
- * vtr::pointer / T* -> POINTER; vtr::timestamp -> TIME.
- *
- * Neither the writer nor a LogStream is thread-safe: log from the thread that
- * owns the writer (a simulator's main thread).
- */
+/* vtr_log.hpp - header-only C++17 logging front end over the VTR C API. */
+
 #ifndef VTR_LOG_HPP
 #define VTR_LOG_HPP
 
@@ -47,34 +23,26 @@ inline const char *severity_name(uint8_t s) {
     return s < 6 ? names[s] : "other";
 }
 
-/* Argument wrappers selecting a non-default type tag. */
-struct interned { uint32_t id; };                    /* VTR_VAL_STR: a string id from vtr_writer_intern */
-struct bytes { const uint8_t *data; size_t len; };   /* VTR_VAL_BYTES */
-struct pointer { uint64_t value; };                  /* VTR_VAL_POINTER */
-struct timestamp { uint64_t value; };                /* VTR_VAL_TIME */
+struct interned { uint32_t id; };
+struct bytes { const uint8_t *data; size_t len; };
+struct pointer { uint64_t value; };
+struct timestamp { uint64_t value; };
 
-/* A LOG stream of a writer: the target of VTR_LOG. */
 class LogStream {
 public:
     LogStream() = default;
-    /* Wraps an existing stream node (kind VTR_LOG_STREAM_KIND). */
     LogStream(vtr_writer *w, uint32_t stream) : w_(w), stream_(stream) {}
-    /* Declares a new log stream `name` under `parent` (VTR_NONE = a root). */
     LogStream(vtr_writer *w, uint32_t parent, const char *name)
         : w_(w), stream_(vtr_writer_add_stream(w, parent, name, VTR_LOG_STREAM_KIND)) {}
 
     vtr_writer *writer() const { return w_; }
     uint32_t node() const { return stream_; }
-    /* Transaction id attached as parent to the following messages (0 = none). */
     void set_parent(uint64_t tx) { parent_ = tx; }
     uint64_t parent() const { return parent_; }
-    /* Messages below this severity are dropped before reaching the writer. */
     void set_min_severity(Severity s) { min_ = static_cast<uint8_t>(s); }
     bool enabled(Severity s) const { return static_cast<uint8_t>(s) >= min_; }
-    /* Id of the last recorded message (a transaction id), 0 if none. */
     uint64_t last_id() const { return last_id_; }
 
-    /* Internal: used by the macro. */
     uint64_t &last_id_slot() { return last_id_; }
 
 private:
@@ -177,7 +145,6 @@ struct arg_traits<T *, std::enable_if_t<!std::is_same_v<bare<T>, char>>> {
 
 template <class T> using traits_of = arg_traits<bare<T>>;
 
-/* Row encoding of one argument (see vtr_writer_log_raw). */
 inline uint8_t *put_varint(uint8_t *p, uint64_t v) {
     while (v >= 0x80) {
         *p++ = static_cast<uint8_t>(v | 0x80);
@@ -197,14 +164,13 @@ inline uint8_t *put_value(uint8_t *p, const vtr_value &v) {
         p = put_varint(p, v.len);
         if (v.len) std::memcpy(p, v.data, v.len);
         return p + v.len;
-    default: return put_varint(p, v.u); /* U64, TIME, POINTER */
+    default: return put_varint(p, v.u);
     }
 }
 inline size_t max_encoded(const vtr_value &v) {
     return (v.tag == VTR_VAL_TEXT || v.tag == VTR_VAL_BYTES) ? v.len + 10 : 10;
 }
 
-/* Number of `{...}` placeholders in a format string (`{{` escapes excluded). */
 constexpr size_t count_placeholders(const char *s) {
     size_t n = 0;
     for (size_t i = 0; s[i] != 0; ++i) {
@@ -221,7 +187,6 @@ constexpr size_t count_placeholders(const char *s) {
     return n;
 }
 
-/* The first argument is the format string; the remaining ones are counted. */
 template <class Fmt, class... Args>
 constexpr std::integral_constant<size_t, sizeof...(Args)> count_args(Fmt &&, Args &&...) { return {}; }
 
@@ -259,9 +224,8 @@ inline void log_call(uint32_t &site, LogStream &ls, Severity sev, uint64_t time,
     emit(ls, site, time, args...);
 }
 
-} // namespace detail
+}
 
-/* Reader side: renders a record with a small stack buffer, falling back to the heap. */
 inline std::string format_log(const vtr_reader *r, const vtr_log_rec &rec) {
     char buf[256];
     size_t n = vtr_log_rec_format(r, &rec, buf, sizeof buf);
@@ -271,7 +235,6 @@ inline std::string format_log(const vtr_reader *r, const vtr_log_rec &rec) {
     return s;
 }
 
-/* Visits log records; `f(const vtr_log_rec&)` returns false to stop. */
 template <class F>
 inline int for_each_log(const vtr_reader *r, uint32_t stream, uint8_t min_severity, uint64_t t0, uint64_t t1, F &&f) {
     struct Ctx { F *f; } ctx{&f};
@@ -280,12 +243,11 @@ inline int for_each_log(const vtr_reader *r, uint32_t stream, uint8_t min_severi
         [](void *user, const vtr_log_rec *rec) -> int { return (*static_cast<Ctx *>(user)->f)(*rec) ? 0 : 1; }, &ctx);
 }
 
-} // namespace vtr
+}
 
 #define VTR_LOG_FIRST_(a, ...) a
 #define VTR_LOG_FIRST(...) VTR_LOG_FIRST_(__VA_ARGS__, 0)
 
-/* VTR_LOG(stream, severity, time, "format", args...) */
 #define VTR_LOG(stream, severity, time, ...)                                                                        \
     do {                                                                                                            \
         static_assert(::vtr::detail::count_placeholders(VTR_LOG_FIRST(__VA_ARGS__)) ==                             \
@@ -302,4 +264,4 @@ inline int for_each_log(const vtr_reader *r, uint32_t stream, uint8_t min_severi
 #define VTR_LOG_ERROR(stream, time, ...) VTR_LOG(stream, ::vtr::Severity::Error, time, __VA_ARGS__)
 #define VTR_LOG_FATAL(stream, time, ...) VTR_LOG(stream, ::vtr::Severity::Fatal, time, __VA_ARGS__)
 
-#endif /* VTR_LOG_HPP */
+#endif

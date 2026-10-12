@@ -1,9 +1,6 @@
 // Writes the recordings that tests/track.rs reads back: part A drives vtr::Tracker
 // (vtr_track.hpp) directly, part B the vtr_trace package's DPI functions
-// (vtr_trace_dpi.hpp) over a test host and sink. Prints call results,
-// diagnostics and warnings on stdout for the Rust side to compare.
-//
-//   track_test <out-dir>
+// (vtr_trace_dpi.hpp) over a test host and sink.
 
 #include "vtr_trace_dpi.hpp"
 
@@ -51,8 +48,6 @@ int fail(const char* what) {
     return 1;
 }
 
-// Part A: folding, bind_oldest order, renaming, lanes, ordered aborts, stale keys,
-// attribute replacement, relations across trackers and items open at close.
 int partA(const std::string& path) {
     vtr_writer* w = vtr_writer_create(path.c_str(), nullptr);
     if (!w) return fail("create");
@@ -64,14 +59,14 @@ int partA(const std::string& path) {
     const uint32_t fe = p.keyspace("fe"), iid = p.keyspace("iid"), preg = p.keyspace("preg"), sq = l.keyspace("sq");
 
     p.open(fe, 1, "ID", 10);
-    p.attr(fe, 1, "pc", uint64_t{0x100});  // partial at decode, replaced at 14
+    p.attr(fe, 1, "pc", uint64_t{0x100});
     p.label(fe, 1, "one");
     p.open(fe, 2, "ID", 10);
     p.open(fe, 3, "ID", 10);
     for (uint64_t k = 1; k <= 3; ++k) p.stage(fe, k, "IR", 11);
-    const int n1 = p.bind_oldest(fe, 2, iid, 5, 12);  // fe 1 and 2 fold into iid 5
+    const int n1 = p.bind_oldest(fe, 2, iid, 5, 12);
     p.stage(iid, 5, "IQ", 12);
-    const int n2 = p.bind_oldest(fe, 1, iid, 6, 12);  // fe 3 alone into iid 6
+    const int n2 = p.bind_oldest(fe, 1, iid, 6, 12);
     p.stage(iid, 6, "IQ", 12);
     p.bind(iid, 6, preg, 40, 12);
     p.stage(preg, 40, "EX", 13);
@@ -79,13 +74,13 @@ int partA(const std::string& path) {
     p.open(fe, 4, "ID", 13);
     p.open(fe, 5, "ID", 13);
     p.lane(preg, 40, "mem", "", 14);
-    p.stage(iid, 6, "EX", 14);  // already in EX: continues
+    p.stage(iid, 6, "EX", 14);
     p.attr(iid, 5, "pc", uint64_t{0x1000});
     p.attr(iid, 6, "pc", uint64_t{0x2000});
     p.event(iid, 5, "replay", 14);
-    p.close(iid, 5, VTR_TX_STATUS_OK, 15);  // both members of the group
-    const int y = p.abort_younger(iid, 6, 15);  // fe 4 and 5
-    p.stage(fe, 4, "IR", 16);  // released: counted
+    p.close(iid, 5, VTR_TX_STATUS_OK, 15);
+    const int y = p.abort_younger(iid, 6, 15);
+    p.stage(fe, 4, "IR", 16);
     p.open(fe, 7, "ID", 16);
     l.open(sq, 0, "Q", 16);
     l.parent(sq, 0, p, iid, 6);
@@ -93,9 +88,9 @@ int partA(const std::string& path) {
     p.open(fe, 8, "ID", 16);
     p.bind(fe, 8, iid, 9, 16);
     p.open(fe, 9, "ID", 16);
-    p.open(fe, 7, "ID", 17);  // fe 7 still names an item: it is aborted, counted
-    p.bind(fe, 9, iid, 9, 17);  // iid 9 still names fe 8's item: aborted, counted
-    const int k = p.abort_keyspace(fe, 18);  // fe 9 (also iid 9) and the second fe 7
+    p.open(fe, 7, "ID", 17);
+    p.bind(fe, 9, iid, 9, 17);
+    const int k = p.abort_keyspace(fe, 18);
     l.close(sq, 0, VTR_TX_STATUS_OK, 19);
     l.open(sq, 1, "Q", 19);
     l.open(sq, 2, "Q", 19);
@@ -103,7 +98,7 @@ int partA(const std::string& path) {
     std::printf("RET %d %d %d %d %d\n", n1, n2, y, k, a);
     std::printf("OPEN %zu %zu\n", p.open_count(), l.open_count());
     vtr_writer_set_time(w, 20);
-    p.detach();  // iid 6 stays open: its pc is written now
+    p.detach();
     l.detach();
     std::printf("OPEN %zu %zu\n", p.open_count(), l.open_count());
     for (const std::string& d : p.take_diagnostics()) std::printf("DIAG %s\n", d.c_str());
@@ -111,9 +106,6 @@ int partA(const std::string& path) {
     return vtr_writer_close(w) == VTR_OK ? 0 : fail("close A");
 }
 
-// Part C: a group larger than the inline capacity and a key table that grows and
-// shrinks: 1000 items, six of them folded under one key, the rest closed in a
-// scattered order.
 int partC(const std::string& path) {
     vtr_writer* w = vtr_writer_create(path.c_str(), nullptr);
     if (!w) return fail("create");
@@ -146,8 +138,6 @@ int closeFile(TestSink& sink, const char* tag) {
     return vtr_writer_close(sink.w) == VTR_OK ? 0 : fail("close");
 }
 
-// Part B: the package over a sink: declarations replayed at open, calls ignored while
-// no file is open, _at forms, misuse counts, and key tables dropped at the close notice.
 int partB(const std::string& b1, const std::string& b2) {
     TestSink sink;
     g_test_scope = "TOP.tb.core.u_vtr";
@@ -158,7 +148,7 @@ int partB(const std::string& b1, const std::string& b2) {
     const unsigned other = vtr_tracker("", "bus", "BUS", "request", "nope");
     const unsigned grouped = vtr_keyspace(vtr_tracker("/TX.core0", "events", "EVENTS", "event", ""), "ev");
     vtr_clock_run(c, 10, -12);
-    vtr_item_open(sn, 1, "F");  // no file yet: ignored
+    vtr_item_open(sn, 1, "F");
     if (openFile(sink, b1)) return 1;
     s_host.t = 100;
     vtr_item_open(sn, 1, "F");
@@ -170,27 +160,27 @@ int partB(const std::string& b1, const std::string& b2) {
     vtr_item_stage(sn, 1, "D");
     s_host.t = 130;
     vtr_item_close(sn, 1, VTR_TX_STATUS_OK);
-    vtr_item_close(sn, 2, 7);  // not a status: counted
-    vtr_item_stage(trk, 1, "X");  // a tracker handle: counted
-    const unsigned rob = vtr_keyspace(trk, "rob");  // declared while open
+    vtr_item_close(sn, 2, 7);
+    vtr_item_stage(trk, 1, "X");
+    const unsigned rob = vtr_keyspace(trk, "rob");
     s_host.t = 140;
     vtr_item_bind(sn, 2, rob, 3);
     vtr_item_label(rob, 3, "two");
-    vtr_item_bind(sn, 2, vtr_keyspace(other, "id"), 1);  // another tracker: counted
+    vtr_item_bind(sn, 2, vtr_keyspace(other, "id"), 1);
     s_host.t = 150;
     if (closeFile(sink, "WARN1")) return 1;
-    vtr_item_open(sn, 9, "F");  // closed: ignored
+    vtr_item_open(sn, 9, "F");
     if (openFile(sink, b2)) return 1;
     s_host.t = 200;
-    vtr_item_stage(rob, 3, "X");  // the old file's key: names nothing here
+    vtr_item_stage(rob, 3, "X");
     vtr_item_open(sn, 5, "F");
-    vtr_item_open(grouped, 1, "E");  // a stream of the file's own: TX.core0.events
+    vtr_item_open(grouped, 1, "E");
     std::printf("ABORT %d\n", vtr_tracker_abort(other));
     s_host.t = 210;
     return closeFile(sink, "WARN2");
 }
 
-}  // namespace
+}
 
 vtr_trace::Runtime& vtr_trace::runtime() { return s_runtime; }
 

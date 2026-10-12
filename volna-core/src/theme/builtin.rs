@@ -1,11 +1,8 @@
-//! Themes selectable by `appearance.theme`: the Volna themes (the default),
-//! One Dark, and bundled palettes. Each bundled palette is a host-neutral
-//! palette JSON under `assets/themes`, resolved through the same path as a
-//! user's palette file, so the two never drift.
+//! Themes selectable by `appearance.theme`: the Volna themes (the default), One Dark, and
+//! bundled palettes.
 
 use super::{HostPalette, Theme, Themes};
 
-/// A bundled theme: the id `appearance.theme` names, its label, its palette.
 #[derive(Clone, Copy, Debug)]
 pub struct Builtin {
     pub id: &'static str,
@@ -23,7 +20,6 @@ macro_rules! builtin {
     };
 }
 
-/// Every bundled palette, in the order the theme picker lists them after One Dark.
 pub const BUILTIN: &[Builtin] = &[
     builtin!("dracula", "Dracula"),
     builtin!("catppuccin-mocha", "Catppuccin Mocha"),
@@ -34,17 +30,12 @@ pub const BUILTIN: &[Builtin] = &[
     builtin!("vscode-light", "VS Code Light Modern"),
 ];
 
-/// The default: Volna Dark or Volna Light, following the system.
 pub const VOLNA: &str = "volna";
 pub const VOLNA_DARK: &str = "volna-dark";
 pub const VOLNA_LIGHT: &str = "volna-light";
-/// Volna Dark for the panels drawn against time in a Volna Light window,
-/// whatever the system appearance.
 pub const VOLNA_MIXED: &str = "volna-mixed";
-/// The code-defined theme that was the default before Volna.
 pub const ONE_DARK: &str = "one-dark";
 
-/// The themes defined in code, in the order the theme picker lists them.
 const CODED: [(&str, &str); 5] = [
     (VOLNA, "Volna"),
     (VOLNA_DARK, "Volna Dark"),
@@ -53,7 +44,6 @@ const CODED: [(&str, &str); 5] = [
     (ONE_DARK, "One Dark"),
 ];
 
-/// `(id, label)` for the coded themes and every bundled palette.
 pub fn choices() -> impl Iterator<Item = (&'static str, &'static str)> {
     CODED
         .into_iter()
@@ -64,8 +54,6 @@ pub fn is_builtin(id: &str) -> bool {
     choices().any(|(known, _)| known == id)
 }
 
-/// The themes `id` names while the system appearance is dark (`system_dark`)
-/// or light; `None` for an id that is not built in.
 pub fn resolve(id: &str, system_dark: bool) -> Option<Themes> {
     let volna = Theme::volna;
     Some(match id {
@@ -86,8 +74,6 @@ pub fn resolve(id: &str, system_dark: bool) -> Option<Themes> {
 }
 
 impl Theme {
-    /// The built-in theme with this id, as a dark system shows it; the
-    /// chrome (light) of Volna Mixed.
     pub fn builtin(id: &str) -> Option<Self> {
         resolve(id, true).map(|themes| themes.chrome)
     }
@@ -115,8 +101,6 @@ mod tests {
                 "{}",
                 builtin.id
             );
-            // The palette supplied every surface it names; nothing fell back to
-            // the neutral defaults.
             assert_ne!(theme.editor.bg, theme.bar.bg, "{}", builtin.id);
             assert!(is_builtin(builtin.id));
         }
@@ -135,14 +119,12 @@ mod tests {
             let mixed = resolve(VOLNA_MIXED, system_dark).unwrap();
             assert!(!dark(&mixed.chrome), "Mixed ignores the system");
             assert!(dark(&mixed.canvas));
-            // The data panel is Volna Dark, unchanged: switching Mixed and Dark never changes the waves.
             let pinned = resolve(VOLNA_DARK, system_dark).unwrap();
             assert_eq!(mixed.canvas.wave_signal, pinned.canvas.wave_signal);
             assert_eq!(mixed.canvas.editor.bg, pinned.canvas.editor.bg);
             assert!(dark(&pinned.chrome));
             assert!(!dark(&resolve(VOLNA_LIGHT, system_dark).unwrap().chrome));
         }
-        // Every built-in id resolves, and only those do.
         for (id, _) in choices() {
             assert!(resolve(id, false).is_some(), "{id}");
         }

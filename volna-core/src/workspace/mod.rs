@@ -1,5 +1,4 @@
-//! Frontend-neutral workspace files. Parsing and resolution are side-effect free;
-//! a validated plan installs the complete session view in one operation.
+//! Frontend-neutral workspace files.
 
 use crate::nav::Tween;
 use crate::panels::{
@@ -25,7 +24,6 @@ pub const VERSION: u32 = 6;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ROWS: usize = 100_000;
 
-/// Capture and restore share the same aggregate row limit across panels.
 pub(crate) fn admit_rows(total: &mut usize, count: usize) -> Result<()> {
     *total = total
         .checked_add(count)
@@ -34,7 +32,6 @@ pub(crate) fn admit_rows(total: &mut usize, count: usize) -> Result<()> {
     Ok(())
 }
 
-/// Stop serialization before an oversized snapshot can replace a readable save.
 struct SnapshotWriter(Vec<u8>);
 impl std::io::Write for SnapshotWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -57,12 +54,7 @@ pub struct Workspace {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<String>,
-    /// The session's traces; A owns the workspace (its sidecar and recent
-    /// entry name it).
     pub traces: Vec<Trace>,
-    /// The unit every saved time is counted in, `10^timescale` seconds: the
-    /// finest of the traces when it was saved. A restore converts the times
-    /// to the unit of the traces it opens.
     pub timescale: i8,
     pub layout: Layout,
     pub timeline_dividers: Vec<crate::panels::TimelineDivider>,
@@ -72,14 +64,11 @@ pub struct Workspace {
     pub sidebar: Sidebar,
 }
 
-/// One trace of a saved session: where it is, relative to the workspace
-/// when it can be, and what it was when saved.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Trace {
     pub letter: TraceId,
     pub path: String,
     pub name: String,
-    /// The name the user gave it, when they did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rename: Option<String>,
     pub timescale: i8,
@@ -92,7 +81,6 @@ pub struct Shared {
     pub viewport: Viewport,
     pub cursor: Option<u64>,
     pub markers: Vec<Marker>,
-    /// Where measurements start: `{"marker": n}` or `{"time": t}`.
     pub reference: Option<Reference>,
 }
 
@@ -101,8 +89,6 @@ pub struct Sidebar {
     pub visible: bool,
     pub width: f32,
     pub scopes_fraction: f32,
-    /// The selected scope's path in its trace; an empty path is the
-    /// trace's own row.
     pub selected_scope: Option<Traced<Vec<String>>>,
     pub expanded: Vec<Traced<Vec<String>>>,
     pub filter: String,
@@ -120,15 +106,12 @@ impl RestoreReport {
 
 pub struct RestorePlan {
     generation: u64,
-    // Resolved identities belong to each slot, including its load state.
     traces: Vec<(
         TraceId,
         u64,
         std::mem::Discriminant<crate::trace::SlotState>,
     )>,
-    /// How saved times convert to the session unit, when it differs.
     retime: Option<crate::trace::Rescale>,
-    /// The names the user gave the traces, by letter.
     renames: Vec<(TraceId, Option<String>)>,
     panels: Panels,
     shared: Shared,
@@ -158,8 +141,6 @@ impl Workspace {
         serde_json::from_slice(bytes).context("invalid workspace")
     }
 
-    /// A workspace of this format saved by an older version. During the
-    /// research phase such files are discarded rather than migrated.
     pub fn is_outdated(bytes: &[u8]) -> bool {
         #[derive(Deserialize)]
         struct Header {
@@ -177,10 +158,6 @@ impl Workspace {
         Ok(writer.0)
     }
 
-    /// Capture destinations use a durable URI, or a reference relative to the workspace:
-    /// `path_of` says how each trace is referenced, and `None` leaves a
-    /// trace out (its rows then restore unresolved). Histories and
-    /// transient input/animation state are never serialized.
     pub fn capture(
         app: &App,
         path_of: impl Fn(&crate::trace::TraceSlot) -> Result<Option<String>>,
@@ -269,8 +246,6 @@ impl Workspace {
         })
     }
 
-    /// Resolve against an immutable live session. Hosts resolve the trace resource
-    /// before this call; `expected_trace` is its durable identity.
     pub fn prepare(
         &self,
         app: &App,
@@ -303,9 +278,6 @@ impl Workspace {
                 saved.time_range.0 <= saved.time_range.1,
                 "invalid trace time range"
             );
-            // A was checked against the caller's trace above. Rows of the
-            // others resolve against the trace that holds their letter, the
-            // saved one or one the user opened in its place.
             let uri = resolve_trace(&saved.path, workspace_location)?;
             let slot = app.doc.traces().get(saved.letter);
             let Some(session) = slot.and_then(|slot| slot.session()) else {
@@ -376,7 +348,6 @@ impl Workspace {
         valid_viewport(self.shared.viewport)?;
         let mut marker_ids = HashSet::new();
         for m in &self.shared.markers {
-            // Numbers are positive by type; a zero fails to parse.
             ensure!(marker_ids.insert(m.id), "duplicate marker ID");
         }
         if let Some(Reference::Marker(id)) = self.shared.reference {
@@ -479,7 +450,6 @@ impl RestorePlan {
         );
         ensure!(app.doc.is_loaded(), "no trace open");
         app.retire_panels();
-        // Invalidate earlier history results before installing rows.
         app.doc.restart();
         for (trace, name) in self.renames {
             app.doc.restore_trace_name(trace, name);
@@ -489,7 +459,6 @@ impl RestorePlan {
         app.doc.restore_markers(self.shared.markers);
         app.doc.set_reference(self.shared.reference);
         app.panels = self.panels;
-        // Saved times follow the unit of the traces open now.
         if let Some(by) = self.retime {
             use crate::trace::Retime;
             app.doc.retime(by);
@@ -512,8 +481,6 @@ impl RestorePlan {
     }
 }
 
-/// URI resolution preserves remote schemes and authorities. A host-storage
-/// fallback must contain an absolute trace URI, since it has no directory.
 pub fn resolve_trace(reference: &str, workspace_location: &str) -> Result<String> {
     if let Ok(uri) = url::Url::parse(reference) {
         return Ok(uri.into());

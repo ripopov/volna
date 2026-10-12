@@ -1,4 +1,5 @@
 //! Kanata version 0004 instruction lifecycles, stages, labels, and wakeup relations.
+
 use anyhow::{bail, ensure, Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read};
@@ -27,14 +28,6 @@ fn append(dst: &mut String, text: &str) {
     dst.push_str(text);
 }
 
-/// Convert a plain or gzip-compressed Kanata 0004 log into a fresh writer.
-///
-/// Cycles must be nonnegative and nondecreasing. One tick is one abstract cycle;
-/// `time.unit=cycle` distinguishes it from physical seconds. Each thread becomes
-/// a pipeline stream associated with the period-one `cpu.cycle` clock.
-/// Instructions are retained until EOF to preserve late labels and dependencies.
-/// Unknown commands, dangling references, and inconsistent lifecycles are errors.
-/// The caller closes the writer after success and discards it after an error.
 pub fn convert_kanata(input: impl AsRef<Path>, w: &mut Writer) -> Result<()> {
     let input = input.as_ref();
     let file = std::fs::File::open(input).with_context(|| input.display().to_string())?;
@@ -189,7 +182,6 @@ fn convert_reader(reader: impl BufRead, w: &mut Writer) -> Result<()> {
                                 .find(|s| s.lane == lane && s.name == name && s.end.is_none());
                             if cmd == "S" {
                                 ensure!(active.is_none(), "stage already open on this lane");
-                                // A new stage on a lane closes its previous stage, as in Kanata.
                                 if let Some(previous) = op
                                     .stages
                                     .iter_mut()
@@ -226,7 +218,6 @@ fn convert_reader(reader: impl BufRead, w: &mut Writer) -> Result<()> {
         parse(w, &mut ops).with_context(|| format!("Kanata line {}", line_index + 2))?;
     }
     w.set_time(cycle)?;
-    // A stable finalization order keeps output independent of hash-map iteration.
     for op in ops.values() {
         for (key, text) in [("vtr.label", &op.label), ("detail", &op.detail)] {
             if !text.is_empty() {

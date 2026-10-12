@@ -1,5 +1,5 @@
-//! Compare only the persistent fields an input can touch. In particular pointer
-//! motion never walks signal rows or serializes a workspace.
+//! Compare only the persistent fields an input can touch.
+
 use crate::marker::Marker;
 use crate::panels::PanelId;
 use crate::pipeline::RowView;
@@ -28,7 +28,6 @@ pub(crate) struct Stamp {
     filter: String,
     wave: Option<WaveStamp>,
     pipeline: Option<PipelineStamp>,
-    /// A selection can change every unpinned panel, not just the focused one.
     transactions: Vec<(PanelId, Option<crate::transaction::ShownRecord>)>,
 }
 #[derive(PartialEq)]
@@ -52,8 +51,6 @@ struct WaveStamp {
     columns: (f32, f32),
     rows: usize,
     selected: Option<BTreeSet<usize>>,
-    /// Bumped by every row edit (format, height, colour, fold, move, undo),
-    /// so no command walks the rows to find out.
     revision: u64,
 }
 

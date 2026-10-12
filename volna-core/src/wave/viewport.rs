@@ -2,24 +2,15 @@
 
 use crate::nav::{Lerp, Tween};
 
-/// The animated time window: linked panels advance the document's one
-/// animation, independent panels advance their own.
 pub type ViewportState = Tween<Viewport>;
 
-/// Fraction of the trace length the view may scroll past either end.
 const EDGE_SPACE: f64 = 0.2;
-/// Narrowest window, in time units.
 const MIN_WIDTH: f64 = 0.25;
-/// Narrowest window relative to its times' magnitude, so late times keep a
-/// window whose ends and pixels stay distinct in f64.
 const MIN_RELATIVE_WIDTH: f64 = 256.0 * f64::EPSILON;
 
-/// The narrowest window around times of magnitude `at`.
 fn min_width(at: f64) -> f64 {
     MIN_WIDTH.max(at.abs() * MIN_RELATIVE_WIDTH)
 }
-/// Space Zoom Fit leaves on each side of the trace, in design pixels, so
-/// the shade outside it shows that the whole trace is on screen.
 pub const FIT_MARGIN_PX: f64 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -31,8 +22,6 @@ pub struct Viewport {
 impl Viewport {
     pub fn fit(range: (u64, u64)) -> Self {
         let (a, b) = (range.0 as f64, range.1 as f64);
-        // One integer tick can disappear when converted at a large absolute
-        // timestamp. Use the navigation minimum before constructing endpoints.
         let width = (b - a).max(1.0).max(min_width(a.abs().max(b.abs())));
         Viewport {
             start: a,
@@ -40,9 +29,6 @@ impl Viewport {
         }
     }
 
-    /// The trace with `margin_px` on each side of a `width_px` wide area;
-    /// the exact [`Viewport::fit`] when the margins would exceed the edge
-    /// space [`Viewport::clamp`] allows.
     pub fn fit_px(range: (u64, u64), width_px: f64, margin_px: f64) -> Self {
         let fit = Self::fit(range);
         let inner = width_px - 2.0 * margin_px;
@@ -64,8 +50,6 @@ impl Viewport {
         width_px / self.width()
     }
 
-    /// Map an exact recorded tick without rounding its absolute timestamp to
-    /// f64. Subtraction at an integer origin preserves nearby late-time events.
     pub fn x_of_tick(&self, time: u64, width_px: f64) -> f64 {
         let origin = self.start.floor() as i128;
         let relative = (i128::from(time) - origin) as f64 - (self.start - origin as f64);
@@ -80,7 +64,6 @@ impl Viewport {
         (t - self.start) / self.width() * width_px
     }
 
-    /// Zoom by `factor` (> 1 zooms in) keeping the time under `x_px` fixed.
     pub fn zoom_about(&mut self, x_px: f64, width_px: f64, factor: f64, limits: (u64, u64)) {
         let anchor = self.time_at(x_px, width_px);
         let new_width = (self.width() / factor).max(min_width(anchor));
@@ -90,7 +73,6 @@ impl Viewport {
         self.clamp(limits);
     }
 
-    /// Pan by a pixel delta (positive moves the view to later times).
     pub fn pan_px(&mut self, dx_px: f64, width_px: f64, limits: (u64, u64)) {
         let dt = dx_px / width_px * self.width();
         self.start += dt;
@@ -119,10 +101,7 @@ impl Viewport {
         self.clamp(limits);
     }
 
-    /// Keep the window inside the trace plus edge space and above the minimum width.
     pub fn clamp(&mut self, limits: (u64, u64)) {
-        // Clamp against the same representable extent used by fit; raw
-        // rounded endpoints could otherwise force the minimum width to zero.
         let fit = Self::fit(limits);
         let (a, b) = (fit.start, fit.end);
         let span = fit.width();
@@ -150,10 +129,6 @@ impl Viewport {
         self.end = self.start + w;
     }
 
-    /// Clamp position and minimum width while allowing a window wider than
-    /// the trace. Pipeline square cells can need this extra empty time space.
-    /// A wide window must contain the trace; a narrower one keeps the usual
-    /// edge space. Neither case changes the requested scale.
     pub(crate) fn clamp_preserving_width(&mut self, limits: (u64, u64)) {
         let fit = Self::fit(limits);
         if !(self.start.is_finite()

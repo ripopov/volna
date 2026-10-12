@@ -107,7 +107,6 @@ pub(super) fn paint_row(
             .iter()
             .position(|i| model.selected.contains(i) && !model.signal(*i).unwrap().overlay_hidden)
     });
-    // Draw the focused member last so coincident lines remain inspectable.
     geometries.sort_by_key(|(k, _)| Some(*k) == focused);
     p.scene.clipped(clip, |scene| {
         for y in [plot.top, plot.bottom] {
@@ -139,8 +138,6 @@ pub(super) fn paint_row(
                 z(t.analog_wave_width).max(1.0)
             };
             scene.lines(overlaid::strokes(&geometry.runs, clip), color, width);
-            // Unknowns are member-specific lanes along the bottom, rather
-            // than a fill that could cover another member's valid line.
             let unknown_y = plot.bottom - z(2.0) - (k % 4) as f32 * z(3.0);
             let unknowns: Vec<_> = geometry
                 .undefined
@@ -229,8 +226,6 @@ pub(super) fn paint_probes(
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
     for row in rows {
-        // Cursor dots and probe values always use held trace samples, even
-        // when the visible stroke uses linear interpolation or envelopes.
         for time in cursor.into_iter().chain(row.probe.map(|(_, at, _)| at)) {
             if (time as f64) < vp.start || (time as f64) > vp.end {
                 continue;

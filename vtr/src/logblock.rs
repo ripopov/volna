@@ -1,17 +1,4 @@
 //! Log blocks: timestamped log records stored column-wise per block.
-//!
-//! A log record is a zero-duration transaction of a generator that describes
-//! a *log site*: the format string, severity, source location and the
-//! argument types of one logging call site (`LOG_INFO("addr={:#x}", a)`).
-//! Because the argument types are declared once on the generator, a record
-//! stores only the argument values: no attribute keys, no tags. Text
-//! arguments are deduplicated in a per-block dictionary at encode time (off
-//! the caller's thread), so the hot path is a plain copy of the values.
-//!
-//! The design borrows from NanoLog / binlog (static call-site metadata
-//! written once, dynamic arguments copied raw) and from CLP (a dictionary
-//! for repeated string variables, integers kept as integers), see
-//! `vtr/docs/RATIONALE.md`.
 
 use crate::codec::{Compression, Compressor, Decompressor};
 use crate::error::{Error, Result};
@@ -25,8 +12,6 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
-/// Multiply-xorshift hasher for the per-block text dictionary (short byte
-/// strings, no adversarial input): several times faster than SipHash.
 #[derive(Default)]
 struct FastHasher(u64);
 
@@ -59,11 +44,6 @@ impl Hasher for FastHasher {
 
 type FastMap<'a> = HashMap<&'a [u8], u32, BuildHasherDefault<FastHasher>>;
 
-// ---------------------------------------------------------------------------
-// Static site description
-// ---------------------------------------------------------------------------
-
-/// Severity of a log site (generator attribute `log.severity`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Severity {
     Trace,
@@ -72,7 +52,6 @@ pub enum Severity {
     Warn,
     Error,
     Fatal,
-    /// Producer-specific level; ranks by its code.
     Other(u8),
 }
 
@@ -110,7 +89,6 @@ impl Severity {
             Severity::Other(_) => "other",
         }
     }
-    /// Parses `trace|debug|info|warn|warning|error|fatal` (case-insensitive) or a number.
     pub fn from_name(s: &str) -> Option<Severity> {
         Some(match s.to_ascii_lowercase().as_str() {
             "trace" => Severity::Trace,
@@ -135,7 +113,6 @@ impl Ord for Severity {
     }
 }
 
-/// Argument types a log site declares (a subset of the value tags).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum LogArgType {
@@ -143,13 +120,10 @@ pub enum LogArgType {
     I64 = ValueTag::I64 as u8,
     U64 = ValueTag::U64 as u8,
     F64 = ValueTag::F64 as u8,
-    /// Interned string id (the producer interned it; stable across the file).
     Str = ValueTag::Str as u8,
-    /// Opaque bytes, stored verbatim.
     Bytes = ValueTag::Bytes as u8,
     Time = ValueTag::Time as u8,
     Pointer = ValueTag::Pointer as u8,
-    /// UTF-8 text, deduplicated per block (the common case for names, states, ids).
     Text = ValueTag::Text as u8,
 }
 
@@ -186,11 +160,6 @@ impl LogArgType {
     }
 }
 
-/// One argument of a log record. Borrowed: logging allocates nothing.
-///
-/// `From` converts integers (signed to `I64`, unsigned to `U64`), floats,
-/// `bool`, `&str`/`&String` (as `Text`), `&[u8]` (as `Bytes`) and `StrId`, so
-/// `&[a.into(), name.into()]` builds an argument list.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LogArg<'a> {
     Bool(bool),
@@ -218,7 +187,6 @@ impl<'a> LogArg<'a> {
             LogArg::Text(_) => LogArgType::Text,
         }
     }
-    /// Owned attribute value (used when a record is viewed as a transaction).
     pub fn to_value(&self) -> Value {
         match *self {
             LogArg::Bool(b) => Value::Bool(b),
@@ -271,24 +239,16 @@ impl<'a> From<StrId> for LogArg<'a> {
     }
 }
 
-/// Writer-side handle of a registered log site (dense index).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LogSiteId(pub u32);
 
-/// What a producer declares about a call site (see `Writer::add_log_site`).
 #[derive(Clone, Debug)]
 pub struct LogSiteSpec<'a> {
-    /// The `LOG` stream the site belongs to.
     pub stream: NodeId,
     pub severity: Severity,
-    /// Format string with `{}` placeholders (`{:x}`, `{:#010x}`, `{:.3}`, `{1}` ...).
     pub fmt: &'a str,
-    /// Argument types in placeholder order.
     pub args: &'a [LogArgType],
-    /// Optional argument names (attribute keys when the record is read as a
-    /// transaction); `"0"`, `"1"`, ... when empty.
     pub names: &'a [&'a str],
-    /// Source location; empty / 0 when unknown.
     pub file: &'a str,
     pub line: u32,
     pub func: &'a str,
@@ -322,38 +282,28 @@ impl<'a> LogSiteSpec<'a> {
     }
 }
 
-/// Reader-side description of a log site (decoded from the generator's attributes).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogSite {
-    /// Position in `Reader::log_sites()`.
     pub index: u32,
     pub node: NodeId,
     pub stream: NodeId,
     pub severity: Severity,
-    /// Format string (the generator's name).
     pub fmt: StrId,
     pub file: Option<StrId>,
     pub line: Option<u32>,
     pub func: Option<StrId>,
     pub args: Vec<LogArgType>,
-    /// One name per argument (always present in files written by this crate).
     pub names: Vec<StrId>,
 }
 
-/// Attribute keys used on log-site generators.
 pub const KEY_SEVERITY: &str = "log.severity";
 pub const KEY_ARGS: &str = "log.args";
 pub const KEY_NAMES: &str = "log.names";
 pub const KEY_FILE: &str = "log.file";
 pub const KEY_LINE: &str = "log.line";
 pub const KEY_FUNC: &str = "log.func";
-/// Stream kind of log streams.
 pub const STREAM_KIND: &str = "LOG";
 
-/// The name (format string) and attributes (`log.*`) of the generator
-/// describing `spec`, with its strings interned by `intern`; nothing is
-/// interned when it fails. Argument names default to `"0"`, `"1"`, ... and
-/// must be unique.
 pub(crate) fn site_attrs(
     spec: &LogSiteSpec,
     mut intern: impl FnMut(&str) -> StrId,
@@ -404,11 +354,6 @@ pub(crate) fn site_attrs(
     Ok((name, attrs))
 }
 
-// ---------------------------------------------------------------------------
-// Row format (writer scratch and block input)
-// ---------------------------------------------------------------------------
-
-/// Appends one record in row form: `site, time, id, parent(0/id+1), values...`.
 #[inline]
 pub fn encode_row(out: &mut Vec<u8>, site: u32, time: u64, id: u64, parent: u64, args: &[LogArg]) {
     varint::put_u64(out, site as u64);
@@ -428,27 +373,20 @@ pub fn encode_row(out: &mut Vec<u8>, site: u32, time: u64, id: u64, parent: u64,
     }
 }
 
-/// Per-site facts the block encoder needs.
 #[derive(Clone, Debug)]
 pub struct LogSiteEnc {
     pub node: u32,
     pub args: Vec<LogArgType>,
 }
 
-/// Input for one log block: rows plus a snapshot of the site table.
 pub struct LogBlockInput {
     pub rows: Vec<u8>,
     pub n: u64,
     pub sites: Arc<Vec<LogSiteEnc>>,
 }
 
-// ---------------------------------------------------------------------------
-// Block encoding (columnar)
-// ---------------------------------------------------------------------------
-
 pub const LOG_HEADER_LEN: usize = 48;
 
-/// Fixed header of a log block.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LogBlockHeader {
     pub n_rec: u64,
@@ -496,7 +434,6 @@ impl LogBlockHeader {
     }
 }
 
-/// Generator ids present in a block, in order of first occurrence.
 pub fn block_generators<'a>(p: &'a [u8], h: &LogBlockHeader) -> impl Iterator<Item = u32> + 'a {
     let base = h.gens_off();
     (0..h.n_gens as usize)
@@ -514,7 +451,6 @@ const C_DICT: usize = 7;
 const C_MISC: usize = 8;
 const N_COLS: usize = 9;
 
-/// Encodes a log block payload.
 pub fn encode_log_block(
     input: &LogBlockInput,
     comp: Compression,
@@ -522,7 +458,6 @@ pub fn encode_log_block(
     out: &mut Vec<u8>,
 ) -> Result<()> {
     let n = input.n as usize;
-    // Columns as separate vectors (no per-push indexing), pre-sized from the row volume.
     let mut c_gen: Vec<u8> = Vec::with_capacity(n + 16);
     let mut c_time: Vec<u8> = Vec::with_capacity(2 * n + 16);
     let mut c_id: Vec<u8> = Vec::with_capacity(n + 16);
@@ -541,7 +476,6 @@ pub fn encode_log_block(
         blob_len: 0,
     };
     let mut gens: Vec<u32> = Vec::new();
-    // site index -> local generator index (u32::MAX = not seen yet)
     let mut local: Vec<u32> = vec![u32::MAX; input.sites.len()];
     let mut dict: FastMap = FastMap::default();
     let mut n_dict = 0u32;
@@ -587,7 +521,6 @@ pub fn encode_log_block(
             match t {
                 LogArgType::Bool => c_num.push(r.u8()?),
                 LogArgType::I64 | LogArgType::U64 | LogArgType::Time | LogArgType::Pointer => {
-                    // Already LEB128 in the row (zig-zag for I64): copy the encoded bytes.
                     let start = r.pos;
                     let _ = r.u64()?;
                     c_num.extend_from_slice(&r.buf[start..r.pos]);
@@ -645,18 +578,11 @@ pub fn encode_log_block(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Decoded block
-// ---------------------------------------------------------------------------
-
-/// One decoded record (argument values live in the block's cell array).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LogRec {
     pub id: u64,
     pub time: u64,
-    /// Generator node id of the site.
     pub gen: u32,
-    /// 0 = none, else parent id + 1.
     pub parent: u64,
     first: u32,
     n_args: u32,
@@ -675,23 +601,19 @@ enum Cell {
     Bytes(u32, u32),
 }
 
-/// Decoded contents of one log block.
 #[derive(Debug, Default)]
 pub struct LogBlockData {
     pub recs: Vec<LogRec>,
     cells: Vec<Cell>,
     dict: Vec<u8>,
-    /// `dict_off[i]..dict_off[i+1]` is dictionary string i.
     dict_off: Vec<u32>,
     bytes: Vec<u8>,
 }
 
 impl LogBlockData {
-    /// Number of arguments of `rec`.
     pub fn arg_count(&self, rec: &LogRec) -> usize {
         rec.n_args as usize
     }
-    /// Argument `i` of `rec`.
     pub fn arg(&self, rec: &LogRec, i: usize) -> Option<LogArg<'_>> {
         if i >= rec.n_args as usize {
             return None;
@@ -709,7 +631,6 @@ impl LogBlockData {
                     self.dict_off[d as usize] as usize,
                     self.dict_off[d as usize + 1] as usize,
                 );
-                // Validated UTF-8 in decode.
                 LogArg::Text(unsafe { std::str::from_utf8_unchecked(&self.dict[a..b]) })
             }
             Cell::Bytes(off, len) => LogArg::Bytes(&self.bytes[off as usize..(off + len) as usize]),
@@ -720,8 +641,6 @@ impl LogBlockData {
     }
 }
 
-/// Decodes a log block. `types(gen)` returns the declared argument types of a
-/// generator (from the hierarchy); unknown generators are an error.
 pub fn decode_log_block<'t>(
     p: &[u8],
     d: &mut Decompressor,
@@ -757,7 +676,6 @@ pub fn decode_log_block<'t>(
         pos += l;
     }
     let mut out = LogBlockData::default();
-    // Dictionary.
     let n_dict = cols[C_DICT].usize()?;
     if n_dict > cols[C_DICT].remaining() {
         return Err(Error::Corrupt("log dictionary count exceeds data"));
@@ -823,12 +741,6 @@ pub fn decode_log_block<'t>(
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// Reader-facing record view
-// ---------------------------------------------------------------------------
-
-/// One log record as returned by the reader (borrows the decoded block).
-/// Render its message with `format` / `format_into`.
 #[derive(Clone, Copy)]
 pub struct LogRecord<'a> {
     pub id: TxId,
@@ -861,21 +773,18 @@ impl<'a> LogRecord<'a> {
             block,
         }
     }
-    /// Severity of the record's site.
     pub fn severity(&self) -> Severity {
         self.site.severity
     }
     pub fn arg_count(&self) -> usize {
         self.rec.n_args as usize
     }
-    /// Argument `i`, typed as the site declares; `Text` and `Bytes` borrow the block.
     pub fn arg(&self, i: usize) -> Option<LogArg<'a>> {
         self.block.arg(self.rec, i)
     }
     pub fn args(&self) -> impl Iterator<Item = LogArg<'a>> + 'a {
         self.block.args(self.rec)
     }
-    /// The record viewed as a zero-duration transaction (attribute keys = argument names).
     pub fn to_transaction(&self) -> Transaction {
         let attrs = self
             .args()
@@ -1028,7 +937,7 @@ mod tests {
             ]
         );
         assert_eq!(d.arg(&d.recs[4], 1), Some(LogArg::Text("axi0")));
-        assert_eq!(d.dict_off.len(), 3); // two distinct strings
+        assert_eq!(d.dict_off.len(), 3);
     }
 
     #[test]

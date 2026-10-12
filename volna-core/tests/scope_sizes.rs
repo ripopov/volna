@@ -1,7 +1,6 @@
-//! Scope sizes: the count over the
-//! session hierarchy equals a brute-force set count on every fixture, VTR
-//! and FST, and the scope tree reports it per row once the count after open
-//! is delivered.
+//! Scope sizes: the count over the session hierarchy equals a brute-force set count on
+//! every fixture, VTR and FST, and the scope tree reports it per row once the count after
+//! open is delivered.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -42,7 +41,6 @@ fn the_scope_tree_reports_sizes_once_counted() {
     app.set_session(session.clone());
     let h = session.hierarchy();
     let top = TreeNode::scope(Traced::new(TraceId::A, h.roots().first().unwrap()));
-    // Until the count finishes the column is empty rather than wrong.
     assert_eq!(ScopeTreeModel::size(app.doc.traces(), top), None);
     let requests = app.take_requests();
     let sizes = requests
@@ -70,7 +68,6 @@ fn a_count_for_an_older_generation_is_dropped() {
     let mut app = App::new();
     app.set_session(OpenSpec::Path(path.clone()).open().unwrap());
     let stale = app.take_requests();
-    // A new session replaces the trace before the count arrives.
     app.set_session(OpenSpec::Path(path).open().unwrap());
     for request in stale {
         app.deliver(request.perform());

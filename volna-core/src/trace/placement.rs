@@ -5,10 +5,6 @@ use std::sync::Arc;
 use volna_trace::data::value_view::ValueView;
 use volna_trace::data::{Bit, SignalHistory, SignalShape, WaveValue};
 
-/// The map from a trace's own times to session times: `t` becomes
-/// `t * scale`, where the session unit is `scale` times finer than the
-/// trace's. The document applies it to every history and track as it
-/// arrives, so panels, readouts and snapping only ever see session times.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Placement {
     scale: u64,
@@ -30,12 +26,10 @@ impl Placement {
         self.scale == 1
     }
 
-    /// This placement on a timeline `factor` times finer.
     pub(crate) fn refined(self, factor: u64) -> Self {
         Self::scaled(self.scale.saturating_mul(factor))
     }
 
-    /// Whether trace time `t` has a session time.
     pub(crate) fn fits(self, t: u64) -> bool {
         t.checked_mul(self.scale).is_some()
     }
@@ -44,12 +38,10 @@ impl Placement {
         t.saturating_mul(self.scale)
     }
 
-    /// The last trace time at or before session time `t`.
     pub fn to_trace(self, t: u64) -> u64 {
         t / self.scale
     }
 
-    /// `history` in session times.
     pub fn place_history(self, history: Arc<dyn SignalHistory>) -> Arc<dyn SignalHistory> {
         if self.is_identity() {
             history
@@ -61,7 +53,6 @@ impl Placement {
         }
     }
 
-    /// Place prepared viewer records; raw published owners remain immutable.
     pub(crate) fn place_track(
         self,
         track: &mut crate::data::loaded_tracks::LoadedTrack,
@@ -77,7 +68,6 @@ impl Placement {
     }
 }
 
-/// A history seen in session times.
 struct Placed {
     inner: Arc<dyn SignalHistory>,
     placement: Placement,

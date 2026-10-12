@@ -1,5 +1,5 @@
-//! Protocol v6 bounded hierarchy pages. Names and fixed-width columns are
-//! retained directly; no node acquires an owned string or vector.
+//! Protocol v6 bounded hierarchy pages.
+
 use super::decode::{Decoder, Reader, Step};
 use super::memory::{MemoryBudget, Reservation};
 use super::objects::Metadata;
@@ -13,11 +13,9 @@ use crate::session::{Capabilities, Session};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// Maximum scope or variable declarations in one page.
 pub const PAGE_ENTRIES: usize = 65_536;
 const SCRATCH: u64 = (super::transport::DATA_BYTES + 8192) as u64;
 
-/// Small raw catalog. Hierarchy declarations travel in separate objects.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Header {
     pub info: TraceInfo,
@@ -30,7 +28,6 @@ pub struct Header {
     pub server: String,
 }
 #[derive(Serialize)]
-/// Borrowed catalog serialization; shares recording strings and slices.
 pub struct HeaderView<'a> {
     info: &'a TraceInfo,
     capabilities: Capabilities,
@@ -42,7 +39,6 @@ pub struct HeaderView<'a> {
     server: String,
 }
 impl Header {
-    /// Project resident raw metadata without copying record storage.
     pub fn borrowed(session: &dyn Session, server: String) -> anyhow::Result<HeaderView<'_>> {
         Ok(HeaderView {
             info: session.info(),
@@ -55,7 +51,6 @@ impl Header {
             server,
         })
     }
-    /// Owned catalog projection for fixtures; production serialization borrows.
     pub fn from_session(session: &dyn Session) -> anyhow::Result<Self> {
         Ok(Self {
             info: session.info().clone(),
@@ -68,18 +63,14 @@ impl Header {
             server: session.activity_host().unwrap_or("remote server").into(),
         })
     }
-    /// Number of required scope objects, including a partial last page.
     pub fn scope_pages(&self) -> u32 {
         self.scopes.div_ceil(PAGE_ENTRIES as u32)
     }
-    /// Number of required variable objects, including a partial last page.
     pub fn var_pages(&self) -> u32 {
         self.vars.div_ceil(PAGE_ENTRIES as u32)
     }
 }
 
-/// A page's column buffers plus its UTF-8 dictionary. Scope pages also carry
-/// the server's distinct-signal, variable and subtree-scope totals.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Page {
     pub start: u32,
@@ -91,21 +82,17 @@ pub struct Page {
     pub sizes: Vec<ScopeSize>,
 }
 impl Page {
-    /// Project one scope page. Panics if the page is out of range.
     pub fn scopes(h: &Hierarchy, sizes: &ScopeSizes, page: u32) -> Self {
         scope_pages(h, sizes)
             .nth(page as usize)
             .expect("scope page")
     }
-    /// Project one variable page. Panics if the page is out of range.
     pub fn vars(h: &Hierarchy, page: u32) -> Self {
         var_pages(h).nth(page as usize).expect("variable page")
     }
     fn name(&self, id: u32) -> &str {
         let bytes =
             &self.names[self.offsets[id as usize] as usize..self.offsets[id as usize + 1] as usize];
-        // SAFETY: ColumnBuilder accepts str; PageDecoder validates every name
-        // before these private pages enter an immutable hierarchy owner.
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
     fn rows(&self) -> usize {
@@ -160,7 +147,6 @@ impl Iterator for VarOrder<'_> {
         }
     }
 }
-/// Scope pages in preorder, preserving source-local identities in an ID column.
 pub fn scope_pages<'a>(h: &'a Hierarchy, sizes: &'a ScopeSizes) -> impl Iterator<Item = Page> + 'a {
     let mut order = ScopeOrder::new(h);
     let mut start = 0u32;
@@ -190,7 +176,6 @@ pub fn scope_pages<'a>(h: &'a Hierarchy, sizes: &'a ScopeSizes) -> impl Iterator
         Some(page)
     })
 }
-/// Variable pages grouped by preorder scope, in declaration order within it.
 pub fn var_pages(h: &Hierarchy) -> impl Iterator<Item = Page> + '_ {
     let mut order = VarOrder {
         scopes: ScopeOrder::new(h),
@@ -349,9 +334,6 @@ impl PageDecoder {
                 Ok(page)
             })
         })?;
-        // Wire lengths cover payload buffers. Vec headers in the column
-        // directory are larger than their wire lengths, so admit those too
-        // before reading even the first length or allocating a page buffer.
         let column_headers =
             if scopes { SCOPE_WORDS } else { VAR_WORDS } * std::mem::size_of::<Vec<u32>>();
         decoder.prepay(
@@ -369,7 +351,6 @@ impl PageDecoder {
     }
 }
 
-// Validate long strings in bounded byte batches, preserving UTF-8 boundaries.
 async fn validate_name(r: &Reader, bytes: &[u8]) -> anyhow::Result<()> {
     let mut start = 0;
     while start < bytes.len() {
@@ -378,8 +359,6 @@ async fn validate_name(r: &Reader, bytes: &[u8]) -> anyhow::Result<()> {
         match std::str::from_utf8(&bytes[start..end]) {
             Ok(_) => start = end,
             Err(error) if error.error_len().is_none() && end < bytes.len() => {
-                // Only the final (up to three) bytes are incomplete. The next
-                // batch begins at that character and includes its full tail.
                 start += error.valid_up_to();
             }
             Err(error) => return Err(error.into()),
@@ -505,7 +484,6 @@ impl Assembly {
             header.info.time_range.0 <= header.info.time_range.1,
             "reversed trace time range"
         );
-        // Small page directories are also admitted before allocation.
         let pages = header.scope_pages() as usize + header.var_pages() as usize;
         reservation.grow(
             (pages * std::mem::size_of::<Page>()
@@ -548,8 +526,6 @@ impl Assembly {
                 let mut assembly = self;
                 let scopes = assembly.header.scopes as usize;
                 let vars = assembly.header.vars as usize;
-                // CSR offsets, edges, cursors and sizes. Exact lengths, no per-node
-                // hash tables; charge before constructing any of the indexes.
                 let generators = assembly.header.generators.len();
                 let index_charge = (scopes as u64 + 1) * 12
                     + scopes as u64 * 28
@@ -655,7 +631,6 @@ impl Assembly {
                     links.generators[*pos as usize] = id as u32;
                     *pos += 1;
                 }
-                // Reuse the admitted cursor as a preorder ancestor stack.
                 let mut depth = 0;
                 for p in &assembly.scopes {
                     for i in 0..p.rows() {
@@ -676,7 +651,6 @@ impl Assembly {
                 }
                 drop(cursor);
                 let mut sizes = filled(&r, scopes, ScopeSize::default()).await?;
-                // Move size storage into the shared owner, one column-sized buffer.
                 for p in &assembly.scopes {
                     for (i, &size) in p.sizes.iter().enumerate() {
                         r.checkpoint().await;
@@ -724,7 +698,6 @@ impl Assembly {
                     activity: assembly.header.activity,
                     server: assembly.header.server,
                 };
-                // Alias validation has one slot per signal, rather than per alias.
                 r.charge(
                     metadata
                         .info
@@ -740,7 +713,6 @@ impl Assembly {
                     anyhow::ensure!(slot.0 == NONE || *slot == shape, "inconsistent alias shape");
                     *slot = shape;
                 }
-                // Catalog checks are bounded by streams/generators, not waveforms.
                 validate_catalog(&metadata, &r).await?;
                 Ok((
                     metadata,

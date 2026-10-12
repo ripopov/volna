@@ -124,7 +124,7 @@ fn each_surface_resolves_against_its_own_background() {
     assert_eq!(t.selection.text, c(0xffffff));
     assert_eq!(t.hover.text, c(0x333333));
     assert_eq!(t.bar.text, c(0xffffff));
-    assert_eq!(t.button.text, c(0xffffff)); // Valid host choice below the old blanket 4.5 floor.
+    assert_eq!(t.button.text, c(0xffffff));
     assert_eq!(t.menu_hover.text, c(0));
     assert_eq!(t.tooltip.text, c(0x002200));
     assert_eq!(t.badge.text, t.input.text);
@@ -244,7 +244,6 @@ fn vscode_precedence_fallbacks_and_appearance_are_resolved_in_rust() {
             expected
         );
     }
-    // A later snapshot starts fresh; omitted host roles cannot retain stale colours.
     assert!(vscode::host_palette("kind=vscode-light").charts[0].is_none());
 }
 
@@ -270,7 +269,6 @@ fn real_and_mixed_palettes_keep_surface_text_visible() {
             t.badge,
             t.badge_hover,
         ] {
-            // Preserve the host's choices (some supplied text pairs are below 4.5).
             assert!(contrast(over(surface.text, surface.bg), surface.bg) >= 3.0);
             for text in [
                 surface.text_muted,
@@ -337,24 +335,18 @@ fn zoomed_scales_every_metric_from_the_design_size_and_map_keeps_it() {
     assert_eq!(big.icon_size, base.icon_size * 2.0);
     assert_eq!(big.splitter_grab, base.splitter_grab * 2.0);
     assert_eq!(big.scale(12.0), 24.0);
-    // Colours and fonts are untouched.
     assert_eq!(big.editor.bg, base.editor.bg);
     assert_eq!(big.ui_font, base.ui_font);
-    // Zooming an already zoomed theme starts from the design size again.
     let half = big.zoomed(0.5);
     assert_eq!(half.row_height, base.row_height * 0.5);
     assert_eq!(half.zoomed(1.0).row_height, base.row_height);
-    // Nonsense factors fall back to the design size.
     assert_eq!(base.zoomed(0.0).zoom, 1.0);
     assert_eq!(base.zoomed(f32::NAN).row_height, base.row_height);
-    // Colour conversion keeps the zoom.
     let mapped = big.map(|c| c.with_alpha(0.5));
     assert_eq!(mapped.zoom, 2.0);
     assert_eq!(mapped.row_height, big.row_height);
 }
 
-/// Perceptual distance (OKLab ΔE × 100) between two opaque colours, with
-/// Ottosson's published matrices.
 #[allow(clippy::excessive_precision)]
 fn delta_e(a: Color, b: Color) -> f32 {
     let lab = |c: Color| {
@@ -380,8 +372,6 @@ fn delta_e(a: Color, b: Color) -> f32 {
     100.0 * ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
-/// Every theme a user can get: Volna, One Dark, the bundled palettes, the real
-/// host palettes and the fallbacks of an empty palette in each appearance.
 fn every_theme() -> Vec<(String, Theme)> {
     let mut out = vec![
         ("volna-dark".to_owned(), Theme::volna(true)),
@@ -430,7 +420,6 @@ fn row_colours_are_legible_everywhere_and_never_pass_for_x_or_z() {
                 assert!(d >= 10.0, "{name} {tint:?} is {d:.1} from X/Z");
             }
         }
-        // The six choices are told apart from each other too.
         let inks: Vec<Color> = std::iter::once(None)
             .chain(Tint::ALL.map(Some))
             .map(|tint| t.ink(tint))

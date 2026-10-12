@@ -1,13 +1,5 @@
-//! Markers: kept instants with a number people type and an optional name,
-//! owned by [`Document`] as one time-sorted list. This module holds the
-//! marker type, numbering and lookups, and the Markers lane input shared by
-//! every timed panel: presses, chip drags, the lane's context menus as data
-//! and the readable text they copy. The lane's layout and painting live in
-//! [`crate::wave::overlay`]; the wave and pipeline models hit-test their
-//! [`MarkerLane`] and hand the hit here, so both panels answer the same
-//! gesture the same way.
-//!
-//! [`MarkerLane`]: crate::wave::overlay::MarkerLane
+//! Markers: kept instants with a number people type and an optional name, owned by
+//! [`Document`] as one time-sorted list.
 
 use std::fmt;
 use std::num::NonZeroU32;
@@ -22,10 +14,6 @@ use crate::wave::timeline::{TimeBase, format_time};
 use crate::wave::viewport::Viewport;
 use web_time::Instant;
 
-/// A marker's number: what its chip shows and a digit key will reach. It
-/// is chosen explicitly or allocated as the lowest free positive number,
-/// and never changes while the marker exists. Removing marker 2 frees 2
-/// for reuse. Workspaces store it as a plain positive integer.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -41,7 +29,6 @@ impl MarkerId {
         self.0.get()
     }
 
-    /// Zero-based index into the theme's marker palette.
     pub fn palette_index(self) -> usize {
         self.get() as usize - 1
     }
@@ -60,10 +47,6 @@ pub struct Marker {
     pub label: Option<String>,
 }
 
-/// Where measurements start: a time, or a marker whose time it follows.
-/// At most one exists per document. It is navigation state like the cursor:
-/// saved in workspaces, never journaled. Workspaces store it as
-/// `{"marker": 4}` or `{"time": 186000}`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reference {
@@ -71,14 +54,10 @@ pub enum Reference {
     Marker(MarkerId),
 }
 
-/// The reference for `time`: the marker exactly there, else the time.
 pub fn reference_at(markers: &[Marker], time: u64) -> Reference {
     at(markers, time).map_or(Reference::Time(time), |m| Reference::Marker(m.id))
 }
 
-/// Where a measuring gesture at `raw` puts the reference: on the nearest
-/// marker within `tolerance` time units, unless the cursor's snapping put
-/// `snapped` on an edge closer to the pointer; else at `snapped`.
 pub fn reference_near(markers: &[Marker], raw: f64, tolerance: f64, snapped: u64) -> Reference {
     let ix = markers.partition_point(|m| (m.time as f64) < raw);
     let distance = |t: u64| (t as f64 - raw).abs();
@@ -87,7 +66,6 @@ pub fn reference_near(markers: &[Marker], raw: f64, tolerance: f64, snapped: u64
         .flatten()
         .filter_map(|i| markers.get(i))
         .min_by(|a, b| distance(a.time).total_cmp(&distance(b.time)));
-    // Without an edge nearby, snapping leaves the rounded pointer time.
     let edge = if snapped == raw.round().max(0.0) as u64 {
         f64::INFINITY
     } else {
@@ -101,11 +79,8 @@ pub fn reference_near(markers: &[Marker], raw: f64, tolerance: f64, snapped: u64
     }
 }
 
-/// The longest marker name, in characters; longer names are cut.
 pub const MAX_NAME: usize = 48;
 
-/// A typed marker name as stored: trimmed, at most [`MAX_NAME`] characters,
-/// and `None` when nothing is left, which returns the chip to its number.
 pub fn clean_name(name: &str) -> Option<String> {
     let name = name.trim();
     let name = match name.char_indices().nth(MAX_NAME) {
@@ -115,7 +90,6 @@ pub fn clean_name(name: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
-/// The lowest positive number no marker has, if one is left.
 pub fn free_id(markers: &[Marker]) -> Option<MarkerId> {
     let mut used: Vec<u32> = markers.iter().map(|m| m.id.get()).collect();
     used.sort_unstable();
@@ -129,13 +103,11 @@ pub fn free_id(markers: &[Marker]) -> Option<MarkerId> {
     MarkerId::new(next)
 }
 
-/// The marker at exactly `time` in a time-sorted list.
 pub fn at(markers: &[Marker], time: u64) -> Option<&Marker> {
     let ix = markers.partition_point(|m| m.time < time);
     markers.get(ix).filter(|m| m.time == time)
 }
 
-/// Where `.`, `,` and the digit keys send the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Walk {
     Next,
@@ -143,10 +115,6 @@ pub enum Walk {
     To(MarkerId),
 }
 
-/// The marker a walk lands on in a time-sorted list. Next and previous
-/// count from the cursor and skip markers at its time, so markers sharing
-/// an instant are one stop. Without a cursor they start from the view:
-/// the first marker at or after its start, the last at or before its end.
 pub fn walk_target(
     markers: &[Marker],
     walk: Walk,
@@ -166,9 +134,6 @@ pub fn walk_target(
     }
 }
 
-/// Walk the cursor to a marker as a jump (see [`NavState::jump_cursor`]).
-/// Returns what the status bar says either way: where the cursor is, or why
-/// it stayed.
 pub fn walk(
     doc: &mut Document,
     nav: &mut NavState,
@@ -194,30 +159,18 @@ pub fn walk(
     })
 }
 
-/// What a pointer is over on the Markers lane. Markers are indices into
-/// [`Document::markers`], which is sorted by time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LaneHit {
-    /// The chip of one marker.
     Chip(usize),
-    /// A cluster standing for markers too close together to draw apart.
     Cluster(Range<usize>),
-    /// The span from a marker to the next one.
     Span(usize),
-    /// The live span from the reference to the cursor, on the Measure lane.
     Live,
-    /// The reference's `R` tag on the Measure lane.
     Tag,
-    /// The Measure lane's `×` button, which clears the reference.
     ClearReference,
 }
 
-/// Zooming to markers or a measurement keeps this fraction of their time span as margin on
-/// each side, so the outer ones stay clear of the view's edges.
 const ZOOM_MARGIN: f64 = 0.15;
 
-/// Zoom `nav`'s view to the markers `first..=last` (indices), animated.
-/// Returns whether both exist.
 pub fn zoom_to(
     doc: &mut Document,
     nav: &mut NavState,
@@ -233,8 +186,6 @@ pub fn zoom_to(
     true
 }
 
-/// Zoom `nav`'s view to the time between `a` and `b`, in either order,
-/// with `ZOOM_MARGIN` of it on each side, animated.
 pub fn zoom_between(doc: &mut Document, nav: &mut NavState, a: u64, b: u64, now: Instant) {
     let (start, end) = (a.min(b) as f64, a.max(b) as f64);
     let margin = ((end - start) * ZOOM_MARGIN).max(1.0);
@@ -248,15 +199,6 @@ pub fn zoom_between(doc: &mut Document, nav: &mut NavState, a: u64, b: u64, now:
     );
 }
 
-/// A left press on the lane: a cluster zooms the view to its markers, and
-/// the Measure lane's `×` clears the reference. A chip takes no press here:
-/// the panel holds it as a [`MarkerDrag`], which goes to the marker on
-/// release or moves it. A span takes none either: a click on it moves the
-/// cursor like one on the header, and a double-click zooms to it
-/// ([`zoom_to`]). The live span and the `R` tag keep the cursor, which is
-/// one of the span's ends; a double-click on the span zooms to it. Returns
-/// whether anything changed. No modifier removes a marker: Shift-click
-/// extends selections elsewhere, and `⇧M` removes the marker at the cursor.
 pub fn press(doc: &mut Document, nav: &mut NavState, hit: LaneHit, now: Instant) -> bool {
     match hit {
         LaneHit::Cluster(markers) => {
@@ -267,29 +209,18 @@ pub fn press(doc: &mut Document, nav: &mut NavState, hit: LaneHit, now: Instant)
     }
 }
 
-/// A press must travel this far (at zoom 1.0) to drag a chip; shorter
-/// presses are clicks.
 pub const DRAG_SLOP_PX: f32 = 3.0;
 
-/// A marker chip held by the pointer. Released where it was pressed, it
-/// moves the cursor to the marker; dragged, it moves the marker, which the
-/// panel snaps like the cursor. The document changes as the pointer moves,
-/// and the open gesture keeps the edits one undo step (*Move marker 4*),
-/// which `Esc` rolls back.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MarkerDrag {
     pub id: MarkerId,
-    /// Where the marker was at the press; painted dotted while it moves.
     pub from: u64,
-    /// The pointer's x minus the marker's at the press, so the flag keeps
-    /// its place under the pointer.
     pub grab_dx: f32,
     pub start: Point,
     pub moved: bool,
 }
 
 impl MarkerDrag {
-    /// Hold marker `ix` (an index into the markers), drawn at `marker_x`.
     pub fn begin(doc: &Document, ix: usize, p: Point, marker_x: f32) -> Option<Self> {
         let m = doc.markers().get(ix)?;
         Some(Self {
@@ -301,16 +232,11 @@ impl MarkerDrag {
         })
     }
 
-    /// Where the marker's flag should go for pointer `p`, once the press has
-    /// travelled [`DRAG_SLOP_PX`]; `None` while it is still a click.
     pub fn target_x(&mut self, p: Point, zoom: f32) -> Option<f32> {
         self.moved |= (p.x - self.start.x).hypot(p.y - self.start.y) > DRAG_SLOP_PX * zoom;
         self.moved.then_some(p.x - self.grab_dx)
     }
 
-    /// The press ended. A click moves the cursor to the marker as a jump
-    /// (`` ` `` returns); a drag has already moved it. Returns whether the
-    /// cursor moved.
     pub fn release(self, doc: &mut Document, nav: &mut NavState, now: Instant) -> bool {
         if self.moved {
             return false;
@@ -327,8 +253,6 @@ impl MarkerDrag {
     }
 }
 
-/// What a lane menu offers. Menus list the same verbs as the keys and
-/// gestures, with those shown beside them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaneVerb {
     GoTo(MarkerId),
@@ -337,7 +261,6 @@ pub enum LaneVerb {
     Copy(MarkerId),
     MoveToCursor(MarkerId),
     Remove(MarkerId),
-    /// Put the reference on the first marker and the cursor on the second.
     MeasureSpan(MarkerId, MarkerId),
     ZoomToSpan(MarkerId, MarkerId),
     CopySpan(MarkerId, MarkerId),
@@ -354,7 +277,6 @@ fn item(verb: LaneVerb, label: impl Into<String>, badge: Option<&str>) -> MenuEn
     })
 }
 
-/// `4 “req B”`, or `4` without a name.
 pub fn name(m: &Marker) -> String {
     match &m.label {
         Some(label) => format!("{} “{label}”", m.id),
@@ -362,8 +284,6 @@ pub fn name(m: &Marker) -> String {
     }
 }
 
-/// The context menu of what `hit` is over, or `None` where the lane has
-/// no menu (a cluster).
 pub fn menu(doc: &Document, hit: &LaneHit) -> Option<Vec<MenuEntry>> {
     let markers = doc.markers();
     let measure = || {
@@ -425,15 +345,10 @@ pub fn menu(doc: &Document, hit: &LaneHit) -> Option<Vec<MenuEntry>> {
     })
 }
 
-/// The query of the palette's marker mode: what follows a leading `@`, or
-/// `None` for an ordinary palette query.
 pub fn navigator_query(query: &str) -> Option<&str> {
     query.trim_start().strip_prefix('@')
 }
 
-/// Markers an ordinary palette query asks for: when one of its words starts
-/// the word *markers* (at least `mar`), the other words, which then filter
-/// the markers as in the navigator. `None` otherwise.
 pub fn palette_preview(query: &str) -> Option<String> {
     let words: Vec<&str> = query.split_whitespace().collect();
     let asks = |w: &str| w.len() >= 3 && "markers".starts_with(&w.to_lowercase());
@@ -447,24 +362,16 @@ pub fn palette_preview(query: &str) -> Option<String> {
     Some(rest.join(" "))
 }
 
-/// One row of the marker navigator (the palette's marker mode).
 #[derive(Clone, Debug, PartialEq)]
 pub struct NavigatorRow {
     pub id: MarkerId,
     pub name: Option<String>,
-    /// The marker's time.
     pub time: String,
-    /// From the previous marker in time, `+400 ns`; `None` for the first.
     pub step: Option<String>,
-    /// From the reference, in time and in cycles of the selected clock:
-    /// `−126 ns · −80 core_clk`; `None` without a reference.
     pub from_reference: Option<String>,
-    /// Whether the reference is this marker.
     pub is_reference: bool,
 }
 
-/// Whether marker `m` matches every word of `query`: a word of digits
-/// matches its number, and any word a part of its name, ignoring case.
 fn matches_query(m: &Marker, query: &str) -> bool {
     let name = m.label.as_deref().unwrap_or_default().to_lowercase();
     query.split_whitespace().all(|word| {
@@ -473,9 +380,6 @@ fn matches_query(m: &Marker, query: &str) -> bool {
     })
 }
 
-/// The navigator's rows for `query`, in time order. Steps are measured from
-/// the previous marker of the whole list, so filtering does not change
-/// them, and distances from the reference count cycles of `selected`.
 pub fn navigator_rows(doc: &Document, query: &str, selected: Option<&Clock>) -> Vec<NavigatorRow> {
     let base = doc.time_base();
     let reference = doc.reference_time();
@@ -514,9 +418,6 @@ pub fn navigator_rows(doc: &Document, query: &str, selected: Option<&Clock>) -> 
         .collect()
 }
 
-/// A marker as a readable reference for a bug report, a chat or an agent:
-/// `lsu_ddr.vtr marker 4 “req B” at 186 ns (core_clk 185, axi_clk 73)`,
-/// with the marker's position in each ruler clock.
 pub fn text(
     trace: &str,
     m: &Marker,
@@ -539,8 +440,6 @@ pub fn text(
     text
 }
 
-/// The span between two markers as text: `lsu_ddr.vtr marker 1 “req A” →
-/// marker 2 “resp A”: 126 ns · 80 core_clk · 26.4 axi_clk`.
 pub fn span_text(
     trace: &str,
     a: &Marker,
@@ -588,7 +487,6 @@ mod tests {
 
     #[test]
     fn walks_step_in_time_order_and_treat_an_instant_as_one_stop() {
-        // Markers 2 and 3 share time 20, as a restored workspace may have.
         let markers: Vec<Marker> = [(1, 10), (2, 20), (3, 20), (4, 30)]
             .into_iter()
             .map(|(n, time)| Marker {
@@ -616,7 +514,6 @@ mod tests {
         assert_eq!(go(Walk::Prev, Some(10)), None);
         assert_eq!(go(Walk::Next, Some(0)), Some(1));
         assert_eq!(go(Walk::Prev, Some(u64::MAX)), Some(4));
-        // Without a cursor: from the view's start, back from its end.
         assert_eq!(go(Walk::Next, None), Some(2));
         assert_eq!(go(Walk::Prev, None), Some(3));
         let id = |n| Walk::To(MarkerId::new(n).unwrap());
@@ -638,7 +535,7 @@ mod tests {
 
     #[test]
     fn a_measuring_gesture_attaches_to_a_marker_unless_an_edge_is_closer() {
-        let markers = with_ids(&[1, 2]); // at 0 and 10
+        let markers = with_ids(&[1, 2]);
         let near = |raw, snapped| reference_near(&markers, raw, 3.0, snapped);
         let marker = |n| Reference::Marker(MarkerId::new(n).unwrap());
         assert_eq!(

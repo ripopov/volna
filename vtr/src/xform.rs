@@ -1,33 +1,19 @@
-//! Value-stream transforms applied to a column run before compression
-//! (spec section 6.4): byte shuffle (Blosc-style transposition) and delta
-//! coding of fixed-width entries, alone or combined. They cost one pass over
-//! the value bytes and turn counters, addresses and slowly changing high
-//! bytes into long runs that the general-purpose compressor handles well.
-//!
-//! An entry stream is `n` consecutive entries of `w` bytes each; entries are
-//! little-endian integers for delta purposes.
+//! Value-stream transforms applied to a column run before compression (spec section 6.4):
+//! byte shuffle (Blosc-style transposition) and delta coding of fixed-width entries, alone
+//! or combined.
 
-/// Transform applied to every eligible column of a run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum Xform {
     #[default]
     None = 0,
-    /// `out[b * n + i] = in[i * w + b]`: byte plane `b` of every entry stored together.
     Shuffle = 1,
-    /// Entry `i` replaced by `entry[i] - entry[i - 1]` (little-endian, modulo `2^(8w)`).
     Delta = 2,
-    /// Delta, then shuffle.
     DeltaShuffle = 3,
-    /// Per-column dictionary: the value stream becomes `varint n_dict` (0: the plain
-    /// values follow), `n_dict * w` dictionary bytes in first-occurrence order, then one
-    /// code byte per entry. Unlike the others this changes the column length, so it is
-    /// applied and undone at run level ([`dict_encode`], [`dict_decode`]).
     Dict = 4,
 }
 
 impl Xform {
-    /// The in-place transforms ([`forward`] / [`inverse`]), in trial order.
     pub const IN_PLACE: [Xform; 4] = [
         Xform::None,
         Xform::Shuffle,
@@ -47,23 +33,17 @@ impl Xform {
     }
 }
 
-/// Most distinct entries a dictionary-coded column may have (codes are one byte).
 pub const DICT_MAX: usize = 256;
 
-/// Scratch state for [`dict_encode`]: an open-addressing table of `DICT_SLOTS` slots
-/// holding `code + 1` (0 = empty), plus the dictionary and code buffers.
 pub struct DictTable {
     slots: Vec<u16>,
-    /// (key, code + 1) slots for entries of up to 8 bytes.
     narrow: Vec<(u64, u16)>,
     dict: Vec<u8>,
     codes: Vec<u8>,
-    /// Occurrences of every code in the last encoded stream.
     counts: Vec<u32>,
 }
 
 impl DictTable {
-    /// Occurrences of each dictionary code in the stream last passed to [`dict_encode`].
     pub fn counts(&self) -> &[u32] {
         &self.counts
     }
@@ -110,9 +90,6 @@ fn hash_entry(e: &[u8]) -> u64 {
     h ^ (h >> 29)
 }
 
-/// Dictionary-codes `v` (a whole number of `w`-byte entries) and appends the coded
-/// stream to `out`, returning the dictionary size. Returns `None` and leaves `out`
-/// untouched when the entries have more than `max` distinct values (`max <= DICT_MAX`).
 pub fn dict_encode(
     w: usize,
     v: &[u8],
@@ -127,8 +104,6 @@ pub fn dict_encode(
     t.counts.clear();
     let mut nd = 0usize;
     if w <= 8 {
-        // Narrow entries: the slot holds the key itself next to the code, so a hit costs
-        // one load and one compare.
         t.narrow.fill((0, 0));
         for e in v.chunks_exact(w) {
             let key = load_le(e);
@@ -186,7 +161,6 @@ pub fn dict_encode(
     Some(nd)
 }
 
-/// Undoes [`dict_encode`]: appends the plain `w`-byte entries of a coded stream to `out`.
 pub fn dict_decode(w: usize, input: &[u8], out: &mut Vec<u8>) -> crate::error::Result<()> {
     use crate::error::Error;
     let mut r = crate::varint::Reader::new(input);
@@ -225,7 +199,6 @@ fn dict_expand<const W: usize>(dict: &[u8], codes: &[u8], out: &mut Vec<u8>) {
     }
 }
 
-/// Applies `x` in place to `v` (a whole number of `w`-byte entries); `tmp` is scratch space.
 pub fn forward(x: Xform, w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     debug_assert!(w > 0 && v.len().is_multiple_of(w));
     match x {
@@ -240,7 +213,6 @@ pub fn forward(x: Xform, w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     }
 }
 
-/// Undoes [`forward`].
 pub fn inverse(x: Xform, w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     debug_assert!(w > 0 && v.len().is_multiple_of(w));
     match x {
@@ -255,11 +227,8 @@ pub fn inverse(x: Xform, w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     }
 }
 
-/// Entries per block of the plane-major loops (a block of `64 * w` bytes stays in L1).
 const BLOCK: usize = 64;
 
-/// Entry-major to plane-major. Plane-major loop: sequential writes, reads strided
-/// within a block that stays in L1.
 fn shuffle(w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     if w < 2 {
         return;
@@ -281,7 +250,6 @@ fn shuffle(w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     v.copy_from_slice(tmp);
 }
 
-/// Plane-major back to entry-major.
 fn unshuffle(w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     match w {
         0 | 1 => {}
@@ -293,8 +261,6 @@ fn unshuffle(w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     }
 }
 
-/// Entry-major loop with a compile-time width: the gather of `W` bytes unrolls and every
-/// entry is written sequentially (best for narrow entries).
 fn unshuffle_w<const W: usize>(v: &mut [u8], tmp: &mut Vec<u8>) {
     let n = v.len() / W;
     tmp.clear();
@@ -306,7 +272,6 @@ fn unshuffle_w<const W: usize>(v: &mut [u8], tmp: &mut Vec<u8>) {
     }
 }
 
-/// Plane-major loop in blocks for wide entries (few streams touched at once).
 fn unshuffle_any(w: usize, v: &mut [u8], tmp: &mut Vec<u8>) {
     let n = v.len() / w;
     tmp.clear();
@@ -335,7 +300,6 @@ macro_rules! typed_delta {
                 $v[i * W..i * W + W].copy_from_slice(&d.to_le_bytes());
             }
         } else if n > 0 {
-            // Keep the running value in a register rather than re-reading the store.
             let mut prev = at($v, 0);
             for i in 1..n {
                 prev = at($v, i).wrapping_add(prev);
@@ -377,7 +341,6 @@ fn delta_decode(w: usize, v: &mut [u8]) {
     }
 }
 
-/// `dst -= src` on little-endian integers of `dst.len()` bytes.
 fn sub_le(dst: &mut [u8], src: &[u8]) {
     let mut borrow = 0u64;
     let mut i = 0;
@@ -392,7 +355,6 @@ fn sub_le(dst: &mut [u8], src: &[u8]) {
     }
 }
 
-/// `dst += src` on little-endian integers of `dst.len()` bytes.
 fn add_le(dst: &mut [u8], src: &[u8]) {
     let mut carry = 0u64;
     let mut i = 0;
@@ -401,7 +363,6 @@ fn add_le(dst: &mut [u8], src: &[u8]) {
         let (a, b) = (limb(&dst[i..i + k]), limb(&src[i..i + k]));
         let (s, o1) = a.overflowing_add(b);
         let (s, o2) = s.overflowing_add(carry);
-        // A partial limb (k < 8) carries out of its 8k bits; a full limb when the add wraps.
         carry = if k < 8 {
             s >> (8 * k)
         } else {
@@ -473,7 +434,6 @@ mod tests {
         for i in 1..100 {
             assert_eq!(&v[i * 4..i * 4 + 4], &[4, 0, 0, 0]);
         }
-        // Wide entries with borrows across limbs.
         let mut v = Vec::new();
         for i in 0u64..50 {
             let mut e = [0u8; 12];
@@ -492,7 +452,6 @@ mod tests {
         let mut t = DictTable::default();
         let mut out = Vec::new();
         for w in [2usize, 3, 4, 8, 23] {
-            // 300 entries cycling through 7 values, then a stream with 300 distinct values.
             let v: Vec<u8> = (0..300)
                 .flat_map(|i| (0..w).map(move |b| ((i % 7) * 37 + b) as u8))
                 .collect();
@@ -516,7 +475,6 @@ mod tests {
             dict_decode(w, &out, &mut back).unwrap();
             assert_eq!(back, v[..256 * w]);
         }
-        // A plain (count 0) stream passes through; a code past the dictionary is corrupt.
         let mut back = Vec::new();
         dict_decode(4, &[0, 1, 2, 3, 4], &mut back).unwrap();
         assert_eq!(back, [1, 2, 3, 4]);

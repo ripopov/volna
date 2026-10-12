@@ -1,13 +1,4 @@
 //! Rendering of log records: format strings with `{}` placeholders.
-//!
-//! The placeholder language is the common subset of Rust's `std::fmt` and
-//! C++ `std::format`: `{}` (next argument), `{2}` (explicit index),
-//! `{:spec}` with `spec = [[fill]align][sign][#][0][width][.precision][type]`,
-//! `align` one of `<`, `^`, `>`, `type` one of `x X o b e E f F s ?`, and
-//! `{{` / `}}` for literal braces. Integers format two's complement in the
-//! non-decimal radixes (Rust semantics); floats without a precision print
-//! their shortest round-trip form. Rendering allocates nothing except for
-//! floats that need width padding.
 
 use crate::logblock::{LogArg, LogRecord};
 use crate::strings::StringTable;
@@ -16,14 +7,12 @@ use std::fmt::Write;
 #[derive(Clone, Copy, Debug)]
 struct Spec {
     fill: char,
-    /// 0 = default, else `<`, `^` or `>`.
     align: u8,
     sign_plus: bool,
     alt: bool,
     zero: bool,
     width: usize,
     precision: Option<usize>,
-    /// 0 = none.
     ty: u8,
 }
 
@@ -158,7 +147,6 @@ fn write_uint(out: &mut String, v: u64, negative: bool, sp: &Spec) {
         ""
     };
     let prefix = if sp.alt { prefix } else { "" };
-    // ASCII digits only.
     let body = unsafe { std::str::from_utf8_unchecked(&buf[pos..]) };
     pad_number(out, sign, prefix, body, sp);
 }
@@ -222,7 +210,6 @@ fn write_float(out: &mut String, v: f64, sp: &Spec) {
     pad_number(out, sign, "", &body, sp);
 }
 
-/// Writes one argument according to `spec`.
 pub fn write_arg(out: &mut String, a: LogArg, spec: &str, strings: &StringTable) {
     write_arg_spec(out, a, &parse_spec(spec), strings)
 }
@@ -274,15 +261,11 @@ fn write_arg_spec(out: &mut String, a: LogArg, sp: &Spec, strings: &StringTable)
 
 #[derive(Clone, Copy, Debug)]
 enum Seg {
-    /// Literal text `fmt[a..b]`.
     Lit(u32, u32),
-    /// Argument `index` rendered with `spec`.
     Arg(u32, Spec),
-    /// Placeholder with an unparsable index: renders `{?}`.
     Bad,
 }
 
-/// A format string parsed once (per log site) into literal and argument segments.
 #[derive(Clone, Debug, Default)]
 pub struct ParsedFmt {
     segs: Vec<Seg>,
@@ -353,8 +336,6 @@ impl ParsedFmt {
         ParsedFmt { segs }
     }
 
-    /// Renders with the original format string `fmt` (for the literal pieces)
-    /// and the arguments returned by `arg(index)`.
     pub fn render<'a>(
         &self,
         fmt: &str,
@@ -375,9 +356,6 @@ impl ParsedFmt {
     }
 }
 
-/// Renders `fmt` with the arguments returned by `arg(index)`. A placeholder
-/// whose argument does not exist renders as `{?}`. Parses `fmt` on every
-/// call; readers use the per-site [`ParsedFmt`].
 pub fn format_message<'a>(
     fmt: &str,
     arg: impl FnMut(usize) -> Option<LogArg<'a>>,
@@ -388,12 +366,10 @@ pub fn format_message<'a>(
 }
 
 impl<'a> LogRecord<'a> {
-    /// Appends the rendered message (format string with arguments substituted).
     pub fn format_into(&self, strings: &StringTable, out: &mut String) {
         self.fmt
             .render(strings.get(self.site.fmt), |i| self.arg(i), strings, out)
     }
-    /// The rendered message.
     pub fn format(&self, strings: &StringTable) -> String {
         let mut s = String::new();
         self.format_into(strings, &mut s);

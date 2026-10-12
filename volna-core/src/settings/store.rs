@@ -1,7 +1,4 @@
-//! Three layers (registry defaults, the user's JSONC document, host
-//! overrides) resolved into one [`Settings`] value plus diagnostics, and the
-//! write queue that hands the document to the host: one write in flight,
-//! acknowledged by ticket, coalesced after a short idle, echoes ignored.
+//! Layered settings resolution and a coalesced, ticketed host write queue.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -12,10 +9,8 @@ use super::{Settings, Value};
 use crate::Instant;
 use anyhow::{Result, bail, ensure};
 
-/// A change to the document is written after this idle time.
 pub const WRITE_IDLE: Duration = Duration::from_millis(300);
 
-/// The settings file is treated as unreadable above this size.
 pub const MAX_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,12 +19,10 @@ pub enum Severity {
     Warning,
 }
 
-/// A problem in the document. `span` is empty for a syntax error at `offset`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub key: Option<String>,
-    /// 1-based.
     pub line: usize,
     pub span: std::ops::Range<usize>,
     pub message: String,
@@ -45,16 +38,13 @@ pub struct Store {
     values: BTreeMap<&'static str, Value>,
     resolved: Settings,
     diagnostics: Vec<Diagnostic>,
-    /// Ids present in the document with a valid value.
     modified: Vec<&'static str>,
-    // -- the write queue --
     dirty: bool,
     changed_at: Option<Instant>,
     outstanding: Option<u64>,
     next_ticket: u64,
     last_written: Option<String>,
     last_error: Option<String>,
-    /// A read error at start-up makes the file read-only for us.
     writable: bool,
 }
 
@@ -87,12 +77,10 @@ impl Store {
         self.host
     }
 
-    /// The `$schema` value written into a document created from nothing.
     pub(crate) fn set_schema_uri(&mut self, uri: Option<String>) {
         self.schema_uri = uri;
     }
 
-    /// Palette names the host offers for `appearance.theme`.
     pub(crate) fn set_themes(&mut self, themes: Vec<String>) -> Vec<&'static str> {
         if self.themes == themes {
             return Vec::new();
@@ -121,7 +109,6 @@ impl Store {
         self.parsed.as_ref().err()
     }
 
-    /// The document parses, so GUI edits are possible.
     pub fn editable(&self) -> bool {
         self.parsed.is_ok() && self.writable
     }
@@ -142,12 +129,10 @@ impl Store {
         self.last_error.as_deref()
     }
 
-    /// The resolved generic value of a registered id.
     pub fn value(&self, id: &str) -> Option<&Value> {
         self.values.get(id)
     }
 
-    /// Whether the user's document sets this id.
     pub fn is_modified(&self, id: &str) -> bool {
         self.modified.contains(&id)
     }
@@ -156,29 +141,21 @@ impl Store {
         &self.modified
     }
 
-    /// Whether a host override hides the document value of this id.
     pub fn is_overridden(&self, id: &str) -> bool {
         self.overrides.contains_key(id)
     }
 
-    // -- loading ---------------------------------------------------------------
-
-    /// Install the document the host read at start. An unreadable file is
-    /// reported through [`Store::mark_unreadable`] instead.
     pub(crate) fn load(&mut self, text: &str) -> Vec<&'static str> {
         self.text = text.to_owned();
         self.parsed = jsonc::parse(&self.text);
         self.resolve()
     }
 
-    /// The host could not read the file: keep defaults, never overwrite it.
     pub(crate) fn mark_unreadable(&mut self, error: String) {
         self.writable = false;
         self.last_error = Some(error);
     }
 
-    /// Values a host owns (VS Code configuration, `--set`). They win over the
-    /// document and are never written into it.
     pub(crate) fn set_overrides(
         &mut self,
         overrides: BTreeMap<String, Value>,
@@ -190,8 +167,6 @@ impl Store {
         self.resolve()
     }
 
-    /// Bytes reported by the host's file watcher. The store's own write comes
-    /// back as an echo and is ignored; unchanged text is not a change either.
     pub(crate) fn external(&mut self, bytes: &[u8]) -> Result<Vec<&'static str>> {
         let hash = crate::workspace::persistence::hash(bytes);
         if self.last_written.as_deref() == Some(hash.as_str()) {
@@ -204,13 +179,10 @@ impl Store {
         if text == self.text {
             return Ok(Vec::new());
         }
-        // The file came back; a stale unreadable state no longer applies.
         self.writable = true;
         self.last_error = None;
         Ok(self.load(text))
     }
-
-    // -- edits ---------------------------------------------------------------------
 
     fn seed(&self) -> Vec<(&str, serde_json::Value)> {
         self.schema_uri
@@ -230,7 +202,6 @@ impl Store {
         }
     }
 
-    /// Set `id` in the document with a surgical edit. Returns the changed keys.
     pub(crate) fn set(
         &mut self,
         id: &str,
@@ -249,14 +220,12 @@ impl Store {
         self.commit(text, now)
     }
 
-    /// Remove `id` from the document.
     pub(crate) fn reset(&mut self, id: &str, now: Instant) -> Result<Vec<&'static str>> {
         self.ensure_writable()?;
         let doc = self.document()?;
         if doc.get(id).is_none() {
             return Ok(Vec::new());
         }
-        // Remove every duplicate: an earlier one would take effect otherwise.
         let mut text = jsonc::remove(&self.text, doc, id);
         while let Ok(doc) = jsonc::parse(&text)
             && doc.get(id).is_some()
@@ -266,9 +235,6 @@ impl Store {
         self.commit(text, now)
     }
 
-    /// Replace the whole text (the JSON view's save). A syntax error keeps the
-    /// last good resolution and is reported as a diagnostic, but the text is
-    /// still written so the user's edit is not lost.
     pub(crate) fn replace_text(&mut self, text: String, now: Instant) -> Result<Vec<&'static str>> {
         self.ensure_writable()?;
         if text == self.text {
@@ -285,9 +251,6 @@ impl Store {
         Ok(self.resolve())
     }
 
-    // -- the write queue ----------------------------------------------------------
-
-    /// The bytes to write, once idle (or forced) and nothing is in flight.
     pub(crate) fn next_write(&mut self, now: Instant, force: bool) -> Option<(u64, Vec<u8>)> {
         if !self.dirty || self.outstanding.is_some() || !self.writable {
             return None;
@@ -308,7 +271,6 @@ impl Store {
         Some((ticket, bytes))
     }
 
-    /// The host finished the write; a failure keeps the document dirty.
     pub(crate) fn acknowledge(&mut self, ticket: u64, error: Option<String>, now: Instant) -> bool {
         if self.outstanding != Some(ticket) {
             return false;
@@ -329,17 +291,11 @@ impl Store {
         self.dirty || self.outstanding.is_some()
     }
 
-    // -- resolution ----------------------------------------------------------------
-
-    /// Diagnostics for text that is not (yet) the document: the JSON view
-    /// reports problems while the user types.
     pub fn diagnose(&self, text: &str) -> Vec<Diagnostic> {
         let parsed = jsonc::parse(text);
         self.analyse(&parsed).1
     }
 
-    /// Resolution of one parse: document values (last good values when the
-    /// text does not parse), diagnostics, and the ids the document sets.
     #[allow(clippy::type_complexity)]
     fn analyse(
         &self,
@@ -430,7 +386,6 @@ impl Store {
         (values, diagnostics, modified)
     }
 
-    /// Rebuild the resolved struct; returns the ids whose value changed.
     fn resolve(&mut self) -> Vec<&'static str> {
         let (values, diagnostics, modified) = self.analyse(&self.parsed);
         let changed: Vec<&'static str> = values
@@ -446,7 +401,6 @@ impl Store {
     }
 }
 
-/// Convert a document value into a setting value.
 fn json_value(value: &serde_json::Value) -> Option<Value> {
     match value {
         serde_json::Value::Bool(b) => Some(Value::Bool(*b)),
@@ -535,7 +489,6 @@ mod tests {
         assert!(!store.acknowledge(99, None, t0));
         assert!(store.acknowledge(ticket, None, t0));
         assert!(!store.pending_write());
-        // The echo of our own write is not a change.
         assert!(store.external(&bytes).unwrap().is_empty());
         assert_eq!(
             store.reset("waves.animation", t0).unwrap(),
@@ -543,17 +496,14 @@ mod tests {
         );
         assert_eq!(store.text(), "{\n  // keep\n  \"waves.snapPixels\": 3\n}\n");
         assert!(store.reset("waves.animation", t0).unwrap().is_empty());
-        // A failed write keeps the document dirty.
         let (ticket, _) = store.next_write(t0, true).unwrap();
         store.acknowledge(ticket, Some("disk full".into()), t0);
         assert!(store.pending_write());
         assert_eq!(store.last_error(), Some("disk full"));
-        // Values are validated before they reach the document.
         assert!(store.set("waves.snapPixels", 99.into(), t0).is_err());
         assert!(store.set("memory.budgetMiB", 0.into(), t0).is_err());
         assert!(store.set("remote.serverPath", "x".into(), t0).is_err());
         assert!(store.set("nope", true.into(), t0).is_err());
-        // A first edit seeds the schema line.
         let mut fresh = Store::new(Host::Native);
         fresh.set_schema_uri(Some("./settings.schema.json".into()));
         fresh.set("panels.linkByDefault", false.into(), t0).unwrap();

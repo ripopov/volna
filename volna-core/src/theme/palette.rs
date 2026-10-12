@@ -1,4 +1,5 @@
-//! Host-independent input. Missing colours fall back independently; pairs stay together.
+//! Host-independent input.
+
 use crate::color::Color;
 use serde::{Deserialize, Deserializer};
 
@@ -70,7 +71,6 @@ pub struct HostPalette {
     pub scrollbar: Option<Color>,
     #[serde(deserialize_with = "optional_color")]
     pub scrollbar_hover: Option<Color>,
-    /// Green, red, yellow, blue, orange, purple. Alpha becomes coverage, not a tint.
     #[serde(deserialize_with = "chart_colors")]
     pub charts: [Option<Color>; 6],
     #[serde(deserialize_with = "optional_color")]
@@ -78,8 +78,6 @@ pub struct HostPalette {
 }
 
 impl HostPalette {
-    /// Host-neutral JSON: optional surface pairs and CSS colour strings.
-    /// Unknown fields are ignored; malformed supplied colours are rejected.
     pub fn from_json(json: &str) -> serde_json::Result<Self> {
         let value: serde_json::Value = serde_json::from_str(json)?;
         if !value.is_object() {

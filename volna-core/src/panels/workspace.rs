@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use volna_trace::data::Hierarchy;
 
-/// The fields every saved panel shares; alone, they describe a start panel.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PanelHeader {
     pub(crate) id: PanelId,
@@ -23,7 +22,6 @@ pub(crate) fn present_raw<'de, D: serde::Deserializer<'de>>(
     Box::<RawValue>::deserialize(d).map(Some)
 }
 
-/// The open traces a workspace's letters resolved to.
 #[derive(Default)]
 pub(crate) struct Traces<'a> {
     open: std::collections::HashMap<TraceId, &'a std::sync::Arc<dyn volna_trace::session::Session>>,
@@ -58,7 +56,6 @@ pub(crate) fn valid_viewport(v: Viewport) -> Result<()> {
     Ok(())
 }
 
-/// Inputs for path resolution; all loads wait until the prepared panels adopt.
 pub(crate) struct RestoreContext<'a> {
     pub(crate) doc: &'a crate::Document,
     pub(crate) traces: &'a Traces<'a>,

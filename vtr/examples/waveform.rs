@@ -1,6 +1,4 @@
-//! Minimal waveform round trip. Without an output path, the trace is temporary.
-//!
-//!     cargo run -p vtr --example waveform -- /tmp/waveform.vtr
+//! Minimal waveform round trip.
 
 use vtr::{Direction, Reader, Timescale, Writer};
 

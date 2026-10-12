@@ -1,5 +1,4 @@
 //! The table panel's workspace schema, capture, validation and resolution.
-//! Preparing content never retains data or changes the live document.
 
 use super::{
     SignalSource, TableModel, TableSource,

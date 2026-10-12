@@ -1,5 +1,4 @@
-//! Panel identity, ownership, and docking operations. Widget IDs and pixel
-//! geometry never enter the docking tree; timeline widths use design pixels.
+//! Panel identity, ownership, and docking operations.
 
 pub(crate) mod content;
 mod layout;
@@ -43,20 +42,11 @@ pub struct PanelId(pub u64);
 
 pub enum PanelKind {
     Waves(Box<WaveModel>),
-    /// Konata-style stage cells over one transaction track.
     Pipeline(Box<PipelineModel>),
-    /// Virtualized records from one immutable generator or fixed signal set.
     Table(Box<TableModel>),
-    /// One selected record: its identity, timing, lifeline, attributes,
-    /// stages, events and every record it is related to.
     Transaction(Box<TransactionModel>),
-    /// The placeholder every trace opens with: it names what the trace
-    /// holds, and the first content opened while it is focused takes its
-    /// place. It is also what closing the last content panel leaves.
     Start,
-    /// The settings editor: a chrome tab the workspace codec never saves.
     Settings,
-    /// Unrecognized panel payloads are preserved by the workspace codec.
     Unsupported(Box<serde_json::value::RawValue>),
 }
 
@@ -125,24 +115,18 @@ impl PanelKind {
         matches!(self, Self::Start)
     }
 
-    /// Content, or the placeholder standing in for it; chrome does not count.
     pub fn is_content(&self) -> bool {
         !self.is_settings()
     }
 
-    /// A panel the core lays out and paints into a `Scene`.
     pub fn is_canvas(&self) -> bool {
         matches!(self, Self::Waves(_) | Self::Pipeline(_) | Self::Table(_))
     }
 
-    /// Whether the panel draws clock rulers (and numbers cycles from an
-    /// origin): the choices [`crate::app::ClockCommand::ToggleRuler`] and
-    /// the cycle origin edit.
     pub fn shows_rulers(&self) -> bool {
         matches!(self, Self::Waves(_) | Self::Pipeline(_))
     }
 
-    /// The navigation of a timed panel.
     pub fn nav(&self) -> Option<&NavState> {
         match self {
             Self::Waves(w) => Some(&w.nav),
@@ -161,9 +145,6 @@ impl PanelKind {
         }
     }
 
-    /// The one trace a pipeline, table or transaction panel shows (tabs
-    /// name it while several traces are open). Wave panels mix traces row
-    /// by row, and a table of signals may too.
     pub fn trace(&self) -> Option<crate::trace::TraceId> {
         match self {
             Self::Pipeline(p) => Some(p.track.trace()),
@@ -177,9 +158,6 @@ impl PanelKind {
         }
     }
 
-    /// Whether the panel's content is trace `trace`'s, so it closes with
-    /// it: a pipeline or a table over its data, or a transaction panel
-    /// pinned to one of its records.
     pub fn shows_trace(&self, trace: crate::trace::TraceId) -> bool {
         match self {
             Self::Pipeline(p) => p.track.trace() == trace,
@@ -191,7 +169,6 @@ impl PanelKind {
         }
     }
 
-    /// The Markers lane of the last layout, in panels that have one.
     pub fn marker_lane(&self) -> Option<&crate::wave::overlay::MarkerLane> {
         match self {
             Self::Waves(w) => Some(&w.last_layout().marker_lane),
@@ -200,9 +177,6 @@ impl PanelKind {
         }
     }
 
-    /// The content a split copies: rows for waves, the track for a pipeline.
-    /// A new tab next to a pipeline starts as an empty wave panel. The start
-    /// panel has nothing to copy: the owner replaces it instead.
     fn clone_view(&self, split: bool) -> Result<PanelKind> {
         Ok(match (self, split) {
             (Self::Waves(w), _) => Self::Waves(Box::new(w.clone_view(split))),
@@ -216,7 +190,6 @@ impl PanelKind {
     }
 }
 
-/// A panel's times follow the unit they are counted in.
 impl crate::trace::Retime for PanelKind {
     fn retime(&mut self, by: crate::trace::Rescale) {
         if let Some(nav) = self.nav_mut() {
@@ -230,8 +203,6 @@ impl crate::trace::Retime for PanelKind {
 
 pub struct Panel {
     pub id: PanelId,
-    /// The name the user gave the panel; journaled, changed by
-    /// [`Panels::rename`].
     pub title: Journaled<Option<String>>,
     pub kind: PanelKind,
 }
@@ -272,8 +243,6 @@ impl Panel {
             })
     }
 
-    /// Route pointer input to the panel's model. Returns true when something
-    /// visible changed.
     pub fn pointer(&mut self, doc: &mut Document, event: PointerEvent, now: Instant) -> bool {
         let id = self.id;
         match &mut self.kind {
@@ -284,7 +253,6 @@ impl Panel {
         }
     }
 
-    /// Whether a pointer drag is in progress (hosts forward releases then).
     pub fn dragging(&self) -> bool {
         match &self.kind {
             PanelKind::Waves(w) => w.drag.is_some(),
@@ -294,9 +262,6 @@ impl Panel {
         }
     }
 
-    /// Hand every journaled field of the panel to the undo journal: its
-    /// title, a timed panel's rulers and origin, and its kind's own fields.
-    /// A new kind with journaled state hands it over here.
     pub(crate) fn take_edits(
         &mut self,
         clocks: &crate::clock::Clocks,
@@ -326,8 +291,6 @@ impl Panel {
         }
     }
 
-    /// Drop pointer capture without finishing the gesture (Esc or ⌘Z
-    /// during a drag): the undo journal rolls back what it changed.
     pub(crate) fn cancel_drag(&mut self) {
         match &mut self.kind {
             PanelKind::Waves(w) => w.drag = None,
@@ -337,7 +300,6 @@ impl Panel {
         }
     }
 
-    /// Advance the panel's own animations. Returns true while a frame is needed.
     pub fn tick(&mut self, doc: &crate::document::Document, now: Instant) -> bool {
         match &mut self.kind {
             PanelKind::Waves(w) => w.tick(doc, now),
@@ -356,7 +318,6 @@ impl Panel {
         }
     }
 
-    /// Count a paint of this panel's canvas, for tests that need real repaints.
     pub fn record_paint(&mut self) {
         match &mut self.kind {
             PanelKind::Waves(w) => w.frames_painted += 1,
@@ -396,7 +357,6 @@ impl Panels {
         }
     }
 
-    /// Assemble a validated workspace without changing an existing panel collection.
     pub(crate) fn restore(
         layout: Layout,
         panels: Vec<Panel>,
@@ -434,30 +394,23 @@ impl Panels {
         Ok(result)
     }
 
-    /// The open settings tab, if any.
     pub fn settings_id(&self) -> Option<PanelId> {
         self.iter().find(|p| p.kind.is_settings()).map(|p| p.id)
     }
 
-    /// Whether [`PanelsCommand::Close`] would change anything: every panel
-    /// closes except the start placeholder standing in for the last
-    /// content, which [`Self::close`] keeps.
     pub fn can_close(&self, id: PanelId) -> bool {
         self.get(id)
             .is_some_and(|panel| !(panel.kind.is_start() && self.content_count() == 1))
     }
 
-    /// Content panels, the start placeholder included.
     fn content_count(&self) -> usize {
         self.iter().filter(|p| p.kind.is_content()).count()
     }
 
-    /// The first waveform panel in layout order.
     pub fn first_waves(&self) -> Option<PanelId> {
         self.first(|kind| kind.waves().is_some())
     }
 
-    /// The first start panel in layout order.
     pub fn first_start(&self) -> Option<PanelId> {
         self.first(PanelKind::is_start)
     }
@@ -469,8 +422,6 @@ impl Panels {
             .find(|id| pred(&self.panels[id].kind))
     }
 
-    /// Open the settings tab in the focused group, or focus it. Returns
-    /// whether the layout changed.
     pub fn open_settings(&mut self) -> Result<bool> {
         if let Some(id) = self.settings_id() {
             return self.focus(id);
@@ -483,7 +434,6 @@ impl Panels {
         Ok(true)
     }
 
-    /// Put a settings panel with this id beside `beside` and give it focus if asked.
     fn insert_settings(&mut self, id: PanelId, beside: PanelId, focus: bool) {
         if let Some(Layout::Tabs { tabs, active }) = self.layout.group_mut(beside) {
             tabs.push(id);
@@ -497,8 +447,6 @@ impl Panels {
         }
     }
 
-    /// Restore the settings tab after a trace change or a workspace restore
-    /// replaced the panels; its id is kept so the frontend keeps its view.
     fn readd_settings(&mut self, id: PanelId, focus: bool) -> Result<()> {
         ensure!(!self.panels.contains_key(&id), "settings id reused");
         ensure!(self.len() < MAX_PANELS, "panel limit reached");
@@ -548,7 +496,6 @@ impl Panels {
         self.get_mut(id)?.kind.pipeline_mut()
     }
 
-    /// The pipeline panels, for deliveries and track bookkeeping.
     pub fn pipelines_mut(&mut self) -> impl Iterator<Item = &mut PipelineModel> {
         self.panels
             .values_mut()
@@ -563,15 +510,12 @@ impl Panels {
         self.get_mut(id)?.kind.transaction_mut()
     }
 
-    /// The transaction panels, for selection delivery and bookkeeping.
     pub fn transactions_mut(&mut self) -> impl Iterator<Item = (PanelId, &mut TransactionModel)> {
         self.panels
             .values_mut()
             .filter_map(|p| Some((p.id, p.kind.transaction_mut()?)))
     }
 
-    /// The first transaction panel that is not pinned, in layout order: the
-    /// one a new record is shown in.
     pub fn first_free_transaction(&self) -> Option<PanelId> {
         self.layout.panels().into_iter().find(|id| {
             self.panels[id]
@@ -581,7 +525,6 @@ impl Panels {
         })
     }
 
-    /// The panel already showing this stream or generator, in layout order.
     pub fn pipeline_for_track(
         &self,
         track: crate::trace::Traced<volna_trace::data::transactions::TrackRef>,
@@ -593,7 +536,6 @@ impl Panels {
                 .is_some_and(|p| p.track.track() == Some(track))
         })
     }
-    /// The pipeline panel that has a row for this record, in layout order.
     pub fn pipeline_showing(
         &self,
         doc: &Document,
@@ -632,7 +574,6 @@ impl Panels {
         self.panels.keys().copied().collect()
     }
 
-    /// The next panel ID, reserved by the caller with `next_id = id.0 + 1`.
     fn unused_id(&self) -> Result<PanelId> {
         self.next_id
             .checked_add(1)
@@ -661,7 +602,6 @@ impl Panels {
         Ok(())
     }
 
-    /// User dock edits are all-or-nothing and must describe the same panels.
     pub fn set_layout(&mut self, layout: Layout, from_revision: u64) -> Result<bool> {
         ensure!(from_revision == self.revision, "stale layout proposal");
         layout.validate(&self.ids())?;
@@ -690,7 +630,6 @@ impl Panels {
         Ok(true)
     }
 
-    /// Cycles across groups as well as hidden tabs, in tree order.
     pub fn focus_next(&mut self, backwards: bool) -> Result<bool> {
         let ids = self.layout.panels();
         let ix = ids.iter().position(|p| *p == self.focused).unwrap();
@@ -717,7 +656,6 @@ impl Panels {
         self.retitle(id, title, true).map(|_| true)
     }
 
-    /// Install a title while undoing or redoing; returns the replaced one.
     pub(crate) fn swap_title(
         &mut self,
         id: PanelId,
@@ -726,8 +664,6 @@ impl Panels {
         self.retitle(id, title, false)
     }
 
-    /// Set a panel's title, as an edit or as a swap, keeping an unsupported
-    /// panel's saved payload in step.
     fn retitle(
         &mut self,
         id: PanelId,
@@ -769,7 +705,6 @@ impl Panels {
         self.advance()
     }
 
-    /// Splits clone content; new tabs start empty. Both inherit navigation.
     pub fn create(&mut self, source: PanelId, split: Option<Axis>) -> Result<PanelId> {
         let kind = self
             .panels
@@ -780,8 +715,6 @@ impl Panels {
         self.place(kind, source, split)
     }
 
-    /// Open a new panel of any kind beside `beside`: split along `split`,
-    /// or as a new tab of its group. The new panel takes focus.
     pub fn open(
         &mut self,
         kind: PanelKind,
@@ -792,9 +725,6 @@ impl Panels {
         self.place(kind, beside, split)
     }
 
-    /// Put a new panel of `kind` where `id` is: same group, position and
-    /// activity, a fresh ID (a panel never changes kind under a frontend's
-    /// view). Focus follows. Returns the new ID and the removed panel.
     pub fn replace(&mut self, id: PanelId, kind: PanelKind) -> Result<(PanelId, Vec<Panel>)> {
         ensure!(self.panels.contains_key(&id), "unknown panel");
         let new = self.unused_id()?;
@@ -837,9 +767,6 @@ impl Panels {
         Ok(id)
     }
 
-    /// Close a panel. The last content panel gives way to a start panel
-    /// instead, so the layout never empties. Returns the removed panels so
-    /// the owner can release what they retained.
     pub fn close(&mut self, id: PanelId) -> Result<Vec<Panel>> {
         let panel = self
             .panels
@@ -871,8 +798,6 @@ impl Panels {
         Ok(vec![removed])
     }
 
-    /// Close every other panel. A start panel joins a lone settings tab so
-    /// content is never absent. Returns the removed panels.
     pub fn close_others(&mut self, id: PanelId) -> Result<Vec<Panel>> {
         let panel = self
             .get(id)
@@ -900,8 +825,6 @@ impl Panels {
         Ok(removed.into_iter().map(|(_, panel)| panel).collect())
     }
 
-    /// The layout, focus and panels a workspace file records: everything but
-    /// the settings tab, which is chrome.
     pub fn saved_view(&self) -> (Layout, PanelId, Vec<&Panel>) {
         let mut layout = self.layout.clone();
         for id in self.iter().filter(|p| p.kind.is_settings()).map(|p| p.id) {
@@ -919,20 +842,12 @@ impl Panels {
         (layout, focused, panels)
     }
 
-    /// The layout, focus and content panels a layout edit records: the
-    /// settings tab is chrome.
     pub(crate) fn structure(&self) -> (Layout, PanelId, BTreeSet<PanelId>) {
         let (layout, focused, panels) = self.saved_view();
         let ids = panels.iter().map(|p| p.id).collect();
         (layout, focused, ids)
     }
 
-    /// Install a structure (undoing or redoing a layout edit): close its
-    /// `close` panels, put its `reopen` panels back under their own IDs,
-    /// then its tree and focus. An open settings tab stays, beside the
-    /// focused panel. Returns the structure that undoes this one; its
-    /// `reopen` holds the panels closed here, which the owner detaches.
-    /// Fails without changing anything when the structure does not fit.
     pub(crate) fn install(&mut self, structure: Structure) -> Result<Structure> {
         let (layout, focused, mut ids) = self.structure();
         for id in &structure.close {
@@ -972,9 +887,6 @@ impl Panels {
         })
     }
 
-    /// A trace change discards content while keeping the ID allocator alive,
-    /// so delayed pointer events can never address a replacement panel. The
-    /// settings tab survives the change; a start panel takes the centre.
     pub fn reset(&mut self) -> Result<()> {
         let id = self.unused_id()?;
         self.advance()?;

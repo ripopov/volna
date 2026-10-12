@@ -1,4 +1,5 @@
 //! FST's mutable reader is owned by this adapter, never by a frontend.
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
@@ -23,8 +24,6 @@ pub(crate) struct FstSession {
     activity: Option<FstActivity>,
 }
 
-/// The activity index of an FST opened from a path, and the block scanner
-/// that reads its undecided signals, mapped on the first read.
 struct FstActivity {
     source: super::activity::ActivitySource,
     #[cfg(not(target_family = "wasm"))]
@@ -56,8 +55,6 @@ impl FstSession {
         let mut tag = [0];
         input.read_exact(&mut tag)?;
         if tag[0] == 254 {
-            // Unwrap here so the same framing/feature checks also see the inner
-            // recording. fst-reader otherwise unwraps privately into memory.
             let mut lengths = [0; 16];
             input.read_exact(&mut lengths)?;
             let expected = u64::from_be_bytes(lengths[8..].try_into().unwrap());
@@ -126,8 +123,6 @@ impl FstSession {
                         tpe,
                         fst_reader::FstVarType::GenericString | fst_reader::FstVarType::Port
                     ) {
-                        // EVCD ports carry values and strength fields. Keep the
-                        // complete payload rather than interpreting it as bits.
                         SignalShape::Text
                     } else if length <= 1 {
                         SignalShape::Bit
@@ -193,8 +188,6 @@ impl FstSession {
         })
     }
 
-    /// Look for an activity index of the FST file at `path`, beside it or
-    /// in the user cache, valid for this file.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn find_activity(&mut self, path: &std::path::Path) {
         let Ok(id) = super::fst_activity::FstTrace::identity_of(path) else {
@@ -211,8 +204,6 @@ impl FstSession {
         &self,
         signals: &[SignalRef],
     ) -> anyhow::Result<BTreeMap<SignalRef, Arc<dyn SignalHistory>>> {
-        // Requested signals in handle order, each with its history being
-        // loaded; `slot` maps a handle to its place in O(1) per change.
         let mut requested: Vec<SignalRef> = signals
             .iter()
             .copied()
@@ -271,7 +262,6 @@ impl FstSession {
                             FstSignalValue::String(bytes) if h.shape == SignalShape::Text => {
                                 WaveValue::Bytes(bytes.to_vec())
                             }
-                            // Events: one occurrence per change.
                             FstSignalValue::String(bytes) => WaveValue::Bits(
                                 std::str::from_utf8(bytes)
                                     .context("FST logic value is not ASCII")?
@@ -298,15 +288,11 @@ impl FstSession {
     }
 }
 
-/// A history being loaded: packed for logic and reals, owned values for
-/// text and events.
 enum Loading {
     Compact(CompactBuilder),
     Vec(VecHistory),
 }
 
-// fst-reader seeks over sections while discovering metadata. A seek beyond
-// EOF succeeds on files/cursors, so check framing before handing over ownership.
 fn validate_sections(input: &mut dyn Input) -> anyhow::Result<()> {
     let length = input.seek(SeekFrom::End(0))?;
     let mut offset = 0u64;
@@ -337,8 +323,6 @@ fn validate_sections(input: &mut dyn Input) -> anyhow::Result<()> {
                 );
             }
             2 => {
-                // The blackout payload starts with an unsigned varint count.
-                // A zero count has the canonical one-byte spelling 0.
                 ensure!(size >= 9, "truncated FST dump-activity metadata");
                 let mut count = [0];
                 input.read_exact(&mut count)?;

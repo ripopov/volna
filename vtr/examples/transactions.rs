@@ -1,7 +1,4 @@
 //! Transactions with attributes, pipeline stages, and dependency relations.
-//! Without an output path, the trace is temporary.
-//!
-//!     cargo run -p vtr --example transactions -- /tmp/transactions.vtr
 
 use vtr::{Reader, ScopeType, TxQuery, TxStatus, Value, Writer};
 
@@ -15,7 +12,6 @@ fn main() -> vtr::Result<()> {
     let core = w.add_scope(None, "cpu", ScopeType::Core, "")?;
     let pipe = w.add_stream(Some(core), "pipe", "PIPELINE")?;
     let insn = w.add_generator(pipe, "instruction")?;
-    // Intern keys and names once; transaction methods take StrId.
     let (k_pc, k_dep, lane, st_f, st_x) = (
         w.intern("pc"),
         w.intern("depends_on"),
@@ -28,11 +24,11 @@ fn main() -> vtr::Result<()> {
         let tx = w.begin_tx(insn, i)?;
         w.tx_attr(tx, k_pc, &Value::U64(0x1000 + i * 4))?;
         w.tx_stage_begin(tx, st_f, lane, i)?;
-        w.tx_stage_begin(tx, st_x, lane, i + 1)?; // closes F
+        w.tx_stage_begin(tx, st_x, lane, i + 1)?;
         if let Some(p) = prev {
             w.relate(k_dep, p, tx, &[])?;
         }
-        w.end_tx(tx, i + 3, TxStatus::Ok)?; // closes X
+        w.end_tx(tx, i + 3, TxStatus::Ok)?;
         prev = Some(tx);
     }
     w.close()?;
@@ -47,7 +43,7 @@ fn main() -> vtr::Result<()> {
         for s in &tx.stages {
             println!("{} {}: {}..{:?}", tx.id, rd.str(s.name), s.begin, s.end);
         }
-        true // keep going
+        true
     })?;
     assert_eq!(rd.relations_to(5)?[0].from, 4);
     Ok(())

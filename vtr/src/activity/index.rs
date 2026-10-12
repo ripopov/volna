@@ -12,57 +12,31 @@ use crate::hierarchy::SignalId;
 use crate::varint;
 use std::path::Path;
 
-/// One source block as the index saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IndexBlock {
-    /// First and last time step of the block.
     pub start: u64,
     pub end: u64,
-    /// Compressed bytes of the block in the trace.
     pub bytes: u64,
-    /// The block's threshold: silences longer than it that end in the block are kept.
     pub delta: u64,
 }
 
-/// A busy stretch: first and last change of a run of changes with no kept
-/// silence between them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stretch {
     pub start: u64,
     pub end: u64,
-    /// Largest gap between consecutive changes inside the stretch. Gaps are
-    /// held in 32 bits: one of `u32::MAX` time units or more reads as `u64::MAX`.
     pub gap: u64,
 }
 
-/// Signals by what the index says about them in a window, each list ascending.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Classification {
-    /// Signals with a change in the window.
     pub active: Vec<SignalId>,
-    /// Signals the index cannot decide: the window is narrower than the
-    /// threshold of the blocks it touches and lies inside one of their busy
-    /// stretches. [`resolve`](super::resolve) reads them from the trace.
     pub undecided: Vec<SignalId>,
 }
 
-/// A loaded activity index. It is immutable; share it (for example in an
-/// `Arc`) between threads.
-///
-/// Memory is [`STRETCH_BYTES`] per stretch and 4 bytes per signal.
-///
-/// A window `[t0, t1]` includes both ends. [`classify`](Self::classify)
-/// answers every signal with one binary search over its stretches: quiet
-/// when the window lies in a kept silence, active when it holds a stretch's
-/// first or last change or is at least as wide as the stretch's largest gap
-/// or as [`exact_width`](Self::exact_width), and undecided otherwise. It is
-/// never wrong, and a window at least `exact_width` wide leaves nothing
-/// undecided.
 #[derive(Clone, Debug)]
 pub struct Index {
     header: Header,
     blocks: Vec<IndexBlock>,
-    /// Stretches of signal `s` are `off[s]..off[s + 1]`.
     off: Vec<u32>,
     start: Vec<u64>,
     end: Vec<u64>,
@@ -76,17 +50,10 @@ fn corrupt<T>(msg: &'static str) -> Result<T> {
 }
 
 impl Index {
-    /// Reads and decodes the sidecar at `path` (see [`decode`](Self::decode)).
     pub fn open(path: impl AsRef<Path>, trace: &Identity) -> Result<Index> {
         Self::decode(&std::fs::read(path)?, trace)
     }
 
-    /// Decodes a sidecar image built for the trace identified by `trace`.
-    ///
-    /// Fails with [`Error::Invalid`] when the image was built for another
-    /// trace, [`Error::UnsupportedVersion`] for another format version, and
-    /// [`Error::Corrupt`] or [`Error::Checksum`] for a damaged image. Every
-    /// section's CRC is verified.
     pub fn decode(bytes: &[u8], trace: &Identity) -> Result<Index> {
         let mut decode = std::pin::pin!(Self::decode_with(
             bytes,
@@ -102,19 +69,12 @@ impl Index {
         }
     }
 
-    /// Decodes with cooperative checkpoints and admission before table/scratch
-    /// allocation. `admit` receives the peak Rust heap bytes required so far,
-    /// excluding the input image and codec-native scratch; reject to stop before
-    /// allocation. Checkpoints can yield or cancel between rows and stretches.
-    /// The complete index remains private until the future succeeds.
     pub async fn decode_with<F: std::future::Future<Output = Result<()>>>(
         bytes: &[u8],
         trace: &Identity,
         mut admit: impl FnMut(u64) -> Result<()>,
         mut checkpoint: impl FnMut() -> F,
     ) -> Result<Index> {
-        // The directory cannot retain more entries than the encoded image can
-        // hold. Admit that upper bound before Container allocates its entries.
         admit(bytes.len() as u64)?;
         let ((major, minor), entries) = Container::parse_closed(bytes, &MAGIC)?;
         if major != VERSION {
@@ -142,8 +102,6 @@ impl Index {
         }
         let n = header.signals as usize;
         let base = (n as u64 + 1) * 4 + (rest.len() * std::mem::size_of::<IndexBlock>()) as u64;
-        // Account for directory storage and geometric Vec scratch growth.
-        // Admission excludes the input image and codec-native scratch.
         let directory = (entries.len() * std::mem::size_of::<DirEntry>()) as u64;
         format::tail_rows(payload(tail)?)?;
         let mut scratch = crate::codec::raw_len(&payload(tail)?[TAIL_HEAD_LEN..])? as u64;
@@ -161,7 +119,6 @@ impl Index {
         let tail = payload(tail)?;
         let (mut d, mut raw) = (Decompressor::new(), Vec::new());
 
-        // Pass 1: stretches per signal, into off[s + 1].
         let mut off = vec![0u32; n + 1];
         let mut blocks = Vec::with_capacity(rest.len());
         for e in rest {
@@ -218,8 +175,6 @@ impl Index {
                 .ok_or(Error::Corrupt("activity index too large"))?;
         }
 
-        // Pass 2: fill. `cursor[s]` is the signal's open stretch, whose start
-        // is already in place once the signal has changed.
         let total = off[n] as usize;
         admit(
             peak.checked_add((total as u64).saturating_mul(STRETCH_BYTES))
@@ -320,17 +275,14 @@ impl Index {
         })
     }
 
-    /// Identity of the trace the index was built for.
     pub fn identity(&self) -> Identity {
         self.header.identity
     }
 
-    /// The budget the index was built with.
     pub fn budget(&self) -> Budget {
         self.header.budget
     }
 
-    /// The trace's first time step: values recorded at it are not changes.
     pub fn t_min(&self) -> u64 {
         self.header.t_min
     }
@@ -339,26 +291,20 @@ impl Index {
         self.header.signals
     }
 
-    /// The trace's blocks in time order, with their thresholds.
     pub fn blocks(&self) -> &[IndexBlock] {
         &self.blocks
     }
 
-    /// Stretches over all signals.
     pub fn stretch_count(&self) -> u64 {
         self.start.len() as u64
     }
 
-    /// Heap bytes held by the loaded index.
     pub fn memory_bytes(&self) -> u64 {
         self.start.len() as u64 * STRETCH_BYTES
             + self.off.len() as u64 * 4
             + (self.blocks.len() * std::mem::size_of::<IndexBlock>()) as u64
     }
 
-    /// The smallest threshold of the blocks whose cells `[t0, t1]` touches:
-    /// every window at least this wide is decided for every signal.
-    /// `u64::MAX` for an index without blocks.
     pub fn exact_width(&self, t0: u64, t1: u64) -> u64 {
         let cell = |t: u64| {
             self.blocks
@@ -375,20 +321,12 @@ impl Index {
         }
     }
 
-    /// Classifies every signal in the window `[t0, t1]`; an empty window
-    /// (`t0 > t1`) has no active signal.
     pub fn classify(&self, t0: u64, t1: u64) -> Classification {
         let mut out = Classification::default();
         self.classify_range(0..self.header.signals, t0, t1, &mut out);
         out
     }
 
-    /// [`classify`](Self::classify) for the signals in `signals`, appended
-    /// to `out`; callers split the signals into ranges to classify them on
-    /// several threads.
-    ///
-    /// # Panics
-    /// When `signals` reaches past [`signal_count`](Self::signal_count).
     pub fn classify_range(
         &self,
         signals: std::ops::Range<u32>,
@@ -423,11 +361,6 @@ impl Index {
         }
     }
 
-    /// The busy stretches of `signal` in time order; none for a signal that
-    /// never changes after the first time step.
-    ///
-    /// # Panics
-    /// When `signal` is not below [`signal_count`](Self::signal_count).
     pub fn stretches(&self, signal: SignalId) -> impl ExactSizeIterator<Item = Stretch> + '_ {
         let s = signal.0 as usize;
         (self.off[s] as usize..self.off[s + 1] as usize).map(move |i| Stretch {

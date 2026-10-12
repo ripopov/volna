@@ -1,47 +1,5 @@
-/*
- * vtr_track.hpp - header-only C++17 keyed lifecycle tracker over the VTR C API.
- *
- *     vtr::Tracker p(writer, generator, "top.core.pipeline");
- *     uint32_t sn = p.keyspace("sn"), rob = p.keyspace("rob");
- *     p.open(sn, 7, "F", 100);          // new item named sn 7, stage F from 100
- *     p.bind(sn, 7, rob, 12, 102);      // the same item now also answers to rob 12
- *     p.stage(rob, 12, "X", 105);       // the previous main-lane stage ends at 105
- *     p.close(rob, 12, VTR_TX_STATUS_OK, 109);
- *
- * Producers name items (instructions, requests) by the identifiers their
- * hardware or model already has: a sequence number, a ROB index, a queue slot.
- * A tracker maps (key space, key) to open transactions of one generator and
- * handles renaming, groups (one key naming several items), ordered aborts and
- * key reuse, so a producer never sees a transaction id. The vtr_trace
- * SystemVerilog package (vtr_trace.sv, vtr_trace_dpi.hpp) is one front end.
- *
- * Rules:
- *   * Every call carries its time in file units; calls take effect in the
- *     order they are made.
- *   * open() starts an item (one transaction) under a first name. An item has
- *     at most one name per key space; bind() adds or replaces one, and
- *     bind_oldest() moves the oldest items of a space to one new name as a
- *     group. A name is released when its item ends.
- *   * stage() ends the lane's previous stage; entering the stage the item is
- *     already in on that lane continues it, so a producer may report a valid
- *     that stays high for several cycles on every cycle.
- *   * Calls addressing a group apply to every member. Items are ordered by
- *     open(): abort_younger() ends every item opened after the addressed one.
- *   * A call on a key that names nothing is skipped; open() or bind() onto a
- *     key that still names another item aborts that item first (a missed
- *     retirement). Both are counted in diagnostics(), never fatal.
- *   * Attributes are buffered, last value wins, and written when the item
- *     ends; detach() writes those of items still open and forgets every item,
- *     before the writer closes them with status open.
- *
- * A tracker sits on a simulator's hot path (a few calls per instruction), so
- * it allocates nothing in steady state: items are recycled with their
- * buffers, names live in flat hash tables with inline groups, and strings
- * (stage names, attribute keys, captions) are interned through a small cache
- * in front of vtr_writer_intern().
- *
- * Not thread-safe: call from one thread, or serialize the calls.
- */
+/* vtr_track.hpp - header-only C++17 keyed lifecycle tracker over the VTR C API. */
+
 #ifndef VTR_TRACK_HPP
 #define VTR_TRACK_HPP
 
@@ -60,7 +18,6 @@ namespace vtr {
 
 class Tracker {
 public:
-    /* Items become transactions of `generator`; `name` prefixes diagnostics. */
     Tracker(vtr_writer *w, uint32_t generator, std::string name)
         : w_(w), gen_(generator), name_(std::move(name)), label_(vtr_writer_intern(w, "vtr.label")) {}
     Tracker(const Tracker &) = delete;
@@ -69,7 +26,6 @@ public:
     vtr_writer *writer() const { return w_; }
     const std::string &name() const { return name_; }
 
-    /* Adds a key space and returns its index. */
     uint32_t keyspace(const char *name) {
         spaces_.emplace_back(new Space{});
         spaces_.back()->name = name ? name : "";
@@ -78,9 +34,7 @@ public:
     size_t keyspace_count() const { return spaces_.size(); }
     size_t open_count() const { return open_.size(); }
 
-    /* ---- create, rename, advance ---------------------------------------- */
 
-    /* A new item named (sp, k), its first stage beginning with it at t. */
     void open(uint32_t sp, uint64_t k, const char *stage, uint64_t t) {
         if (!valid(sp, "open")) return;
         if (const Group *g = spaces_[sp]->by_key.find(k)) {
@@ -92,12 +46,11 @@ public:
         Item *it = alloc();
         it->seq = ++seq_;
         it->tx = tx;
-        open_.push_back(it);  // seq only grows: open_ stays sorted
+        open_.push_back(it);
         enter(*it, 0, intern(stage), t);
         name(*it, sp, k);
     }
 
-    /* The item(s) named (sp, k) also answer to (to_sp, to_k). */
     void bind(uint32_t sp, uint64_t k, uint32_t to_sp, uint64_t to_k, uint64_t t) {
         if (!valid(sp, "bind") || !valid(to_sp, "bind")) return;
         const Group *g = lookup(sp, k, "bind");
@@ -107,8 +60,6 @@ public:
         for (size_t i = 0; i < items.n; ++i) name(*items.v[i], to_sp, to_k);
     }
 
-    /* The n items of sp opened first lose their sp names and are named
-     * (to_sp, to_k) together. Returns how many moved. */
     int bind_oldest(uint32_t sp, int n, uint32_t to_sp, uint64_t to_k, uint64_t t) {
         if (!valid(sp, "bind_oldest") || !valid(to_sp, "bind_oldest")) return 0;
         const std::vector<Item *> &order = spaces_[sp]->by_seq;
@@ -125,8 +76,6 @@ public:
         return static_cast<int>(count);
     }
 
-    /* Enters `stage` on the main lane at t; the previous main-lane stage ends at t.
-     * If the item is already in `stage` there, the stage continues. */
     void stage(uint32_t sp, uint64_t k, const char *stage, uint64_t t) {
         const Group *g = lookup(sp, k, "stage");
         if (!g) return;
@@ -135,7 +84,6 @@ public:
         for (size_t i = 0; i < items.n; ++i) enter(*items.v[i], 0, s, t);
     }
 
-    /* Enters `stage` on `lane`; an empty stage ends the lane's current stage. */
     void lane(uint32_t sp, uint64_t k, const char *lane, const char *stage, uint64_t t) {
         const Group *g = lookup(sp, k, "lane");
         if (!g) return;
@@ -156,7 +104,6 @@ public:
         }
     }
 
-    /* ---- describe ------------------------------------------------------- */
 
     void event(uint32_t sp, uint64_t k, const char *name, uint64_t t) {
         const Group *g = lookup(sp, k, "event");
@@ -175,23 +122,19 @@ public:
         set_attr(*g, intern(key), val);
     }
 
-    /* A string attribute, interned: the string table grows with distinct values. */
     void attr(uint32_t sp, uint64_t k, const char *key, const char *v) {
         const Group *g = lookup(sp, k, "attr");
         if (!g) return;
         set_attr(*g, intern(key), str_value(v));
     }
 
-    /* The item's caption: the reserved vtr.label attribute. */
     void label(uint32_t sp, uint64_t k, const char *text) {
         const Group *g = lookup(sp, k, "label");
         if (!g) return;
         set_attr(*g, label_, str_value(text));
     }
 
-    /* ---- end ------------------------------------------------------------ */
 
-    /* Ends the item(s) named (sp, k) with a VTR_TX_STATUS_* code, releasing every name. */
     void close(uint32_t sp, uint64_t k, uint8_t status, uint64_t t) {
         const Group *g = lookup(sp, k, "close");
         if (!g) return;
@@ -199,7 +142,6 @@ public:
         for (size_t i = 0; i < items.n; ++i) end(*items.v[i], status, t);
     }
 
-    /* Aborts every item opened after the item(s) named (sp, k), which survive. */
     int abort_younger(uint32_t sp, uint64_t k, uint64_t t) {
         const Group *g = lookup(sp, k, "abort_younger");
         if (!g) return 0;
@@ -211,22 +153,18 @@ public:
         return abort_doomed(t);
     }
 
-    /* Aborts every item that has a name in sp. */
     int abort_keyspace(uint32_t sp, uint64_t t) {
         if (!valid(sp, "abort_keyspace")) return 0;
         doomed_ = spaces_[sp]->by_seq;
         return abort_doomed(t);
     }
 
-    /* Aborts every open item. */
     int abort_all(uint64_t t) {
         doomed_ = open_;
         return abort_doomed(t);
     }
 
-    /* ---- links ---------------------------------------------------------- */
 
-    /* Transactions named (sp, k), oldest first; empty (and counted) if none. */
     std::vector<uint64_t> txs(uint32_t sp, uint64_t k, const char *what) {
         std::vector<uint64_t> out;
         if (const Group *g = lookup(sp, k, what)) {
@@ -236,7 +174,6 @@ public:
         return out;
     }
 
-    /* A relation `kind` from each item named (sp, k) here to each named (bsp, bk) in `b`. */
     void relate(const char *kind, uint32_t sp, uint64_t k, Tracker &b, uint32_t bsp, uint64_t bk) {
         const Group *from = lookup(sp, k, "relate");
         const Group *to = b.lookup(bsp, bk, "relate");
@@ -247,8 +184,6 @@ public:
                 check(vtr_writer_relate(w_, kid, from->at(i)->tx, to->at(j)->tx, 0, nullptr, nullptr));
     }
 
-    /* The item named (bsp, bk) in `b` (the oldest, for a group) becomes the parent of
-     * each item named (sp, k) here. */
     void parent(uint32_t sp, uint64_t k, Tracker &b, uint32_t bsp, uint64_t bk) {
         const Group *child = lookup(sp, k, "parent");
         const Group *par = b.lookup(bsp, bk, "parent");
@@ -256,10 +191,7 @@ public:
         for (size_t i = 0; i < child->size(); ++i) check(vtr_writer_set_tx_parent(w_, child->at(i)->tx, par->at(0)->tx));
     }
 
-    /* ---- file close ------------------------------------------------------ */
 
-    /* Writes the buffered attributes of the items still open and forgets every
-     * item and name; the writer closes their transactions with status open. */
     void detach() {
         for (Item *it : open_) {
             write_attrs(*it);
@@ -272,13 +204,11 @@ public:
         }
     }
 
-    /* Misuse counts: message -> (count, first key). */
     struct Diagnostic {
         uint64_t count = 0;
         std::string first;
     };
     const std::map<std::string, Diagnostic> &diagnostics() const { return diags_; }
-    /* Formats and clears the diagnostics: "<name>: <message> (N times, first <space> <key>)". */
     std::vector<std::string> take_diagnostics() {
         std::vector<std::string> out;
         for (auto &d : diags_) {
@@ -292,24 +222,22 @@ public:
 
 private:
     struct Item {
-        uint64_t seq = 0;  // open order
+        uint64_t seq = 0;
         uint64_t tx = 0;
-        std::vector<std::pair<uint32_t, uint64_t>> names;  // (space, key), one per space
-        std::vector<std::pair<uint32_t, uint32_t>> lanes;  // (lane, open stage or 0)
-        std::vector<std::pair<uint32_t, vtr_value>> attrs;  // buffered, last value wins
+        std::vector<std::pair<uint32_t, uint64_t>> names;
+        std::vector<std::pair<uint32_t, uint32_t>> lanes;
+        std::vector<std::pair<uint32_t, vtr_value>> attrs;
     };
 
-    /* The items one key names, oldest first: inline up to four, rarely more. */
     struct Group {
         static constexpr size_t INLINE = 4;
         Item *v[INLINE] = {};
         uint32_t n = 0;
-        std::vector<Item *> more;  // members beyond INLINE, in order
+        std::vector<Item *> more;
         size_t size() const { return n + more.size(); }
         Item *at(size_t i) const { return i < INLINE ? v[i] : more[i - INLINE]; }
     };
 
-    /* A snapshot of a group, safe to iterate while the calls change the group. */
     struct Items {
         Item *inl[Group::INLINE];
         std::vector<Item *> heap;
@@ -340,7 +268,6 @@ private:
         return out;
     }
 
-    /* Open addressing from key to Group with linear probing and backward-shift deletion. */
     class KeyTable {
     public:
         const Group *find(uint64_t k) const {
@@ -370,7 +297,6 @@ private:
             while (slots_[i].used && slots_[i].key != k) i = (i + 1) & mask();
             if (!slots_[i].used) return;
             --count_;
-            // Shift later members of the probe run back into the hole.
             for (size_t j = (i + 1) & mask(); slots_[j].used; j = (j + 1) & mask()) {
                 const size_t home = hash(slots_[j].key) & mask();
                 if (((j - home) & mask()) >= ((j - i) & mask())) {
@@ -422,10 +348,9 @@ private:
     struct Space {
         std::string name;
         KeyTable by_key;
-        std::vector<Item *> by_seq;  // items with a name here, by open order
+        std::vector<Item *> by_seq;
     };
 
-    /* Interned ids of recently used strings, in front of vtr_writer_intern(). */
     struct InternCache {
         static constexpr size_t SIZE = 512;
         struct Entry {
@@ -438,7 +363,7 @@ private:
 
     uint32_t intern(const char *s) {
         if (!s || !*s) return 0;
-        uint64_t h = 1469598103934665603ULL;  // FNV-1a
+        uint64_t h = 1469598103934665603ULL;
         size_t len = 0;
         for (const char *p = s; *p; ++p, ++len) h = (h ^ static_cast<unsigned char>(*p)) * 1099511628211ULL;
         InternCache::Entry &e = strings_.table[h & (InternCache::SIZE - 1)];
@@ -488,7 +413,7 @@ private:
 
     static void insert_ordered(std::vector<Item *> &v, Item *it) {
         auto at = v.end();
-        while (at != v.begin() && (*(at - 1))->seq > it->seq) --at;  // usually appends
+        while (at != v.begin() && (*(at - 1))->seq > it->seq) --at;
         v.insert(at, it);
     }
 
@@ -507,7 +432,6 @@ private:
         it.names.emplace_back(sp, k);
         Space &s = *spaces_[sp];
         Group &g = s.by_key.insert(k);
-        // Members stay in open order.
         size_t at = g.size();
         while (at > 0 && g.at(at - 1)->seq > it.seq) --at;
         if (g.size() < Group::INLINE) {
@@ -553,7 +477,6 @@ private:
         }
     }
 
-    /* (sp, k) is about to name `keep`: abort any other item it still names. */
     void evict(uint32_t sp, uint64_t k, const Items &keep, uint64_t t) {
         const Group *g = spaces_[sp]->by_key.find(k);
         if (!g) return;
@@ -568,7 +491,7 @@ private:
     void enter(Item &it, uint32_t lane, uint32_t stage, uint64_t t) {
         for (auto &cur : it.lanes) {
             if (cur.first != lane) continue;
-            if (cur.second == stage) return;  // already there: the stage continues
+            if (cur.second == stage) return;
             check(vtr_writer_tx_stage_begin(w_, it.tx, stage, lane, t));
             cur.second = stage;
             return;
@@ -604,14 +527,13 @@ private:
         return static_cast<int>(items.n);
     }
 
-    /* Aborts the items in doomed_, which must not change meanwhile. */
     int abort_doomed(uint64_t t) {
         std::vector<Item *> items;
         items.swap(doomed_);
         for (Item *it : items) end(*it, VTR_TX_STATUS_ABORTED, t);
         const int n = static_cast<int>(items.size());
         items.clear();
-        doomed_.swap(items);  // keep the capacity
+        doomed_.swap(items);
         return n;
     }
 
@@ -631,15 +553,15 @@ private:
     std::string name_;
     uint32_t label_;
     uint64_t seq_ = 0;
-    std::vector<Item *> open_;  // open items by open order
+    std::vector<Item *> open_;
     std::vector<std::unique_ptr<Space>> spaces_;
-    std::vector<std::unique_ptr<Item>> pool_;  // every item ever allocated
-    std::vector<Item *> free_;  // recycled items, buffers kept
-    std::vector<Item *> moved_, doomed_;  // scratch
+    std::vector<std::unique_ptr<Item>> pool_;
+    std::vector<Item *> free_;
+    std::vector<Item *> moved_, doomed_;
     InternCache strings_;
     std::map<std::string, Diagnostic> diags_;
 };
 
-}  // namespace vtr
+}
 
-#endif /* VTR_TRACK_HPP */
+#endif

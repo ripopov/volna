@@ -1,8 +1,4 @@
-//! Volna Dark and Volna Light, the default viewer themes. Their colours are
-//! the viewer sheet of the design system, `docs/design-system/tokens/viewer.css`,
-//! compiled in, so the website and the viewer read one source. Surfaces are
-//! the Instrument neutrals; data colours are OKLCH values stored as sRGB; stage
-//! fills are computed from the sheet's ladder numbers.
+//! Volna Dark and Volna Light, the default viewer themes.
 
 use std::collections::HashMap;
 
@@ -10,19 +6,11 @@ use super::{Appearance, MarkerColors, Surface, Theme, over, stroke};
 use crate::color::Color;
 use crate::pipeline::{StageStyle, StageSwatch};
 
-/// The design system's viewer tokens (`--viewer-*`), dark block first.
 pub const SHEET_CSS: &str = include_str!("../../../docs/design-system/tokens/viewer.css");
 
-/// How stage fills follow pipeline order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StageLadder {
-    /// HSL hue from 250° to 0° at saturation 0.52 and lightness 0.58, with
-    /// neighbours alternating to 0.70 beyond eight stages: One Dark and host
-    /// palettes.
     Hsl,
-    /// OKLCH hue from `hue_from` to `hue_to` in pipeline order at chroma `c`,
-    /// lightness always alternating between `l` and `l_alt`; the edge is the
-    /// fill with lightness `+ edge_dl`.
     Oklch {
         hue_from: f32,
         hue_to: f32,
@@ -33,16 +21,12 @@ pub enum StageLadder {
     },
 }
 
-/// Hues of enum and text value tints, clear of the X red and the Z amber.
 const TINT_HUES: [f32; 6] = [265.0, 220.0, 175.0, 130.0, 300.0, 340.0];
-/// Opacity of a value tint: too faint to compete with a state colour.
 const TINT_ALPHA: f32 = 0.22;
 
-/// One appearance block of the sheet: token name (without `--viewer-`) to value.
 pub(crate) struct Sheet(HashMap<&'static str, &'static str>);
 
 impl Sheet {
-    /// The dark block (`:root,[data-theme="dark"]`) or the light one.
     pub(crate) fn new(dark: bool) -> Self {
         let selector = if dark {
             ":root,[data-theme=\"dark\"]{"
@@ -91,7 +75,6 @@ impl Sheet {
 }
 
 impl Theme<Color> {
-    /// Volna Dark (`dark`) or Volna Light, from the design system's viewer sheet.
     pub fn volna(dark: bool) -> Self {
         let s = Sheet::new(dark);
         let col = |name: &str| s.color(name);
@@ -113,7 +96,6 @@ impl Theme<Color> {
             values: [text, undef, highimp, dontcare, weak],
         };
         let (canvas, panel, hover) = (col("canvas"), col("panel"), col("hover"));
-        // A step of the accent toward the text, for a hovered button.
         let accent_hover = over(text.with_alpha(0.14), accent);
         let mut t = Self::one_dark();
         t.appearance = if dark {
@@ -189,9 +171,6 @@ impl Theme<Color> {
                 hover_text: marker_text,
             }
         });
-        // The row colours take the signal's lightness and chroma in their own
-        // hue (blue, cyan, violet, pink) and the grey of weak values, then meet
-        // the stroke floor on every row surface.
         let [sl, sa, sb] = t.wave_signal.to_oklab();
         let chroma = sa.hypot(sb);
         t.resolve_tints([
@@ -206,7 +185,6 @@ impl Theme<Color> {
         t
     }
 
-    /// The colours of a stage swatch.
     pub fn swatch(&self, swatch: StageSwatch) -> StageStyle {
         match swatch {
             StageSwatch::Step { rank, of } => self.stage_style(rank, of),
@@ -214,7 +192,6 @@ impl Theme<Color> {
         }
     }
 
-    /// Stage `k` of `n` in pipeline order.
     pub fn stage_style(&self, k: usize, n: usize) -> StageStyle {
         match self.stages {
             StageLadder::Hsl => {
@@ -253,7 +230,6 @@ impl Theme<Color> {
         }
     }
 
-    /// Grey, for stage names outside the ladder and transactions without stages.
     pub fn stage_fallback(&self) -> StageStyle {
         match self.stages {
             StageLadder::Hsl => {
@@ -277,8 +253,6 @@ impl Theme<Color> {
         }
     }
 
-    /// A stable tint for an enum or text value: FNV-1a of its text picks one
-    /// of six hues at the stage ladder's lightness and chroma.
     pub fn value_tint(&self, value: &str) -> Color {
         let mut h: u32 = 2_166_136_261;
         for ch in value.chars() {

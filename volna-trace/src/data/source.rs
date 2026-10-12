@@ -24,7 +24,6 @@ pub enum Member {
 }
 
 impl Member {
-    /// Variable identity, if this member is a variable.
     pub fn var(self) -> Option<VarId> {
         if let Self::Var(id) = self {
             Some(id)
@@ -39,12 +38,9 @@ pub struct Generator {
     pub name: String,
     pub stream: ScopeId,
     pub track: TrackRef,
-    /// Raw declaration attributes, including log-site provenance.
     pub attributes: Attributes,
 }
 
-/// A durable name must resolve uniquely; ambiguous names never select a
-/// declaration by accident. Runtime IDs remain local to one hierarchy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lookup<T> {
     Found(T),
@@ -60,7 +56,6 @@ fn unique<T>(mut matches: impl Iterator<Item = T>) -> Lookup<T> {
     }
 }
 
-/// Source-local signal identity: a VTR `SignalId` or a zero-based FST handle.
 #[derive(
     Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
@@ -88,7 +83,6 @@ impl From<vtr::Direction> for Direction {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Scope {
     pub name: String,
-    /// Raw scope type name or producer-defined stream kind.
     pub kind: String,
     pub parent: Option<ScopeId>,
     pub children: Vec<ScopeId>,
@@ -103,11 +97,9 @@ pub struct Variable {
     pub name: String,
     pub scope: ScopeId,
     pub shape: SignalShape,
-    /// Variable type name (`wire`, `reg`, ...).
     pub var_type: String,
     pub direction: Direction,
     pub signal: SignalRef,
-    /// Source-local enum table identity; tables are type metadata, not members.
     pub enum_table: Option<u32>,
 }
 
@@ -120,7 +112,6 @@ pub struct HierarchyBuilder {
 }
 
 impl HierarchyBuilder {
-    /// Append a scope and link it under `parent` or among the roots.
     pub fn push_scope(&mut self, name: String, kind: String, parent: Option<ScopeId>) -> ScopeId {
         let id = self.scopes.len();
         self.scopes.push(Scope {
@@ -143,22 +134,15 @@ impl HierarchyBuilder {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TraceInfo {
-    /// Display name (file name).
     pub name: String,
-    /// Optional build identity attached to the trace, without VDB presentation data.
     pub design_id: Option<String>,
-    /// `10^timescale` seconds per time unit.
     pub timescale: i8,
     pub time_range: (u64, u64),
     pub signal_count: usize,
-    /// Total value changes when cheaply known.
     pub change_count: Option<u64>,
-    /// A producer-named time unit (`time.unit`, e.g. `cycle`) shown instead
-    /// of SI scaling of `timescale`.
     pub time_unit: Option<String>,
 }
 
-/// Borrowed scope metadata. Names and membership stay in the immutable owner.
 #[derive(Clone, Copy, Debug)]
 pub struct ScopeView<'a> {
     pub name: &'a str,
@@ -171,7 +155,6 @@ pub struct ScopeView<'a> {
     pub generators: Ids<'a>,
 }
 
-/// Borrowed variable metadata; querying a declaration allocates nothing.
 #[derive(Clone, Copy, Debug)]
 pub struct VariableView<'a> {
     pub name: &'a str,
@@ -183,7 +166,6 @@ pub struct VariableView<'a> {
     pub enum_table: Option<u32>,
 }
 
-/// A borrowed range of declaration identities. Iteration allocates nothing.
 #[derive(Clone, Copy, Debug)]
 pub struct Ids<'a> {
     storage: IdStorage<'a>,
@@ -200,7 +182,6 @@ impl Default for Ids<'_> {
     }
 }
 impl<'a> Ids<'a> {
-    /// Borrow an existing column of declaration identities.
     pub fn from_slice(ids: &'a [u32]) -> Self {
         Self {
             storage: IdStorage::Slice(ids),
@@ -217,18 +198,15 @@ impl<'a> Ids<'a> {
         self.gap = gap;
         self
     }
-    /// Number of members; reader-backed ranges scan the shared child column.
     pub fn len(self) -> usize {
         match self.storage {
             IdStorage::Slice(ids) => ids.len(),
             IdStorage::Reader(ids) => ids.len(),
         }
     }
-    /// Whether this range has any selected member.
     pub fn is_empty(self) -> bool {
         self.iter().next().is_none()
     }
-    /// Iterate in declaration order without allocating.
     pub fn iter(self) -> IdsIter<'a> {
         IdsIter {
             storage: match self.storage {
@@ -238,7 +216,6 @@ impl<'a> Ids<'a> {
             gap: self.gap,
         }
     }
-    /// First selected identity, if present.
     pub fn first(self) -> Option<usize> {
         self.iter().next()
     }
@@ -250,7 +227,6 @@ impl<'a> IntoIterator for Ids<'a> {
         self.iter()
     }
 }
-/// Allocation-free cursor over an immutable membership range.
 pub struct IdsIter<'a> {
     storage: IterStorage<'a>,
     gap: Option<usize>,
@@ -285,8 +261,6 @@ impl DoubleEndedIterator for IdsIter<'_> {
     }
 }
 
-/// Resident hierarchy queries shared by local and remote sessions. Implementors
-/// return borrowed views; no caller owns strings or member vectors per node.
 pub(crate) trait HierarchySource: Send + Sync + std::fmt::Debug {
     fn scope_count(&self) -> usize;
     fn var_count(&self) -> usize;
@@ -294,21 +268,17 @@ pub(crate) trait HierarchySource: Send + Sync + std::fmt::Debug {
     fn scope(&self, id: ScopeId) -> ScopeView<'_>;
     fn var(&self, id: VarId) -> VariableView<'_>;
     fn resident_bytes(&self) -> u64;
-    /// Signal identity without decoding the rest of a variable.
     fn signal(&self, id: VarId) -> SignalRef {
         self.var(id).signal
     }
-    /// A variable's name without decoding the rest of it.
     fn var_name(&self, id: VarId) -> &str {
         self.var(id).name
     }
 }
 
-/// Immutable hierarchy backed by shared columns or a reader's own storage.
 #[derive(Clone, Debug)]
 pub struct Hierarchy {
     pub(crate) source: std::sync::Arc<dyn HierarchySource>,
-    /// Shared raw generator declarations and their attributes.
     pub(crate) generators: std::sync::Arc<Vec<Generator>>,
 }
 impl Default for Hierarchy {
@@ -317,59 +287,45 @@ impl Default for Hierarchy {
     }
 }
 impl Hierarchy {
-    /// Borrow raw generator declarations; their storage follows the hierarchy owner.
     pub fn generators(&self) -> &[Generator] {
         &self.generators
     }
-    /// Number of scope and stream declarations.
     pub fn scope_count(&self) -> usize {
         self.source.scope_count()
     }
-    /// Number of variable declarations, aliases included.
     pub fn var_count(&self) -> usize {
         self.source.var_count()
     }
-    /// Raw signal identity of a variable; panics for an invalid variable ID.
     pub fn signal(&self, id: VarId) -> SignalRef {
         self.source.signal(id)
     }
-    /// Root scope identities in declaration order.
     pub fn roots(&self) -> Ids<'_> {
         self.source.roots()
     }
-    /// Borrow a scope by its original identity; panics out of range.
     pub fn scope(&self, id: ScopeId) -> ScopeView<'_> {
         self.source.scope(id)
     }
-    /// Borrow a variable by its original identity; panics out of range.
     pub fn var(&self, id: VarId) -> VariableView<'_> {
         self.source.var(id)
     }
-    /// A variable's name without decoding the rest of it; panics out of range.
     pub fn var_name(&self, id: VarId) -> &str {
         self.source.var_name(id)
     }
-    /// Borrow a scope, returning `None` for an invalid identity.
     pub fn get_scope(&self, id: ScopeId) -> Option<ScopeView<'_>> {
         (id < self.scope_count()).then(|| self.scope(id))
     }
-    /// Borrow a variable, returning `None` for an invalid identity.
     pub fn get_var(&self, id: VarId) -> Option<VariableView<'_>> {
         (id < self.var_count()).then(|| self.var(id))
     }
-    /// Borrow every scope in declaration order.
     pub fn scopes(&self) -> impl ExactSizeIterator<Item = ScopeView<'_>> {
         (0..self.scope_count()).map(|id| self.scope(id))
     }
-    /// Borrow every variable in declaration order.
     pub fn vars(&self) -> impl ExactSizeIterator<Item = VariableView<'_>> {
         (0..self.var_count()).map(|id| self.var(id))
     }
-    /// Resident column storage, excluding shared reader storage for a VTR view.
     pub fn resident_bytes(&self) -> u64 {
         self.source.resident_bytes()
     }
-    /// Explicit owned copy for fixture construction or transformations.
     pub fn to_builder(&self) -> HierarchyBuilder {
         HierarchyBuilder {
             scopes: self
@@ -456,7 +412,6 @@ impl Hierarchy {
         matches!(scope.role, ScopeRole::Stream { .. }) && scope.kind == "LOG"
     }
 
-    /// Whether `scope` or a scope below it declares a variable.
     pub fn has_vars(&self, scope: ScopeId) -> bool {
         if self.get_scope(scope).is_none() {
             return false;
@@ -472,8 +427,6 @@ impl Hierarchy {
         false
     }
 
-    /// Resolve literal path segments, including dots and escaped HDL names.
-    /// Every scope along the path must be unambiguous.
     pub fn find_scope(&self, path: &[impl AsRef<str>]) -> Lookup<ScopeId> {
         let mut children = self.roots();
         let mut result = Lookup::Missing;
@@ -491,8 +444,6 @@ impl Hierarchy {
         result
     }
 
-    /// Resolve a variable, optionally choosing the zero-based occurrence of
-    /// its name in declaration order. `nth` never disambiguates a scope.
     pub fn find_var(&self, path: &[impl AsRef<str>], nth: Option<usize>) -> Lookup<VarId> {
         let Some((name, scope)) = path.split_last() else {
             return Lookup::Missing;
@@ -513,8 +464,6 @@ impl Hierarchy {
         }
     }
 
-    /// Durable locator for a declaration. Include an occurrence only when
-    /// sibling declarations have the same name; signal aliases stay distinct.
     pub fn var_path(&self, var: VarId) -> (Vec<String>, Option<usize>) {
         let v = self.var(var);
         let mut path: Vec<_> = self
@@ -523,7 +472,6 @@ impl Hierarchy {
             .map(str::to_owned)
             .collect();
         path.push(v.name.to_owned());
-        // One pass over the scope, comparing names only.
         let (mut before, mut total, mut seen) = (0, 0, false);
         for id in self.scope(v.scope).vars.iter() {
             seen |= id == var;

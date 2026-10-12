@@ -1,12 +1,4 @@
 //! Undo and redo of the cockpit (`volna/README.md`, "Undo and redo").
-//!
-//! One linear history per open trace. Changes to cockpit state are
-//! `Edit`s: data whose application returns the edit that undoes it, so
-//! undo and redo are the same operation ([`crate::App`]'s `flip`). Every
-//! journaled field has exactly one writer, which keeps the value the field
-//! had before its first change since the app last collected edits; the app
-//! collects those inverses after each command into the open [`Step`]. Steps
-//! hold descriptions (detached rows and panels), never trace data.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -18,18 +10,9 @@ use crate::marker::Marker;
 use crate::panels::{Layout, Panel, PanelId, content::Prop};
 use crate::wave::tree::Entry;
 
-/// Repeated adjustments of the same targets merge into one step while they
-/// follow each other this closely.
 pub const MERGE_WINDOW: Duration = Duration::from_secs(1);
-/// The journal's memory cap. The oldest steps go first; the newest step is
-/// always kept, even when it alone is larger.
 pub const MAX_BYTES: usize = 64 << 20;
 
-/// The value a journaled field had before its first change since the app
-/// last collected edits. Every journaled field keeps its inverse in one of
-/// these. Debug builds count the ones that hold a value on each thread, so
-/// the app can check that collecting took every one ([`pending`]): a field
-/// its owner forgot to hand over fails the next command in any test.
 pub struct Before<T>(Option<T>);
 
 #[cfg(debug_assertions)]
@@ -37,8 +20,6 @@ thread_local! {
     static PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many [`Before`]s on this thread hold a value; always 0 in release
-/// builds.
 pub fn pending() -> usize {
     #[cfg(debug_assertions)]
     return PENDING.with(std::cell::Cell::get);
@@ -47,7 +28,6 @@ pub fn pending() -> usize {
 }
 
 impl<T> Before<T> {
-    /// Keep `value()` unless a value is already kept.
     pub(crate) fn note(&mut self, value: impl FnOnce() -> T) {
         if self.0.is_none() {
             self.0 = Some(value());
@@ -56,7 +36,6 @@ impl<T> Before<T> {
         }
     }
 
-    /// The kept value, handed to the journal.
     pub(crate) fn take(&mut self) -> Option<T> {
         let value = self.0.take();
         #[cfg(debug_assertions)]
@@ -77,7 +56,6 @@ impl<T> Default for Before<T> {
     }
 }
 
-/// A copy holds nothing: the pending inverse stays with the original.
 impl<T> Clone for Before<T> {
     fn clone(&self) -> Self {
         Self(None)
@@ -100,10 +78,6 @@ impl<T> std::fmt::Debug for Before<T> {
     }
 }
 
-/// A field of cockpit state that only changes through `Journaled::set`
-/// (or `Journaled::update`), which remembers the value before the first
-/// change since the last `Journaled::take_before`. Reads go through
-/// `Deref`; there is deliberately no `DerefMut`.
 #[derive(Debug, Default)]
 pub struct Journaled<T> {
     value: T,
@@ -122,7 +96,6 @@ impl<T: Clone + PartialEq> Journaled<T> {
         &self.value
     }
 
-    /// Change the value as an edit. Returns whether it changed.
     pub(crate) fn set(&mut self, value: T) -> bool {
         if self.value == value {
             return false;
@@ -132,27 +105,22 @@ impl<T: Clone + PartialEq> Journaled<T> {
         true
     }
 
-    /// Change a copy of the value and `Journaled::set` it.
     pub(crate) fn update(&mut self, f: impl FnOnce(&mut T)) -> bool {
         let mut value = self.value.clone();
         f(&mut value);
         self.set(value)
     }
 
-    /// Install a value that is not an edit (a restored workspace, a new
-    /// trace): nothing is remembered.
     pub(crate) fn restore(&mut self, value: T) {
         self.value = value;
         self.before.take();
     }
 
-    /// Install `value` while undoing or redoing; returns the value it replaces.
     pub(crate) fn swap(&mut self, value: T) -> T {
         debug_assert!(!self.before.is_held(), "edits were not collected");
         std::mem::replace(&mut self.value, value)
     }
 
-    /// The value before the edits since the last call, unless they cancelled out.
     pub(crate) fn take_before(&mut self) -> Option<T> {
         self.before.take().filter(|before| *before != self.value)
     }
@@ -165,7 +133,6 @@ impl<T> std::ops::Deref for Journaled<T> {
     }
 }
 
-/// A copy holds the value only; the pending inverse stays with the original.
 impl<T: Clone> Clone for Journaled<T> {
     fn clone(&self) -> Self {
         Self {
@@ -183,8 +150,6 @@ impl<T: PartialEq> PartialEq for Journaled<T> {
 
 impl<T: Eq> Eq for Journaled<T> {}
 
-/// Replace `remove` rows at `at` of a wave panel's pre-order rows with
-/// `insert`. Rows kept in the journal are detached: no history, no error.
 #[derive(Clone)]
 pub struct Splice {
     pub at: usize,
@@ -193,55 +158,41 @@ pub struct Splice {
 }
 
 impl Splice {
-    /// Whether the splice rewrites rows in place without moving others.
     pub fn in_place(&self) -> bool {
         self.remove == self.insert.len()
     }
 }
 
-/// The selected rows of a wave panel, restored with each step.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RowSelection {
     pub selected: BTreeSet<usize>,
     pub anchor: Option<usize>,
 }
 
-/// One change to cockpit state. Applying it returns the edit that undoes it.
 pub(crate) enum Edit {
-    /// Replace runs of a wave panel's pre-order rows, applied in order.
     Rows {
         panel: PanelId,
         splices: Vec<Splice>,
     },
-    /// The document's markers, swapped whole (tens, not thousands), and the
-    /// marker the reference was attached to when the edit detached it:
-    /// applying the edit reattaches it if the reference has not moved since.
     Markers {
         markers: Vec<Marker>,
         attached: Option<crate::marker::MarkerId>,
     },
-    /// One property of one panel, swapped whole.
-    Prop { panel: PanelId, prop: Prop },
-    /// The panel tree, the panels to close, and detached panels to put back.
+    Prop {
+        panel: PanelId,
+        prop: Prop,
+    },
     Layout(Box<Structure>),
-    /// A trace joining, leaving or being renamed. A trace that left keeps
-    /// its open session here, so putting it back is instant.
     Traces(crate::document::TraceEdit),
 }
 
-/// What a workspace's panel structure was, as a layout edit restores it.
 pub(crate) struct Structure {
-    /// The dock tree without the settings tab, which is chrome.
     pub layout: Layout,
     pub focused: PanelId,
-    /// Panels that exist now and go away.
     pub close: Vec<PanelId>,
-    /// Detached panels that come back under their own IDs.
     pub reopen: Vec<Panel>,
 }
 
-/// Journal bytes: a row is its inline entry plus its own strings
-/// (translators are shared); a closed panel adds a fixed allowance.
 const ROW_BYTES: usize = std::mem::size_of::<Entry>();
 const PANEL_BYTES: usize = 1024;
 
@@ -272,14 +223,10 @@ impl Edit {
                             .map(|p| PANEL_BYTES + p.kind.waves().map_or(0, |w| rows(w.items())))
                             .sum::<usize>()
                 }
-                // The session a closed trace keeps is charged to the memory
-                // budget, not to the journal.
                 Edit::Traces(_) => PANEL_BYTES,
             }
     }
 
-    /// The target of a swap edit: a later swap of the same target within a
-    /// step is not recorded, since the first inverse restores the start.
     fn swap_target(&self) -> Option<(u8, u8, Option<PanelId>)> {
         match self {
             Edit::Markers { .. } => Some((0, 0, None)),
@@ -291,7 +238,6 @@ impl Edit {
         }
     }
 
-    /// The runs an in-place row edit rewrites, when it only rewrites.
     fn in_place_shape(&self) -> Option<(PanelId, Vec<(usize, usize)>)> {
         let Edit::Rows { panel, splices } = self else {
             return None;
@@ -302,7 +248,6 @@ impl Edit {
             .then(|| (*panel, splices.iter().map(|s| (s.at, s.remove)).collect()))
     }
 
-    /// The panel whose content the edit changes.
     fn panel(&self) -> Option<PanelId> {
         match self {
             Edit::Rows { panel, .. } | Edit::Prop { panel, .. } => Some(*panel),
@@ -321,9 +266,6 @@ fn text_bytes(row: &crate::wave::WaveRow) -> usize {
     }
 }
 
-/// The kind and targets of an adjustment. Equal keys merge within
-/// [`MERGE_WINDOW`]; a step that [`Step::continues`] a key is joined by the
-/// next step with that key, however late.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MergeKey {
     pub kind: &'static str,
@@ -332,8 +274,6 @@ pub(crate) struct MergeKey {
 }
 
 impl MergeKey {
-    /// A key for `kind` over `target` (hashed), with the panel filled in by
-    /// the app when the edit is collected.
     pub(crate) fn of(kind: &'static str, target: &impl Hash) -> Self {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         target.hash(&mut hasher);
@@ -350,17 +290,14 @@ impl MergeKey {
     }
 }
 
-/// Focus and the selection of each wave panel a step touched.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Context {
     pub focus: Option<PanelId>,
     pub rows: Vec<(PanelId, RowSelection)>,
 }
 
-/// What one undo takes back: the inverse edits of one command or gesture.
 pub struct Step {
     pub label: String,
-    /// Recorded order; a flip applies them newest first.
     pub(crate) edits: Vec<Edit>,
     pub before: Context,
     pub after: Context,
@@ -395,9 +332,6 @@ impl Step {
         self.bytes
     }
 
-    /// Append an inverse, unless an earlier inverse in this step already
-    /// restores the same target: the first swap of a target, and the first
-    /// of a run of same-shaped in-place row rewrites with nothing between.
     fn push(&mut self, edit: Edit) {
         if let Some(target) = edit.swap_target()
             && self.edits.iter().any(|e| e.swap_target() == Some(target))
@@ -423,7 +357,6 @@ impl Step {
         }
     }
 
-    /// Join a later step: its edits follow ours, earlier inverses win.
     pub(crate) fn absorb(&mut self, later: Step) {
         for (panel, selection) in later.before.rows {
             self.note_selection(panel, selection);
@@ -434,25 +367,21 @@ impl Step {
         self.after = later.after;
         self.at = later.at;
         if self.continues.is_none() || later.merge != self.continues {
-            // A merge (not a continuation) names the step after its latest part.
             self.label = later.label;
         }
         self.merge = later.merge;
         self.continues = later.continues;
     }
 
-    /// Keep only the edits for which `keep` holds.
     pub(crate) fn retain_edits(&mut self, mut keep: impl FnMut(&Edit) -> bool) {
         self.edits.retain(|e| keep(e));
         self.bytes = self.edits.iter().map(Edit::bytes).sum();
     }
 
-    /// The panels whose content the step changes, most recent last.
     pub(crate) fn touched(&self) -> Vec<PanelId> {
         self.edits.iter().filter_map(Edit::panel).collect()
     }
 
-    /// Whether the step changes the panel structure.
     pub(crate) fn has_layout(&self) -> bool {
         self.edits.iter().any(|e| matches!(e, Edit::Layout(_)))
     }
@@ -465,21 +394,16 @@ enum Last {
     Redo,
 }
 
-/// The journal: undo and redo lists and the step being recorded.
 pub struct History {
     undo: VecDeque<Step>,
     redo: Vec<Step>,
     open: Option<Step>,
-    /// Focus and time when the current command began: a step it opens
-    /// starts there.
     focus: Option<PanelId>,
     now: Option<Instant>,
     last: Last,
     bytes: usize,
     max_bytes: usize,
-    /// Counts every change of the undo and redo lists.
     revision: u64,
-    /// Steps dropped by the cap since the history began.
     evicted: u64,
 }
 
@@ -508,8 +432,6 @@ impl History {
         }
     }
 
-    /// Forget every step: a new trace, a closed one or a restored workspace
-    /// replaced the objects the steps name.
     pub fn clear(&mut self) {
         let (max_bytes, revision) = (self.max_bytes, self.revision + 1);
         *self = Self {
@@ -518,18 +440,14 @@ impl History {
         };
     }
 
-    /// Changes whenever the undo or redo list does: menus that show the
-    /// labels rebuild when it moves.
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    /// Steps the memory cap has dropped since the history began.
     pub fn evicted(&self) -> u64 {
         self.evicted
     }
 
-    /// Set the memory cap (tests force eviction with a small one).
     pub fn set_max_bytes(&mut self, max_bytes: usize) {
         self.max_bytes = max_bytes;
         self.evict();
@@ -551,17 +469,14 @@ impl History {
         self.redo.last().map(|s| s.label.as_str())
     }
 
-    /// Steps that can be undone, oldest first.
     pub fn undo_steps(&self) -> impl DoubleEndedIterator<Item = &Step> {
         self.undo.iter()
     }
 
-    /// Steps that can be redone, next first.
     pub fn redo_steps(&self) -> impl DoubleEndedIterator<Item = &Step> {
         self.redo.iter().rev()
     }
 
-    /// Bytes held by the undo and redo lists.
     pub fn bytes(&self) -> usize {
         self.bytes
     }
@@ -570,12 +485,10 @@ impl History {
         self.max_bytes
     }
 
-    /// Whether a gesture or command is recording.
     pub fn is_recording(&self) -> bool {
         self.open.is_some()
     }
 
-    /// A command begins: a step it opens starts with this focus, at `now`.
     pub(crate) fn begin_command(&mut self, focus: PanelId, now: Instant) {
         if self.open.is_none() {
             self.focus = Some(focus);
@@ -591,7 +504,6 @@ impl History {
         step
     }
 
-    /// Journal an inverse in the open step; the first label names it.
     pub(crate) fn record(&mut self, edit: Edit, label: Option<String>) {
         let step = self.open();
         if step.label.is_empty()
@@ -602,13 +514,10 @@ impl History {
         step.push(edit);
     }
 
-    /// Name the step being recorded, whatever its first edit called it.
     pub(crate) fn name_step(&mut self, label: String) {
         self.open().label = label;
     }
 
-    /// The session unit changed: rewrite every time the journal keeps, so
-    /// undoing lands where the edit was.
     pub(crate) fn retime(&mut self, by: crate::trace::Rescale) {
         use crate::trace::Retime;
         let steps = self
@@ -634,7 +543,6 @@ impl History {
         }
     }
 
-    /// The selection a wave panel had before the open step first changed it.
     pub(crate) fn note_selection(&mut self, panel: PanelId, selection: RowSelection) {
         self.open().note_selection(panel, selection);
     }
@@ -647,21 +555,15 @@ impl History {
         self.open().continues = Some(key);
     }
 
-    /// The step being recorded, taken out for committing or rolling back.
     pub(crate) fn take_open(&mut self) -> Option<Step> {
         self.open.take()
     }
 
-    /// Resume recording `step`, taken out with [`History::take_open`] so a
-    /// step of its own could be committed below it.
     pub(crate) fn resume_open(&mut self, step: Option<Step>) {
         debug_assert!(self.open.is_none(), "another step is recording");
         self.open = step;
     }
 
-    /// The step `step` joins instead of standing alone: the last committed
-    /// step when `step` repeats its adjustment within [`MERGE_WINDOW`], or
-    /// continues it.
     pub(crate) fn take_merge_target(&mut self, step: &Step) -> Option<Step> {
         let key = step.merge?;
         if self.last != Last::Commit {
@@ -680,7 +582,6 @@ impl History {
         Some(last)
     }
 
-    /// Commit a finished step: it empties the redo list.
     pub(crate) fn push(&mut self, step: Step) {
         self.last = Last::Commit;
         if step.is_empty() {
@@ -695,7 +596,6 @@ impl History {
         self.evict();
     }
 
-    /// Drop the oldest steps over the cap, always keeping the newest.
     fn evict(&mut self) {
         while self.bytes > self.max_bytes && self.undo.len() > 1 {
             let oldest = self.undo.pop_front().expect("more than one step");
@@ -718,7 +618,6 @@ impl History {
         Some(step)
     }
 
-    /// A flipped step goes to the other list.
     pub(crate) fn push_undone(&mut self, mut step: Step) {
         step.bytes = step.edits.iter().map(Edit::bytes).sum();
         self.bytes += step.bytes;
@@ -736,7 +635,6 @@ impl History {
     }
 }
 
-/// "1 row", "3 rows".
 pub(crate) fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -832,7 +730,6 @@ mod tests {
             Some(key),
         );
         assert_eq!(h.undo_steps().count(), 1);
-        // The earliest inverse wins.
         assert!(
             matches!(&h.undo.back().unwrap().edits[..], [Edit::Markers { markers: m, .. }] if m[0].time == 1)
         );

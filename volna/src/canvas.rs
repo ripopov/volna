@@ -1,6 +1,4 @@
-//! `PanelCanvas`: the GPUI element that hosts a core-painted panel (waves or
-//! pipeline). It asks the core for the frame's layout (for hitboxes), paints
-//! the display list the core produces, and forwards pointer input as commands.
+//! `PanelCanvas`: the GPUI element that hosts a core-painted panel (waves or pipeline).
 
 use gpui_kit::{
     App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId, Entity, Font,
@@ -22,8 +20,6 @@ use std::{
     sync::Arc,
 };
 
-/// Keep two submissions per panel alive. GPUI owns the atlas, and obsolete
-/// images are explicitly removed before the next submission to bound it.
 #[derive(Default)]
 pub(crate) struct PresenceImages {
     panels: HashMap<volna_core::panels::PanelId, VecDeque<Vec<Arc<gpui_kit::RenderImage>>>>,
@@ -71,7 +67,6 @@ fn presence_image(
     let [r, g, b, a] = color.to_rgba8();
     let mut image = image::RgbaImage::new(width as u32, height as u32);
     let bytes: &mut [u8] = image.as_mut();
-    // RenderImage's upload format is BGRA, despite the image crate's container name.
     for (y, x) in runs {
         let start = (y * width + x.start) * 4;
         let end = (y * width + x.end) * 4;
@@ -87,7 +82,6 @@ pub struct PanelCanvas {
     panel: volna_core::panels::PanelId,
     generation: u64,
     table_focus: Option<gpui_kit::FocusHandle>,
-    /// A waveform panel: its rows are exposed as a tree.
     waves: bool,
 }
 
@@ -102,8 +96,6 @@ impl PanelCanvas {
         }
     }
 
-    /// The theme this panel paints with: the canvas theme for the panels
-    /// drawn against time (waves, pipeline), the chrome for the table.
     pub(crate) fn core_theme(&self, cx: &App) -> crate::theme::CoreTheme {
         let data = self
             .ws
@@ -138,7 +130,6 @@ impl PanelCanvas {
 
 pub struct CanvasPrepaint {
     hitbox: Hitbox,
-    /// Small interactive rectangles, so GPUI resolves pointer shapes per position.
     regions: Vec<(CRect, Hitbox)>,
     row_h: f32,
     accessible: Vec<(
@@ -146,7 +137,6 @@ pub struct CanvasPrepaint {
         Option<gpui_kit::accesskit::NodeId>,
     )>,
     table_status: Option<String>,
-    /// Wave rows on screen, while assistive technology is active.
     wave_rows: Vec<volna_core::wave::model::AccessibleRow>,
     scale: f64,
 }
@@ -218,8 +208,6 @@ fn shape(
         .shape_line(text, px(size), &[run], None)
 }
 
-/// A wave row as a tree item: its name, level, selection and, for a group,
-/// whether it is expanded.
 pub(crate) fn wave_row_node(
     row: &volna_core::wave::model::AccessibleRow,
     scale: f64,
@@ -241,7 +229,6 @@ pub(crate) fn wave_row_node(
     node
 }
 
-/// Width measurement through GPUI's text system.
 struct GpuiMeasure<'a> {
     window: &'a Window,
     theme: &'a Theme,
@@ -265,7 +252,6 @@ fn cursor_style(icon: CursorIcon) -> CursorStyle {
     }
 }
 
-/// Paint `prims[*i..]` until the matching `PopClip`, nesting clips as content masks.
 fn paint_prims(
     prims: &[Prim],
     i: &mut usize,
@@ -573,8 +559,6 @@ impl Element for PanelCanvas {
         }
         let t = *theme(cx);
         let core = self.core_theme(cx);
-        // Build the display list, then paint it. The scene buffer and the
-        // shaped-text cache live on the workspace so they persist across frames.
         let (mut scene, mut shaped, mut presence_images) = self.ws.update(cx, |ws, _| {
             let mut scene = std::mem::take(&mut ws.scene);
             let mut measure = GpuiMeasure { window, theme: &t };
@@ -596,7 +580,6 @@ impl Element for PanelCanvas {
             cx,
         );
         presence_images.finish(self.panel, images);
-        // Pointer shapes.
         if let Some(icon) = scene.window_cursor {
             window.set_window_cursor_style(cursor_style(icon));
         } else {
@@ -651,7 +634,6 @@ impl PanelCanvas {
                 if ws.read(cx).app.doc.generation() != generation {
                     return;
                 }
-                // A press anywhere else keeps the name typed so far.
                 ws.update(cx, |ws, cx| ws.commit_rename(window, cx));
                 let focus = ws
                     .read(cx)
@@ -670,8 +652,6 @@ impl PanelCanvas {
                     window,
                     cx,
                 );
-                // Pipeline labels navigate to their record's start. Other
-                // record-bearing areas open what the first click selected.
                 let label_row = {
                     let app = &ws.read(cx).app;
                     app.panels
@@ -690,7 +670,6 @@ impl PanelCanvas {
                     }) || p.kind.table().is_some()
                         || p.kind.waves().is_some_and(|w| w.pressed_record)
                 });
-                // A second click on a group's name renames it.
                 let group_name = ws
                     .read(cx)
                     .app
@@ -698,8 +677,6 @@ impl PanelCanvas {
                     .waves(panel)
                     .and_then(|w| w.group_name_at(cpoint(ev.position)))
                     .is_some();
-                // A second click on a marker's chip names it; on a span it
-                // zooms to the span, and on the live span to the measurement.
                 let (chip_marker, span, live) = {
                     let app = &ws.read(cx).app;
                     let markers = app.doc.markers();
@@ -718,9 +695,6 @@ impl PanelCanvas {
                         _ => (None, None, false),
                     }
                 };
-                // On the time header or an empty part of the Markers lane,
-                // where the first click put the cursor, a second one adds a
-                // marker (or names the one already there).
                 let adds_marker = ws.read(cx).app.adds_marker_at(panel, cpoint(ev.position));
                 if ev.click_count >= 2
                     && button == volna_core::geometry::MouseButton::Left
@@ -734,7 +708,6 @@ impl PanelCanvas {
                             cx,
                         )
                     });
-                    // A name field may open, and it keeps the keys.
                     window.prevent_default();
                 } else if ev.click_count >= 2
                     && button == volna_core::geometry::MouseButton::Left
@@ -772,8 +745,6 @@ impl PanelCanvas {
                             cx,
                         )
                     });
-                    // The field now has the keys; the panel's own
-                    // focus-on-press must not take them back.
                     window.prevent_default();
                 } else if ev.click_count >= 2
                     && button == volna_core::geometry::MouseButton::Left
@@ -787,8 +758,6 @@ impl PanelCanvas {
                             cx,
                         )
                     });
-                    // The field now has the keys; the panel's own
-                    // focus-on-press must not take them back.
                     window.prevent_default();
                 } else if ev.click_count >= 2
                     && button == volna_core::geometry::MouseButton::Left
@@ -853,7 +822,6 @@ impl PanelCanvas {
             }
         });
 
-        // Trackpad pinch: zoom about the gesture centre.
         window.on_mouse_event({
             let ws = ws.clone();
             let hitbox = hitbox.clone();
@@ -873,8 +841,6 @@ impl PanelCanvas {
             }
         });
 
-        // The core resolves wheel zoom, time pan and row scroll from the hit
-        // region and from whether the deltas are a trackpad's exact pixels.
         window.on_mouse_event({
             move |ev: &ScrollWheelEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {

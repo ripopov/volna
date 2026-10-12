@@ -1,6 +1,6 @@
 //! The app's side of undo and redo (`volna/README.md`, "Undo and redo"): step boundaries,
-//! collecting the journaled fields' inverses, applying edits, and showing
-//! what a flip changed. The journal itself is [`crate::history`].
+//! collecting the journaled fields' inverses, applying edits, and showing what a flip
+//! changed.
 
 use anyhow::{Context as _, Result};
 use web_time::Instant;
@@ -11,12 +11,10 @@ use crate::panels::content::Prop;
 use crate::panels::{Panel, PanelId, Panels};
 
 impl App {
-    /// The label of the step ⌘Z would take back.
     pub fn undo_label(&self) -> Option<&str> {
         self.history.undo_label()
     }
 
-    /// The label of the step ⇧⌘Z would put back.
     pub fn redo_label(&self) -> Option<&str> {
         self.history.redo_label()
     }
@@ -29,18 +27,14 @@ impl App {
         self.history.can_redo()
     }
 
-    /// Whether a pointer gesture holds capture in some panel.
     pub(super) fn gesture_open(&self) -> bool {
         self.panels.iter().any(Panel::dragging)
     }
 
-    /// A command begins: edits it makes join one step.
     pub(super) fn begin_step(&mut self, now: Instant) {
         self.history.begin_command(self.panels.focused_id(), now);
     }
 
-    /// A command ended: collect its edits, and commit the step unless a
-    /// gesture keeps it open until the pointer is released.
     pub(super) fn end_step(&mut self, now: Instant) {
         self.collect_edits();
         if self.history.is_recording() && !self.gesture_open() {
@@ -48,11 +42,6 @@ impl App {
         }
     }
 
-    /// Move the inverses the journaled fields keep into the open step: the
-    /// document's, then each panel's (see [`Panel::take_edits`]). Called
-    /// after each command and before every layout edit, so a closed panel's
-    /// edits are collected while it still exists. Debug builds then check
-    /// that no journaled field still holds an inverse nobody took.
     pub(super) fn collect_edits(&mut self) {
         self.doc.take_edits(&mut self.history);
         for panel in self.panels.iter_mut() {
@@ -65,10 +54,6 @@ impl App {
         );
     }
 
-    /// Perform a change of the panel structure as a layout edit. `op`
-    /// returns the panels it removed; they are released and kept, detached,
-    /// in the journal. Nothing is journaled when only navigation changed
-    /// (focus, active tabs, sash sizes, the settings tab).
     pub(super) fn restructure<T>(
         &mut self,
         label: Option<String>,
@@ -107,8 +92,6 @@ impl App {
         Ok(value)
     }
 
-    /// Commit the open step: merge it into the previous one when it repeats
-    /// or continues it, drop edits that cancelled out, and keep the rest.
     pub(super) fn commit_step(&mut self, now: Instant) {
         let Some(mut step) = self.history.take_open() else {
             return;
@@ -131,8 +114,6 @@ impl App {
         }
     }
 
-    /// Drop the edits whose stored value is what the state holds now: a
-    /// marker dragged back, a format cycled round, a panel renamed back.
     fn prune(&self, step: &mut Step) {
         let rows_edits = |panel: PanelId| {
             step.edits
@@ -182,7 +163,6 @@ impl App {
         });
     }
 
-    /// Focus now, and the current selection of each panel the step noted.
     fn context_after(&self, step: &Step) -> Context {
         Context {
             focus: Some(self.panels.focused_id()),
@@ -195,8 +175,6 @@ impl App {
         }
     }
 
-    /// Esc or ⌘Z during a drag: drop pointer capture and roll back what the
-    /// gesture changed, recording nothing. Returns whether a gesture was open.
     pub(super) fn cancel_gesture(&mut self) -> bool {
         if !self.gesture_open() {
             return false;
@@ -215,7 +193,6 @@ impl App {
         true
     }
 
-    /// ⌘Z: take back the last step, or the gesture in progress.
     pub(super) fn undo(&mut self, now: Instant) {
         if self.cancel_gesture() {
             return;
@@ -234,7 +211,6 @@ impl App {
         self.workspace.scheduler.changed(now);
     }
 
-    /// ⇧⌘Z / Ctrl+Y: put back the last step undone.
     pub(super) fn redo(&mut self, now: Instant) {
         if self.gesture_open() {
             return;
@@ -253,16 +229,12 @@ impl App {
         self.workspace.scheduler.changed(now);
     }
 
-    /// Say what undo, redo or a marker jump did; the status bar keeps it
-    /// until the next key, click or edit.
     pub(super) fn announce(&mut self, text: String) {
         self.events.push(Event::Announce(text.clone()));
         self.announcement = Some(text);
         self.changed();
     }
 
-    /// Undo and redo: apply a step's edits newest first and keep what comes
-    /// back, which is the step that flips it again.
     fn flip(&mut self, step: &mut Step) -> Result<()> {
         let mut flipped = Vec::with_capacity(step.edits.len());
         for edit in step.edits.drain(..).rev() {
@@ -272,9 +244,6 @@ impl App {
         Ok(())
     }
 
-    /// Perform one edit and return its inverse. Journaled state changes
-    /// only through edits, so the targets of a flipped step are there; a
-    /// failure is a bug (see [`App::history_broken`]).
     pub(crate) fn apply(&mut self, edit: Edit) -> Result<Edit> {
         Ok(match edit {
             Edit::Rows { panel, mut splices } => {
@@ -334,9 +303,6 @@ impl App {
             .swap_prop(&mut self.doc, prop)
     }
 
-    /// Show what a flip changed: focus the panel it touched, restore the
-    /// selections the step saved and scroll their first row into view. The
-    /// time axis stays where it is.
     fn restore_context(&mut self, step: &Step, context: &Context) {
         let touched = step.touched();
         let layout = step.has_layout();
@@ -361,8 +327,6 @@ impl App {
         self.changed();
     }
 
-    /// A flip failed: the journal no longer matches the state. That is a
-    /// bug, so debug builds stop; release builds drop the history.
     fn history_broken(&mut self, error: anyhow::Error) {
         debug_assert!(false, "undo journal out of step: {error:#}");
         self.history.clear();

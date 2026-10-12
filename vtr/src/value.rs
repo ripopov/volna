@@ -1,15 +1,9 @@
 //! Typed attribute values (`Value`) and their binary encoding.
-//!
-//! `Value` is the universal attribute type used on hierarchy nodes,
-//! transactions, transaction events/phases and relations. It is a superset of
-//! the FTR/SCV attribute types, the OpenTelemetry `AnyValue` model and the
-//! FST attribute payloads.
 
 use crate::error::{Error, Result};
 use crate::strings::StrId;
 use crate::varint::{self, Reader};
 
-/// Type tags as written to the file (one byte).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ValueTag {
@@ -20,27 +14,16 @@ pub enum ValueTag {
     F64 = 4,
     Str = 5,
     Bytes = 6,
-    /// 2-state bit vector.
     Bits = 7,
-    /// 4-state logic vector (0,1,X,Z).
     Logic = 8,
-    /// 9-state logic vector (IEEE 1164).
     Logic9 = 9,
-    /// Time in file timescale units.
     Time = 10,
-    /// Named enumeration literal: integer value plus its name.
     Enum = 11,
-    /// Opaque pointer / handle.
     Pointer = 12,
-    /// Signed fixed point: raw integer plus binary scale (value = raw * 2^-scale).
     Fixed = 13,
-    /// Unsigned fixed point.
     UFixed = 14,
-    /// Ordered list of values.
     List = 15,
-    /// Ordered key/value map (keys are interned strings).
     Map = 16,
-    /// Inline UTF-8 text (not interned; for one-off strings such as log arguments).
     Text = 17,
 }
 
@@ -71,62 +54,25 @@ impl ValueTag {
     }
 }
 
-/// A typed attribute value.
-///
-/// Used on file metadata, hierarchy nodes, transactions, events, stages and
-/// relations. `F64` compares by IEEE rules, so `Value` is not `Eq`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    /// Absent value.
     Null,
     Bool(bool),
     I64(i64),
     U64(u64),
     F64(f64),
-    /// Interned string: intern with `Writer::intern`, resolve with `Reader::str`.
     Str(StrId),
-    /// Opaque blob.
     Bytes(Vec<u8>),
-    /// 2-state vector, `width` bits, packed LSB-first (bit i at byte i/8, bit i%8).
-    Bits {
-        width: u32,
-        data: Vec<u8>,
-    },
-    /// 4-state vector, 2 bits per bit (codes: 0=0, 1=1, 2=X, 3=Z), LSB-first.
-    Logic {
-        width: u32,
-        data: Vec<u8>,
-    },
-    /// 9-state vector, 4 bits per bit (codes: 0,1,X,Z,U,W,L,H,-), LSB-first.
-    Logic9 {
-        width: u32,
-        data: Vec<u8>,
-    },
-    /// Time in the file's timescale units.
+    Bits { width: u32, data: Vec<u8> },
+    Logic { width: u32, data: Vec<u8> },
+    Logic9 { width: u32, data: Vec<u8> },
     Time(u64),
-    /// Enumeration literal: integer value and interned name.
-    Enum {
-        value: i64,
-        name: StrId,
-    },
-    /// Opaque pointer or handle.
+    Enum { value: i64, name: StrId },
     Pointer(u64),
-    /// Signed fixed point: value = `raw * 2^-scale`.
-    Fixed {
-        raw: i64,
-        scale: i32,
-    },
-    /// Unsigned fixed point: value = `raw * 2^-scale`.
-    UFixed {
-        raw: u64,
-        scale: i32,
-    },
-    /// Ordered list; nesting allowed.
+    Fixed { raw: i64, scale: i32 },
+    UFixed { raw: u64, scale: i32 },
     List(Vec<Value>),
-    /// Ordered key/value pairs with interned keys.
     Map(Vec<(StrId, Value)>),
-    /// Inline UTF-8 text, stored verbatim (unlike `Str`, which is an interned id).
-    /// Requires format 1.1.
     Text(String),
 }
 
@@ -154,13 +100,11 @@ impl Value {
         }
     }
 
-    /// Encodes `[tag][payload]`.
     pub fn encode(&self, out: &mut Vec<u8>) {
         out.push(self.tag() as u8);
         self.encode_payload(out);
     }
 
-    /// Encodes only the payload (the tag is stored elsewhere, e.g. in a column).
     pub fn encode_payload(&self, out: &mut Vec<u8>) {
         match self {
             Value::Null => {}
@@ -289,8 +233,6 @@ fn states_of(tag: ValueTag) -> u8 {
     }
 }
 
-/// Number of bytes needed to pack `width` bits of a `states`-state vector
-/// (`states` other than 2 or 4 counts as 9).
 #[inline]
 pub fn packed_len(width: u32, states: u8) -> usize {
     let w = width as usize;
@@ -301,7 +243,6 @@ pub fn packed_len(width: u32, states: u8) -> usize {
     }
 }
 
-/// Attribute list encoding: `count` then `(key, value)` pairs.
 pub fn encode_attrs(attrs: &[(StrId, Value)], out: &mut Vec<u8>) {
     varint::put_u64(out, attrs.len() as u64);
     for (k, v) in attrs {

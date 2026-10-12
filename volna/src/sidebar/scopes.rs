@@ -19,14 +19,10 @@ use crate::app::Workspace;
 use crate::theme::{ThemePx, theme};
 use crate::ui::{Icon, IconName, icon_button, panel_header};
 
-/// Width of a scope row's activity meter, in design pixels.
 const METER_WIDTH: f32 = 26.0;
 
-/// The meter of a scope row: the share of its signals that change in the
-/// view, solid, and the share that may while the rest are read, hatched.
 fn activity_meter(a: volna_core::data::ScopeActivity, t: &crate::theme::Theme) -> gpui_kit::Div {
     let (changing, upper) = a.shares();
-    // A share that is not zero shows at least 2 px.
     let length = |share: f32, count: u32| {
         if count == 0 {
             0.0
@@ -196,9 +192,6 @@ impl Workspace {
         cx.stop_propagation();
     }
 
-    /// A trace's own row, heading its scopes while several traces are
-    /// open: its letter, name and what it holds. Its menu renames or closes
-    /// it.
     fn trace_row(&self, ix: usize, node: TreeNode, cx: &mut Context<Self>) -> AnyElement {
         let t = *theme(cx);
         let trace = node.trace;
@@ -283,7 +276,6 @@ impl Workspace {
         row.tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
             .child(chevron)
             .child(crate::traces::letter_badge(trace, cx))
-            // The name keeps its room; what the trace holds gives way first.
             .child(
                 div()
                     .flex_shrink_0()
@@ -316,7 +308,6 @@ impl Workspace {
         let t = *theme(cx);
         let colors = t.panel;
         let focused = self.scopes_focus.is_focused(window);
-        // Only the focused pane shows its selection at full strength.
         let selection_bg = if focused {
             t.selection.bg
         } else {
@@ -423,16 +414,11 @@ impl Workspace {
                                         .inherit_color(),
                                     )
                             });
-                        // Scopes with variables add as a group; child scopes
-                        // with variables become folded subgroups unless only
-                        // this scope is asked for.
                         let addable = h.has_vars(id);
                         let nested = scope.children.iter().any(|c| h.has_vars(c));
                         let owner = cx.weak_entity();
                         let (icon, tint) = scope_icon(&scope);
-                        // Empty until the count after open finishes.
                         let size = ScopeTreeModel::size(this.app.doc.traces(), node);
-                        // With an activity index, the signals that change in the view.
                         let activity = this.app.scope_activity(node);
                         let mut tooltip = format!(
                             "{} — {} {}",
@@ -480,7 +466,6 @@ impl Workspace {
                                 menu
                             }
                         };
-                        // 1px guides, one per enclosing level, through each chevron's centre.
                         let guides = (0..depth).map(|d| {
                             div()
                                 .absolute()
@@ -503,7 +488,6 @@ impl Workspace {
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .text_ellipsis()
-                                        // A scope none of whose signals can change in the view is faint.
                                         .when(quiet && !selected, |name| {
                                             name.text_color(colors.text_placeholder)
                                         })

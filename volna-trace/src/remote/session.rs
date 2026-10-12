@@ -1,6 +1,4 @@
-//! Resident metadata of one remote recording. Complete histories and tracks
-//! are delivered asynchronously to their consumers; this object never
-//! owns a second data cache or performs I/O.
+//! Resident metadata of one remote recording.
 
 use super::objects::Metadata;
 use crate::data::transactions::{Track, TrackRef};
@@ -8,9 +6,6 @@ use crate::data::{Hierarchy, SignalHistory, SignalRef, TraceInfo};
 use crate::session::{Capabilities, Session};
 use std::sync::Arc;
 
-/// Validated remote metadata with a nonzero server identity. Its blocking
-/// `load_*` methods fail: histories and tracks come through
-/// [`super::client::RemoteClient`].
 pub struct RemoteSession {
     id: u64,
     metadata: Metadata,
@@ -20,8 +15,6 @@ pub struct RemoteSession {
 }
 
 impl RemoteSession {
-    /// Install only a complete, validated metadata object. Zero is reserved for
-    /// the Open request before the server assigns an identity.
     pub fn new(id: u64, metadata: Metadata) -> anyhow::Result<Self> {
         anyhow::ensure!(id != 0, "invalid remote session identity");
         metadata.validate()?;

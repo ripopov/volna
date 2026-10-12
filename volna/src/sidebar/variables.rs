@@ -1,5 +1,4 @@
-//! The variable list panel: GPUI rows over `MemberListModel`, with the
-//! filter text box.
+//! The variable list panel: GPUI rows over `MemberListModel`, with the filter text box.
 
 use gpui_kit::component::Disableable;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
@@ -21,7 +20,6 @@ use crate::theme::{ThemePx, theme};
 use crate::ui::{Icon, IconName, icon_button, panel_header};
 
 impl Workspace {
-    /// The members some wave panel shows, kept until the rows change.
     fn members_on_waves(&mut self) -> std::rc::Rc<crate::app::OnWaves> {
         let key = self.app.rows_revision();
         match &self.on_waves {
@@ -83,7 +81,6 @@ impl Workspace {
             "up" => Key::Up,
             "escape" => Key::Escape,
             _ => {
-                // Typing starts filtering: hand the character to the text box.
                 if let Some(c) = ks.key_char.as_deref().filter(|c| !c.is_empty())
                     && !ks.modifiers.platform
                     && !ks.modifiers.control
@@ -113,7 +110,6 @@ impl Workspace {
         let t = *theme(cx);
         let colors = t.panel;
         let focused = self.variables_focus.is_focused(window);
-        // Only the focused pane shows its selection at full strength.
         let selection_bg = if focused {
             t.selection.bg
         } else {
@@ -126,7 +122,6 @@ impl Workspace {
         let show_direction = vars.show_direction(traces);
         let placeholder = vars.placeholder(traces);
         let breadcrumb = vars.breadcrumb(traces);
-        // Results from several traces say which trace each row is from.
         let letters = traces.is_combined() && show_scope;
         let everywhere = vars.search_everywhere;
         let truncated = vars.truncated;
@@ -183,11 +178,9 @@ impl Workspace {
                             describe(h, member)
                         };
                         let severity = log_site(h, member).map(|s| s.severity);
-                        // Variables and non-log generators have a wave row form.
                         let addable = member.var().is_some()
                             || (matches!(member, volna_trace::data::Member::Generator(_))
                                 && !h.is_log(member));
-                        // A clock's generator is shown as a ruler or as a waveform row.
                         let clock = this.app.member_clock(traced).is_some();
                         let mut row = div()
                             .id(("var", ix))
@@ -259,7 +252,6 @@ impl Workspace {
                                     .text_ellipsis()
                                     .child(name),
                             )
-                            // Already a row on the waves: a 2px accent bar.
                             .when(shown, |row| {
                                 row.relative().child(
                                     div()
@@ -297,7 +289,6 @@ impl Workspace {
                             )
                             .context_menu(move |menu, _, _cx| {
                                 let owner = owner.clone();
-                                // The clicked row, or the whole selection when it is part of it.
                                 let add =
                                     |label: &'static str,
                                      command: fn(Vec<Traced<Member>>) -> Command| {

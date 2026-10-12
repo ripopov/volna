@@ -1,7 +1,5 @@
-//! `WaveModel`: the state of the waveform panel (displayed signals, selection,
-//! viewport, scroll, hover, drags, and row menus) and every input rule that
-//! mutates it. Navigation reads through the document while linked; markers
-//! always belong to the document.
+//! `WaveModel`: the state of the waveform panel (displayed signals, selection, viewport,
+//! scroll, hover, drags, and row menus) and every input rule that mutates it.
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -31,27 +29,14 @@ use crate::trace::{TraceId, Traced};
 use volna_trace::data::transactions::TrackRef;
 use volna_trace::data::{SignalHistory, SignalRef, SignalShape, VarId};
 
-/// A ⌘-drag narrower than this (at zoom 1.0) is a click, not a zoom range.
 pub const ZOOM_RANGE_MIN_PX: f32 = 4.0;
-/// A press on a signal name must travel this far (at zoom 1.0) to start
-/// moving rows; shorter presses are clicks.
 pub const ROW_DRAG_MIN_PX: f32 = 4.0;
-/// A middle press that moves less than this is a click, not a pan.
 const CLICK_SLOP_PX: f32 = 3.0;
-/// A press this close (at zoom 1.0) to the bottom edge of a row's name cell
-/// resizes the row instead of selecting it.
 pub const ROW_EDGE_GRAB_PX: f32 = 3.0;
-/// While moving rows, the pointer this close to the top or bottom edge of the
-/// rows (in rows) scrolls them, faster the deeper it goes.
 const ROW_DRAG_EDGE_ROWS: f32 = 1.0;
-/// Auto-scroll speed in rows per second per row of depth into the edge zone.
 const ROW_DRAG_SCROLL_RATE: f32 = 12.0;
-/// Stepping through a stack's sum skips at most this many changes that
-/// cancel out before it gives up.
 const TOTAL_EDGE_TRIES: usize = 100_000;
 
-/// A row is either bound to a variable of an open trace or retains an
-/// unresolved durable locator in its trace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RowSource {
     Resolved {
@@ -88,7 +73,6 @@ impl RowSource {
         }
     }
 
-    /// The row's path in its trace and which of equal paths it is.
     pub fn locator(&self, doc: &Document) -> (Vec<String>, Option<usize>) {
         match self {
             Self::Resolved { trace, var, .. } => doc
@@ -99,9 +83,6 @@ impl RowSource {
     }
 }
 
-/// A row's height as a whole multiple of the theme's row height, so rows keep
-/// the grid rhythm and follow the interface zoom. Only [`RowHeight::PRESETS`]
-/// exist; workspaces store the multiple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
 pub struct RowHeight(u8);
@@ -115,7 +96,6 @@ impl RowHeight {
         RowHeight(8),
     ];
     pub const DEFAULT: RowHeight = RowHeight(1);
-    /// What a 1× row grows to when it is first drawn as a plot.
     pub const ANALOG: RowHeight = RowHeight(3);
 
     pub fn multiple(self) -> u8 {
@@ -130,7 +110,6 @@ impl RowHeight {
         Self::PRESETS.iter().position(|p| *p == self).unwrap_or(0)
     }
 
-    /// The next preset up (`1`) or down (`-1`), saturating at the ends.
     pub fn step(self, delta: isize) -> Self {
         let ix = self.preset_index() as isize + delta;
         Self::PRESETS[ix.clamp(0, Self::PRESETS.len() as isize - 1) as usize]
@@ -162,7 +141,6 @@ impl From<RowHeight> for u8 {
 #[derive(Clone)]
 pub struct DisplayedSignal {
     pub source: RowSource,
-    /// Unavailable translator requested by a workspace; cleared by an explicit format change.
     pub requested_format: Option<String>,
     pub name: String,
     pub scope: String,
@@ -171,21 +149,16 @@ pub struct DisplayedSignal {
     pub history: Option<Arc<dyn SignalHistory>>,
     pub error: Option<String>,
     pub height: RowHeight,
-    /// Drawn as a plot instead of digital values.
     pub analog: Option<Analog>,
-    /// Excluded from enclosing overlaid plots; its individual row stays visible.
     pub overlay_hidden: bool,
-    /// Its own colour; `None` inherits (see [`tint::ink`]).
     pub tint: Option<Tint>,
 }
 
 impl DisplayedSignal {
-    /// Numeric interpretation shared by stacked and overlaid group plots.
     pub fn numeric_kind(&self) -> Option<crate::data::NumericKind> {
         analog::numeric_kind(self.shape, self.translator.as_ref())
     }
 
-    /// The translator a workspace file records for this row.
     pub fn format_id(&self) -> String {
         self.requested_format
             .clone()
@@ -193,10 +166,8 @@ impl DisplayedSignal {
     }
 }
 
-/// A declared clock drawn from its stretches: no dumped waveform is needed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClockRow {
-    /// The clock's trace and path (its stream's path joined with '.').
     pub key: ClockKey,
     pub name: String,
     pub height: RowHeight,
@@ -214,42 +185,31 @@ impl ClockRow {
         }
     }
 
-    /// The clock's timeline, once its trace's clock is loaded.
     pub fn timeline<'a>(&self, doc: &'a Document) -> Option<&'a Arc<crate::clock::ClockTimeline>> {
         doc.clocks.find(&self.key)?.timeline()
     }
 }
 
-/// How a group's own row is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GroupStyle {
-    /// Folded, its members' merged activity.
     #[default]
     Activity,
-    /// Folded or open, one stacked area whose layers are its members;
-    /// with `peak`, zoomed out, a faint band
-    /// reaches the total's own extremes in each column.
-    Stack { peak: bool },
-    /// Independent numeric members against a shared amplitude scale.
+    Stack {
+        peak: bool,
+    },
     Overlaid {
         draw: AnalogDraw,
         range: AnalogRange,
     },
 }
 
-/// A named group of rows. Folded, it hides its rows; its own row draws
-/// their activity when folded, or their numeric plot in either state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GroupRow {
     pub name: String,
     pub collapsed: bool,
-    /// The group's own row; its members keep their heights.
     pub height: RowHeight,
-    /// The colour its rows without their own are drawn in.
     pub tint: Option<Tint>,
     pub style: GroupStyle,
-    /// The height a group plot replaced; restored when it returns to activity
-    /// while it still has [`RowHeight::ANALOG`]. An explicit resize clears it.
     pub restore_height: Option<RowHeight>,
 }
 
@@ -277,16 +237,11 @@ impl GroupRow {
         self.is_stacked() || self.is_overlaid()
     }
 
-    /// Stacked with the peak band.
     pub fn shows_peak(&self) -> bool {
         self.style == GroupStyle::Stack { peak: true }
     }
 }
 
-/// One row of the waveform panel: a signal, a transaction generator shown
-/// as a lane of bars, a declared clock, or a group of rows. All share the
-/// row operations (selection, reordering, clipboard, heights, removal and
-/// workspace entries).
 #[derive(Clone)]
 pub enum WaveRow {
     Signal(DisplayedSignal),
@@ -314,7 +269,6 @@ impl WaveRow {
         }
     }
 
-    /// Set the height; a lane keeps an explicit choice from then on.
     pub fn set_height(&mut self, height: RowHeight) {
         match self {
             Self::Signal(s) => {
@@ -335,7 +289,6 @@ impl WaveRow {
         }
     }
 
-    /// The row's own colour, without what it inherits.
     pub fn tint(&self) -> Option<Tint> {
         match self {
             Self::Signal(s) => s.tint,
@@ -389,17 +342,14 @@ impl WaveRow {
         }
     }
 
-    /// The loaded signal of a signal row.
     pub fn signal_ref(&self) -> Option<Traced<SignalRef>> {
         self.signal()?.source.signal()
     }
 
-    /// The generator of a resolved lane.
     pub fn lane_track(&self) -> Option<Traced<TrackRef>> {
         self.lane()?.track()
     }
 
-    /// The trace a signal, lane or clock row shows; groups belong to none.
     pub fn trace(&self) -> Option<TraceId> {
         match self {
             Self::Signal(s) => Some(s.source.trace()),
@@ -409,9 +359,6 @@ impl WaveRow {
         }
     }
 
-    /// A copy that holds no trace data: a signal row drops its history and,
-    /// when resolved, its load error, so it loads again when attached. The
-    /// clipboard, the undo journal and closed panels keep rows like this.
     pub fn detached(&self) -> Self {
         let mut row = self.clone();
         if let Self::Signal(item) = &mut row {
@@ -423,8 +370,6 @@ impl WaveRow {
         row
     }
 
-    /// Whether two rows describe the same cockpit content: what a workspace
-    /// stores of them, without the fold state (undo's projection).
     pub fn same(&self, other: &Self) -> bool {
         let analog = |a: &Option<Analog>| a.as_ref().map(|a| (a.draw, a.range));
         if self.tint() != other.tint() {
@@ -453,9 +398,6 @@ impl WaveRow {
     }
 }
 
-/// Give detached signal rows their data: a history another row already
-/// holds for the same signal, or one queued load. Lanes and plots follow
-/// through the app's reconciliation after each command.
 pub(crate) fn attach_rows<'a>(
     rows: impl IntoIterator<Item = &'a mut Entry>,
     doc: &mut Document,
@@ -475,18 +417,13 @@ pub(crate) fn attach_rows<'a>(
     }
 }
 
-/// Histories already held by some row, by signal: new rows share them.
 pub type Resident = HashMap<Traced<SignalRef>, Arc<dyn SignalHistory>>;
 
-/// What the cursor snaps to and steps through on a row.
 enum EdgeSource<'a> {
     History(Arc<dyn SignalHistory>),
     Lane(&'a LoadedGenerator),
     Clock(Arc<crate::clock::ClockTimeline>),
-    /// A folded or open group: every change of its loaded signals.
     Group(Vec<Arc<dyn SignalHistory>>),
-    /// A stacked group: it snaps to its layers' changes and steps through
-    /// the changes of their sum.
     Stack(Vec<stack::Layer>),
 }
 
@@ -497,12 +434,7 @@ pub enum Drag {
         start: Point,
         current: Point,
     },
-    /// A marker chip held by the pointer: a click goes to the marker, a
-    /// drag moves it.
     Marker(crate::marker::MarkerDrag),
-    /// Panning with the middle or right button. A middle press that has
-    /// not moved yet keeps its `click` point: released there, it measures
-    /// from that point instead.
     Pan {
         last_x: f32,
         click: Option<Point>,
@@ -512,18 +444,10 @@ pub enum Drag {
     Scroll {
         grab: f32,
     },
-    /// Resizing `row` (and the selection containing it) by the bottom edge
-    /// of its name cell; `top` is the row's top at the press.
     RowHeight {
         row: usize,
         top: f32,
     },
-    /// Moving the selected rows by their names. `gap` is the insertion point
-    /// (a visible position, or the visible row count for the end) once the
-    /// press has moved far enough and the drop would change the tree; the
-    /// rows land at `depth`, or inside the folded group `into` (an entry).
-    /// A plain press on an already selected row keeps the selection for
-    /// dragging and narrows it to `collapse` only if it ends as a click.
     Rows {
         press_y: f32,
         started: bool,
@@ -531,7 +455,6 @@ pub enum Drag {
         depth: u8,
         into: Option<usize>,
         collapse: Option<usize>,
-        /// Last auto-scroll step, while the pointer is in an edge zone.
         scrolled_at: Option<Instant>,
     },
 }
@@ -546,30 +469,19 @@ pub enum MenuAction {
     PasteSignals,
     RemoveSignals,
     RowHeight(RowHeight),
-    /// Draw the rows digitally (`None`) or as a plot.
     Draw(Option<AnalogDraw>),
     Range(AnalogRange),
     ToggleAnalog,
-    /// Hide the ruler of the clock with this path.
     HideRuler(ClockKey),
-    /// Put the selected rows under a new group and rename it.
     Group,
-    /// Dissolve the selected groups, keeping their rows.
     Ungroup,
     Rename,
-    /// Fold (`true`) or unfold the menu's group.
     Fold(bool),
-    /// Fold or unfold every group of the panel.
     FoldAll(bool),
-    /// A choice of a Markers or Measure lane menu (`WaveMenuKind::Lane`).
     Lane(crate::marker::LaneVerb),
-    /// Pan a pipeline panel to the start of the named row.
     PipelineStart(usize),
-    /// Colour the menu's rows; `None` is Default.
     Tint(Option<Tint>),
-    /// Draw the menu's groups as stacked areas (`true`) or as activity.
     Stack(bool),
-    /// Show (`true`) or hide the peak band of the menu's stacked groups.
     Peak(bool),
     Overlaid,
     OverlaidDraw(AnalogDraw),
@@ -587,15 +499,10 @@ pub struct MenuItem {
     pub checked: bool,
 }
 
-/// A menu entry: a choice, a labelled submenu of choices, or a group divider.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuEntry {
     Item(MenuItem),
-    Submenu {
-        label: String,
-        items: Vec<MenuItem>,
-    },
-    /// A group title.
+    Submenu { label: String, items: Vec<MenuItem> },
     Label(String),
     Separator,
 }
@@ -615,17 +522,11 @@ impl MenuItem {
 pub enum WaveMenuKind {
     Format,
     Signal,
-    /// A clock ruler's menu; `row` is the ruler's index.
     Ruler,
-    /// A Markers or Measure lane menu, which the app holds for any timed
-    /// panel (`App::menu`); `row` counts the menus opened, so each is new.
     Lane,
-    /// A pipeline transaction label menu, also held by the app.
     PipelineLabel,
 }
 
-/// A panel context menu. The frontend shows its own popup widget at the panel
-/// position and reports the typed choice.
 #[derive(Clone, Debug)]
 pub struct WaveMenu {
     pub kind: WaveMenuKind,
@@ -635,7 +536,6 @@ pub struct WaveMenu {
 }
 
 impl WaveMenu {
-    /// Every choice, with submenus flattened in order.
     pub fn items(&self) -> impl Iterator<Item = &MenuItem> {
         self.entries.iter().flat_map(|entry| match entry {
             MenuEntry::Item(item) => std::slice::from_ref(item),
@@ -645,8 +545,6 @@ impl WaveMenu {
     }
 }
 
-/// Pointer input over the wave panel, in the same coordinate space as the
-/// bounds passed to [`WaveModel::layout`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PointerEvent {
     Down {
@@ -658,10 +556,7 @@ pub enum PointerEvent {
         position: Point,
     },
     Up,
-    /// The pointer left the panel (or the window).
     Leave,
-    /// Wheel or trackpad scroll in logical pixels. `precise` marks trackpad
-    /// deltas (pixel-exact scrolling) as opposed to mouse wheel notches.
     Wheel {
         position: Point,
         dx: f32,
@@ -669,37 +564,26 @@ pub enum PointerEvent {
         modifiers: Modifiers,
         precise: bool,
     },
-    /// Trackpad pinch; `delta` is the scale change of this event.
     Pinch {
         position: Point,
         delta: f32,
     },
 }
 
-/// A wave row as assistive technology sees it (a tree item).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccessibleRow {
     pub entry: usize,
     pub label: String,
-    /// 1 at the top level.
     pub level: usize,
-    /// Groups only: whether their rows are shown.
     pub expanded: Option<bool>,
     pub selected: bool,
-    /// The row's name cell.
     pub bounds: crate::geometry::Rect,
 }
 
-/// Inverses of a wave panel's row edits since the app last collected them
-/// into the undo journal (`volna/README.md`, "Undo and redo").
 #[derive(Default)]
 pub(crate) struct RowJournal {
-    /// Each edit's label and inverse splices, in the order they were made.
     pub edits: Vec<(String, Vec<Splice>)>,
-    /// The selection before the first of them; holding it marks the
-    /// journal as waiting to be collected.
     pub selection: Before<RowSelection>,
-    /// The adjustment the edits repeat, and one they may be continued by.
     pub merge: Option<MergeKey>,
     pub continues: Option<MergeKey>,
 }
@@ -711,49 +595,29 @@ impl RowJournal {
 }
 
 pub struct WaveModel {
-    /// The rows as a tree in pre-order (see [`tree`]). Only
-    /// [`WaveModel::splice`] changes the vector; row edits go through
-    /// [`WaveModel::edit_rows`], which journals their inverse. Folds, loaded
-    /// histories and a new lane's height change rows in place: they are
-    /// navigation or trace data, not cockpit edits.
     items: Vec<Entry>,
     journal: RowJournal,
-    /// Selected entries; always visible ones.
     pub selected: BTreeSet<usize>,
     pub anchor: Option<usize>,
-    /// Link flags and the local viewport/cursor kept while unlinked.
     pub nav: NavState,
     pub scroll_y: f32,
     pub names_width: f32,
     pub values_width: f32,
     pub hover_row: Option<usize>,
     pub badge_hover: Option<usize>,
-    /// The row whose bottom edge the pointer can drag to resize it.
     pub edge_hover: Option<usize>,
-    /// Pointer is over a column divider (drives repaints).
     pub split_hover: bool,
-    /// The Markers lane chip or span under the pointer (drives repaints).
     pub lane_hover: Option<crate::marker::LaneHit>,
     pub drag: Option<Drag>,
-    /// Width of the waves column at the last layout, for keyboard zoom.
     pub wave_width: f32,
-    /// Canvas paints so far, for tests that need real repaints.
     pub frames_painted: u64,
     pub menu: Option<WaveMenu>,
-    /// Last known pointer position over the panel.
     pub pointer: Option<Point>,
-    /// The last press landed on a lane bar and selected its record, so a
-    /// second click opens it.
     pub pressed_record: bool,
-    /// The group whose name is being edited; the frontend hosts a text
-    /// input over [`WaveModel::rename_rect`] and answers with
-    /// `Command::RenameGroup`.
     pub rename: Option<usize>,
-    /// When analog ranges last eased, while one is moving.
     analog_eased_at: Option<Instant>,
     pub(crate) overlaid_ranges: std::collections::HashMap<usize, super::overlaid::Ranges>,
     layout: WaveLayout,
-    /// Counts changes of the rows' shape (see [`WaveModel::revision`]).
     revision: u64,
 }
 
@@ -776,8 +640,6 @@ impl WaveModel {
         self.nav.set_cursor(doc, cursor)
     }
 
-    /// Copy persistent view content, sharing immutable histories. Pixel
-    /// layout, pointer capture, menus, and animation belong to the old view.
     pub fn clone_view(&self, with_rows: bool) -> Self {
         Self {
             items: if with_rows {
@@ -828,7 +690,6 @@ impl WaveModel {
         }
     }
 
-    /// Forget every row and interaction; called when the document's session changes.
     pub fn reset(&mut self, limits: Option<(u64, u64)>) {
         self.nav.reset(limits);
         self.items.clear();
@@ -843,7 +704,6 @@ impl WaveModel {
         self.badge_hover = None;
     }
 
-    /// The layout of the last frame (see [`WaveModel::layout`]).
     pub fn last_layout(&self) -> &WaveLayout {
         &self.layout
     }
@@ -870,7 +730,6 @@ impl WaveModel {
         self.items.iter_mut().filter_map(|e| e.row.signal_mut())
     }
 
-    /// Fit the visible plots' target ranges to the current viewport.
     fn update_analog_targets(&mut self, doc: &Document) {
         let vp = self.viewport(doc);
         let groups: Vec<usize> = self
@@ -896,7 +755,6 @@ impl WaveModel {
                 .or_default()
                 .update(&signals, range, doc, &vp);
         }
-        // The rows on screen only, straight from the layout.
         let Self { layout, items, .. } = self;
         for i in layout.rows.clone().filter_map(|pos| layout.entry(pos)) {
             let Some(item) = items.get_mut(i).and_then(|e| e.row.signal_mut()) else {
@@ -911,7 +769,6 @@ impl WaveModel {
         }
     }
 
-    /// Ease every plot's displayed range towards its target.
     fn ease_analog(&mut self, doc: &Document, now: Instant) -> bool {
         self.update_analog_targets(doc);
         let dt = self.analog_eased_at.map_or(0.0, |at| {
@@ -937,8 +794,6 @@ impl WaveModel {
             .count()
     }
 
-    /// The trace entry `ix` shows: a leaf's own, or the one trace every
-    /// row of a group comes from.
     pub fn row_trace(&self, ix: usize) -> Option<TraceId> {
         let entry = self.items.get(ix)?;
         if !entry.is_group() {
@@ -949,32 +804,19 @@ impl WaveModel {
         traces.all(|t| t == first).then_some(first)
     }
 
-    /// The signal of row `row`, if it is a signal row.
     pub fn signal(&self, row: usize) -> Option<&DisplayedSignal> {
         self.items.get(row)?.signal()
     }
 
-    // -- items ---------------------------------------------------------------
-
-    /// The painted rows in order, as entry indices: every entry outside a
-    /// folded group.
     pub fn visible(&self) -> Arc<[u32]> {
         tree::visible(&self.items)
     }
 
-    /// The rows as a tree in pre-order (see [`tree`]).
     pub fn items(&self) -> &[Entry] {
         &self.items
     }
 
-    // -- row edits -------------------------------------------------------------
-
-    /// Perform `splices` on the rows and return their inverse (see
-    /// [`tree::apply`]); the undo journal applies its edits through here.
-    /// Nothing is journaled, and nothing changes when the splices do not fit.
     pub(crate) fn splice(&mut self, mut splices: Vec<Splice>) -> Result<Vec<Splice>, String> {
-        // Folds are navigation, not journaled: a group rewritten in place
-        // (undo of a rename, colour or format) keeps its current fold.
         for s in splices.iter_mut().filter(|s| s.in_place()) {
             for (k, entry) in s.insert.iter_mut().enumerate() {
                 if let (WaveRow::Group(new), Some(WaveRow::Group(old))) =
@@ -989,8 +831,6 @@ impl WaveModel {
         Ok(inverse)
     }
 
-    /// Edit the rows: perform `splices` planned against the current rows,
-    /// journal their inverse under `label`, and select `selection`.
     fn edit_rows(&mut self, label: String, splices: Vec<Splice>, selection: RowSelection) {
         if splices.is_empty() {
             return;
@@ -1004,8 +844,6 @@ impl WaveModel {
         self.set_row_selection(selection);
     }
 
-    /// Rewrite rows in place as one edit: `f` changes a copy of each of
-    /// `rows` and says whether it did. Returns whether any row changed.
     fn rewrite_rows(
         &mut self,
         label: String,
@@ -1043,13 +881,11 @@ impl WaveModel {
         let selection = self.row_selection();
         let (rename, menu) = (self.rename, self.menu.take());
         self.edit_rows(label, splices, selection);
-        // In-place rewrites keep every index, so what names rows stays valid.
         self.rename = rename;
         self.menu = menu;
         true
     }
 
-    /// The selection, as steps store it.
     pub(crate) fn row_selection(&self) -> RowSelection {
         RowSelection {
             selected: self.selected.clone(),
@@ -1057,9 +893,6 @@ impl WaveModel {
         }
     }
 
-    /// Select rows (an edit's result, or a restored step's context); rows
-    /// that no longer exist are left out and hidden ones give way to the
-    /// group that shows them.
     pub(crate) fn set_row_selection(&mut self, selection: RowSelection) {
         let len = self.items.len();
         self.selected = selection
@@ -1071,8 +904,6 @@ impl WaveModel {
         self.fix_hidden_selection();
     }
 
-    /// Hand the row edits since the last call to the undo journal, with the
-    /// selection before them and their merge keys.
     pub(crate) fn take_edits(&mut self, panel: crate::panels::PanelId, history: &mut History) {
         if self.journal.is_empty() {
             return;
@@ -1092,15 +923,12 @@ impl WaveModel {
         }
     }
 
-    /// Install rows that are not an edit (a restored workspace).
     pub(crate) fn restore_rows(&mut self, items: Vec<Entry>) {
         debug_assert!(tree::validate(&items).is_ok());
         self.items = items;
         self.edited();
     }
 
-    /// Drop every row's trace data: the panel is closed and kept by the
-    /// undo journal.
     pub(crate) fn detach_rows(&mut self) {
         for entry in &mut self.items {
             entry.row = entry.row.detached();
@@ -1111,12 +939,10 @@ impl WaveModel {
         self.clear_hover();
     }
 
-    /// Give detached rows their data again (see [`attach_rows`]).
     pub(crate) fn attach_rows(&mut self, doc: &mut Document, resident: &Resident) {
         attach_rows(&mut self.items, doc, resident);
     }
 
-    /// Whether some resolved signal row waits for a history.
     pub(crate) fn needs_attach(&self) -> bool {
         self.items.iter().any(|e| {
             e.signal().is_some_and(|s| {
@@ -1125,7 +951,6 @@ impl WaveModel {
         })
     }
 
-    /// Retry loading `signal`: its rows show loading again.
     pub(crate) fn clear_error(&mut self, signal: Traced<SignalRef>) {
         for row in self
             .signals_mut()
@@ -1135,8 +960,6 @@ impl WaveModel {
         }
     }
 
-    /// Scroll so entry `entry` (or the visible group holding it) is on
-    /// screen, as of the last layout.
     pub(crate) fn reveal_entry(&mut self, entry: usize) {
         let row_h = self.layout.row_h;
         let height = self.layout.names.height();
@@ -1160,7 +983,6 @@ impl WaveModel {
         }
     }
 
-    /// Append `rows` at the top level and select them.
     fn push_rows(&mut self, label: String, rows: impl IntoIterator<Item = WaveRow>) {
         let first = self.items.len();
         let insert: Vec<Entry> = rows.into_iter().map(|row| Entry::new(0, row)).collect();
@@ -1180,17 +1002,12 @@ impl WaveModel {
         self.edit_rows(label, vec![splice], selection);
     }
 
-    /// Append rows for `vars`, sharing `loaded` histories for the same signal
-    /// and queuing a load for the rest.
     pub fn add_vars(&mut self, doc: &mut Document, vars: &[Traced<VarId>], loaded: Resident) {
         let rows = var_rows(doc, vars, &loaded);
         let label = format!("Add {}", count(rows.len(), "signal", "signals"));
         self.push_rows(label, rows);
     }
 
-    /// Append a group named after `scope` holding its variables and, when
-    /// `recursive`, a folded subgroup for each child scope that has
-    /// variables; select it. Scopes deeper than groups can nest are left out.
     pub fn add_scope_group(
         &mut self,
         doc: &mut Document,
@@ -1212,7 +1029,6 @@ impl WaveModel {
             let vars: Vec<_> = s.vars.iter().map(|v| scope.with(v)).collect();
             let rows = var_rows(doc, &vars, &loaded);
             entries.extend(rows.into_iter().map(|row| Entry::new(depth + 1, row)));
-            // Child scopes with variables below them, while groups can nest.
             if recursive && depth + 2 < tree::MAX_DEPTH {
                 let children = s.children.iter().rev().filter(|&c| h.has_vars(c));
                 stack.extend(children.map(|c| (c, depth + 1)));
@@ -1236,9 +1052,6 @@ impl WaveModel {
         true
     }
 
-    /// Append a lane for each generator in `tracks` and select them. A lane
-    /// takes the default height for its depth as soon as its records are
-    /// resident; the app retains them for as long as a lane shows them.
     pub fn add_lanes(&mut self, doc: &Document, tracks: &[Traced<TrackRef>]) {
         let lanes: Vec<WaveRow> = tracks
             .iter()
@@ -1249,7 +1062,6 @@ impl WaveModel {
         self.push_rows(label, lanes);
     }
 
-    /// Append a clock row for each clock and select them.
     pub fn add_clocks(&mut self, keys: &[ClockKey]) {
         let label = format!("Add {}", count(keys.len(), "clock row", "clock rows"));
         self.push_rows(
@@ -1259,7 +1071,6 @@ impl WaveModel {
         );
     }
 
-    /// Records arrived: new lanes take their default height.
     pub fn fit_lanes(&mut self, doc: &Document) {
         for row in &mut self.items {
             if let WaveRow::Lane(lane) = &mut row.row {
@@ -1268,7 +1079,6 @@ impl WaveModel {
         }
     }
 
-    /// A history load finished (the document already checked its generation).
     pub fn finish_signal(
         &mut self,
         signal: Traced<SignalRef>,
@@ -1284,26 +1094,20 @@ impl WaveModel {
         }
     }
 
-    /// The rows changed shape: forget state that names entries.
     fn edited(&mut self) {
         self.rename = None;
         self.menu = None;
         self.revision += 1;
     }
 
-    /// The row under `y`. A layout older than the last edit may name rows
-    /// past the end; those are no row.
     fn entry_under(&self, layout: &WaveLayout, y: f32) -> Option<usize> {
         layout.entry_at(y).filter(|&row| row < self.items.len())
     }
 
-    /// Changes whenever rows are added, removed, moved or rewritten, so
-    /// what is derived from them can be kept until then.
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
-    /// Remove the selected rows; a selected group goes with everything in it.
     pub fn remove_selected(&mut self) {
         self.remove_selected_as("Remove");
     }
@@ -1321,8 +1125,6 @@ impl WaveModel {
         self.edit_rows(label, splices, RowSelection::default());
     }
 
-    /// Remove the rows of a trace that is closing, and the groups only it
-    /// filled, as one edit named `label`. Returns whether any went.
     pub(crate) fn remove_trace_rows(&mut self, trace: TraceId, label: String) -> bool {
         let rows = tree::of_trace(&self.items, trace);
         if rows.is_empty() {
@@ -1333,8 +1135,6 @@ impl WaveModel {
         true
     }
 
-    /// Load every resolved signal row again: its trace was placed anew.
-    /// Rows keep their place, format and selection.
     pub(crate) fn reload_rows(&mut self, doc: &mut Document) {
         for row in self.signals_mut() {
             if row.source.signal().is_some() {
@@ -1345,10 +1145,6 @@ impl WaveModel {
         attach_rows(&mut self.items, doc, &Resident::new());
     }
 
-    /// Copy the selected rows, in display order and with the groups they
-    /// head, to the document clipboard. Rows keep their format, height and
-    /// the colour they are drawn in; histories stay with the panels. The
-    /// clipboard is not journaled.
     pub fn copy_selected(&self, doc: &mut Document) {
         if self.selected.is_empty() {
             return;
@@ -1369,9 +1165,6 @@ impl WaveModel {
         self.remove_selected_as("Cut");
     }
 
-    /// Move the selected rows, with the rows of selected groups and keeping
-    /// their order, to `to`; they stay selected. Returns whether the tree
-    /// changed.
     pub fn move_selected_to(&mut self, to: Place) -> bool {
         let Some(moved) = tree::plan_move(&self.items, &self.selected, to) else {
             return false;
@@ -1403,10 +1196,6 @@ impl WaveModel {
         true
     }
 
-    /// Insert the document clipboard below the last selected row, at its
-    /// level (or at the end), and select the new rows. Duplicates share
-    /// `loaded` histories for the same signal; the rest load once, like newly
-    /// added variables.
     pub fn paste(&mut self, doc: &mut Document, loaded: &Resident) {
         if doc.copied_rows.is_empty() {
             return;
@@ -1457,8 +1246,6 @@ impl WaveModel {
         self.selected = self.visible().iter().map(|&i| i as usize).collect();
     }
 
-    /// Escape: cancel a drag or a rename, close the menu, clear selection,
-    /// then clear cursor.
     pub fn clear_selection(&mut self, doc: &mut Document) {
         if self.drag.is_some() {
             self.drag = None;
@@ -1473,8 +1260,6 @@ impl WaveModel {
         }
     }
 
-    /// Click selection with platform conventions: plain = single, cmd/ctrl =
-    /// toggle, shift = the visible rows from the anchor.
     fn select_row(&mut self, row: usize, modifiers: Modifiers) {
         if row >= self.items.len() {
             return;
@@ -1492,7 +1277,6 @@ impl WaveModel {
         selection::select(&mut self.selected, &mut self.anchor, row, modifiers);
     }
 
-    /// Select the visible row `delta` rows from the anchor.
     pub fn move_selection(&mut self, delta: isize) {
         let visible = self.visible();
         if visible.is_empty() {
@@ -1509,9 +1293,6 @@ impl WaveModel {
         self.anchor = Some(next);
     }
 
-    // -- groups ------------------------------------------------------------------
-
-    /// A name no group of the panel has yet: "Group 1", "Group 2", …
     fn fresh_group_name(&self) -> String {
         (1..)
             .map(|n| format!("Group {n}"))
@@ -1524,8 +1305,6 @@ impl WaveModel {
             .expect("unbounded")
     }
 
-    /// `G`: put the selected rows, in order, under a new group at the place
-    /// of the first one, select it and start renaming it.
     pub fn group_selected(&mut self) -> bool {
         let group = WaveRow::Group(GroupRow::new(self.fresh_group_name()));
         let Some((splices, g)) = tree::group(&self.items, &self.selected, group) else {
@@ -1541,14 +1320,11 @@ impl WaveModel {
                 anchor: Some(g),
             },
         );
-        // Naming the new group joins this step, however long it takes.
         self.journal.continues = Some(MergeKey::of("rename", &g));
         self.rename = Some(g);
         true
     }
 
-    /// `Shift+G`: dissolve the selected groups; their rows move up one level
-    /// in place and become the selection.
     pub fn ungroup_selected(&mut self) -> bool {
         let groups: BTreeSet<usize> = self
             .selected
@@ -1576,7 +1352,6 @@ impl WaveModel {
         true
     }
 
-    /// Start renaming the anchored group (`F2`, double-click).
     pub fn start_rename(&mut self) -> bool {
         let Some(g) = self
             .anchor
@@ -1591,7 +1366,6 @@ impl WaveModel {
         true
     }
 
-    /// Finish renaming: `Some` commits a non-empty name, `None` cancels.
     pub fn finish_rename(&mut self, name: Option<&str>) -> bool {
         let Some(g) = self.rename.take() else {
             return false;
@@ -1613,9 +1387,6 @@ impl WaveModel {
         )
     }
 
-    /// Fold or unfold group `i`, and with `deep` every group inside it.
-    /// Selected rows the fold hides leave the selection, and the group takes
-    /// their place, so no command acts on rows that cannot be seen.
     pub fn set_folded(&mut self, i: usize, collapsed: bool, deep: bool) -> bool {
         if !self.items.get(i).is_some_and(Entry::is_group) {
             return false;
@@ -1628,7 +1399,6 @@ impl WaveModel {
         changed
     }
 
-    /// Fold or unfold every group.
     pub fn fold_all(&mut self, collapsed: bool) -> bool {
         let mut changed = false;
         for i in 0..self.items.len() {
@@ -1641,8 +1411,6 @@ impl WaveModel {
         changed
     }
 
-    /// `←` / `→` on a selected group: fold it (`open == false`) or unfold
-    /// it. Returns `false` when the anchor is not a group, so the keys pan.
     pub fn fold_key(&mut self, open: bool, deep: bool) -> bool {
         let Some(g) = self
             .anchor
@@ -1655,8 +1423,6 @@ impl WaveModel {
         true
     }
 
-    /// Replace selected rows hidden inside folded groups by the visible
-    /// group that holds them.
     pub(crate) fn fix_hidden_selection(&mut self) {
         let visible = self.visible();
         let shown = |items: &[Entry], mut i: usize| {
@@ -1680,28 +1446,20 @@ impl WaveModel {
             .map(|a| shown(&self.items, a));
     }
 
-    /// The signal, lane and clock entries of `rows` and the groups among
-    /// them: value commands such as formats apply to these.
     fn leaves_of(&self, rows: &[usize]) -> Vec<usize> {
         let set: BTreeSet<usize> = rows.iter().copied().collect();
         tree::selected_leaves(&self.items, &set)
     }
 
-    // -- colours ----------------------------------------------------------------
-
-    /// The colour entry `ix` is drawn in (see [`tint::ink`]).
     pub fn ink(&self, ix: usize) -> Option<Tint> {
         tint::ink(&self.items, ix)
     }
 
-    /// Colour the selected rows and groups, or clear their own colour with
-    /// `None`: one step, and nothing when every row already has it.
     pub fn tint_selected(&mut self, tint: Option<Tint>) -> bool {
         let rows: Vec<usize> = self.selected.iter().copied().collect();
         self.set_tint(&rows, tint)
     }
 
-    /// Give `rows` their own colour `tint` (see [`WaveModel::tint_selected`]).
     pub fn set_tint(&mut self, rows: &[usize], tint: Option<Tint>) -> bool {
         let what = match rows {
             [row] => match self.items.get(*row) {
@@ -1722,8 +1480,6 @@ impl WaveModel {
             true
         })
     }
-
-    // -- translators -----------------------------------------------------------
 
     fn set_translator(&mut self, doc: &Document, rows: &[usize], id: &str) {
         let Some(t) = doc.translators.get(id) else {
@@ -1778,24 +1534,15 @@ impl WaveModel {
         }
     }
 
-    // -- analog ------------------------------------------------------------------
-
-    /// Whether row `row` can be drawn as a plot in its current format.
     pub fn can_plot(&self, row: usize) -> bool {
         self.signal(row)
             .is_some_and(|s| analog::supports(s.shape, s.translator.as_ref()))
     }
 
-    /// Draw `rows` as plots with `draw`, or digitally with `None`; rows that
-    /// cannot be plotted are skipped. A 1× row grows to
-    /// [`RowHeight::ANALOG`] and gets 1× back when analog is turned off,
-    /// unless it was resized in between.
     pub fn set_analog(&mut self, rows: &[usize], draw: Option<AnalogDraw>) {
         self.draw_rows(rows, |_| draw);
     }
 
-    /// Draw each of `rows` as `draw` says: as a plot, or digitally with
-    /// `None`; rows that cannot be plotted are skipped. One edit.
     fn draw_rows(&mut self, rows: &[usize], draw: impl Fn(&DisplayedSignal) -> Option<AnalogDraw>) {
         let label = match rows
             .iter()
@@ -1847,8 +1594,6 @@ impl WaveModel {
         self.scroll_y = self.scroll_y.min(self.layout.max_scroll.max(0.0));
     }
 
-    /// `A`: plot the selected rows, or turn them all back to digital when
-    /// every plottable one already is a plot.
     pub fn toggle_analog(&mut self) {
         let rows = tree::selected_leaves(&self.items, &self.selected);
         self.toggle_analog_rows(&rows);
@@ -1868,8 +1613,6 @@ impl WaveModel {
         });
     }
 
-    /// Choose the vertical range of the plotted `rows`; type limits apply
-    /// only to formats that have them.
     pub fn set_analog_range(&mut self, rows: &[usize], range: AnalogRange) {
         let merge = MergeKey::of("analog", &rows);
         self.rewrite_rows(
@@ -1894,9 +1637,6 @@ impl WaveModel {
         );
     }
 
-    // -- numeric group plots --------------------------------------------------------
-
-    /// Whether entry `i` is a stacked group.
     pub fn is_stacked(&self, i: usize) -> bool {
         self.items
             .get(i)
@@ -1904,9 +1644,6 @@ impl WaveModel {
             .is_some_and(GroupRow::is_stacked)
     }
 
-    /// The layers of group `group` drawn as a stack: every loaded signal
-    /// below it that reads as a number, nested groups included, in list
-    /// order.
     pub fn stack_layers(&self, group: usize) -> Vec<stack::Layer> {
         tree::leaves(&self.items, group)
             .filter_map(|entry| {
@@ -1920,16 +1657,10 @@ impl WaveModel {
             .collect()
     }
 
-    /// The stacked group whose area entry `i` is a layer of, or would be
-    /// if it had a number: the nearest stacked group above it.
     pub fn stack_of(&self, i: usize) -> Option<usize> {
         self.enclosing_group(i, GroupRow::is_stacked)
     }
 
-    /// Draw the groups among `rows` as stacked areas, or as activity: one
-    /// step. A 1× group row grows to [`RowHeight::ANALOG`] and gets 1× back
-    /// when unstacked, unless it was resized in between. Returns whether
-    /// any group changed.
     pub fn set_stacked(&mut self, rows: &[usize], stacked: bool) -> bool {
         let style = if stacked {
             GroupStyle::Stack { peak: true }
@@ -1939,8 +1670,6 @@ impl WaveModel {
         self.set_group_style(rows, style, if stacked { "Stack" } else { "Unstack" })
     }
 
-    /// Change group rendering as one undo step. Switching between numeric
-    /// plots preserves the height to restore on returning to activity.
     fn set_group_style(&mut self, rows: &[usize], style: GroupStyle, verb: &str) -> bool {
         let groups: Vec<usize> =
             rows.iter()
@@ -1990,8 +1719,6 @@ impl WaveModel {
             .is_some_and(GroupRow::is_overlaid)
     }
 
-    /// Numeric members, including unloaded ones, in tree order. Group plots
-    /// use the same ordering whether the group is folded or expanded.
     pub fn numeric_members(&self, group: usize) -> Vec<usize> {
         tree::leaves(&self.items, group)
             .filter(|&i| self.signal(i).is_some_and(|s| s.numeric_kind().is_some()))
@@ -2028,7 +1755,6 @@ impl WaveModel {
         )
     }
 
-    /// Shift+O toggles selected groups between overlaid lines and activity.
     pub fn toggle_overlaid(&mut self) -> bool {
         let groups: Vec<usize> = self
             .selected
@@ -2114,7 +1840,6 @@ impl WaveModel {
             let WaveRow::Signal(s) = &mut e.row else {
                 return false;
             };
-            // Both tree leaves and rewrite_rows visit entries in ascending order.
             let hidden = positions.next() != Some(row);
             if s.overlay_hidden == hidden {
                 return false;
@@ -2124,8 +1849,6 @@ impl WaveModel {
         });
     }
 
-    /// Show or hide the peak band of the stacked groups among `rows`: one
-    /// step.
     pub fn set_peak(&mut self, rows: &[usize], peak: bool) -> bool {
         let label = if peak {
             "Show peak of total"
@@ -2143,8 +1866,6 @@ impl WaveModel {
         })
     }
 
-    /// `Shift+A`: draw the selected groups as stacked areas, or all of them
-    /// as activity again when every one is stacked already.
     pub fn toggle_stack(&mut self) -> bool {
         let groups: Vec<usize> = self
             .selected
@@ -2156,7 +1877,6 @@ impl WaveModel {
         self.set_stacked(&groups, on)
     }
 
-    /// Open the format menu for `row` at a panel position.
     pub fn open_format_menu(&mut self, doc: &Document, row: usize, position: Point) {
         let Some(item) = self.signal(row) else {
             return;
@@ -2175,7 +1895,6 @@ impl WaveModel {
                 })
             })
             .collect();
-        // Draw and Range sections for rows that can be plots.
         if analog::supports(item.shape, item.translator.as_ref()) {
             let a = item.analog.as_ref();
             let choice = |action, label: &str, checked| {
@@ -2232,8 +1951,6 @@ impl WaveModel {
         });
     }
 
-    /// Open the signal-name context menu. Right-clicking within an existing
-    /// selection preserves the group; an unselected row becomes the selection.
     pub fn open_signal_menu(&mut self, doc: &Document, row: usize, position: Point) {
         if row >= self.items.len() {
             return;
@@ -2241,7 +1958,6 @@ impl WaveModel {
         if !self.selected.contains(&row) {
             self.select_row(row, Modifiers::default());
         }
-        // A preset is checked only when every target row already has it.
         let targets = self.menu_rows(row);
         let mut heights = targets.iter().map(|&r| self.items[r].height());
         let first = heights.next();
@@ -2297,7 +2013,6 @@ impl WaveModel {
                 }),
             ]);
         }
-        // Groups: make one, and dissolve, rename or fold the ones selected.
         let group = self.items[row].group();
         let any_group = targets.iter().any(|&r| self.items[r].is_group());
         let overlay_member = self.overlaid_of(row).is_some()
@@ -2325,7 +2040,6 @@ impl WaveModel {
                 )),
             ]);
         }
-        // How groups draw: activity, stacked areas, or independent lines.
         if any_group {
             let groups: Vec<&GroupRow> = targets
                 .iter()
@@ -2386,7 +2100,6 @@ impl WaveModel {
                     "Show all overlay lines",
                 )));
             }
-            // Checked when every stacked one shows it; choosing flips them all.
             let stacked: Vec<&&GroupRow> = groups.iter().filter(|g| g.is_stacked()).collect();
             if !stacked.is_empty() {
                 let checked = stacked.iter().all(|g| g.shows_peak());
@@ -2434,7 +2147,6 @@ impl WaveModel {
                 MenuEntry::Item(MenuItem::plain(MenuAction::FoldAll(false), "Unfold all")),
             ]);
         }
-        // A colour is checked only when every target row has it as its own.
         let mut own = targets.iter().map(|&r| self.items[r].tint());
         let first = own.next();
         let shared = first.filter(|t| own.all(|other| other == *t));
@@ -2471,8 +2183,6 @@ impl WaveModel {
         ]);
     }
 
-    /// Open the signal menu for the keyboard selection, positioned beside its
-    /// name cell. Off-screen selections use the nearest panel edge.
     pub fn open_selected_signal_menu(&mut self, doc: &Document) {
         let Some(row) = self
             .anchor
@@ -2493,9 +2203,6 @@ impl WaveModel {
         );
     }
 
-    /// The frontend's popup reported a choice.
-    /// Return a failed canonical signal to retry through the document owner.
-    /// Open the menu of clock ruler `ruler` (its index among the panel's rulers).
     pub fn open_ruler_menu(&mut self, doc: &Document, ruler: usize, position: Point) {
         let Some(path) = self
             .nav
@@ -2587,7 +2294,6 @@ impl WaveModel {
         None
     }
 
-    /// The rows a menu opened on `row` acts on: the selection containing it, or itself.
     fn menu_rows(&self, row: usize) -> Vec<usize> {
         if self.selected.contains(&row) {
             self.selected.iter().copied().collect()
@@ -2596,9 +2302,6 @@ impl WaveModel {
         }
     }
 
-    // -- row heights -------------------------------------------------------------
-
-    /// Top of `row` in multiples of the base row height.
     fn row_units_before(&self, row: usize) -> u32 {
         self.visible()
             .iter()
@@ -2607,7 +2310,6 @@ impl WaveModel {
             .sum()
     }
 
-    /// Resize `rows`, keeping `anchor`'s top where it is on screen.
     fn resize_rows(
         &mut self,
         rows: &[usize],
@@ -2641,8 +2343,6 @@ impl WaveModel {
         self.scroll_y = (self.scroll_y + shift * self.layout.row_h).max(0.0);
     }
 
-    /// Step every selected row to the next larger (`1`) or smaller (`-1`)
-    /// preset; `0` resets them to the default height.
     pub fn step_row_height(&mut self, delta: isize) {
         let Some(anchor) = self
             .anchor
@@ -2665,8 +2365,6 @@ impl WaveModel {
         self.menu = None;
     }
 
-    // -- navigation ------------------------------------------------------------
-
     fn wave_w(&self) -> f64 {
         f64::from(self.wave_width).max(1.0)
     }
@@ -2675,7 +2373,6 @@ impl WaveModel {
         self.nav.animate_to(doc, target, now);
     }
 
-    /// Immediate zoom (mouse wheel) around a pixel position in the waves column.
     fn zoom_at(&mut self, doc: &mut Document, x_px: f32, factor: f64) {
         let w = self.wave_w();
         self.nav.zoom_at(doc, f64::from(x_px), w, factor);
@@ -2716,14 +2413,11 @@ impl WaveModel {
         self.nav.pan_fraction(doc, frac, now);
     }
 
-    /// Immediate pan by pixels (mouse drag / wheel).
     fn pan_px(&mut self, doc: &mut Document, dx: f32) {
         let w = self.wave_w();
         self.nav.pan_px(doc, f64::from(dx), w);
     }
 
-    /// What row `row` snaps to: a signal's changes or a lane's record
-    /// begins and ends.
     fn edge_source<'a>(&self, doc: &'a Document, row: usize) -> Option<EdgeSource<'a>> {
         match &self.items.get(row)?.row {
             WaveRow::Signal(s) => s.history.clone().map(EdgeSource::History),
@@ -2743,7 +2437,6 @@ impl WaveModel {
         }
     }
 
-    /// The loaded histories of the signals in group `group`, in order.
     pub fn group_histories(&self, group: usize) -> Vec<Arc<dyn SignalHistory>> {
         tree::leaves(&self.items, group)
             .filter_map(|j| self.items[j].signal()?.history.clone())
@@ -2756,8 +2449,6 @@ impl WaveModel {
             .or_else(|| self.selected.iter().next().copied())
     }
 
-    /// Step the cursor to the selected row's next edge: a signal's next
-    /// value change, or a lane's next record begin or end.
     pub fn next_edge(&mut self, doc: &mut Document, now: Instant) {
         let from = self
             .cursor(doc)
@@ -2802,11 +2493,6 @@ impl WaveModel {
         }
     }
 
-    // -- layout ------------------------------------------------------------------
-
-    /// Lay the panel out in `bounds` for this frame. Clamps the scroll, records
-    /// the waves width used by keyboard zoom, and derives hover state from the
-    /// last pointer position. The result is kept for input handling.
     pub fn layout(
         &mut self,
         bounds: crate::geometry::Rect,
@@ -2814,7 +2500,6 @@ impl WaveModel {
         theme: &Theme,
         metadata_width: Option<f32>,
     ) -> &WaveLayout {
-        // Keep the same rows on screen when the interface zoom changes.
         if self.layout.row_h > 0.0 && self.layout.row_h != theme.row_height {
             self.scroll_y *= theme.row_height / self.layout.row_h;
         }
@@ -2848,7 +2533,6 @@ impl WaveModel {
         self.scroll_y = layout.scroll_y;
         self.wave_width = layout.waves.width();
         self.layout = layout;
-        // Only signal rows have a format.
         let items = &self.items;
         self.layout
             .badges
@@ -2859,10 +2543,6 @@ impl WaveModel {
         &self.layout
     }
 
-    // -- moving rows by drag ---------------------------------------------------
-
-    /// Follow the pointer during a row drag: start once it has moved far
-    /// enough, then track the drop under it.
     fn update_row_drag(&mut self) {
         let (
             Some(Drag::Rows {
@@ -2894,10 +2574,6 @@ impl WaveModel {
         });
     }
 
-    /// Where dragged rows would land under `p`: a visible gap, the depth
-    /// there (chosen by the pointer's x among the valid depths), and the
-    /// folded group the middle of whose row takes them. `None` when that
-    /// drop would not change the tree.
     fn drop_at(&self, p: Point) -> Option<(usize, u8, Option<usize>)> {
         let layout = &self.layout;
         let visible = &layout.visible;
@@ -2925,7 +2601,6 @@ impl WaveModel {
         tree::plan_move(&self.items, &self.selected, to).map(|_| (gap, depth, None))
     }
 
-    /// Where a finished drag drops, from its gap, depth and target group.
     fn drag_place(&self, gap: usize, depth: u8, into: Option<usize>) -> Place {
         match into {
             Some(group) => Place::into(&self.items, group),
@@ -2933,7 +2608,6 @@ impl WaveModel {
         }
     }
 
-    /// The visible insertion gap nearest to `y`, which is clamped to the rows area.
     fn gap_at(&self, y: f32) -> usize {
         let layout = &self.layout;
         let len = layout.visible.len();
@@ -2945,8 +2619,6 @@ impl WaveModel {
         }
     }
 
-    /// Where the name editor of the group being renamed sits: over its name,
-    /// after the chevron, to the end of the names column.
     pub fn rename_rect(&self) -> Option<crate::geometry::Rect> {
         let g = self.rename?;
         let (y, _) = self.layout.entry_span(g)?;
@@ -2958,8 +2630,6 @@ impl WaveModel {
             .then(|| crate::geometry::Rect::from_xywh(x, y, right - x, layout.row_h))
     }
 
-    /// The group whose name (not its chevron) is under `p`: a double-click
-    /// there renames it.
     pub fn group_name_at(&self, p: Point) -> Option<usize> {
         if !self.layout.names.contains(p) || self.chevron_at(p).is_some() {
             return None;
@@ -2968,9 +2638,6 @@ impl WaveModel {
         self.items.get(i)?.is_group().then_some(i)
     }
 
-    /// The rows on screen for assistive technology, as a tree: each with its
-    /// level, its expanded state (groups only) and its selection.
-    /// A stacked group says so, with its layers and the sum at the cursor.
     pub fn accessible_rows<'a>(
         &'a self,
         doc: &Document,
@@ -3040,7 +2707,6 @@ impl WaveModel {
                 }
                 row => (row.name().to_owned(), None),
             };
-            // With a trace gutter, a row says which trace it shows.
             let gutter = layout.name_left > layout.names.left();
             let label = match gutter.then(|| self.row_trace(entry)).flatten() {
                 Some(trace) => format!("{label}, trace {trace}"),
@@ -3062,7 +2728,6 @@ impl WaveModel {
         })
     }
 
-    /// The group whose chevron is under `p`.
     fn chevron_at(&self, p: Point) -> Option<usize> {
         let layout = &self.layout;
         if !layout.names.contains(p) {
@@ -3076,8 +2741,6 @@ impl WaveModel {
         (p.x >= x - 4.0 * layout.zoom && p.x < x + w && p.y < y + layout.row_h).then_some(i)
     }
 
-    /// Auto-scroll speed in pixels per second while a started row drag holds
-    /// the pointer near the top (negative) or bottom (positive) edge.
     fn row_drag_scroll_speed(&self) -> f32 {
         let (Some(Drag::Rows { started: true, .. }), Some(p)) = (self.drag, self.pointer) else {
             return 0.0;
@@ -3099,7 +2762,6 @@ impl WaveModel {
         }
     }
 
-    /// Advance the row-drag auto-scroll; the next layout moves the gap.
     fn row_drag_scroll(&mut self, now: Instant) -> bool {
         let speed = self.row_drag_scroll_speed();
         let Some(Drag::Rows { scrolled_at, .. }) = &mut self.drag else {
@@ -3116,8 +2778,6 @@ impl WaveModel {
         self.scroll_y != before || dt == 0.0
     }
 
-    /// The record of lane row `row` under panel point `p`, when bars are
-    /// drawn (not the density strip).
     pub fn lane_hit(
         &self,
         doc: &Document,
@@ -3146,7 +2806,6 @@ impl WaveModel {
         Some((Traced::new(lane.source.trace(), tx.generator), tx.id))
     }
 
-    /// The entry whose name-cell bottom edge is under `p`.
     pub fn row_edge_at(&self, p: Point) -> Option<usize> {
         let layout = &self.layout;
         if !layout.names.contains(p) {
@@ -3179,7 +2838,6 @@ impl WaveModel {
         self.badge_hover = badge_hover;
     }
 
-    /// Forget every hover state; returns whether any was set.
     fn clear_hover(&mut self) -> bool {
         let had = self.hover_row.is_some()
             || self.badge_hover.is_some()
@@ -3194,10 +2852,6 @@ impl WaveModel {
         had
     }
 
-    // -- pointer input -------------------------------------------------------------
-
-    /// Handle pointer input over panel `panel`. Returns true when something
-    /// visible changed.
     pub fn pointer(
         &mut self,
         doc: &mut Document,
@@ -3283,9 +2937,6 @@ impl WaveModel {
         }
     }
 
-    /// Put the document's reference at `p` (Alt-click, a middle click),
-    /// snapped like the cursor to the selected clock and the row under the
-    /// pointer, and onto a marker there.
     fn measure_from(&mut self, doc: &mut Document, p: Point) {
         let layout = &self.layout;
         let wave_wf = layout.wave_width_f64();
@@ -3375,7 +3026,6 @@ impl WaveModel {
         let in_waves_x = p.x >= layout.waves.left() && p.x < layout.waves.right();
         let wave_wf = layout.wave_width_f64();
         let snap_px = doc.navigation.snap_px * f64::from(layout.zoom);
-        // Alt-click measures from the pointer; a middle click does on release.
         if in_waves_x && button == MouseButton::Left && modifiers.alt {
             self.measure_from(doc, p);
             return;
@@ -3396,7 +3046,6 @@ impl WaveModel {
             });
             return;
         }
-        // A press on a clock ruler selects its clock, then works like the header.
         let rulers: Vec<ClockKey> = self
             .nav
             .clocks()
@@ -3412,7 +3061,6 @@ impl WaveModel {
             }
             self.nav.select_clock(rulers[ix].clone());
         }
-        // The time strip above the rows: header, rulers and the lane between chips.
         if layout.header.contains(p) || ruler.is_some() || layout.marker_lane.strip().contains(p) {
             if in_waves_x && button == MouseButton::Left {
                 let x = f64::from(p.x - layout.waves.left());
@@ -3444,8 +3092,6 @@ impl WaveModel {
                         wave_wf,
                         snap_px,
                     );
-                    // A press on a lane selects the record under it for
-                    // every panel, or clears the selection over empty space.
                     if let Some(r) = row.filter(|r| self.items[*r].lane().is_some()) {
                         let hit = self.lane_hit(doc, r, p);
                         doc.select(hit.map(|(track, id)| TxSelection {
@@ -3472,15 +3118,12 @@ impl WaveModel {
             }
             return;
         }
-        // Signal-name context menu. Preserve a group when the clicked row is
-        // already selected; otherwise make this the single selected row.
         if button == MouseButton::Right && layout.names.contains(p) {
             if let Some(row) = row {
                 self.open_signal_menu(doc, row, p);
             }
             return;
         }
-        // Names / values columns.
         if button != MouseButton::Left {
             return;
         }
@@ -3490,7 +3133,6 @@ impl WaveModel {
             self.drag = Some(Drag::RowHeight { row, top });
             return;
         }
-        // The chevron folds or unfolds its group; Alt does the groups inside too.
         if let Some(g) = self.chevron_at(p) {
             let collapsed = self.items[g].group().is_some_and(|g| g.collapsed);
             self.set_folded(g, !collapsed, modifiers.alt);
@@ -3508,8 +3150,6 @@ impl WaveModel {
             self.selected.clear();
             return;
         };
-        // A plain press inside the selection keeps the group so it can be
-        // dragged; releasing without a drag then selects just this row.
         let keep_group = self.selected.contains(&r) && !modifiers.shift && !modifiers.secondary();
         if !keep_group {
             self.select_row(r, modifiers);
@@ -3552,8 +3192,6 @@ impl WaveModel {
                 true
             }
             Some(Drag::Marker(mut held)) => {
-                // Snapped like the cursor: to the selected clock and the row
-                // under the pointer.
                 let Some(x) = held.target_x(p, layout.zoom) else {
                     return false;
                 };
@@ -3574,7 +3212,6 @@ impl WaveModel {
                 true
             }
             Some(Drag::Pan { last_x, click }) => {
-                // A middle press pans once it moves past the threshold.
                 if let Some(c) = click
                     && (p.x - c.x).hypot(p.y - c.y) <= CLICK_SLOP_PX * layout.zoom
                 {
@@ -3588,13 +3225,11 @@ impl WaveModel {
                 self.pan_px(doc, dx);
                 true
             }
-            // Column widths are kept at zoom 1.0 (they are saved in workspaces).
             Some(Drag::NamesSplit) => {
                 let width = ((p.x - layout.bounds.left()) / layout.zoom).max(MIN_COLUMN);
                 self.names_width = if layout.shared_metadata {
                     let metadata = (layout.waves.left() - layout.bounds.left()) / layout.zoom;
                     let min = MIN_COLUMN.min(metadata / 2.0);
-                    // Narrow windows shrink rendered columns, never their saved minimum.
                     width.clamp(min, metadata - min).max(MIN_COLUMN)
                 } else {
                     width
@@ -3639,9 +3274,6 @@ impl WaveModel {
                 false
             }
             None => {
-                // Hover feedback only needs a repaint when the hovered row or
-                // badge changes, when we enter/leave splitter zones, or when
-                // the pointer leaves the table while something was hovered.
                 let (prev_row, prev_badge, prev_split, prev_lane, prev_edge) = (
                     self.hover_row,
                     self.badge_hover,
@@ -3656,7 +3288,6 @@ impl WaveModel {
                 } else {
                     self.clear_hover();
                 }
-                // The hover readout of a plot or a group follows the pointer.
                 let reading = p.x >= self.layout.waves.left()
                     && self.hover_row.is_some_and(|r| {
                         self.signal(r).is_some_and(|s| s.analog.is_some())
@@ -3672,7 +3303,6 @@ impl WaveModel {
         }
     }
 
-    /// Wheel over waves pans time; over names/values it scrolls rows.
     fn wheel(
         &mut self,
         doc: &mut Document,
@@ -3687,7 +3317,6 @@ impl WaveModel {
             let x = (p.x - self.layout.waves.left()).max(0.0);
             self.zoom_at(doc, x, factor);
         } else if modifiers.shift {
-            // Some hosts translate Shift-wheel's vertical delta to horizontal.
             self.scroll_y = (self.scroll_y - dy - dx).clamp(0.0, self.layout.max_scroll);
         } else if p.x >= self.layout.waves.left() {
             self.pan_fraction(doc, -f64::from(dx + dy) / 1000.0, now);
@@ -3702,7 +3331,6 @@ impl WaveModel {
     }
 }
 
-/// Rows for `vars`, as [`WaveModel::add_vars`] adds them.
 fn var_rows(doc: &mut Document, vars: &[Traced<VarId>], loaded: &Resident) -> Vec<WaveRow> {
     let mut rows = Vec::with_capacity(vars.len());
     for &var in vars {
@@ -3715,10 +3343,8 @@ fn var_rows(doc: &mut Document, vars: &[Traced<VarId>], loaded: &Resident) -> Ve
         };
         let signal = var.with(v.signal);
         let translator = doc.translators.default_for(v.shape);
-        // Variable identity/format stay per row; aliases share immutable data.
         let history = loaded.get(&signal).cloned();
         let needs_load = history.is_none();
-        // Reals open as plots: their text is rarely readable at a glance.
         let analog = (v.shape == SignalShape::Real
             && analog::supports(v.shape, translator.as_ref()))
         .then(|| {
@@ -3755,10 +3381,6 @@ fn var_rows(doc: &mut Document, vars: &[Traced<VarId>], loaded: &Resident) -> Ve
     rows
 }
 
-/// Where a click on the waves at `x_px` lands after snapping to the nearest
-/// edge within `snap_px` pixels (0 disables snapping): of the row (a signal
-/// transition, a lane's record begin or end, a clock row's edge) or of the
-/// panel's selected clock, whichever is closer.
 fn snapped_time(
     vp: &Viewport,
     edges: Option<&EdgeSource<'_>>,
@@ -3786,7 +3408,6 @@ fn snapped_time(
         .unwrap_or(raw as u64)
 }
 
-/// The edge of a row nearest to `raw` within `tol`.
 fn row_edge(edges: &EdgeSource<'_>, raw: f64, exact: f64, tol: f64) -> Option<u64> {
     match edges {
         EdgeSource::History(h) => history_edge(h.as_ref(), raw, tol),
@@ -3803,7 +3424,6 @@ fn row_edge(edges: &EdgeSource<'_>, raw: f64, exact: f64, tol: f64) -> Option<u6
     }
 }
 
-/// The change of `h` nearest to `raw` within `tol`.
 fn history_edge(h: &dyn SignalHistory, raw: f64, tol: f64) -> Option<u64> {
     let t = raw as u64;
     let mut best: Option<(f64, u64)> = None;

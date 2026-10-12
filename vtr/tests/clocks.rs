@@ -1,5 +1,5 @@
-//! Declared clocks: writer calls, the dedicated clock
-//! block, `ClockTimeline` queries and recovery.
+//! Declared clocks: writer calls, the dedicated clock block, `ClockTimeline` queries and
+//! recovery.
 
 use rand::{Rng, SeedableRng};
 use vtr::*;
@@ -10,14 +10,12 @@ fn tmp(name: &str) -> std::path::PathBuf {
     dir.join(name)
 }
 
-/// A producer call.
 #[derive(Clone, Copy, Debug)]
 enum Call {
     Run(u64, u64),
     Stop(u64),
 }
 
-/// Brute force: every edge the calls describe, with `close` ending a running clock.
 fn brute_edges(calls: &[Call], close: u64) -> Vec<u64> {
     let mut edges = Vec::new();
     let mut running: Option<(u64, u64)> = None;
@@ -64,7 +62,6 @@ fn fixed_changing_gated_and_single_edge_clocks() {
     type Case = (&'static str, Vec<Call>, u64, Vec<(u64, u64, u64)>, bool);
     let cases: Vec<Case> = vec![
         ("fixed", vec![Call::Run(1, 2)], 100, vec![(1, 99, 2)], true),
-        // The demo's DVFS clock: stop where the delay changes, run at the next rising edge.
         (
             "dvfs",
             vec![
@@ -136,14 +133,14 @@ fn misuse_is_an_error_and_adds_nothing() {
     let clk = w.add_clock(None, "clk").unwrap();
     assert!(w.clock_run(clk, 0, 0).is_err(), "zero period");
     assert!(w.clock_run(ClockId(7), 0, 1).is_err(), "unknown clock");
-    w.clock_stop(clk, 5).unwrap(); // not running: nothing to do
+    w.clock_stop(clk, 5).unwrap();
     w.clock_run(clk, 10, 4).unwrap();
     assert!(
         matches!(w.clock_run(clk, 20, 4), Err(Error::State(_))),
         "run on a running clock"
     );
     assert!(w.clock_stop(clk, 9).is_err(), "stop before the first edge");
-    w.clock_stop(clk, 29).unwrap(); // last edge 26
+    w.clock_stop(clk, 29).unwrap();
     assert!(
         w.clock_run(clk, 26, 4).is_err(),
         "first edge not after the previous last edge"
@@ -164,7 +161,6 @@ fn random_calls_reproduce_brute_force_edges() {
         let mut last_edge: Option<u64> = None;
         let mut t = 0u64;
         for _ in 0..rng.gen_range(1..8) {
-            // A new stretch may begin right after the previous last edge, before the stop time.
             let first = last_edge.map_or(rng.gen_range(0..20), |e| e + rng.gen_range(1..40));
             let period = rng.gen_range(1..25);
             calls.push(Call::Run(first, period));
@@ -246,7 +242,6 @@ fn stretches_live_in_their_own_blocks_and_survive_recovery() {
     let full = std::fs::read(&path).unwrap();
     let rd = Reader::from_bytes(full.clone()).unwrap();
     let info = rd.clocks()[0].clone();
-    // Every TX_BLOCK holding stretches holds nothing else.
     let mut clock_blocks = 0;
     for e in rd.sections().iter().filter(|e| e.kind == 5) {
         let bytes = &full[e.payload_offset() as usize..(e.payload_offset() + e.len) as usize];
@@ -269,7 +264,6 @@ fn stretches_live_in_their_own_blocks_and_survive_recovery() {
             .collect::<Vec<_>>(),
         vec![(0, 40, 2), (41, 98, 3)]
     );
-    // Cut the file after the first clock block: the stretch ended before the flush survives.
     let first_clock_block = rd
         .sections()
         .iter()

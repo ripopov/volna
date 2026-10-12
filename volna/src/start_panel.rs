@@ -1,6 +1,4 @@
-//! The start panel: what every trace opens into. It says what the trace
-//! holds and how to open the first view; the core puts a waveform or
-//! pipeline panel in its place as soon as content is opened.
+//! The start panel: what every trace opens into.
 
 use gpui_kit::base::dock as base;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -18,7 +16,6 @@ use crate::app::Workspace;
 use crate::theme::{ThemePx, theme};
 use crate::ui::{IconName, branding};
 
-/// Streams listed as shortcuts before the list is cut.
 const MAX_LISTED: usize = 8;
 
 pub(crate) struct StartPanelView {
@@ -67,8 +64,6 @@ impl base::Panel for StartPanelView {
     fn panel_name(&self) -> &'static str {
         "volna.start"
     }
-    // Only core commands remove content; the placeholder itself never
-    // needs closing, the trace does.
     fn closable(&self, _: &App) -> bool {
         false
     }

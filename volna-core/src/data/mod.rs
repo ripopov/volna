@@ -1,4 +1,5 @@
 //! Viewer interpretation of raw trace objects.
+
 pub mod activity;
 pub(crate) mod admission;
 pub mod sizes;

@@ -1,7 +1,5 @@
-//! `PipelineModel`: the state of a pipeline panel (the track it shows, its
-//! navigation, the row axis, the label column, hover and drags) and every
-//! input rule that mutates it. Data is the document's loaded track; the model
-//! never copies records.
+//! `PipelineModel`: the state of a pipeline panel (the track it shows, its navigation, the
+//! row axis, the label column, hover and drags) and every input rule that mutates it.
 
 use web_time::Instant;
 
@@ -24,21 +22,13 @@ use volna_trace::data::transactions::{
     AttributeValue, TrackRef, Transaction, TransactionRef, TransactionStage, TxStatus,
 };
 
-/// The per-transaction caption attribute.
 pub const LABEL_ATTRIBUTE: &str = "vtr.label";
-/// A drag shorter than this (at zoom 1.0) is a click.
 const DRAG_THRESHOLD_PX: f32 = 3.0;
-/// Minimum width and height of a box zoom, in design pixels.
 const BOX_ZOOM_MIN_PX: f32 = 4.0;
-/// Space before a transaction start after navigating from its label.
 const START_MARGIN_PX: f64 = 32.0;
-/// Rows scrolled by one keyboard step.
 pub const SCROLL_ROWS: f64 = 3.0;
-/// Row height factor of one Increase/Decrease Row Height step.
 const ROW_HEIGHT_STEP: f64 = std::f64::consts::SQRT_2;
 
-/// A panel or lane is bound to a track of an open trace or retains a
-/// durable path in its trace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrackSource {
     Resolved {
@@ -73,43 +63,30 @@ impl TrackSource {
     }
 }
 
-/// What the pointer is over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
-    /// Aggregate ink can have several contributors; it has no unique record.
     Overview,
     Activity(super::ActivityCommand),
     Row(usize),
-    Cell {
-        row: usize,
-        stage: usize,
-    },
+    Cell { row: usize, stage: usize },
     LabelSplit,
     Header,
-    /// A chip on the Markers lane, by its index in the lane layout.
     Marker(usize),
-    /// A span on the Markers lane, by its index in the lane layout.
     Span(usize),
-    /// The live span on the Measure lane.
     Live,
-    /// The reference's `R` tag on the Measure lane.
     ReferenceTag,
-    /// The Measure lane's `×`.
     ClearReference,
     Retry,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
-    /// Pans both axes once the pointer moved past the threshold; a shorter
-    /// left-button press is a click that sets the cursor.
     Pan {
         button: MouseButton,
         start: Point,
         last: Point,
         moved: bool,
     },
-    /// Selects an area in a fixed cells layout; resizing cancels the gesture.
     BoxZoom {
         start: Point,
         current: Point,
@@ -118,19 +95,14 @@ pub enum Drag {
     },
     Cursor,
     LabelSplit,
-    /// A marker chip held by the pointer: a click goes to the marker, a
-    /// drag moves it onto cycles.
     Marker(crate::marker::MarkerDrag),
 }
 
-/// The rows a panel shows, or why it shows none.
 pub enum Rows<'a> {
     Ready(RowSet<'a>),
     Loading,
     Failed(&'a str),
-    /// The saved path is not a track of this trace.
     Unresolved,
-    /// No trace is open or the panel is not attached to the document.
     Unavailable,
 }
 
@@ -140,18 +112,12 @@ pub struct PipelineModel {
     pub follow: super::FollowActivity,
     pub track: TrackSource,
     pub nav: NavState,
-    /// The row axis at interface zoom 1.0.
     pub rows: Tween<RowView>,
-    /// Maximum square-cell size for pipeline zoom, in design pixels:
-    /// [`ROW_PX_CAP`], or a taller height set by a rows-only zoom.
     pub row_cap: f32,
-    /// Design pixels, zoom applied at layout.
     pub label_width: f32,
     pub hover: Option<Hit>,
     pub drag: Option<Drag>,
-    /// Last known pointer position over the panel.
     pub pointer: Option<Point>,
-    /// Canvas paints so far, for tests that need real repaints.
     pub frames_painted: u64,
     attached: bool,
     palette: StagePalette,
@@ -179,7 +145,6 @@ impl PipelineModel {
         }
     }
 
-    /// Copy persistent view state for a split; the copy is not attached.
     pub fn clone_view(&self) -> Self {
         Self {
             track: self.track.clone(),
@@ -193,7 +158,6 @@ impl PipelineModel {
         }
     }
 
-    /// Retain the track through the document. Pair with [`PipelineModel::detach`].
     pub fn attach(&mut self, doc: &mut Document) -> anyhow::Result<()> {
         if self.attached {
             return Ok(());
@@ -220,7 +184,6 @@ impl PipelineModel {
         self.attached
     }
 
-    /// Rebuild the palette from the loaded track; call after a delivery.
     pub fn refresh(&mut self, doc: &Document) {
         if let Rows::Ready(set) = self.rows(doc) {
             self.palette = StagePalette::build(set.generators());
@@ -259,9 +222,6 @@ impl PipelineModel {
         }
     }
 
-    /// The caption of a transaction from its single `vtr.label` attribute.
-    /// Both VTR `str` and `text` values are resolved to [`AttributeValue::Text`]
-    /// at the session boundary.
     pub fn label(tx: &Transaction) -> String {
         tx.attributes
             .iter()
@@ -272,12 +232,10 @@ impl PipelineModel {
             .unwrap_or_default()
     }
 
-    /// The end of a stage: its own, or its transaction's while still open.
     pub fn stage_end(tx: &Transaction, stage: &TransactionStage) -> u64 {
         stage.end.unwrap_or(tx.end).max(stage.begin)
     }
 
-    /// The layout of the last frame (see [`PipelineModel::layout`]).
     pub fn last_layout(&self) -> &PipelineLayout {
         &self.layout
     }
@@ -292,9 +250,6 @@ impl PipelineModel {
         nav || rows
     }
 
-    // -- selection ---------------------------------------------------------------
-
-    /// The row of the document's selected record, when this panel shows it.
     pub fn selected_row(&self, doc: &Document) -> Option<usize> {
         let selection = doc.selection()?;
         if selection.track.trace != self.track.trace() {
@@ -306,7 +261,6 @@ impl PipelineModel {
         set.row_of(selection.track.item, selection.id)
     }
 
-    /// A readable transaction label under `p`, excluding the resize handle.
     pub fn label_row_at(&self, doc: &Document, p: Point) -> Option<usize> {
         if !self.layout.labels.contains(p) || self.layout.is_overview() {
             return None;
@@ -317,7 +271,6 @@ impl PipelineModel {
         }
     }
 
-    /// Make row `row` the document selection. Returns whether it changed.
     pub fn select_row(&mut self, doc: &mut Document, panel: PanelId, row: usize) -> bool {
         let selection = {
             let Rows::Ready(set) = self.rows(doc) else {
@@ -335,8 +288,6 @@ impl PipelineModel {
         doc.select(Some(selection))
     }
 
-    /// ↑ ↓ with a selection: move it by one row and keep it visible. Without
-    /// one, the rows scroll, as they always have.
     pub fn move_selection(
         &mut self,
         doc: &mut Document,
@@ -358,8 +309,6 @@ impl PipelineModel {
         self.reveal_row(doc, next);
     }
 
-    /// Scroll to the record's row and fit the time axis to its lifetime.
-    /// Returns whether the panel shows the record at all.
     pub fn reveal_record(
         &mut self,
         doc: &mut Document,
@@ -392,8 +341,6 @@ impl PipelineModel {
         true
     }
 
-    /// Pan the time axis to a row's begin time, retaining its width and row
-    /// position. The small leading margin keeps the first cycle visible.
     pub fn pan_to_row_start(&mut self, doc: &mut Document, row: usize, now: Instant) -> bool {
         let begin = match self.rows(doc) {
             Rows::Ready(set) => set.get(row).map(|(_, tx)| tx.begin),
@@ -415,7 +362,6 @@ impl PipelineModel {
         true
     }
 
-    /// Put `row` in the middle of the cells area.
     fn center_row(&mut self, doc: &Document, row: usize) {
         let zoom = self.layout.zoom.max(f32::EPSILON);
         let height = self.layout.cells.height();
@@ -428,7 +374,6 @@ impl PipelineModel {
         self.rows.set(rows.unzoomed(zoom));
     }
 
-    /// Scroll only far enough to bring `row` back inside the cells area.
     fn reveal_row(&mut self, doc: &Document, row: usize) {
         let zoom = self.layout.zoom.max(f32::EPSILON);
         let height = self.layout.cells.height();
@@ -449,7 +394,6 @@ impl PipelineModel {
         self.rows.set(rows.unzoomed(zoom));
     }
 
-    /// Text for the status bar about what the pointer is over.
     pub fn hover_text(&self, doc: &Document) -> Option<String> {
         if self.hover == Some(Hit::Overview) {
             return Some("Pipeline presence · zoom in to inspect records".into());
@@ -491,11 +435,6 @@ impl PipelineModel {
         Some(text)
     }
 
-    // -- layout ------------------------------------------------------------------
-
-    /// Lay the panel out in `bounds` for this frame. Clamps the row view to
-    /// the rows and the area, and derives hover state from the last pointer
-    /// position. The result is kept for input handling.
     pub fn layout(
         &mut self,
         bounds: crate::geometry::Rect,
@@ -551,12 +490,10 @@ impl PipelineModel {
         } else {
             self.layout.clone()
         };
-        // The clamp is part of the view: keep it once nothing animates.
         if !self.rows.is_animating() {
             self.rows.set(layout.rows.unzoomed(layout.zoom));
         }
         self.layout = layout;
-        // The follow pass measured these rows already unless the clamp moved them.
         let activity = match followed {
             Some(activity) if self.rows.target() == rows_before => activity,
             _ => self.activity(doc),
@@ -640,7 +577,6 @@ impl PipelineModel {
         let (_, tx) = set.get(row)?;
         let t = layout.time_at(&self.nav.viewport(doc), p.x);
         let primary = self.palette.primary_lane();
-        // An overlay lane is drawn on top of the primary lane, so it wins.
         let mut best: Option<(usize, bool)> = None;
         for (ix, stage) in tx.stages.iter().enumerate() {
             let end = Self::stage_end(tx, stage);
@@ -659,8 +595,6 @@ impl PipelineModel {
         })
     }
 
-    // -- navigation --------------------------------------------------------------
-
     fn cells_w(&self) -> f64 {
         self.layout.cells_width_f64()
     }
@@ -669,7 +603,6 @@ impl PipelineModel {
         self.layout.cells.height().max(1.0)
     }
 
-    /// The row view the next change builds on, at the current zoom.
     fn rows_target(&self) -> RowView {
         self.rows.target().zoomed(self.layout.zoom)
     }
@@ -683,8 +616,6 @@ impl PipelineModel {
         }
     }
 
-    /// The row view a change builds on: the animation target when the
-    /// change animates, else the displayed view; at the current zoom.
     fn rows_base(&self, animated: bool) -> RowView {
         if animated {
             self.rows_target()
@@ -693,7 +624,6 @@ impl PipelineModel {
         }
     }
 
-    /// Whether a frame was laid out; zoom needs its areas and zoom factor.
     fn laid_out(&self) -> bool {
         self.layout.zoom > 0.0
     }
@@ -702,13 +632,10 @@ impl PipelineModel {
         FIT_MARGIN_PX * f64::from(self.layout.zoom)
     }
 
-    /// The whole trace with the fit margins, in this panel's cells width.
     fn fit_viewport(&self, doc: &Document) -> Viewport {
         Viewport::fit_px(doc.limits(), self.cells_w(), self.fit_margin_px())
     }
 
-    /// Row height (at the current zoom) at which every row fits the cells
-    /// area with the fit margins; infinite without rows.
     fn fit_row_px(&self, doc: &Document) -> f64 {
         let n = self.row_count(doc);
         if n == 0 {
@@ -720,8 +647,6 @@ impl PipelineModel {
         (inner / n as f64).max(f64::from(ROW_PX_MIN * self.layout.zoom))
     }
 
-    /// Time units per cycle of the stream's clock around `t`; one without a
-    /// clock, where the panel counts one time unit per cycle.
     fn cycle_units(&self, doc: &Document, t: f64) -> f64 {
         let (a, b) = doc.limits();
         let t = t.clamp(a as f64, b as f64) as u64;
@@ -738,10 +663,6 @@ impl PipelineModel {
             .unwrap_or(1.0)
     }
 
-    /// Independent box-zoom limits: time from the whole trace with its
-    /// margins to [`CYCLE_PX_MAX`] per cycle; rows from where every row fits
-    /// (no lower than the opening height when they all fit anyway) to the
-    /// panel's cap.
     pub fn zoom_box(&self, doc: &Document, viewport: &Viewport) -> ZoomBox {
         let z = f64::from(self.layout.zoom);
         let w = self.cells_w();
@@ -761,7 +682,6 @@ impl PipelineModel {
         }
     }
 
-    /// The zoom state of a viewport and a row view at the current zoom.
     fn zoom_point(&self, viewport: &Viewport, rows: RowView) -> ZoomPoint {
         ZoomPoint {
             time: (self.cells_w() / viewport.width()).ln(),
@@ -769,8 +689,6 @@ impl PipelineModel {
         }
     }
 
-    /// Shared square-size limits. The smaller fit scale lets both the trace
-    /// and the rows fit, with spare space on the less populated axis.
     fn square_size_limits(&self, doc: &Document, cycle_units: f64) -> (f64, f64) {
         let z = f64::from(self.layout.zoom);
         let cap = f64::from(self.row_cap) * z;
@@ -780,8 +698,6 @@ impl PipelineModel {
         (lo.ln(), cap.ln())
     }
 
-    /// The normalized, cells-clipped box and whether it is large enough to fit.
-    /// Painting and release use the same geometry and design-pixel threshold.
     pub(super) fn selection_box(&self) -> Option<(Rect, bool)> {
         let Drag::BoxZoom {
             start,
@@ -809,7 +725,6 @@ impl PipelineModel {
         let mut rows = self.rows.value.zoomed(self.layout.zoom);
         let bounds = self.zoom_box(doc, &viewport);
         let from = self.zoom_point(&viewport, rows);
-        // Both axes stop together at the first cap, retaining the screen aspect.
         let factor = (self.cells_w() / f64::from(rect.width()))
             .min(f64::from(self.cells_h()) / f64::from(rect.height()))
             .min((bounds.time.1 - from.time).exp().max(1.0))
@@ -826,7 +741,6 @@ impl PipelineModel {
             end: time + width * 0.5,
         };
         target.clamp(doc.limits());
-        // Navigation also enforces a representable minimum time width.
         let factor = factor.min(viewport.width() / target.width());
         self.suspend_follow();
         self.nav.animate_to(doc, target, now);
@@ -835,18 +749,12 @@ impl PipelineModel {
         self.set_rows(doc, rows, Some(now));
     }
 
-    /// Restore square cells and zoom by `factor` (> 1 zooms in) about a panel
-    /// position; animated when `now` is given, otherwise immediate.
     pub fn zoom_about(&mut self, doc: &mut Document, p: Point, factor: f64, now: Option<Instant>) {
         let x = f64::from((p.x - self.layout.cells.left()).max(0.0));
         let y = (p.y - self.layout.cells.top()).max(0.0);
         self.zoom_square(doc, Some((x, y)), factor, now);
     }
 
-    /// Normalize rectangular cells, then scale both axes about the same
-    /// cells-relative anchor. Keyboard zoom uses the visible cursor (else
-    /// the time centre) and the vertical centre. Animated inputs accumulate
-    /// against their targets; immediate gestures use the displayed view.
     fn zoom_square(
         &mut self,
         doc: &mut Document,
@@ -893,10 +801,6 @@ impl PipelineModel {
         );
     }
 
-    /// Apply a square size while retaining the time and fractional row at
-    /// the anchor, subject to position clamps. Derive the row height from
-    /// the representable time window so navigation's precision floor never
-    /// lets the two axes diverge at large timestamps.
     fn set_square_view(
         &mut self,
         doc: &mut Document,
@@ -934,10 +838,6 @@ impl PipelineModel {
         self.set_rows(doc, rows, now);
     }
 
-    /// Rows-only zoom by `factor` about `y` pixels below the top of the
-    /// cells area: from where every row fits (no lower than the opening
-    /// height when they all fit anyway) up to [`ROW_PX_MAX`]. The height
-    /// becomes the panel's cap when it is above [`ROW_PX_CAP`].
     fn zoom_rows_at(&mut self, doc: &mut Document, y: f32, factor: f64, now: Option<Instant>) {
         if !(self.laid_out() && factor.is_finite() && factor > 0.0) {
             return;
@@ -957,7 +857,6 @@ impl PipelineModel {
         self.set_rows(doc, rows, now);
     }
 
-    /// Increase / Decrease Row Height: a rows-only zoom step about the middle.
     pub fn step_row_height(&mut self, doc: &mut Document, delta: isize, now: Instant) {
         if delta == 0 {
             return self.reset_row_height(doc, now);
@@ -967,7 +866,6 @@ impl PipelineModel {
         self.zoom_rows_at(doc, y, factor, Some(now));
     }
 
-    /// Reset Row Height: the opening height and cap, about the middle.
     pub fn reset_row_height(&mut self, doc: &mut Document, now: Instant) {
         if !self.laid_out() {
             return;
@@ -990,8 +888,6 @@ impl PipelineModel {
         self.zoom_square(doc, None, 0.5, Some(now));
     }
 
-    /// Fit the whole trace and every row with square cells. The less
-    /// populated axis retains empty space rather than stretching its cells.
     pub fn zoom_fit(&mut self, doc: &mut Document, now: Instant) {
         if !self.laid_out() {
             return self.nav.zoom_fit(doc, self.cells_w(), 0.0, now);
@@ -999,8 +895,6 @@ impl PipelineModel {
         self.fit_square(doc, Some(now));
     }
 
-    /// Center both axes when the shared fit limit is reached, so pointer
-    /// anchoring cannot leave rows or time off screen at the overview scale.
     fn fit_square(&mut self, doc: &mut Document, now: Option<Instant>) {
         self.suspend_follow();
         let fit = self.fit_viewport(doc);
@@ -1039,7 +933,6 @@ impl PipelineModel {
         self.nav.pan_fraction(doc, frac, now);
     }
 
-    /// Scroll the rows by `rows` (animated).
     pub fn scroll_rows(&mut self, doc: &mut Document, rows: f64, now: Instant) {
         if rows != 0.0 {
             self.suspend_follow();
@@ -1049,7 +942,6 @@ impl PipelineModel {
         self.set_rows(doc, target, Some(now));
     }
 
-    /// Immediate pan of both axes by pixels (drag, trackpad scroll).
     fn pan_px(&mut self, doc: &mut Document, dx: f32, dy: f32) {
         if dx != 0.0 {
             let w = self.cells_w();
@@ -1068,8 +960,6 @@ impl PipelineModel {
         }
     }
 
-    /// Escape: cancel a drag, then clear the selection, then the cursor.
-    /// Clearing the highlight never blanks a transaction panel.
     pub fn escape(&mut self, doc: &mut Document) {
         if self.drag.is_some() {
             self.drag = None;
@@ -1080,14 +970,10 @@ impl PipelineModel {
         }
     }
 
-    /// The clock this panel's stream counts its stages in (its `vtr.clock`).
     pub fn clock<'a>(&self, doc: &'a Document) -> Option<&'a crate::clock::Clock> {
         doc.clocks.linked(self.track.track()?)
     }
 
-    /// The start of the cycle under panel x, clamped to the trace: the last
-    /// edge of the stream's clock at or before it, or the whole time unit
-    /// without a clock (a Kanata trace counts one unit per cycle).
     fn cycle_at(&self, doc: &Document, x: f32) -> u64 {
         let t = self.layout.time_at(&self.nav.viewport(doc), x).max(0.0);
         if let Some(at) = self
@@ -1101,8 +987,6 @@ impl PipelineModel {
         (t.floor() as u64).clamp(a, b)
     }
 
-    /// `12–15 (3 cycles)`: an interval as cycles of the stream's clock, as
-    /// the panel numbers them; `[12, 15)` in time units without a clock.
     fn span_text(&self, doc: &Document, begin: u64, end: u64) -> String {
         let Some(tl) = self.clock(doc).and_then(|c| c.timeline()) else {
             return format!("[{begin}, {end})");
@@ -1121,10 +1005,6 @@ impl PipelineModel {
         }
     }
 
-    // -- pointer input -----------------------------------------------------------
-
-    /// Handle pointer input. `panel` owns the selection a click writes.
-    /// Returns true when something visible changed. Box zoom animates on release.
     pub fn pointer(
         &mut self,
         doc: &mut Document,
@@ -1163,7 +1043,6 @@ impl PipelineModel {
                     held.release(doc, &mut self.nav, now);
                     return true;
                 }
-                // A middle click without dragging measures from its point.
                 if let Some(Drag::Pan {
                     button: MouseButton::Middle,
                     start,
@@ -1182,8 +1061,6 @@ impl PipelineModel {
                 }) = drag
                     && self.layout.cells.contains(start)
                 {
-                    // Readable rows select a record. Aggregate ink and empty
-                    // space set the cursor and clear the record selection.
                     let cycle = self.cycle_at(doc, start.x);
                     self.nav.set_cursor(doc, Some(cycle));
                     match self
@@ -1225,8 +1102,6 @@ impl PipelineModel {
         }
     }
 
-    /// Put the document's reference at `p` (Alt-click, a middle click), on
-    /// the start of the cycle there like the cursor, or onto a marker there.
     fn measure_from(&mut self, doc: &mut Document, p: Point) {
         let x =
             p.x.clamp(self.layout.cells.left(), self.layout.cells.right());
@@ -1292,7 +1167,6 @@ impl PipelineModel {
                     return;
                 }
             }
-            // A press on a clock ruler selects its clock, then works like the header.
             let rulers: Vec<ClockKey> = self
                 .nav
                 .clocks()
@@ -1314,7 +1188,6 @@ impl PipelineModel {
             if ruler.is_some() {
                 return;
             }
-            // A readable label selects its row without moving the cursor.
             if let Some(row) = self.label_row_at(doc, p) {
                 self.select_row(doc, panel, row);
                 return;
@@ -1337,7 +1210,6 @@ impl PipelineModel {
             });
             return;
         }
-        // A middle press measures from its point unless it drags, which pans.
         if layout.cells.contains(p) || (button == MouseButton::Middle && in_time) {
             self.drag = Some(Drag::Pan {
                 button,
@@ -1410,10 +1282,6 @@ impl PipelineModel {
         }
     }
 
-    /// Ctrl/⌘+wheel restores and zooms square cells over both the body and
-    /// the rulers. Alt+wheel adjusts only row height; a plain wheel scrolls
-    /// rows and pans time with its horizontal delta; Shift+wheel pans time.
-    /// Wheel and trackpad deltas use the same scale and navigation rules.
     fn wheel(&mut self, doc: &mut Document, p: Point, dx: f32, dy: f32, modifiers: Modifiers) {
         let factor = 2f64.powf(f64::from(dy) / 120.0);
         if modifiers.control || modifiers.platform {
@@ -1422,7 +1290,6 @@ impl PipelineModel {
             let y = (p.y - self.layout.cells.top()).max(0.0);
             self.zoom_rows_at(doc, y, factor, None);
         } else if modifiers.shift {
-            // Some hosts translate Shift-wheel's vertical delta to horizontal.
             self.pan_px(doc, -(dx + dy), 0.0);
         } else {
             self.pan_px(doc, -dx, -dy);

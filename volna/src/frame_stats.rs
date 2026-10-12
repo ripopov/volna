@@ -1,6 +1,6 @@
 //! Whole-window frame timing: reads GPUI's frame profiler into the core's
-//! [`FrameStats`](volna_core::frames::FrameStats) and draws the status-bar
-//! item and its details popup.
+//! [`FrameStats`](volna_core::frames::FrameStats) and draws the status-bar item and its
+//! details popup.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -21,19 +21,15 @@ use volna_core::frames::{
 use crate::app::Workspace;
 use crate::theme::{Theme, ThemePx, theme};
 
-/// Frontend state around the core's frame statistics.
 #[derive(Default)]
 pub(crate) struct FrameView {
     frames: Option<FrameDurationSnapshot>,
     input: Option<InputLatencySnapshot>,
-    /// Where the status item was last painted: the popup hangs above it,
-    /// and a press on it toggles rather than dismisses.
     trigger: Rc<Cell<Bounds<Pixels>>>,
     focus: Option<FocusHandle>,
 }
 
 impl FrameView {
-    /// The frames GPUI recorded since the previous call.
     fn sample(&mut self, window: &Window) -> FrameSample {
         let frames = window.frame_duration_snapshot();
         let input = window.input_latency_snapshot();
@@ -69,7 +65,6 @@ fn delta(now: &Histogram<u64>, before: Option<&Histogram<u64>>) -> Distribution 
 }
 
 impl Workspace {
-    /// Sample GPUI's frame histograms every tick while the window lives.
     pub(crate) fn start_frame_sampling(&self, window: &Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -108,7 +103,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The status-bar item: recent medians, tinted when frames ran over budget.
     pub(crate) fn render_frame_status(
         &self,
         status: FrameStatus,
@@ -152,7 +146,6 @@ impl Workspace {
             )
     }
 
-    /// The details popup above the status item, while open.
     pub(crate) fn render_frame_details(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         if !self.app.frames.details {
             return None;
@@ -181,7 +174,6 @@ impl Workspace {
             .occlude()
             .on_mouse_down_out(cx.listener(
                 move |this, ev: &gpui_kit::MouseDownEvent, window, cx| {
-                    // A press on the status item toggles the popup itself.
                     if !ignore.get().contains(&ev.position) {
                         this.set_frame_details(false, window, cx);
                     }
@@ -307,8 +299,6 @@ fn metric(row: &FrameRow, t: &Theme) -> impl IntoElement {
 const BAR_W: f32 = 22.0;
 const CHART_H: f32 = 28.0;
 
-/// Frames per duration bucket since the reset, on log scales both ways so
-/// a single slow frame stays visible next to thousands of fast ones.
 fn chart(row: &FrameRow, t: &Theme) -> impl IntoElement {
     let peak = row.buckets.iter().copied().max().unwrap_or(0);
     let height = |count: u64| {

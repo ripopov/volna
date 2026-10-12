@@ -1,4 +1,5 @@
-//! Semantic glyphs and tints. No toolkit or backend handles are involved.
+//! Semantic glyphs and tints.
+
 use crate::icons::IconName;
 use crate::theme::Theme;
 use volna_trace::data::{Direction, Hierarchy, Member, ScopeRole, ScopeView};
@@ -15,8 +16,6 @@ pub enum Tint {
 }
 
 impl Tint {
-    /// Streams, generators and log sites keep their tints; scope, variable
-    /// and port-direction icons share one neutral colour.
     pub fn color<C: Copy>(self, theme: &Theme<C>) -> C {
         match self {
             Self::None | Self::In | Self::Out | Self::InOut => theme.panel.icon_muted,

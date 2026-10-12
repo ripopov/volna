@@ -21,7 +21,6 @@ flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 
 [features]
-# Shared procedural histories for headless loader and viewer tests.
 testing = []
 
 [dev-dependencies]

@@ -1,7 +1,4 @@
-//! The marker navigator (`'`, or `@` in the palette): rows in time order
-//! with number, name, time, the step from the previous marker and the
-//! distance from the reference; typing filters by name words or number;
-//! `↵` goes, `⇧↵` measures from, `F2` renames and `Del` removes.
+//! Marker navigator tests for filtering, navigation, measurement, renaming, and removal.
 
 use std::sync::Arc;
 use volna_core::testing::a_all;
@@ -14,7 +11,6 @@ fn id(n: u32) -> MarkerId {
     MarkerId::new(n).unwrap()
 }
 
-/// Markers 1–4 at 1200, 1600, 2000 and 900: “req A”, “resp A”, “req B”, none.
 fn app() -> App {
     let mut app = App::new();
     app.set_session(Arc::new(ProceduralTrace::new(1000)));
@@ -65,7 +61,6 @@ fn rows_carry_time_step_and_distance_from_the_reference() {
     assert_eq!(rows[0].step, None, "the first has no step");
     assert_eq!(r1.step.as_deref(), Some("+300 ns"));
     assert_eq!(r1.from_reference, None, "no reference yet");
-    // Steps come from the whole list, so a filter keeps them.
     let filtered = app.navigator_rows("resp");
     assert_eq!(filtered[0].step.as_deref(), Some("+400 ns"));
 
@@ -97,15 +92,12 @@ fn the_navigator_opens_by_key_or_name_and_its_keys_act_on_a_marker() {
     );
     let before = app.undo_label().map(str::to_owned);
 
-    // ↵ goes to the marker as a jump.
     app.handle(Command::Lane(LaneVerb::GoTo(id(2))));
     assert_eq!(app.doc.shared.cursor, Some(1600));
     app.handle(Command::Action(Action::JumpBack));
     assert_eq!(app.doc.shared.cursor, Some(100));
-    // ⇧↵ measures from it.
     app.handle(Command::Lane(LaneVerb::MeasureFrom(id(3))));
     assert_eq!(app.doc.reference(), Some(Reference::Marker(id(3))));
-    // F2 opens its name field.
     app.handle(Command::Lane(LaneVerb::Rename(id(1))));
     let edit = app.text_edit().expect("the name field");
     assert_eq!(edit.text, "req A");
@@ -115,7 +107,6 @@ fn the_navigator_opens_by_key_or_name_and_its_keys_act_on_a_marker() {
         before,
         "all navigation"
     );
-    // Del removes it, one step.
     app.handle(Command::Lane(LaneVerb::Remove(id(4))));
     assert_eq!(ids(&app, ""), [1, 2, 3]);
     assert_eq!(app.undo_label(), Some("Remove marker 4"));

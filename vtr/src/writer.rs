@@ -1,41 +1,4 @@
 //! Streaming writer.
-//!
-//! [`Writer`] appends sections and never seeks; the directory and trailer are
-//! written by [`Writer::close`]. It is `Send` but not `Sync`: drive it from one
-//! thread at a time. By default encoding and compression run on a background
-//! thread (`vtr-writer`), so the simulator thread only buffers records.
-//!
-//! Ordering rules:
-//! * Set metadata right after creation: the `Meta` section is written at the
-//!   first flush, after which the setters return [`Error::State`].
-//! * Declare nodes at any time; each names its parent (`None` = a root).
-//!   Attributes can be added to a node only until the next flush.
-//! * Call [`Writer::set_time`] (non-decreasing) before emitting the values of
-//!   a time step. Transactions, log records and clock stretches carry their
-//!   own timestamps and are independent of it.
-//! * Call [`Writer::close`] and check its result; `Drop` closes too but
-//!   discards errors. Errors from the background thread surface on the next
-//!   call that talks to it and on `close`; a failed writer cannot resume, and
-//!   the reader recovers what was completely written.
-//!
-//! Memory is bounded by `block_records`, `tx_block_bytes`, the pending
-//! hierarchy chunk and the attributes, events and stages of open transactions.
-//!
-//! # Values
-//!
-//! Every `emit_*` validates the signal id and kind, stamps the value with the
-//! current time step and returns [`Error::Invalid`] for a value the signal's
-//! states cannot hold. Logic codes are `0 1 X Z U W L H -` = 0..=8
-//! ([`crate::signal`]). A bit vector holding only 0/1 is stored compact
-//! (2-state packing), which makes `emit_u64` and `emit_words` the cheapest
-//! paths; use `emit_logic_str` for converting textual formats.
-//!
-//! With [`WriterOptions::dedup`] a non-event signal drops an emit whose value
-//! and packing equal its last one, starting from the default value (so a
-//! first `0.0`, empty byte string or all-X value is dropped, but a first zero
-//! on a 2-state signal is recorded). Reals compare by bit pattern. Different
-//! values at the same time step are all recorded in emission order, and
-//! every emit on an event signal ([`VarType::Event`]) records an occurrence.
 
 use crate::block::{
     self, BlockInput, ChunkEnc, ChunkInput, EncoderScratch, Record, COMPACT_FLAG, NO_BLOCK,
@@ -77,59 +40,21 @@ fn ensure_unique_attrs(attrs: &[(StrId, Value)]) -> Result<()> {
     Ok(())
 }
 
-/// Writer configuration. Defaults are tuned for simulator traces.
 #[derive(Clone, Debug)]
 pub struct WriterOptions {
-    /// Codec and level for all compressed payloads. Default
-    /// [`Compression::ZSTD_DEFAULT`] (zstd level 3). A payload that does not
-    /// shrink is stored raw.
     pub compression: Compression,
-    /// Signals per value-change group, rounded up to a power of two. Larger
-    /// groups compress better; smaller groups make single-signal reads
-    /// cheaper. Fixed for the file's lifetime. Default 256.
     pub group_size: u32,
-    /// Value changes per signal block, the compression unit. Larger blocks
-    /// compress better; smaller ones make random access touch less data.
-    /// Default 16 Mi.
     pub block_records: usize,
-    /// Value changes handed to the background encoder at a time (the pipelining unit).
-    /// A lower bound: the writer raises it to [`CHUNK_RECORDS_PER_SIGNAL`] changes per
-    /// declared signal so that per-signal column fragments do not become tiny.
-    /// Default 512 Ki.
     pub chunk_records: usize,
-    /// Raw bytes per independently compressed column run inside a group.
-    /// Bounds how much must be decompressed to read one signal in one block.
-    /// Default 64 KiB.
     pub run_bytes: usize,
-    /// Row bytes buffered before a transaction block (or a log block) is
-    /// emitted. Default 4 MiB.
     pub tx_block_bytes: usize,
-    /// Encode and compress on a background thread; a bounded channel applies
-    /// back-pressure. With `false` the work runs inline. Default `true`.
     pub background: bool,
-    /// Helper threads that encode and compress log blocks (only with `background`);
-    /// 0 encodes them on the sink thread. Blocks are written in production
-    /// order whatever the number of threads. Default 2.
     pub log_encoders: usize,
-    /// Drop unchanged values on non-event signals (see the
-    /// [module documentation](crate::writer#values)).
-    /// Event occurrences are never dropped. Default `true`.
     pub dedup: bool,
-    /// Store a CRC32 of every section payload; the reader checks it only with
-    /// [`ReadOptions::verify_crc`](crate::ReadOptions::verify_crc). Default `true`.
     pub checksums: bool,
-    /// Longest time buffered data waits before it is handed to the encoder
-    /// and written, so that a process killed without a chance to close
-    /// (SIGKILL, the OOM killer) loses at most this much of a slow run. The
-    /// writer checks every 256 calls of [`set_time`](Writer::set_time),
-    /// [`log`](Writer::log) and [`end_tx`](Writer::end_tx), and ends a signal
-    /// block, or writes the pending transactions or log records, that has
-    /// waited this long. Fast runs fill their blocks sooner and never see it.
-    /// Zero turns it off. Default off: periodic commits are opt-in.
     pub commit_interval: Duration,
 }
 
-/// Minimum average changes per signal in one chunk (see [`WriterOptions::chunk_records`]).
 pub const CHUNK_RECORDS_PER_SIGNAL: usize = 16;
 
 impl Default for WriterOptions {
@@ -150,19 +75,13 @@ impl Default for WriterOptions {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Sink: owns the output file, encodes and writes sections
-// ---------------------------------------------------------------------------
-
 enum Msg {
-    /// Metadata, strings, blackout.
     Section {
         kind: SectionKind,
         payload: Vec<u8>,
         aux0: u64,
         aux1: u64,
     },
-    /// A hierarchy chunk of `count` nodes from `first`, with `signals` declared after it.
     Hierarchy {
         payload: Vec<u8>,
         first: u32,
@@ -173,18 +92,14 @@ enum Msg {
     Tx(Box<TxBlockInput>),
     Log(Box<LogBlockInput>),
     Close,
-    /// Finish the file with this ending and report (`Sealer::seal`).
     Seal(Ending, SyncSender<Result<()>>),
 }
 
-/// Log blocks encoded on helper threads: inputs go out, finished payloads come back.
 struct LogPool {
     tx: Option<SyncSender<(u64, Box<LogBlockInput>)>>,
     rx: Receiver<(u64, Result<Vec<u8>>)>,
     handles: Vec<std::thread::JoinHandle<()>>,
     pending: usize,
-    /// Sequence number of the next block to submit / to write: blocks are
-    /// written in production order even though they finish out of order.
     next_submit: u64,
     next_write: u64,
     done: std::collections::BTreeMap<u64, Result<Vec<u8>>>,
@@ -234,9 +149,6 @@ impl LogPool {
 }
 
 struct FileSink {
-    /// Started with the writer (background mode with `log_encoders > 0`), so
-    /// that finishing a file never creates a thread: thread creation takes the
-    /// C library's heap lock, which a crash can leave held.
     log_pool: Option<LogPool>,
     file: BufWriter<File>,
     offset: u64,
@@ -250,19 +162,14 @@ struct FileSink {
     chunks: Vec<ChunkEnc>,
     n_chunks: usize,
     chunk_pool: Vec<ChunkEnc>,
-    // The signal block being assembled from its chunks.
     group_size: u32,
     run_budget: usize,
     block: BlockInput,
-    /// Frame parts of the block: (group, arrival, offset, length) into `frame`.
     frame_parts: Vec<(u32, u32, u32, u32)>,
     frame: Vec<u8>,
-    /// Per group: the last block in which it was dirty.
     last_dirty_block: Vec<u32>,
     block_count: u32,
-    // What the file holds so far, for an ending record written by the sink.
     meta_written: bool,
-    /// Ids of the strings an ending record uses (`ending::strings`) already in the file.
     known: std::collections::HashMap<&'static str, u32>,
     next_string: u32,
     next_node: u32,
@@ -273,7 +180,6 @@ struct FileSink {
 }
 
 impl FileSink {
-    /// A sink appending to `file` at `offset`.
     fn new(file: File, offset: u64, opts: &WriterOptions, group_size: u32) -> Result<FileSink> {
         let log_encoders = if opts.background {
             opts.log_encoders
@@ -329,7 +235,6 @@ impl FileSink {
     fn write_log_payload(&mut self, payload: &[u8]) -> Result<()> {
         let h = logblock::LogBlockHeader::parse(payload)?;
         self.saw_ids(h.max_id, h.t_max);
-        // Optional: a reader without log support skips the block instead of failing.
         self.write_section_parts(
             SectionKind::LogBlock,
             SECTION_FLAG_OPTIONAL,
@@ -344,11 +249,8 @@ impl FileSink {
         self.max_time = self.max_time.max(t_max);
     }
 
-    /// Writes finished log blocks in submission order; with `wait` blocks until
-    /// every pending one is done.
     fn drain_logs(&mut self, wait: bool) -> Result<()> {
         loop {
-            // Write everything that is next in line and already finished.
             loop {
                 let r = match &mut self.log_pool {
                     Some(p) if p.pending > 0 => match p.done.remove(&p.next_write) {
@@ -394,9 +296,6 @@ impl FileSink {
         self.write_section_parts(kind, 0, &[payload], aux0, aux1)
     }
 
-    /// Writes a section whose payload is the concatenation of `parts` and
-    /// hands it to the kernel at once: a finished section never waits in the
-    /// file buffer, so a process that dies afterwards keeps it.
     fn write_section_parts(
         &mut self,
         kind: SectionKind,
@@ -433,8 +332,6 @@ impl FileSink {
         Ok(())
     }
 
-    /// Remembers the ids of the strings an ending record would use, so that
-    /// it reuses them (producers intern each string once, SPEC 4).
     fn note_strings(&mut self, payload: &[u8]) -> Result<()> {
         let mut r = varint::Reader::new(payload);
         let first = r.u32()?;
@@ -448,7 +345,6 @@ impl FileSink {
         Ok(())
     }
 
-    /// Writes a STRINGS or HIERARCHY chunk, stored as one compressed blob.
     fn write_blob_section(
         &mut self,
         kind: SectionKind,
@@ -465,13 +361,11 @@ impl FileSink {
         r
     }
 
-    /// Writes the signal block assembled from the chunks received since the last one.
     fn finish_signal_block(&mut self) -> Result<()> {
         let b = &mut self.block;
         let n_sig = b.kinds.len();
         let g = self.group_size as usize;
         let n_groups = n_sig.div_ceil(g);
-        // Frame parts in group order; a group's parts in arrival order.
         self.frame_parts.sort_unstable_by_key(|p| (p.0, p.1));
         b.frame.clear();
         b.dirty_groups.clear();
@@ -493,7 +387,6 @@ impl FileSink {
         b.group_size = self.group_size;
         b.run_budget = self.run_budget;
         if b.times.is_empty() {
-            // Sealed before the first time step.
             b.times.push(0);
         }
         if self.n_chunks == 0 {
@@ -641,8 +534,6 @@ impl FileSink {
         Ok(false)
     }
 
-    /// Finishes a file whose owner cannot: the block being assembled, the
-    /// pending log blocks, the ending record, the directory and the trailer.
     fn seal(&mut self, end: Ending) -> Result<()> {
         if self.n_chunks > 0 {
             self.finish_signal_block()?;
@@ -652,16 +543,12 @@ impl FileSink {
         self.finish()
     }
 
-    /// Writes the ending record of [`Writer::close_with`] from the sink's own
-    /// knowledge of the file: new strings, the `vtr.run` stream and its site
-    /// after every node written, and a log block with one record.
     fn write_ending(&mut self, end: Ending) -> Result<()> {
         let Some((site, args)) = end.record() else {
             return Ok(());
         };
         let (fmt, names, types) = ending::SITES[site];
         if !self.meta_written {
-            // Sealed before the first flush: the owner's metadata never arrived.
             let mut payload = Vec::new();
             Meta {
                 writer: format!("vtr {}", env!("CARGO_PKG_VERSION")),
@@ -673,7 +560,6 @@ impl FileSink {
             self.meta_written = true;
         }
         let first = self.next_string;
-        // String id 0 is the empty string.
         let mut strings: Vec<&str> = if first == 0 { vec![""] } else { Vec::new() };
         let known = &self.known;
         let mut intern = |s: &'static str| {
@@ -700,7 +586,6 @@ impl FileSink {
             ..LogSiteSpec::new(stream, logblock::Severity::Fatal, fmt, types)
         };
         let (name, attrs) = logblock::site_attrs(&spec, |s| {
-            // Every string of an ending's site is a constant.
             let s: &'static str = [
                 ending::STREAM,
                 logblock::STREAM_KIND,
@@ -762,7 +647,6 @@ impl FileSink {
         Ok(())
     }
 
-    /// Writes the last log blocks, the directory and the trailer.
     fn finish(&mut self) -> Result<()> {
         self.drain_logs(true)?;
         if let Some(pool) = &mut self.log_pool {
@@ -836,7 +720,6 @@ impl Sink {
         }
     }
 
-    /// Waits for the background thread after it finished the file (close or seal).
     fn join(&mut self) -> Result<()> {
         match self {
             Sink::Inline(_) => Ok(()),
@@ -874,41 +757,20 @@ impl Sink {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Sealing from another thread
-// ---------------------------------------------------------------------------
-
-/// State a [`Sealer`] shares with its writer.
 struct Shared {
     state: CrashState,
-    /// The background encoder's queue (`None` for an inline writer).
     tx: Option<SyncSender<Msg>>,
 }
 
-/// What a crash handler needs to know about a writer: whether its owner is
-/// inside it, and whether a call panicked. The owner marks the calls or
-/// batches of calls that a crash must not interrupt with
-/// [`Writer::guarded`] (or `enter`/`leave` around each call, as the C API
-/// does); a handler reads the mark on the same thread or from another one.
-/// Marking every method inside the writer was measured instead: 4.6 to 9%
-/// on the fastest replay, where the emit path inlines into the caller's loop.
-/// Callers mark only a writer a crash guard [watches](Self::watched), so a
-/// writer without one pays nothing.
 #[derive(Default)]
 pub struct CrashState {
     busy: AtomicU32,
     poisoned: AtomicBool,
-    /// A crash guard watches the writer.
     watched: AtomicBool,
-    /// A `fn()` the owner calls when it next leaves the writer (0: none).
     park: AtomicUsize,
 }
 
 impl CrashState {
-    /// Marks the owner as inside the writer; returns the previous mark for
-    /// [`leave`](Self::leave). Relaxed stores fenced against compiler
-    /// reordering: a signal handler on the same thread sees them in program
-    /// order.
     #[inline(always)]
     pub fn enter(&self) -> u32 {
         let prev = self.busy.load(Ordering::Relaxed);
@@ -917,8 +779,6 @@ impl CrashState {
         prev
     }
 
-    /// Restores the mark [`enter`](Self::enter) returned. Leaving the
-    /// outermost mark runs a pending [`request_park`](Self::request_park).
     #[inline(always)]
     pub fn leave(&self, prev: u32) {
         compiler_fence(Ordering::SeqCst);
@@ -926,50 +786,38 @@ impl CrashState {
         if prev == 0 {
             let park = self.park.load(Ordering::Relaxed);
             if park != 0 {
-                // Safety: only `request_park` stores, and it stores a `fn()`.
                 let park: fn() = unsafe { std::mem::transmute::<usize, fn()>(park) };
                 park();
             }
         }
     }
 
-    /// Asks the owner to call `park` as soon as it leaves the writer: a crash
-    /// guard stops an owner that was inside the writer when another thread
-    /// crashed at the point where the writer is consistent again.
     pub fn request_park(&self, park: fn()) {
         self.park.store(park as usize, Ordering::Relaxed);
     }
 
-    /// Records that a call panicked: the writer's buffers cannot be trusted.
-    /// The busy mark stays set.
     pub fn poison(&self) {
         self.poisoned.store(true, Ordering::Relaxed);
     }
 
-    /// True while the owner is inside a marked call, or after one panicked.
     pub fn busy(&self) -> bool {
         self.busy.load(Ordering::Relaxed) != 0 || self.poisoned()
     }
 
-    /// True after a marked call panicked.
     pub fn poisoned(&self) -> bool {
         self.poisoned.load(Ordering::Relaxed)
     }
 
-    /// True while a crash guard watches the writer: only then do callers need
-    /// to mark their calls.
     #[inline(always)]
     pub fn watched(&self) -> bool {
         self.watched.load(Ordering::Relaxed)
     }
 
-    /// Set by a crash guard when it starts and stops watching the writer.
     pub fn set_watched(&self, watched: bool) {
         self.watched.store(watched, Ordering::Relaxed);
     }
 }
 
-/// Leaves a [`Writer::guarded`] batch, or poisons the writer when a panic unwinds out of it.
 struct Guarded {
     state: *const CrashState,
     prev: u32,
@@ -977,7 +825,6 @@ struct Guarded {
 
 impl Drop for Guarded {
     fn drop(&mut self) {
-        // Safety: the state lives in the writer's `shared`, which outlives the batch.
         let state = unsafe { &*self.state };
         if std::thread::panicking() {
             state.poison();
@@ -987,31 +834,16 @@ impl Drop for Guarded {
     }
 }
 
-/// A handle that finishes a writer's file from another thread, for a crash
-/// guard ([`Writer::sealer`]). It never touches the writer itself.
 #[derive(Clone)]
 pub struct Sealer {
     shared: Arc<Shared>,
 }
 
 impl Sealer {
-    /// The writer's [`CrashState`]. A crash handler reads it to choose between
-    /// closing the writer normally (at rest) and sealing it (busy).
     pub fn state(&self) -> &CrashState {
         &self.shared.state
     }
 
-    /// Finishes the file with what reached the background encoder: the chunks
-    /// of the current signal block, every transaction and log block handed
-    /// over, then `end` as the ending record, the directory and the trailer.
-    /// What the owner still buffers (the unfinished chunk, transaction and log
-    /// rows, open transactions, running clocks, undeclared nodes) is dropped.
-    ///
-    /// Safe to call from any thread while the owner is stopped (parked by a
-    /// crash guard or dead); the owner must not use the writer afterwards
-    /// except to drop it. Blocks until the file is complete. Fails for an
-    /// inline writer (`background: false`) and for a writer already closed or
-    /// sealed.
     pub fn seal(&self, end: Ending) -> Result<()> {
         let tx = self
             .shared
@@ -1026,16 +858,12 @@ impl Sealer {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Open transactions
-// ---------------------------------------------------------------------------
-
 #[derive(Default)]
 struct StageRec {
     name: u32,
     lane: u32,
     begin: u64,
-    end: u64, // u64::MAX = open
+    end: u64,
     attrs: Vec<u8>,
     attr_keys: Vec<StrId>,
     n_attrs: u32,
@@ -1043,7 +871,7 @@ struct StageRec {
 
 #[derive(Default)]
 struct OpenTx {
-    id: u64, // 0 = free slot
+    id: u64,
     gen: u32,
     begin: u64,
     kind: u8,
@@ -1098,7 +926,6 @@ impl OpenTx {
     }
 }
 
-/// Ring-addressed table of open transactions (ids are dense and increasing).
 struct OpenTable {
     slots: Vec<OpenTx>,
     mask: usize,
@@ -1159,10 +986,6 @@ impl OpenTable {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Writer
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy, Default)]
 struct LastVal {
     payload: u64,
@@ -1170,33 +993,21 @@ struct LastVal {
     compact: bool,
 }
 
-/// Hot per-signal facts (kept small and separate from `kinds`).
 #[derive(Clone, Copy)]
 struct SigInfo {
-    /// 0 bits, 1 real, 2 varlen
     kind: u8,
     narrow: bool,
     var_type: VarType,
     width: u32,
 }
 
-/// A declared clock: its generator and its running stretch.
 struct ClockState {
     stream: NodeId,
     gen: u32,
-    /// (transaction id, first edge, period) of the running stretch.
     running: Option<(u64, u64, u64)>,
-    /// Last edge of the previous stretch.
     last_edge: Option<u64>,
 }
 
-/// Streaming VTR writer. See the [module documentation](crate::writer) for
-/// the ordering rules and value semantics.
-///
-/// Errors: [`Error::Invalid`] for a wrong argument (unknown id, wrong signal
-/// kind, time going backwards, unrepresentable value); [`Error::State`] for
-/// an operation not allowed now; [`Error::Io`] and [`Error::Codec`] from the
-/// file and compressor. A rejected call changes nothing.
 pub struct Writer {
     opts: WriterOptions,
     shared: Arc<Shared>,
@@ -1205,9 +1016,7 @@ pub struct Writer {
     meta_written: bool,
     strings: Interner,
     pending_nodes: Vec<Node>,
-    /// Kind of every node declared so far, flushed or pending (for parent checks).
     node_kinds: Vec<NodeKind>,
-    // signals
     kinds: Vec<SignalKind>,
     kinds_arc: Option<Arc<Vec<SignalKind>>>,
     info: Vec<SigInfo>,
@@ -1215,9 +1024,7 @@ pub struct Writer {
     sig_counts: Vec<u32>,
     last: Vec<LastVal>,
     wide_last: Vec<u8>,
-    /// Per wide signal (index = `LastVal::payload`): byte offset of its slot in `wide_last`.
     wide_off: Vec<usize>,
-    /// Per wide signal: signal id, column bytes for the current block, last time index, entry count.
     wide_sig: Vec<u32>,
     wide_hdr: Vec<Vec<u8>>,
     wide_val: Vec<Vec<u8>>,
@@ -1232,25 +1039,18 @@ pub struct Writer {
     epoch: u32,
     time: u64,
     cur_tidx: u32,
-    /// Time-table entries of the current block not yet handed to the encoder.
     times: Vec<u64>,
-    /// Time-table entries of the current block already handed to the encoder.
     times_sent: u32,
     records: Vec<Record>,
     heap: Vec<u8>,
-    /// Groups with a change in the current block, and those whose frame was handed over.
     dirty_bits: Vec<u64>,
     sent_bits: Vec<u64>,
-    /// Signals declared when the last frame parts were handed over.
     frame_sigs: usize,
     block_count: u32,
-    /// Records of the current block already handed to the encoder as chunks.
     block_pending: usize,
-    /// Records to buffer before the next chunk hand-off (bounded by the block budget).
     chunk_limit: usize,
     chunk_pool: Vec<ChunkInput>,
     total_records: u64,
-    // transactions
     open: OpenTable,
     next_tx_id: u64,
     tx_rows: Vec<u8>,
@@ -1258,30 +1058,23 @@ pub struct Writer {
     rel_rows: Vec<u8>,
     n_rel_rows: u64,
     total_tx: u64,
-    // logs
     log_sites: Vec<LogSiteEnc>,
     log_sites_arc: Option<Arc<Vec<LogSiteEnc>>>,
     log_rows: Vec<u8>,
     n_log_rows: u64,
     total_log: u64,
-    // clocks
     clocks: Vec<ClockState>,
     clock_rows: Vec<u8>,
     n_clock_rows: u64,
     blackout: Vec<Blackout>,
     closed: bool,
     scratch: Vec<u8>,
-    // commit interval
     ticks: u32,
-    /// When the current signal block began, the last transaction block and
-    /// the last log block were handed over (`None` without a commit interval).
     block_at: Option<Instant>,
     tx_at: Option<Instant>,
     log_at: Option<Instant>,
 }
 
-/// Configures a trace before creating its file. Metadata remains editable
-/// through writer setters until the first flush.
 #[derive(Clone, Debug, Default)]
 pub struct WriterBuilder {
     options: WriterOptions,
@@ -1295,47 +1088,38 @@ pub struct WriterBuilder {
 }
 
 impl WriterBuilder {
-    /// Sets encoding, buffering and background-worker options.
     pub fn options(mut self, options: WriterOptions) -> Self {
         self.options = options;
         self
     }
-    /// Sets the duration of one timestamp tick.
     pub fn timescale(mut self, timescale: Timescale) -> Self {
         self.timescale = timescale;
         self
     }
-    /// Sets the display offset added to timestamps.
     pub fn time_zero(mut self, time_zero: i64) -> Self {
         self.time_zero = time_zero;
         self
     }
-    /// Sets the producer class.
     pub fn file_type(mut self, file_type: FileType) -> Self {
         self.file_type = file_type;
         self
     }
-    /// Sets the producing tool's name and version.
     pub fn writer_name(mut self, name: impl Into<String>) -> Self {
         self.writer_name = Some(name.into());
         self
     }
-    /// Sets the free-form creation date.
     pub fn date(mut self, date: impl Into<String>) -> Self {
         self.date = date.into();
         self
     }
-    /// Sets the file comment.
     pub fn comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = comment.into();
         self
     }
-    /// Appends a file-level attribute, preserving insertion order.
     pub fn file_attr(mut self, key: impl Into<String>, value: Value) -> Self {
         self.attrs.push((key.into(), value));
         self
     }
-    /// Creates (truncates) the file with the configured options and metadata.
     pub fn create(self, path: impl AsRef<Path>) -> Result<Writer> {
         let mut writer = Writer::create_with(path, self.options)?;
         writer.meta.timescale = self.timescale.exponent();
@@ -1354,18 +1138,14 @@ impl WriterBuilder {
 }
 
 impl Writer {
-    /// Configures options and metadata before creating a trace file.
     pub fn builder() -> WriterBuilder {
         WriterBuilder::default()
     }
 
-    /// Creates a new trace file with default options.
     pub fn create(path: impl AsRef<Path>) -> Result<Writer> {
         Self::create_with(path, WriterOptions::default())
     }
 
-    /// Creates (truncates) a trace file. `Meta` starts with timescale `-12` (picoseconds),
-    /// [`FileType::Verilog`] and writer name `"vtr <crate version>"`.
     pub fn create_with(path: impl AsRef<Path>, opts: WriterOptions) -> Result<Writer> {
         let mut file = File::create(path)?;
         container::write_file_header(&mut file)?;
@@ -1409,7 +1189,6 @@ impl Writer {
         } else {
             Sink::Inline(Box::new(fsink))
         };
-        // Group size is a power of two so group lookups are shifts.
         let meta = Meta {
             group_size,
             writer: format!("vtr {}", env!("CARGO_PKG_VERSION")),
@@ -1495,72 +1274,53 @@ impl Writer {
         })
     }
 
-    // ----- metadata -----
-
     fn meta_mut(&mut self) -> Result<&mut Meta> {
         if self.meta_written {
             return Err(Error::State("metadata must be set before the first flush"));
         }
         Ok(&mut self.meta)
     }
-    /// Sets the duration of one timestamp tick. Default: picoseconds.
-    ///
-    /// Like every metadata setter, fails with [`Error::State`] after the
-    /// first flush.
     pub fn set_timescale(&mut self, timescale: Timescale) -> Result<()> {
         self.meta_mut()?.timescale = timescale.exponent();
         Ok(())
     }
-    /// Display offset added to every time (FST `timezero`). Default 0.
     pub fn set_time_zero(&mut self, t: i64) -> Result<()> {
         self.meta_mut()?.time_zero = t;
         Ok(())
     }
-    /// Default [`FileType::Verilog`].
     pub fn set_file_type(&mut self, ft: FileType) -> Result<()> {
         self.meta_mut()?.file_type = ft;
         Ok(())
     }
-    /// Name of the producing tool. Default `"vtr <crate version>"`.
     pub fn set_writer_name(&mut self, s: &str) -> Result<()> {
         self.meta_mut()?.writer = s.to_string();
         Ok(())
     }
-    /// Free-form date. Default empty.
     pub fn set_date(&mut self, s: &str) -> Result<()> {
         self.meta_mut()?.date = s.to_string();
         Ok(())
     }
-    /// Free-form comment. Default empty.
     pub fn set_comment(&mut self, s: &str) -> Result<()> {
         self.meta_mut()?.comment = s.to_string();
         Ok(())
     }
-    /// Appends a file-level attribute to [`Meta::attrs`].
     pub fn set_file_attr(&mut self, key: &str, value: Value) -> Result<()> {
         let k = self.strings.intern(key);
         self.meta_mut()?.attrs.push((k, value));
         Ok(())
     }
 
-    /// Interns a string (attribute keys, event names, ...). Cheap when already interned.
-    /// Id 0 is always the empty string. Transaction and log methods take
-    /// `StrId`s so that hot paths do no hashing: intern keys once.
     pub fn intern(&mut self, s: &str) -> StrId {
         self.strings.intern(s)
     }
 
-    /// Options in effect (`group_size` rounded).
     pub fn options(&self) -> &WriterOptions {
         &self.opts
     }
 
-    /// Looks up an interned string. Panics for an id not returned by [`intern`](Self::intern).
     pub fn string(&self, id: StrId) -> &str {
         self.strings.get(id)
     }
-
-    // ----- hierarchy -----
 
     fn push_node(&mut self, node: Node) -> NodeId {
         let id = NodeId(self.node_kinds.len() as u32);
@@ -1569,7 +1329,6 @@ impl Writer {
         id
     }
 
-    /// Checks that a node of kind `child` may go under `parent` (SPEC section 5).
     fn check_parent(&self, child: NodeKind, parent: Option<NodeId>) -> Result<()> {
         let parent_kind = match parent {
             None => None,
@@ -1589,13 +1348,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Declares a scope under `parent` (`None` = a root). `component` is the
-    /// module or entity type name, `""` when unknown.
-    ///
-    /// Nodes are numbered densely in declaration order. Scopes, variables,
-    /// enum tables and streams go under a scope or at the root; generators
-    /// under a stream. An unknown parent or one of the wrong kind is
-    /// [`Error::Invalid`]. The writer keeps no current scope.
     pub fn add_scope(
         &mut self,
         parent: Option<NodeId>,
@@ -1617,8 +1369,6 @@ impl Writer {
         }))
     }
 
-    /// Declares a module scope under `parent` (`None` = a root).
-    /// `component` names the instantiated module definition.
     pub fn add_module(
         &mut self,
         parent: Option<NodeId>,
@@ -1628,8 +1378,6 @@ impl Writer {
         self.add_scope(parent, name, ScopeType::Module, component)
     }
 
-    /// Declares a four-state wire and returns its signal id.
-    /// Use `add_var` when the hierarchy node id or another logic alphabet is needed.
     pub fn add_wire(
         &mut self,
         parent: Option<NodeId>,
@@ -1647,8 +1395,6 @@ impl Writer {
         .map(|(_, signal)| signal)
     }
 
-    /// Declares a four-state register and returns its signal id.
-    /// Use `add_var` when the hierarchy node id or another logic alphabet is needed.
     pub fn add_reg(
         &mut self,
         parent: Option<NodeId>,
@@ -1666,10 +1412,6 @@ impl Writer {
         .map(|(_, signal)| signal)
     }
 
-    /// Declares a variable with a new signal under `parent` (`None` = a root).
-    /// Signal ids are dense in declaration order; `states` other than 2 or 4
-    /// is stored as 9. Until its first change the signal has its default
-    /// value (all X for 4/9 states, zeros for 2 states, `0.0`, empty bytes).
     pub fn add_var(
         &mut self,
         parent: Option<NodeId>,
@@ -1695,9 +1437,6 @@ impl Writer {
         Ok((id, sig))
     }
 
-    /// Declares a variable under `parent` that aliases an existing signal
-    /// (the VCD "same id code" case). The alias must agree with the
-    /// declaration on being an event ([`VarType::Event`]) or not.
     pub fn add_alias(
         &mut self,
         parent: Option<NodeId>,
@@ -1730,9 +1469,6 @@ impl Writer {
         }))
     }
 
-    /// Declares an enumeration table of `(literal, bit-string value)` pairs
-    /// under `parent`. Link it to variables by a node attribute convention;
-    /// the library does not.
     pub fn add_enum_table(
         &mut self,
         parent: Option<NodeId>,
@@ -1753,10 +1489,6 @@ impl Writer {
         }))
     }
 
-    /// Declares a transaction stream under `parent`. `kind` is free form
-    /// (`"TRANSACTOR"`, `"PIPELINE"`, ...); log streams use
-    /// [`LOG_STREAM_KIND`](crate::LOG_STREAM_KIND).
-    /// The root stream [`ending::STREAM`] is reserved ([`Error::Invalid`]).
     pub fn add_stream(&mut self, parent: Option<NodeId>, name: &str, kind: &str) -> Result<NodeId> {
         if parent.is_none() && name == ending::STREAM {
             return Err(Error::invalid(format!(
@@ -1778,8 +1510,6 @@ impl Writer {
         }))
     }
 
-    /// Declares a transaction generator (type) within a stream. This is the
-    /// node [`begin_tx`](Self::begin_tx) takes.
     pub fn add_generator(&mut self, stream: NodeId, name: &str) -> Result<NodeId> {
         self.check_parent(NodeKind::Generator, Some(stream))?;
         let name = self.strings.intern(name);
@@ -1791,9 +1521,6 @@ impl Writer {
         }))
     }
 
-    /// Attaches an attribute to a node created since the last flush
-    /// ([`Error::State`] otherwise): add attributes right after declaring the
-    /// node. Keys are unique per node.
     pub fn node_attr(&mut self, node: NodeId, key: &str, value: Value) -> Result<()> {
         let n_nodes = self.node_kinds.len() as u32;
         let first_pending = n_nodes - self.pending_nodes.len() as u32;
@@ -1837,7 +1564,6 @@ impl Writer {
         let mut lv = LastVal::default();
         match kind {
             SignalKind::Bits { width, states } if packed_len(width, states) <= 8 => {
-                // Default X for multi-state, 0 for two-state.
                 if states != 2 {
                     let mut tmp = Vec::new();
                     signal::default_value(kind, &mut tmp);
@@ -1848,7 +1574,7 @@ impl Writer {
             }
             SignalKind::Bits { .. } => {
                 let slot = self.wide_last.len();
-                self.wide_last.push(0); // compact flag
+                self.wide_last.push(0);
                 signal::default_value(kind, &mut self.wide_last);
                 lv.payload = self.wide_off.len() as u64;
                 self.wide_off.push(slot);
@@ -1874,22 +1600,14 @@ impl Writer {
         id
     }
 
-    /// Number of declared signals.
     pub fn signal_count(&self) -> u32 {
         self.kinds.len() as u32
     }
 
-    /// Kind of a declared signal.
     pub fn signal_kind(&self, s: SignalId) -> Option<SignalKind> {
         self.kinds.get(s.0 as usize).copied()
     }
 
-    // ----- time -----
-
-    /// Starts the time step `t` for the values emitted after it. Must be
-    /// non-decreasing ([`Error::Invalid`] otherwise); the first call may use
-    /// any value and repeating the current time is a no-op. Values emitted
-    /// before the first call belong to the first time step.
     pub fn set_time(&mut self, t: u64) -> Result<()> {
         let started = self.block_started();
         if t < self.time && started {
@@ -1906,7 +1624,6 @@ impl Writer {
         self.tick()
     }
 
-    /// Counts a call that may start a commit ([`WriterOptions::commit_interval`]).
     #[inline(always)]
     fn tick(&mut self) -> Result<()> {
         self.ticks = self.ticks.wrapping_add(1);
@@ -1920,7 +1637,6 @@ impl Writer {
         (!self.opts.commit_interval.is_zero()).then(Instant::now)
     }
 
-    /// Hands over whatever has waited longer than the commit interval.
     #[cold]
     fn commit_due(&mut self) -> Result<()> {
         let (now, interval) = (Instant::now(), self.opts.commit_interval);
@@ -1942,19 +1658,14 @@ impl Writer {
         Ok(())
     }
 
-    /// True once the current block has a time-table entry.
     fn block_started(&self) -> bool {
         self.times_sent > 0 || !self.times.is_empty()
     }
 
-    /// Time of the current time step (0 before the first [`set_time`](Self::set_time)).
     pub fn current_time(&self) -> u64 {
         self.time
     }
 
-    /// Records a [`Blackout`] marker "dumping stopped" at the current time
-    /// (VCD `$dumpoff`). Markers are returned verbatim by the reader; the
-    /// writer keeps recording whatever the caller emits.
     pub fn dump_off(&mut self) {
         self.blackout.push(Blackout {
             time: self.time,
@@ -1962,7 +1673,6 @@ impl Writer {
         });
     }
 
-    /// Records a "dumping resumed" marker at the current time (VCD `$dumpon`).
     pub fn dump_on(&mut self) {
         self.blackout.push(Blackout {
             time: self.time,
@@ -1970,8 +1680,6 @@ impl Writer {
         });
     }
 
-    /// Records a blackout marker at an explicit time (for converters). Not
-    /// validated or sorted.
     pub fn blackout_at(&mut self, time: u64, active: bool) {
         self.blackout.push(Blackout { time, active });
     }
@@ -1987,14 +1695,9 @@ impl Writer {
         self.dirty_bits[g / 64] |= 1 << (g % 64);
     }
 
-    // ----- value changes -----
-
-    /// Hot path. `s` has been validated by `check_sig`; all per-signal tables
-    /// (`last`, `frame_cap`, `sig_counts`, `info`) grow together in `new_signal`.
     #[inline(always)]
     fn emit_narrow(&mut self, s: usize, payload: u64, compact: bool) -> Result<()> {
         debug_assert!(s < self.last.len() && s < self.frame_cap.len() && s < self.sig_counts.len());
-        // Safety: see above; `s < kinds.len()` was checked by the caller.
         let lv = unsafe { *self.last.get_unchecked(s) };
         if lv.payload == payload
             && lv.compact == compact
@@ -2028,8 +1731,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Wide vectors bypass the record log: entries are appended, already in
-    /// column format, to a per-signal buffer that the encoder uses verbatim.
     fn emit_wide(&mut self, s: usize, data: &[u8], compact: bool) -> Result<()> {
         let kind = self.kinds[s];
         let (width, states) = match kind {
@@ -2097,8 +1798,6 @@ impl Writer {
         Ok(s)
     }
 
-    /// Emits a named scalar logic value on a single-bit signal.
-    /// Rejects wider vectors and non-bit signals; use `emit_u64` or a vector emitter for those.
     #[inline]
     pub fn emit_bit(&mut self, sig: SignalId, value: Logic) -> Result<()> {
         let code = value as u8;
@@ -2121,12 +1820,9 @@ impl Writer {
         }
     }
 
-    /// Emits a 2-state integer value, zero-extended or truncated to the signal
-    /// width. On a real signal stores `value as f64`.
     #[inline]
     pub fn emit_u64(&mut self, sig: SignalId, value: u64) -> Result<()> {
         let s = self.check_sig(sig)?;
-        // Safety: check_sig validated `s < kinds.len()` and `info` grows with `kinds`.
         let info = unsafe { *self.info.get_unchecked(s) };
         if info.kind == 0 && info.narrow {
             let width = info.width;
@@ -2145,7 +1841,6 @@ impl Writer {
                     value & ((1u64 << width) - 1)
                 };
                 if packed_len(width, states) <= 8 {
-                    // Compact form when the declared packing is wider than 2-state.
                     self.emit_narrow(s, v, true)
                 } else {
                     let bytes = v.to_le_bytes();
@@ -2164,8 +1859,6 @@ impl Writer {
         }
     }
 
-    /// Emits a 2-state value given as little-endian 32-bit words (word 0 = bits 0..32).
-    /// Missing words are zero; bits above the width are ignored.
     pub fn emit_words(&mut self, sig: SignalId, words: &[u32]) -> Result<()> {
         let s = self.check_sig(sig)?;
         match self.kinds[s] {
@@ -2188,13 +1881,6 @@ impl Writer {
         }
     }
 
-    /// Emits a value given as an ASCII bit string (MSB first, VCD style: `01xzXZuUwWlLhH-`).
-    ///
-    /// Other characters mean X. A shorter string is left-extended VCD style
-    /// (with its first character when that is X/Z/U/W/L/H/-, else with 0); a
-    /// longer one keeps its last `width` characters; a width-1 signal uses
-    /// the last character. On a real signal the text is parsed as `f64`; on
-    /// a variable-length signal the bytes are stored as given.
     pub fn emit_logic_str(&mut self, sig: SignalId, s_ascii: &[u8]) -> Result<()> {
         let s = self.check_sig(sig)?;
         match self.kinds[s] {
@@ -2213,7 +1899,6 @@ impl Writer {
             SignalKind::Bits { width, states } => {
                 let mut buf = std::mem::take(&mut self.scratch);
                 buf.clear();
-                // Try compact first.
                 buf.resize((width as usize).div_ceil(8), 0);
                 let two = signal::pack_ascii(s_ascii, width, 2, &mut buf);
                 let mut compact = true;
@@ -2227,7 +1912,6 @@ impl Writer {
                     signal::pack_ascii(s_ascii, width, states, &mut buf);
                     compact = false;
                     if states == 4 {
-                        // Reject 9-state codes on 4-state signals.
                         for &c in s_ascii {
                             if signal::states_for_code(signal::code_from_ascii(c)) > 4 {
                                 self.scratch = buf;
@@ -2259,10 +1943,6 @@ impl Writer {
         }
     }
 
-    /// Emits a value already packed in VTR layout with `states` states per bit
-    /// (2 for a compact value on a multi-state signal, else the declared
-    /// states). `data` must hold at least `packed_len(width, states)` bytes;
-    /// codes are not checked against the declared states.
     pub fn emit_packed(&mut self, sig: SignalId, states: u8, data: &[u8]) -> Result<()> {
         let s = self.check_sig(sig)?;
         match self.kinds[s] {
@@ -2295,7 +1975,6 @@ impl Writer {
         }
     }
 
-    /// Emits a real value; stored as its IEEE bits (NaN payloads and `-0.0` survive).
     pub fn emit_real(&mut self, sig: SignalId, value: f64) -> Result<()> {
         let s = self.check_sig(sig)?;
         match self.kinds[s] {
@@ -2304,7 +1983,6 @@ impl Writer {
         }
     }
 
-    /// Emits a variable-length value (strings, byte blobs; any length, need not be UTF-8).
     pub fn emit_varlen(&mut self, sig: SignalId, bytes: &[u8]) -> Result<()> {
         let s = self.check_sig(sig)?;
         if self.kinds[s] != SignalKind::VarLen {
@@ -2341,13 +2019,6 @@ impl Writer {
         Ok(())
     }
 
-    // ----- flushing -----
-
-    /// Hands the buffered records to the encoder as a chunk of the current block,
-    /// with the block's new time-table entries and the frame parts of the
-    /// groups it dirtied first, so the encoder holds everything needed to
-    /// write the block from the chunks it has. Ends the block when it reached
-    /// its size or `end_block` is set.
     fn flush_chunk(&mut self, end_block: bool) -> Result<()> {
         self.flush_meta_and_hierarchy()?;
         if self.kinds_arc.is_none() {
@@ -2398,7 +2069,6 @@ impl Writer {
         }
         let ends = end_block || self.block_pending >= self.opts.block_records;
         if ends && !self.block_started() {
-            // Every block has a time step, even one without changes.
             self.times.push(self.time);
         }
         chunk.times.clear();
@@ -2418,9 +2088,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Adds to `chunk` the frame (block-initial values) of every group first
-    /// dirtied since the last chunk, and of signals declared since then into
-    /// a group whose frame was already handed over.
     fn frame_parts(&mut self, chunk: &mut ChunkInput) {
         chunk.frame.clear();
         chunk.frame_parts.clear();
@@ -2453,11 +2120,9 @@ impl Writer {
                     .push((grp as u32, (chunk.frame.len() - before) as u32));
             }
         }
-        // Every value captured so far belongs to a group whose frame is now handed over.
         self.frame_heap.clear();
     }
 
-    /// Appends the frame entry of signal `s`: its value when the block began.
     fn push_frame(&self, s: usize, out: &mut Vec<u8>) {
         let lv = self.last[s];
         let captured = lv.epoch == self.epoch;
@@ -2522,7 +2187,6 @@ impl Writer {
         }
     }
 
-    /// Starts a new block at the current time after the last chunk of one was handed over.
     fn end_block(&mut self) {
         self.block_at = self.now();
         self.block_pending = 0;
@@ -2542,7 +2206,6 @@ impl Writer {
         self.cur_tidx = 0;
     }
 
-    /// Records per chunk: the configured minimum, raised for designs with many signals.
     fn chunk_target(&self) -> usize {
         self.opts
             .chunk_records
@@ -2575,7 +2238,6 @@ impl Writer {
             let mut payload = Vec::new();
             varint::put_u64(&mut payload, first as u64);
             varint::put_u64(&mut payload, self.pending_nodes.len() as u64);
-            // Ids are relative in the encoding: reconstruct the signal count at each node.
             let declared = self
                 .pending_nodes
                 .iter()
@@ -2598,12 +2260,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Writes pending strings, metadata and hierarchy, and the buffered value
-    /// changes, transactions, log records and clock stretches as blocks.
-    ///
-    /// Flushing is automatic (`block_records`, `tx_block_bytes`, `close`);
-    /// explicit flushes force block boundaries and make files larger and
-    /// slower to read. With `background` it returns once the work is queued.
     pub fn flush(&mut self) -> Result<()> {
         self.flush_meta_and_hierarchy()?;
         if !self.records.is_empty() || self.wide_bytes > 0 || self.block_pending > 0 {
@@ -2618,12 +2274,9 @@ impl Writer {
         self.flush_clocks()
     }
 
-    /// Ends the current block with whatever is buffered.
     fn flush_signals(&mut self) -> Result<()> {
         self.flush_chunk(true)
     }
-
-    // ----- transactions -----
 
     fn check_gen(&self, gen: NodeId) -> Result<()> {
         if self.node_kinds.get(gen.0 as usize) != Some(&NodeKind::Generator) {
@@ -2632,14 +2285,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Begins a transaction of generator `gen` at `time` and returns its id.
-    ///
-    /// Ids are unique in the file, dense and increasing from 1; log records
-    /// and clock stretches share the id space. A transaction is *open* until
-    /// [`end_tx`](Self::end_tx): the `set_tx_*`, `tx_*` and `end_tx` methods
-    /// take an open id and return [`Error::Invalid`] otherwise. Transaction
-    /// times are independent of [`set_time`](Self::set_time) and need not be
-    /// monotonic.
     pub fn begin_tx(&mut self, gen: NodeId, time: u64) -> Result<TxId> {
         self.check_gen(gen)?;
         let id = self.next_tx_id;
@@ -2650,21 +2295,16 @@ impl Writer {
         Ok(id)
     }
 
-    /// Sets the parent transaction (structural nesting, such as an
-    /// OpenTelemetry parent span). `parent` is not validated.
     pub fn set_tx_parent(&mut self, tx: TxId, parent: TxId) -> Result<()> {
         self.open.get(tx)?.parent = parent + 1;
         Ok(())
     }
 
-    /// Sets the span kind. Default [`TxKind::Unspecified`].
     pub fn set_tx_kind(&mut self, tx: TxId, kind: TxKind) -> Result<()> {
         self.open.get(tx)?.kind = kind as u8;
         Ok(())
     }
 
-    /// Records an attribute on an open transaction. Keys are unique per
-    /// transaction; a repeated key is [`Error::Invalid`].
     #[inline]
     pub fn tx_attr(&mut self, tx: TxId, key: StrId, value: &Value) -> Result<()> {
         let t = self.open.get(tx)?;
@@ -2676,8 +2316,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Records a timestamped point event on an open transaction. `time` is not
-    /// checked against the transaction's interval.
     pub fn tx_event(
         &mut self,
         tx: TxId,
@@ -2694,9 +2332,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Opens a stage on `lane` (a pipeline stage; lanes are arbitrary strings
-    /// such as `"0"`). The most recent open stage on the same lane is closed
-    /// at `time` (no earlier than its begin).
     pub fn tx_stage_begin(&mut self, tx: TxId, name: StrId, lane: StrId, time: u64) -> Result<()> {
         let t = self.open.get(tx)?;
         for s in t.stages.iter_mut().rev() {
@@ -2717,7 +2352,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Closes the most recent open stage with `name` on `lane`. Returns false if none was open.
     pub fn tx_stage_end(&mut self, tx: TxId, name: StrId, lane: StrId, time: u64) -> Result<bool> {
         let t = self.open.get(tx)?;
         for s in t.stages.iter_mut().rev() {
@@ -2729,7 +2363,6 @@ impl Writer {
         Ok(false)
     }
 
-    /// Records a complete stage; `end` is clamped to `>= begin`.
     pub fn tx_stage(
         &mut self,
         tx: TxId,
@@ -2758,8 +2391,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Attaches an attribute to the most recently begun stage, open or not
-    /// ([`Error::State`] when there is none).
     pub fn tx_stage_attr(&mut self, tx: TxId, key: StrId, value: &Value) -> Result<()> {
         let t = self.open.get(tx)?;
         let s = t
@@ -2774,10 +2405,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Ends a transaction with `status`. The end is clamped to `>= begin` and
-    /// still-open stages close at it. Transactions are stored in `end_tx`
-    /// order; those still open at [`close`](Self::close) are written with
-    /// [`TxStatus::Open`] at the current time.
     pub fn end_tx(&mut self, tx: TxId, time: u64, status: TxStatus) -> Result<()> {
         let t = self.open.get(tx)?;
         let end = time.max(t.begin);
@@ -2791,9 +2418,6 @@ impl Writer {
         self.tick()
     }
 
-    /// Records a directed relation of kind `kind` (`"wakeup"`, `"follows_from"`,
-    /// ...) from transaction `from` to `to`. The endpoints are not validated
-    /// and may be open or ended.
     pub fn relate(
         &mut self,
         kind: StrId,
@@ -2813,8 +2437,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Transactions begun and not yet ended. Each holds its attributes,
-    /// events and stages in memory until [`end_tx`](Self::end_tx).
     pub fn open_tx_count(&self) -> usize {
         self.open.live
     }
@@ -2836,14 +2458,6 @@ impl Writer {
         self.sink.send(Msg::Tx(input))
     }
 
-    // ----- logs -----
-
-    /// Registers a log call site: a generator of `spec.stream` (a stream of
-    /// kind [`LOG_STREAM_KIND`](crate::LOG_STREAM_KIND)) named by the format
-    /// string and carrying the severity, argument types and names and the
-    /// source location as attributes (`log.*`). Argument names default to
-    /// `"0"`, `"1"`, ... and must be unique. Register each call site once and
-    /// keep the returned handle; `log` then costs a few bytes per call.
     pub fn add_log_site(&mut self, spec: &LogSiteSpec) -> Result<LogSiteId> {
         self.check_parent(NodeKind::Generator, Some(spec.stream))?;
         let strings = &mut self.strings;
@@ -2862,27 +2476,19 @@ impl Writer {
         Ok(LogSiteId(self.log_sites.len() as u32 - 1))
     }
 
-    /// Generator node of a registered log site.
     pub fn log_site_node(&self, site: LogSiteId) -> Option<NodeId> {
         self.log_sites.get(site.0 as usize).map(|s| NodeId(s.node))
     }
 
-    /// Number of registered log sites.
     pub fn log_site_count(&self) -> u32 {
         self.log_sites.len() as u32
     }
 
-    /// Records a log message of `site` at `time`. `args` must match the site's
-    /// declared types in number and type. Returns the record's transaction id.
-    /// `time` is independent of [`set_time`](Self::set_time). No allocation:
-    /// the row is appended to a buffer flushed at `tx_block_bytes`.
     #[inline]
     pub fn log(&mut self, site: LogSiteId, time: u64, args: &[LogArg]) -> Result<TxId> {
         self.log_with_parent(site, time, None, args)
     }
 
-    /// Like [`log`](Self::log) with a parent transaction (the transaction being
-    /// processed when the message was produced).
     pub fn log_with_parent(
         &mut self,
         site: LogSiteId,
@@ -2931,14 +2537,6 @@ impl Writer {
         Ok(id)
     }
 
-    /// Records a log message whose argument values are already in row
-    /// encoding: bool as one byte, i64 as a zig-zag varint, u64/time/pointer as
-    /// a varint, f64 as 8 little-endian bytes, str as the varint string id,
-    /// text and bytes as a varint length followed by the bytes; in the site's
-    /// declared order. The caller guarantees that `args` matches the site's
-    /// types (a mismatch is detected when the block is encoded and reported by
-    /// `flush`/`close`). Used by front ends that encode arguments themselves,
-    /// such as the C++ header; prefer [`log`](Self::log) otherwise.
     #[inline]
     pub fn log_raw(
         &mut self,
@@ -2989,16 +2587,6 @@ impl Writer {
         self.sink.send(Msg::Log(input))
     }
 
-    // ----- clocks -----
-
-    /// Declares a clock: a stream of kind `CLOCK` named `name` under `scope`,
-    /// with its `edges` generator. Name it after the clock net and place it in
-    /// the net's scope, so viewers pair it with the net's waveform by path.
-    ///
-    /// A clock is recorded as steady stretches, one call per change of speed
-    /// and nothing per edge. A gated clock is a stop when the gate closes and
-    /// a run at the first edge after it opens. Clock ids are dense in
-    /// declaration order and equal the reader's.
     pub fn add_clock(&mut self, scope: Option<NodeId>, name: &str) -> Result<ClockId> {
         let stream = self.add_stream(scope, name, clock::STREAM_KIND)?;
         let gen = self.add_generator(stream, clock::GENERATOR)?;
@@ -3011,7 +2599,6 @@ impl Writer {
         Ok(ClockId(self.clocks.len() as u32 - 1))
     }
 
-    /// Stream node of a declared clock.
     pub fn clock_stream(&self, clock: ClockId) -> Option<NodeId> {
         self.clocks.get(clock.0 as usize).map(|c| c.stream)
     }
@@ -3022,10 +2609,6 @@ impl Writer {
             .ok_or_else(|| Error::invalid(format!("unknown clock {}", clock.0)))
     }
 
-    /// From edge `first`, one edge every `period` (>= 1), until [`clock_stop`](Self::clock_stop).
-    /// The clock must not be running ([`Error::State`]), and `first` must follow the previous
-    /// stretch's last edge ([`Error::Invalid`]). To change speed, stop the clock where the
-    /// generator's delay changes and run it again at the next rising edge.
     pub fn clock_run(&mut self, clock: ClockId, first: u64, period: u64) -> Result<()> {
         if period == 0 {
             return Err(Error::invalid(
@@ -3049,10 +2632,6 @@ impl Writer {
         Ok(())
     }
 
-    /// No more edges at the current speed after `t`: the running stretch ends
-    /// at its last edge at or before `t` (`t` must not precede its first
-    /// edge). Stopping a clock that is not running does nothing. `close` ends
-    /// a running stretch at the current time with status `Open`.
     pub fn clock_stop(&mut self, clock: ClockId, t: u64) -> Result<()> {
         let c = self.clock_state(clock)?;
         let Some((_, first, _)) = c.running else {
@@ -3066,7 +2645,6 @@ impl Writer {
         self.end_stretch(clock, t, TxStatus::Unset)
     }
 
-    /// Writes the running stretch of `clock`, ended at its last edge at or before `t` (>= first).
     fn end_stretch(&mut self, clock: ClockId, t: u64, status: TxStatus) -> Result<()> {
         let key = self.strings.intern(clock::KEY_PERIOD);
         let c = &mut self.clocks[clock.0 as usize];
@@ -3096,8 +2674,6 @@ impl Writer {
         Ok(())
     }
 
-    /// Writes the ended stretches as their own small TX_BLOCK, so that a reader
-    /// loads a clock without decoding other transactions.
     fn flush_clocks(&mut self) -> Result<()> {
         self.flush_meta_and_hierarchy()?;
         if self.n_clock_rows == 0 {
@@ -3113,24 +2689,10 @@ impl Writer {
         self.sink.send(Msg::Tx(input))
     }
 
-    // ----- close -----
-
-    /// Finishes the file: writes open transactions and running clocks with
-    /// status `Open`, flushes everything, and writes the directory and
-    /// trailer. Idempotent. Also invoked by `Drop`, but errors are only
-    /// reported here, including the first error of the background thread.
     pub fn close(&mut self) -> Result<()> {
         self.close_with(Ending::Closed)
     }
 
-    /// Like [`close`](Self::close), recording how the run ended. Any ending
-    /// but [`Ending::Closed`] is written as a FATAL log record at the current
-    /// time in the reserved root log stream [`ending::STREAM`], the last
-    /// record of the file (SPEC section 8.5); [`Reader::ending`](crate::Reader::ending) returns it.
-    ///
-    /// A poisoned writer ([`is_poisoned`](Self::is_poisoned)) is sealed instead ([`Sealer::seal`]):
-    /// its buffers cannot be trusted, and the ending becomes
-    /// [`Ending::Poisoned`] (a crash is marked sealed).
     pub fn close_with(&mut self, end: Ending) -> Result<()> {
         if self.closed {
             return Ok(());
@@ -3169,7 +2731,6 @@ impl Writer {
             self.log(site, self.time, &args)?;
         }
         self.closed = true;
-        // Open transactions are recorded with status Open.
         let live: Vec<u64> = self
             .open
             .slots
@@ -3185,7 +2746,6 @@ impl Writer {
             self.open.remove(id);
             self.n_tx_rows += 1;
         }
-        // Running clocks end at their last edge at or before the current time, with status Open.
         for i in 0..self.clocks.len() {
             self.end_stretch(ClockId(i as u32), self.time, TxStatus::Open)?;
         }
@@ -3213,13 +2773,8 @@ impl Writer {
         self.sink.close()
     }
 
-    /// Runs `f` with the writer marked as busy in its [`CrashState`], so a
-    /// crash guard seals the writer instead of closing it if the process dies
-    /// inside. Mark a whole time step rather than each call: the mark costs
-    /// two stores. A panic that unwinds out of `f` poisons the writer.
     pub fn guarded<R>(&mut self, f: impl FnOnce(&mut Writer) -> R) -> R {
         let state: *const CrashState = &self.shared.state;
-        // Safety: `shared` is never replaced while the writer lives.
         let _mark = Guarded {
             state,
             prev: unsafe { (*state).enter() },
@@ -3227,27 +2782,20 @@ impl Writer {
         f(self)
     }
 
-    /// The writer's [`CrashState`].
     pub fn state(&self) -> &CrashState {
         &self.shared.state
     }
 
-    /// True when a marked call panicked. The writer's buffers cannot be
-    /// trusted any more: call nothing but [`close_with`](Self::close_with),
-    /// which seals it, or drop it.
     pub fn is_poisoned(&self) -> bool {
         self.shared.state.poisoned()
     }
 
-    /// A handle that finishes this writer's file from another thread
-    /// ([`Sealer::seal`]) and tells whether the owner is inside a method.
     pub fn sealer(&self) -> Sealer {
         Sealer {
             shared: self.shared.clone(),
         }
     }
 
-    /// Counters; cheap, callable before or after `close`.
     pub fn stats(&self) -> WriterStats {
         WriterStats {
             blocks: self.block_count,
@@ -3266,29 +2814,16 @@ impl Drop for Writer {
     }
 }
 
-/// Writer counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WriterStats {
-    /// Signal blocks handed to the encoder.
     pub blocks: u32,
-    /// Value changes recorded after deduplication, including buffered ones.
     pub records: u64,
-    /// Transactions ended with `end_tx` (not those closed by `close`).
     pub transactions: u64,
-    /// Log records written with `log` (not included in `transactions`).
     pub log_records: u64,
-    /// Declared signals.
     pub signals: u32,
-    /// Declared hierarchy nodes.
     pub nodes: u32,
 }
 
-/// Rewrites a file that was recovered by scanning (its writer never closed
-/// it) as a complete one, as `mcap recover` does: every complete, verified
-/// section is copied unchanged, then an [`Ending::Recovered`] record, a
-/// directory and a trailer are appended. Returns the bytes the scan dropped,
-/// or `None` for a file that was complete already, which is copied as is.
-/// `output` must be another path than `input`.
 pub fn recover(input: impl AsRef<Path>, output: impl AsRef<Path>) -> Result<Option<u64>> {
     let r = crate::Reader::open(input.as_ref())?;
     let Some(dropped) = r.recovered() else {

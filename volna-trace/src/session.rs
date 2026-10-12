@@ -1,4 +1,4 @@
-//! Recording access shared by local and remote loaders. Blocking queries run on a host executor.
+//! Recording access shared by local and remote loaders.
 
 use std::sync::Arc;
 
@@ -6,12 +6,8 @@ use crate::data::{Hierarchy, SignalHistory, SignalRef, TraceInfo};
 
 pub use crate::data::vtr_source::LocalSession;
 
-/// Results are in request order, including duplicates. Invalid or unsupported
-/// identities have per-signal errors; a shared I/O/decode failure can fail the
-/// whole batch. Duplicate successful identities share an immutable history.
 pub type SignalLoads = Vec<(SignalRef, anyhow::Result<Arc<dyn SignalHistory>>)>;
 
-/// Kinds of data a backend can serve: VTR supports all three, FST waveforms only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Capabilities {
     pub waveforms: bool,
@@ -19,44 +15,25 @@ pub struct Capabilities {
     pub relations: bool,
 }
 
-/// An opened trace.
-///
-/// [`info`](Self::info), [`hierarchy`](Self::hierarchy) and
-/// [`tracks`](Self::tracks) are resident metadata. The `load_*` methods are
-/// blocking complete-object queries for a loader executor; their results are
-/// immutable, shared and remain valid after the session is dropped.
-/// `SignalRef`, `TrackRef` and `TransactionRef` belong to this session and must
-/// not be reused after it is replaced. Remote sessions reject the blocking
-/// loads; their requests go through [`crate::remote::client::RemoteClient`].
 pub trait Session: Send + Sync {
-    /// Bytes retained by the opened session before on-demand signal/track
-    /// owners are loaded (mapped/input image, hierarchy and backend indexes).
     fn resident_bytes(&self) -> u64 {
         0
     }
 
-    /// Shared admission pool for resident raw data and client-side indexes.
-    /// Local sessions may return `None`; callers can supply a process-local
-    /// pool through [`account_local_session`] for the same admission path.
     fn memory_budget(&self) -> Option<crate::remote::memory::MemoryBudget> {
         None
     }
 
-    /// Source format (`VTR`, `FST`), or `None` when a reader does not report it.
     fn format(&self) -> Option<&'static str> {
         None
     }
 
-    /// Server identity for asynchronous executor routing. Local sessions return
-    /// None and use the blocking load methods on a background executor.
     fn remote_id(&self) -> Option<u64> {
         None
     }
-    /// Resident raw track catalog; reading it performs no I/O.
     fn tracks(&self) -> &[crate::data::transactions::Track] {
         &[]
     }
-    /// Capabilities describe operations, not whether this recording has rows.
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             waveforms: true,
@@ -66,45 +43,30 @@ pub trait Session: Send + Sync {
     }
     fn info(&self) -> &TraceInfo;
     fn hierarchy(&self) -> &Hierarchy;
-    /// Precomputed scope sizes, when supplied with resident remote metadata.
     fn scope_sizes(&self) -> Option<Arc<crate::data::ScopeSizes>> {
         None
     }
-    /// The trace's activity index, when a
-    /// valid sidecar was found at open or built later by the session.
-    /// Resident and shared; counted in [`resident_bytes`](Self::resident_bytes).
     fn activity(&self) -> Option<Arc<crate::data::ActivityIndex>> {
         None
     }
-    /// Whether this session's reader can build an activity sidecar. Byte
-    /// images and recovered files have no stable build source.
     fn activity_build_info(&self) -> Option<crate::data::ActivityBuildInfo> {
         None
     }
-    /// Stable raw recording identity for sidecar validation.
     fn activity_identity(&self) -> Option<vtr::activity::Identity> {
         None
     }
-    /// Read a validated raw sidecar image for transport beside the reader.
     fn activity_image(&self, _cache_dir: Option<&std::path::Path>) -> anyhow::Result<Vec<u8>> {
         anyhow::bail!("this session has no activity sidecar")
     }
-    /// Host of a remote reader, for the build offer.
     fn activity_host(&self) -> Option<&str> {
         None
     }
-    /// A remote reader already has an index that the client should fetch.
     fn activity_available(&self) -> bool {
         self.activity().is_some()
     }
-    /// Install a fully validated index received by the remote executor.
-    /// Blocking local readers reject this operation; their builder owns installation.
     fn install_activity(&self, _index: Arc<crate::data::ActivityIndex>) -> anyhow::Result<()> {
         anyhow::bail!("this session does not accept remote activity indexes")
     }
-    /// Builds and installs an immutable activity index through the library.
-    /// Blocking work for the loader; supply a control in `options` for
-    /// progress and cancellation. The late-built index is charged to `budget`.
     fn build_activity(
         &self,
         _options: &vtr::activity::BuildOptions,
@@ -113,9 +75,6 @@ pub trait Session: Send + Sync {
     ) -> anyhow::Result<()> {
         anyhow::bail!("this session cannot build an activity index")
     }
-    /// The signals among `signals` that change in `[t0, t1]` (trace times,
-    /// both included), read from the trace: the exact answer for those the
-    /// activity index leaves undecided. Blocking work for a loader executor.
     fn resolve_activity(
         &self,
         _signals: &[SignalRef],
@@ -124,22 +83,14 @@ pub trait Session: Send + Sync {
     ) -> anyhow::Result<Vec<SignalRef>> {
         anyhow::bail!("this trace cannot read activity")
     }
-    /// Load all records and incident relations of a stream or generator,
-    /// including empty member generators. Invalid identities and unsupported
-    /// backends return errors. This is blocking work for a loader executor,
-    /// never a painting call.
     fn load_track(
         &self,
         _track: crate::data::transactions::TrackRef,
     ) -> anyhow::Result<crate::data::loaded_tracks::LoadedTrack> {
         anyhow::bail!("transaction track loading is unsupported")
     }
-    /// Load the full change history of a signal. May be slow; call off the UI thread.
     fn load_signal(&self, signal: SignalRef) -> anyhow::Result<Arc<dyn SignalHistory>>;
 
-    /// Load complete histories together. Backends can override this to share a
-    /// filtered read. This is an expensive query, not resident metadata access.
-    /// See [`SignalLoads`] for result order and errors.
     fn load_signals(&self, signals: &[SignalRef]) -> SignalLoads {
         let mut loaded = std::collections::BTreeMap::new();
         signals
@@ -160,9 +111,6 @@ pub trait Session: Send + Sync {
     }
 }
 
-/// Give an in-process backend the same admission owner used by remote data and
-/// derived allocations. Remote sessions already return a budget and are kept as
-/// they are.
 pub fn account_local_session(
     session: Arc<dyn Session>,
     budget: crate::remote::memory::MemoryBudget,
@@ -171,8 +119,6 @@ pub fn account_local_session(
         return Ok(session);
     }
     let resident_bytes = session.resident_bytes();
-    // Procedural/test sessions with no resident raw owner need no wrapper;
-    // Their caller can use the same pool for derived allocations.
     if resident_bytes == 0 {
         return Ok(session);
     }
@@ -184,8 +130,6 @@ pub fn account_local_session(
     }))
 }
 
-/// A local trace charged to the shared budget. Loads check the budget's
-/// current object limit, so raising the limit applies on retry.
 struct AccountedSession {
     inner: Arc<dyn Session>,
     budget: crate::remote::memory::MemoryBudget,
@@ -336,23 +280,21 @@ impl SignalHistory for AccountedHistory {
     }
 }
 
-/// What to open.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OpenSpec {
-    /// Recording opened by the workspace host's remote executor.
     Remote {
         name: String,
         limits: crate::remote::limits::Limits,
     },
-    /// A trace on disk: memory-mapped VTR or buffered FST.
     #[cfg(not(target_family = "wasm"))]
     Path(std::path::PathBuf),
-    /// A VTR or FST image already in memory (web hosts, drag and drop of bytes).
-    Bytes { name: String, bytes: Vec<u8> },
+    Bytes {
+        name: String,
+        bytes: Vec<u8>,
+    },
 }
 
 impl OpenSpec {
-    /// Display name while loading.
     pub fn name(&self) -> String {
         match self {
             OpenSpec::Remote { name, .. } => name.clone(),
@@ -365,7 +307,6 @@ impl OpenSpec {
         }
     }
 
-    /// Where it comes from, for naming the trace: the path, or the name.
     pub fn source(&self) -> String {
         match self {
             OpenSpec::Remote { name, .. } | OpenSpec::Bytes { name, .. } => name.clone(),
@@ -374,20 +315,6 @@ impl OpenSpec {
         }
     }
 
-    /// Open a local recording. This blocks; run it on a worker executor when
-    /// the host must remain responsive. Remote specs require [`crate::remote::client::RemoteClient`].
-    ///
-    /// ```no_run
-    /// use volna_trace::OpenSpec;
-    /// let session = OpenSpec::Path("recording.vtr".into()).open()?;
-    /// if let Some(variable) = session.hierarchy().vars().next() {
-    ///     let history = session.load_signal(variable.signal)?;
-    ///     if let Some(index) = history.index_at(100) {
-    ///         println!("{:?}", history.value(Some(index)));
-    ///     }
-    /// }
-    /// # Ok::<(), anyhow::Error>(())
-    /// ```
     pub fn open(self) -> anyhow::Result<Arc<dyn Session>> {
         match self {
             OpenSpec::Remote { .. } => {
@@ -441,8 +368,6 @@ fn is_fst(bytes: &[u8]) -> anyhow::Result<bool> {
     anyhow::bail!("unrecognized trace format: expected VTR or FST header")
 }
 
-/// Raw loading work. `Tag` is an opaque caller identity, never interpreted or sent on the wire.
-/// Generation and request IDs correlate completions; they do not store viewer state.
 pub enum LoadRequest<Tag = u64> {
     BuildActivity {
         tag: Tag,
@@ -465,7 +390,6 @@ pub enum LoadRequest<Tag = u64> {
         session: Arc<dyn Session>,
         signals: Vec<SignalRef>,
     },
-    /// Exact raw changing-signal identities, using complete histories remotely.
     ResolveActivity {
         tag: Tag,
         generation: u64,
@@ -485,7 +409,6 @@ impl<Tag: Copy> LoadRequest<Tag> {
             | Self::ResolveActivity { session, .. } => session.remote_id(),
         }
     }
-    /// Complete a failed load, preserving caller correlation.
     pub fn fail(self, error: anyhow::Error) -> LoadResult<Tag> {
         match self {
             Self::BuildActivity {
@@ -534,7 +457,6 @@ impl<Tag: Copy> LoadRequest<Tag> {
             },
         }
     }
-    /// Run blocking local work on the caller's executor.
     pub fn perform(self) -> LoadResult<Tag> {
         match self {
             Self::BuildActivity {
@@ -589,7 +511,6 @@ impl<Tag: Copy> LoadRequest<Tag> {
     }
 }
 
-/// Complete immutable recording objects or explicit loading errors.
 pub enum LoadResult<Tag = u64> {
     Opened {
         tag: Tag,

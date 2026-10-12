@@ -1,10 +1,4 @@
-//! Headless tests of stacked areas: the
-//! arithmetic of a stack over random histories (column means add up to the
-//! total's mean, both drawing paths agree, the whole-trace walk, stepping
-//! through the sum), stacking and unstacking with their undo steps and
-//! heights, the group menu, workspaces, the painted row (layer order, gaps,
-//! the undefined fill, the net line, cells, swatches and the readout) and
-//! the feature and analog showcases' stackable scopes.
+//! Headless stacked waveform tests for arithmetic, editing, persistence, and painting.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,8 +24,6 @@ use volna_trace::session::{OpenSpec, Session};
 const TRACE: &str = "file:///tmp/stack.vtr";
 const LOCATION: &str = "file:///tmp/stack.vtr.volna.json";
 
-// -- the arithmetic, over random histories -----------------------------------
-
 struct Rng(u64);
 
 impl Rng {
@@ -43,9 +35,6 @@ impl Rng {
     }
 }
 
-/// A random member: a 4-state bit, an 8-bit vector read unsigned or
-/// signed, or a real of either sign; changes at unaligned times, stretches
-/// of X, and sometimes no value before a late first change.
 fn member(rng: &mut Rng, k: usize) -> Layer {
     member_until(rng, k, 10_000)
 }
@@ -78,7 +67,6 @@ fn member_until(rng: &mut Rng, k: usize, end: u64) -> Layer {
             (_, false) => WaveValue::Bits(format!("{:08b}", rng.below(256))),
         });
         times.push(t);
-        // Sometimes two changes at one time: the last one holds.
         t += if rng.below(10) == 0 {
             0
         } else {
@@ -100,8 +88,6 @@ fn members(seed: u64) -> Vec<Layer> {
     (0..n).map(|k| member(&mut rng, k)).collect()
 }
 
-/// The sum over `[ta, tb)` split at every change of any layer: its
-/// integral, or `None` when some layer is undefined for a while there.
 fn brute_integral(layers: &[Layer], ta: f64, tb: f64) -> Option<f64> {
     let mut cuts: Vec<f64> = vec![ta, tb];
     for l in layers {
@@ -160,7 +146,6 @@ fn column_means_add_up_to_the_mean_of_the_total() {
                     (None, None) => {}
                     (means, brute) => panic!("seed {seed} column {c}: {means:?} vs {brute:?}"),
                 }
-                // Bits count 0 or 1, so their means lie between.
                 for (l, v) in layers.iter().zip(values) {
                     if let (Reading::Bit, Sample::Value(v)) = (l.reading, v) {
                         assert!((0.0..=1.0).contains(v), "seed {seed}: bit mean {v}");
@@ -224,7 +209,6 @@ fn a_stack_draws_negative_parts_below_zero_and_stops_at_an_undefined_layer() {
         Sample::Value(-0.5),
     ];
     let c = stack::compose(&values, |k, lo, hi| bands.push((k, lo, hi)));
-    // The last layer is on the baseline; negatives grow down from zero.
     assert_eq!(
         bands,
         [
@@ -305,7 +289,6 @@ fn bits(times: &[(u64, &str)]) -> Layer {
 
 #[test]
 fn stepping_through_the_sum_skips_changes_that_cancel_out() {
-    // At 10 one bit rises as the other falls: the sum stays 1.
     let layers = [
         bits(&[(0, "0"), (10, "1"), (30, "0")]),
         bits(&[(0, "1"), (10, "0"), (20, "1")]),
@@ -315,14 +298,11 @@ fn stepping_through_the_sum_skips_changes_that_cancel_out() {
     assert_eq!(stack::total_edge(&layers, 30, false, 100), Some(20));
     assert_eq!(stack::total_edge(&layers, 20, false, 100), Some(0));
     assert_eq!(stack::total_edge(&layers, 30, true, 100), None);
-    // Weak drives count as their level; X and don't-care do not.
     let weak = bits(&[(0, "h"), (5, "l"), (6, "-")]);
     assert_eq!(weak.at(0), Sample::Value(1.0));
     assert_eq!(weak.at(5), Sample::Value(0.0));
     assert_eq!(weak.at(6), Sample::Undefined);
 }
-
-// -- integral summaries (stage 2) ----------------------------------------------
 
 #[test]
 fn integral_prefixes_equal_a_direct_walk_at_every_block_boundary() {
@@ -369,11 +349,9 @@ fn integral_prefixes_equal_a_direct_walk_at_every_block_boundary() {
             );
             assert_eq!(u, du, "seed {seed} k {k}");
         }
-        // One f64 and one u32 per block of 64 changes.
         let blocks = (len - 2) / b + 1;
         assert_eq!(summary.resident_bytes(), blocks as u64 * 12);
     }
-    // The last change's prefix, also where it starts a block.
     for len in [2usize, 64, 65, 66, 129] {
         let h: Arc<dyn SignalHistory> = Arc::new(VecHistory {
             shape: SignalShape::Bit,
@@ -465,7 +443,6 @@ fn a_long_layer_waits_for_its_summary_rather_than_walk() {
     );
     layers[0] = layers[0].clone().with_summary(Some(s));
     assert!(!stack::frame(&layers, &vp, 800).waiting());
-    // A summary of another reading is not used.
     let other = Arc::new(
         IntegralSummary::build(
             &layers[1].history,
@@ -483,8 +460,6 @@ fn a_long_layer_waits_for_its_summary_rather_than_walk() {
     );
 }
 
-/// Two one-bit valids changing 30,000 and 20,000 times: long enough for
-/// summaries.
 fn long_trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
@@ -542,7 +517,6 @@ fn long_stacks_hold_integral_summaries_until_their_histories_go() {
         "not stacked yet"
     );
     app.handle(Command::Action(Action::ToggleStack));
-    // Queued for the worker: until they arrive the frame waits.
     assert!(layers.iter().all(|l| matches!(
         app.doc.integral(&l.history, l.reading),
         Some(stack::IntegralLoad::Building { .. })
@@ -566,7 +540,6 @@ fn long_stacks_hold_integral_summaries_until_their_histories_go() {
     }
     let shown = texts(frame(&mut app, id));
     assert!(!shown.iter().any(|s| s == "Summarizing…"), "{shown:?}");
-    // Unstacked, the summaries go; removed, so do the histories.
     app.handle(Command::Action(Action::ToggleStack));
     assert!(
         layers
@@ -583,10 +556,6 @@ fn long_stacks_hold_integral_summaries_until_their_histories_go() {
     );
 }
 
-// -- the peak of the total (stage 3) --------------------------------------------
-
-/// The total's extremes over `[ta, tb)`: at its start and after every change
-/// inside it, where every layer is defined.
 fn brute_peak(layers: &[Layer], ta: f64, tb: f64) -> stack::Peak {
     let mut instants: Vec<f64> = vec![ta];
     for l in layers {
@@ -616,7 +585,6 @@ fn brute_peak(layers: &[Layer], ta: f64, tb: f64) -> stack::Peak {
     peak
 }
 
-/// Members that never go below zero, so the stack's top is the total.
 fn unsigned_members(seed: u64, end: u64) -> Vec<Layer> {
     let mut rng = Rng(seed);
     let mut layers = Vec::new();
@@ -679,7 +647,6 @@ fn the_summarys_peaks_agree_with_a_walk() {
     for seed in 1..8u64 {
         let end = (1u64 << 20) - 1;
         let layers = members(0xe703_7ed1 ^ (seed * 3));
-        // Stretch the members over a million ticks.
         let layers: Vec<Layer> = {
             let mut rng = Rng(seed);
             (0..layers.len())
@@ -692,14 +659,12 @@ fn the_summarys_peaks_agree_with_a_walk() {
             &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
         )
         .unwrap();
-        // Columns of 1,024 ticks hold four whole 256-tick blocks: exact.
         let vp = Viewport {
             start: 0.0,
             end: (end + 1) as f64,
         };
         let (walked, summed) = (stack::peaks(&layers, &vp, 1024), summary.peaks(&vp, 1024));
         assert_eq!(walked, summed, "seed {seed}");
-        // Otherwise a column reads the blocks it touches: never narrower.
         let vp = Viewport {
             start: 3_333.3,
             end: 777_777.7,
@@ -721,12 +686,6 @@ fn the_summarys_peaks_agree_with_a_walk() {
     }
 }
 
-// -- the panel ---------------------------------------------------------------
-
-/// `top` holds, in order: `p` (4-bit count 2), `q` (4-bit count 3), `r`
-/// (a bit, 1), `mode` (text) and `tick` (an event), over 0–100 ns; `q` is X
-/// at 40–50 ns and `r` falls at 60 ns. `other.flow` is a real, 0.5 and
-/// −1.5 from 70 ns.
 fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
@@ -841,7 +800,6 @@ fn scope(app: &App, path: &[&str]) -> volna_trace::data::ScopeId {
     }
 }
 
-/// The `top` group, selected, in a fresh app over [`trace`].
 fn app() -> (tempfile::NamedTempFile, App, PanelId) {
     let (file, session) = trace();
     let mut app = App::new();
@@ -885,7 +843,6 @@ fn shift_a_stacks_the_selected_group_as_one_undoable_step() {
         (GroupStyle::Stack { peak: true }, 3)
     );
     assert_eq!(app.undo_label(), Some("Stack top"));
-    // The layers: every signal with a number, in list order.
     let w = app.panels.waves(id).unwrap();
     let names: Vec<&str> = w
         .stack_layers(0)
@@ -898,7 +855,6 @@ fn shift_a_stacks_the_selected_group_as_one_undoable_step() {
     assert_eq!((g.style, g.height.multiple()), (GroupStyle::Activity, 1));
     app.handle(Command::Redo);
     assert_eq!(group(&app, id).style, GroupStyle::Stack { peak: true });
-    // Unstacking gives 1× back, unless the row was resized meanwhile.
     app.handle(Command::Action(Action::ToggleStack));
     assert_eq!(app.undo_label(), Some("Unstack top"));
     assert_eq!(group(&app, id).height.multiple(), 1);
@@ -906,7 +862,6 @@ fn shift_a_stacks_the_selected_group_as_one_undoable_step() {
     app.handle(Command::Action(Action::IncreaseRowHeight));
     app.handle(Command::Action(Action::ToggleStack));
     assert_eq!(group(&app, id).height.multiple(), 4);
-    // Folding is navigation, not a step.
     app.handle(Command::Action(Action::ToggleStack));
     let label = app.undo_label().map(str::to_owned);
     app.handle(Command::Action(Action::PanLeft));
@@ -944,7 +899,6 @@ fn the_group_menu_draws_it_as_activity_or_a_stacked_area() {
     app.handle(Command::MenuSelect(id, MenuAction::Stack(true)));
     assert_eq!(group(&app, id).style, GroupStyle::Stack { peak: true });
     assert_eq!(app.undo_label(), Some("Stack top"));
-    // A signal row's menu has no such section.
     let w = app.panels.waves_mut(id).unwrap();
     w.selected.clear();
     w.open_signal_menu(&app.doc, 1, Point::default());
@@ -987,14 +941,12 @@ fn stacked_groups_round_trip_through_workspaces_at_version_7() {
     )
     .unwrap();
     assert_eq!(again["panels"], saved["panels"]);
-    // Activity is the default and is not written.
     app.handle(Command::Action(Action::ToggleStack));
     let plain = serde_json::to_value(
         Workspace::capture(&app, volna_core::testing::paths(TRACE), None).unwrap(),
     )
     .unwrap();
     assert!(plain["panels"][0]["rows"][0].get("style").is_none());
-    // A version 5 panel is refused like any older one.
     let mut old = saved.clone();
     old["panels"][0]["version"] = 5.into();
     let mut other = App::new();
@@ -1012,7 +964,6 @@ fn stacked_groups_round_trip_through_workspaces_at_version_7() {
     );
 }
 
-/// Filled rectangles of `color` inside `area`.
 fn quads_of(scene: &Scene, area: Rect, color: volna_core::color::Color) -> Vec<Rect> {
     scene
         .quads()
@@ -1058,7 +1009,6 @@ fn the_stack_paints_layers_in_list_order_with_gaps_and_the_undefined_rest() {
         !p.is_empty() && !q.is_empty() && !r.is_empty(),
         "every layer is painted"
     );
-    // Until 40 ns the last member lies on the baseline and the first on top.
     let first = |rs: &[Rect]| {
         *rs.iter()
             .min_by(|a, b| a.left().total_cmp(&b.left()))
@@ -1069,17 +1019,14 @@ fn the_stack_paints_layers_in_list_order_with_gaps_and_the_undefined_rest() {
         r0.bottom() > q0.bottom() && q0.bottom() > p0.bottom(),
         "{p0:?} {q0:?} {r0:?}"
     );
-    // One pixel of canvas between neighbours.
     assert_eq!(q0.bottom(), r0.top() - 1.0, "a gap between q and r");
     assert_eq!(p0.bottom(), q0.top() - 1.0, "a gap between p and q");
-    // From 60 ns r is 0, so q sits on the baseline.
     let late = |rs: &[Rect]| {
         *rs.iter()
             .max_by(|a, b| a.left().total_cmp(&b.left()))
             .unwrap()
     };
     assert_eq!(late(&q).bottom(), r0.bottom());
-    // While q is X, only r is drawn and the rest of the column is hatched.
     let undefined = quads_of(scene, row, t.wave_undef_fill);
     let l = app.panels.waves(id).unwrap().last_layout();
     let x_of =
@@ -1090,7 +1037,6 @@ fn the_stack_paints_layers_in_list_order_with_gaps_and_the_undefined_rest() {
             .any(|u| (u.left() - x_of(40.0)).abs() <= 1.0 && (u.right() - x_of(50.0)).abs() <= 1.0),
         "{undefined:?}"
     );
-    // The cells: the sum, the header line, colour stripes and the rows left out.
     let text = texts(scene);
     assert!(text.iter().any(|s| s == "Σ 6"), "{text:?}");
     assert!(text.iter().any(|s| s == "stacked · 3 layers"), "{text:?}");
@@ -1108,11 +1054,9 @@ fn the_stack_paints_layers_in_list_order_with_gaps_and_the_undefined_rest() {
         })
         .count();
     assert_eq!(stripes, 3, "one stripe per layer row");
-    // The sum reads X while a layer is undefined.
     cursor(&mut app, id, 45);
     let text = texts(frame(&mut app, id));
     assert!(text.iter().any(|s| s == "Σ X"), "{text:?}");
-    // Folded, the group keeps its area.
     app.handle(Command::Action(Action::PanLeft));
     assert!(group(&app, id).collapsed);
     frame(&mut app, id);
@@ -1123,7 +1067,6 @@ fn the_stack_paints_layers_in_list_order_with_gaps_and_the_undefined_rest() {
 #[test]
 fn signed_members_stack_below_zero_with_a_net_line() {
     let (_f, mut app, id) = app();
-    // Move `flow` into the group, last: it becomes the baseline layer.
     let flow = app
         .doc
         .hierarchy(TraceId::A)
@@ -1155,7 +1098,6 @@ fn signed_members_stack_below_zero_with_a_net_line() {
     frame(&mut app, id);
     let scene = app.scene();
     let text = texts(scene);
-    // 2 + 3 + 0 − 1.5 at 80 ns.
     assert!(text.iter().any(|s| s == "Σ 3.5"), "{text:?}");
     let t = Theme::one_dark();
     let row = row_rect(&app, id, 0);
@@ -1164,7 +1106,6 @@ fn signed_members_stack_below_zero_with_a_net_line() {
     };
     let net = scene.prims.iter().any(|p| matches!(p, Prim::Lines { color, segments, .. } if *color == t.editor.text && !segments.is_empty() && segments.iter().all(|[a, b]| inside(a) && inside(b))));
     assert!(net, "a net line where both signs occur: {text:?}");
-    // The scale holds the negative part: its bottom label is below zero.
     assert!(text.iter().any(|s| s.starts_with('-')), "{text:?}");
     let _ = point(0.0, 0.0);
 }
@@ -1183,7 +1124,6 @@ fn hovering_the_stack_lists_every_layer_and_the_sum() {
     );
     frame(&mut app, id);
     let row = row_rect(&app, id, 0);
-    // Near the bottom at 20 ns: over r, the baseline layer.
     app.handle(Command::Pointer(
         id,
         PointerEvent::Move {
@@ -1208,7 +1148,6 @@ fn hovering_the_stack_lists_every_layer_and_the_sum() {
     let w = app.panels.waves(id).unwrap();
     let rows: Vec<String> = w.accessible_rows(&app.doc).map(|r| r.label).collect();
     assert_eq!(rows[0], "top, stacked area, 3 layers");
-    // Shift → steps to the next change of the sum.
     let w = app.panels.waves_mut(id).unwrap();
     w.selected = [0].into();
     w.anchor = Some(0);
@@ -1217,15 +1156,12 @@ fn hovering_the_stack_lists_every_layer_and_the_sum() {
     assert_eq!(app.panels.waves(id).unwrap().cursor(&app.doc), Some(40));
 }
 
-// -- the feature showcase ----------------------------------------------------
-
 fn showcase() -> Arc<dyn Session> {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/feature_showcase.vtr");
     OpenSpec::Path(path).open().unwrap()
 }
 
-/// Add `path` as a group, stack it and return its layers' names and whole-trace range.
 fn stacked(app: &mut App, path: &[&str]) -> (Vec<String>, (f64, f64)) {
     let s = scope(app, path);
     app.handle(Command::AddScopeAsGroup {
@@ -1271,13 +1207,10 @@ fn the_showcase_scopes_stack_bits_counts_and_signed_currents() {
     let (names, range) = stacked(&mut app, &["soc", "pmic"]);
     assert_eq!(names, ["solar_ma", "usb_ma", "radio_ma", "core_ma"]);
     assert!(range.0 < -50.0 && range.1 > 150.0, "{range:?}");
-    // The text mode says it is left out.
     let id = app.panels.focused_id();
     cursor(&mut app, id, 800);
     let shown = texts(frame(&mut app, id));
     assert!(shown.iter().any(|s| s.starts_with("not sta")), "{shown:?}");
-    // In the fault window channel 2's count is unknown: the queue sum reads
-    // X. Folded, the four stacks fit the panel.
     app.panels.waves_mut(id).unwrap().fold_all(true);
     let shown = texts(frame(&mut app, id));
     let sums: Vec<&String> = shown.iter().filter(|s| s.starts_with('Σ')).collect();
@@ -1375,7 +1308,6 @@ fn the_peak_band_shows_bursts_and_switches_from_the_menu() {
     let id = app.panels.focused_id();
     let g = *app.panels.waves(id).unwrap().selected.first().unwrap();
     assert!(group_at(&app, id, g).shows_peak(), "on by default");
-    // Folded and zoomed out: about two nanosecond samples per column.
     app.handle(Command::Action(Action::PanLeft));
     let App { panels, doc, .. } = &mut app;
     panels.waves_mut(id).unwrap().nav.jump_to(
@@ -1402,7 +1334,6 @@ fn the_peak_band_shows_bursts_and_switches_from_the_menu() {
         band(&mut app) > 0,
         "the core's one-nanosecond glitches rise above the means"
     );
-    // The readout names the peak after the means.
     let pos = app
         .panels
         .waves(id)
@@ -1424,7 +1355,6 @@ fn the_peak_band_shows_bursts_and_switches_from_the_menu() {
             .any(|s| s.starts_with("means over") && s.contains(" · peak ")),
         "{shown:?}"
     );
-    // The menu's check hides it, as one step, and the workspace says so.
     let w = app.panels.waves_mut(id).unwrap();
     w.open_signal_menu(&app.doc, g, Point::default());
     let item = w

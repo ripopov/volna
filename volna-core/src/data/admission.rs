@@ -9,8 +9,6 @@ pub(crate) fn bytes<T>(count: usize) -> Result<u64> {
         .context("analysis storage size overflow")
 }
 
-/// Every level is allocated at its final length; the outer vector is given
-/// exactly `levels` slots so its storage is covered by the same estimate.
 pub(crate) fn pyramid(
     mut blocks: usize,
     fanout: usize,

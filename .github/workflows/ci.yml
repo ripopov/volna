@@ -44,7 +44,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
-      # Override rust-toolchain.toml so each matrix entry tests its selected compiler.
       RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
     strategy:
       fail-fast: false
@@ -69,7 +68,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev
-      # The Linux workspace run also compiles and executes the C/C++ integration tests.
       - run: cargo test --workspace --locked
       - run: cargo check --workspace --all-targets --locked
       - name: Exercise examples
@@ -96,8 +94,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev
-      # Package verification creates transient source trees under target/package.
-      # Cache dependency downloads without scanning generated workspace artifacts.
       - uses: actions/cache@v5
         with:
           path: |

@@ -1,4 +1,5 @@
 //! Prepared transaction projections must respect their byte and item admissions.
+
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

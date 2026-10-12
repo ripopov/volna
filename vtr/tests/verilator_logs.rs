@@ -1,4 +1,5 @@
 //! Read actual Verilator output, including files closed during fatal shutdown.
+
 use std::path::PathBuf;
 use vtr::{LogQuery, Reader, Severity, TxQuery};
 

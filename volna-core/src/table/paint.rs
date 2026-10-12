@@ -1,5 +1,4 @@
-//! Paint the bounded prepared window. Raw histories and transaction stores are
-//! never queried from the painter.
+//! Paint the bounded prepared window.
 
 use super::model::{RowIdentity, TableModel};
 use crate::geometry::{Rect, point};

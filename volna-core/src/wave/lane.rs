@@ -1,9 +1,5 @@
-//! Transaction lanes: a generator shown as one row of the waveform panel,
-//! each record a bar over its lifetime. This module holds the lane row, its
-//! geometry in row units, and the pure queries the painter and the input
-//! handlers share (density bins, folded overlaps, hit tests, snapping).
-//! Records come from the document's resident [`LoadedGenerator`]; stacking is
-//! the generator's load-time [`LoadedGenerator::sub_row`].
+//! Transaction lanes: a generator shown as one row of the waveform panel, each record a bar
+//! over its lifetime.
 
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::document::{Document, TrackLoadState};
@@ -13,31 +9,21 @@ use crate::wave::model::RowHeight;
 use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{TrackRef, Transaction, TxStatus};
 
-/// Below this many pixels for a median lifetime, bars are unreadable and the
-/// lane draws a density strip instead.
 pub const DENSITY_PX: f64 = 4.0;
-/// A sub-row is this fraction of a 1× row, and the lane keeps this fraction
-/// of a row free above and below its sub-rows.
 const SUB_ROW: f32 = 2.0 / 3.0;
 const LANE_PAD: f32 = 1.0 / 8.0;
-/// Presets a new lane may take by default; deeper generators fold.
 const DEFAULT_MAX: RowHeight = RowHeight::PRESETS[3];
 
-/// A generator shown as a wave row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TxLane {
     pub source: TrackSource,
     pub name: String,
     pub scope: String,
     pub height: RowHeight,
-    /// A new lane takes the default height for its depth once its records
-    /// arrive; an explicit or restored height clears this.
     pub auto_height: bool,
-    /// Its own colour for the bars; `None` inherits.
     pub tint: Option<super::Tint>,
 }
 
-/// What a lane can show now.
 pub enum LaneData<'a> {
     Ready(&'a LoadedGenerator),
     Loading,
@@ -47,7 +33,6 @@ pub enum LaneData<'a> {
 }
 
 impl TxLane {
-    /// A lane for `track` of its trace's catalog.
     pub fn new(doc: &Document, track: Traced<TrackRef>) -> Option<Self> {
         let path = doc
             .session(track.trace)?
@@ -72,7 +57,6 @@ impl TxLane {
         Some(lane)
     }
 
-    /// A lane that keeps a saved path its trace does not have.
     pub fn unresolved(trace: TraceId, path: Vec<String>, height: RowHeight) -> Self {
         let name = path.last().cloned().unwrap_or_default();
         let scope = path[..path.len().saturating_sub(1)].join(".");
@@ -90,7 +74,6 @@ impl TxLane {
         self.source.track()
     }
 
-    /// The generator's records, when the document holds them.
     pub fn data<'a>(&self, doc: &'a Document) -> LaneData<'a> {
         let Some(track) = self.track() else {
             return LaneData::Unresolved;
@@ -113,8 +96,6 @@ impl TxLane {
         }
     }
 
-    /// Take the default height for the generator's depth once it is known.
-    /// Returns whether the height changed.
     pub fn fit_height(&mut self, doc: &Document) -> bool {
         if !self.auto_height {
             return false;
@@ -130,15 +111,11 @@ impl TxLane {
     }
 }
 
-// -- geometry ------------------------------------------------------------------
-
-/// Sub-rows a lane of `height` shows; deeper ones fold into the last.
 pub fn capacity(height: RowHeight) -> u16 {
     let units = f32::from(height.multiple());
     (((units - 2.0 * LANE_PAD) / SUB_ROW).floor() as u16).max(1)
 }
 
-/// The smallest preset up to 4× that shows `depth` sub-rows.
 pub fn default_height(depth: u16) -> RowHeight {
     RowHeight::PRESETS
         .into_iter()
@@ -148,17 +125,14 @@ pub fn default_height(depth: u16) -> RowHeight {
         .unwrap_or(DEFAULT_MAX)
 }
 
-/// Sub-rows folded away at `height`.
 pub fn folded(depth: u16, height: RowHeight) -> u16 {
     depth.saturating_sub(capacity(height))
 }
 
-/// The sub-row a record with stacking `sub_row` is drawn on.
 pub fn shown_sub_row(sub_row: u16, height: RowHeight) -> u16 {
     sub_row.min(capacity(height) - 1)
 }
 
-/// Pixel geometry of one lane row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LaneGeometry {
     pub top: f32,
@@ -179,12 +153,10 @@ impl LaneGeometry {
         }
     }
 
-    /// Top of sub-row `sub`.
     pub fn sub_top(&self, sub: u16) -> f32 {
         self.top + self.pad + self.sub_h * f32::from(sub)
     }
 
-    /// The shown sub-row under `y`, if any.
     pub fn sub_at(&self, y: f32) -> Option<u16> {
         let offset = y - self.top - self.pad;
         if offset < 0.0 || self.sub_h <= 0.0 {
@@ -195,29 +167,22 @@ impl LaneGeometry {
     }
 }
 
-/// Whether bars are too narrow to read at `px_per_unit`.
 pub fn is_density(generator: &LoadedGenerator, px_per_unit: f64) -> bool {
     generator.median_lifetime() as f64 * px_per_unit < DENSITY_PX
 }
 
-// -- queries -------------------------------------------------------------------
-
-/// The window of trace time `viewport` shows, as an inclusive query range.
 pub fn window(viewport: &Viewport) -> (u64, u64) {
     let start = viewport.start.max(0.0).floor() as u64;
     let end = viewport.end.max(0.0).ceil() as u64;
     (start, end.max(start))
 }
 
-/// One density column: how many records are open, and whether one failed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DensityColumn {
     pub open: u32,
     pub failed: bool,
 }
 
-/// Open records per pixel column over `viewport`, `columns` wide. One visit
-/// of the window with difference arrays: O(records + columns).
 pub fn density(
     generator: &LoadedGenerator,
     viewport: &Viewport,
@@ -255,8 +220,6 @@ pub fn density(
         .collect()
 }
 
-/// Time spans where two or more records folded into the last sub-row of a
-/// lane `height` tall overlap. Empty when nothing folds.
 pub fn fold_overlaps(
     generator: &LoadedGenerator,
     viewport: &Viewport,
@@ -293,9 +256,6 @@ pub fn fold_overlaps(
     spans
 }
 
-/// The record under time `time` on shown sub-row `sub`: the last one drawn
-/// that contains it, else the one with an edge nearest to it within
-/// `tolerance`. Returns its canonical ordinal.
 pub fn hit(
     generator: &LoadedGenerator,
     height: RowHeight,
@@ -325,7 +285,6 @@ pub fn hit(
     inside.or(near.map(|(_, ordinal)| ordinal))
 }
 
-/// The record begin or end nearest to `time` within `tolerance`.
 pub fn nearest_boundary(generator: &LoadedGenerator, time: f64, tolerance: f64) -> Option<u64> {
     let start = (time - tolerance).max(0.0).floor() as u64;
     let end = (time + tolerance).max(0.0).ceil() as u64;
@@ -342,8 +301,6 @@ pub fn nearest_boundary(generator: &LoadedGenerator, time: f64, tolerance: f64) 
     best.map(|(_, edge)| edge)
 }
 
-/// Records open at `time`: begun at or before it and not yet ended (a point
-/// record is open at its own time), in canonical order.
 pub fn open_at(generator: &LoadedGenerator, time: u64) -> Vec<&Transaction> {
     let mut open = Vec::new();
     _ = generator.visit_window(time, time, |tx| {
@@ -355,7 +312,6 @@ pub fn open_at(generator: &LoadedGenerator, time: u64) -> Vec<&Transaction> {
     open
 }
 
-/// A record's caption: its `vtr.label`, else its identity.
 pub fn label(tx: &Transaction) -> String {
     let label = PipelineModel::label(tx);
     if label.is_empty() {
@@ -365,8 +321,6 @@ pub fn label(tx: &Transaction) -> String {
     }
 }
 
-/// The value column of a lane at the cursor: the record open there, or how
-/// many are, and whether any of them failed.
 pub fn value_text(generator: &LoadedGenerator, cursor: u64) -> (String, bool) {
     let open = open_at(generator, cursor);
     let failed = open.iter().any(|tx| tx.status == TxStatus::Error);
@@ -406,7 +360,6 @@ mod tests {
         }
     }
 
-    /// The demo's four overlapping reads: sub-rows 0, 1, 2, 0.
     fn episode() -> LoadedGenerator {
         LoadedGenerator::new(
             TrackRef(1),
@@ -455,10 +408,8 @@ mod tests {
         assert_eq!(d[19].open, 3);
         assert!(d[39].failed && !d[41].failed);
         assert_eq!(d[50], DensityColumn::default());
-        // At 1×, every sub-row folds into one; overlapping spans hatch.
         assert_eq!(fold_overlaps(&g, &vp, RowHeight::DEFAULT), [(8, 34)]);
         assert!(fold_overlaps(&g, &vp, RowHeight::PRESETS[2]).is_empty());
-        // Sub-row 2 at 19 is the failing read; folded, the last drawn wins.
         let three = RowHeight::PRESETS[2];
         assert_eq!(hit(&g, three, 2, 19.0, 0.0), Some(2));
         assert_eq!(hit(&g, RowHeight::DEFAULT, 0, 19.0, 0.0), Some(2));

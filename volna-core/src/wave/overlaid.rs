@@ -1,6 +1,4 @@
-//! Independent numeric group members on one amplitude scale. Each member
-//! uses the analog renderer and its own min/max summary; values are never
-//! composed, and an undefined member cannot interrupt another line.
+//! Independent numeric group members on one amplitude scale.
 
 use std::collections::HashMap;
 
@@ -11,8 +9,6 @@ use crate::Document;
 use crate::data::NumericKind;
 use volna_trace::data::SignalShape;
 
-/// Unsaved range caches and easing for one group. History identity and
-/// numeric interpretation invalidate cached whole-trace extents.
 #[derive(Clone, Debug)]
 pub(crate) struct Ranges {
     members: HashMap<(usize, NumericKind), Analog>,
@@ -79,7 +75,6 @@ impl Ranges {
     }
 }
 
-/// Convert independent polylines to solid segments clipped to the plot bounds.
 pub fn strokes(
     runs: &[Vec<crate::geometry::Point>],
     bounds: crate::geometry::Rect,
@@ -90,7 +85,6 @@ pub fn strokes(
         .collect()
 }
 
-/// Liang–Barsky clipping in f64 also handles large finite sample coordinates.
 fn clip_segment(
     a: crate::geometry::Point,
     b: crate::geometry::Point,
@@ -126,8 +120,6 @@ fn clip_segment(
         return None;
     }
     let at = |f: f64, edge: Option<(usize, f32)>| {
-        // Anchor interpolation at the nearer endpoint. Retain the exact
-        // clipping edge when the ratio rounds to 0 or 1 for a distant point.
         let mut coordinates = if f <= 0.5 {
             [(x + f * dx) as f32, (y + f * dy) as f32]
         } else {

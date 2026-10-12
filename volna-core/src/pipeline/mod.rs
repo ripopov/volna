@@ -1,6 +1,5 @@
-//! The pipeline panel: Konata-style rows of stage cells over any transaction
-//! track, sharing the document's time axis with the wave panels and owning a
-//! local row axis.
+//! The pipeline panel: Konata-style rows of stage cells over any transaction track, sharing
+//! the document's time axis with the wave panels and owning a local row axis.
 
 pub mod activity;
 pub use activity::{Activity, ActivityCommand, FollowActivity};

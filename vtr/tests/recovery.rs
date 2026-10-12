@@ -1,7 +1,6 @@
-//! Files whose writer never closed them:
-//! finished sections reach the file at once, and a recovering reader keeps
-//! exactly the complete, verified sections before a cut, a torn payload or a
-//! zero-filled tail.
+//! Files whose writer never closed them: finished sections reach the file at once, and a
+//! recovering reader keeps exactly the complete, verified sections before a cut, a torn
+//! payload or a zero-filled tail.
 
 use vtr::*;
 
@@ -11,7 +10,6 @@ fn tmp(name: &str) -> std::path::PathBuf {
     dir.join(name)
 }
 
-/// A closed file with every kind of section, many of each.
 fn sample() -> (Vec<u8>, SignalId) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sample.vtr");
@@ -77,7 +75,6 @@ fn sample() -> (Vec<u8>, SignalId) {
         if t % 500 == 0 {
             w.clock_stop(clk, t).unwrap();
             w.clock_run(clk, t + 1, 2).unwrap();
-            // A few extra sections of the other kinds: hierarchy and strings grow mid-run.
             w.add_var(
                 Some(top),
                 &format!("late{t}"),
@@ -96,7 +93,6 @@ fn sample() -> (Vec<u8>, SignalId) {
     (std::fs::read(&path).unwrap(), a)
 }
 
-/// Everything a reader can decode, in a comparable form.
 type Contents = (Vec<(u64, Option<u64>)>, Vec<u64>, Vec<u64>);
 
 fn contents(rd: &Reader, a: SignalId) -> Contents {
@@ -123,7 +119,6 @@ fn contents(rd: &Reader, a: SignalId) -> Contents {
     (values, txs, logs)
 }
 
-/// A recovered prefix must be a prefix of the complete file's contents.
 fn assert_prefix(cut: &Reader, full: &Reader, a: SignalId) {
     let (cv, ct, cl) = contents(cut, a);
     let (fv, ft, fl) = contents(full, a);
@@ -186,8 +181,6 @@ fn cut_inside_every_payload() {
 
 #[test]
 fn zero_filled_tail_is_dropped() {
-    // A header that made it to disk with its payload unwritten (the file was
-    // extended, the data never landed) reads back as zeros of the right length.
     let (full, a) = sample();
     let rd = Reader::from_bytes(full.clone()).unwrap();
     let sections = rd.sections().to_vec();
@@ -197,7 +190,7 @@ fn zero_filled_tail_is_dropped() {
         let half = (e.payload_offset() + e.len / 2) as usize;
         torn[half..end].fill(0);
         if torn[..end] == full[..end] {
-            continue; // the payload's tail was zeros already
+            continue;
         }
         let r = Reader::from_bytes(torn).unwrap();
         assert_eq!(r.recovered(), Some(end as u64 - e.offset), "section {k}");
@@ -205,7 +198,6 @@ fn zero_filled_tail_is_dropped() {
         if k > 3 {
             assert_prefix(&r, &rd, a);
         }
-        // Zeros past the last complete section read as the end.
         let mut padded = full[..e.offset as usize].to_vec();
         padded.resize(end + 4096, 0);
         let r = Reader::from_bytes(padded).unwrap();
@@ -216,8 +208,6 @@ fn zero_filled_tail_is_dropped() {
 
 #[test]
 fn finished_sections_reach_the_file_at_once() {
-    // A writer that is never closed, as when its process dies: what it has
-    // written is in the file, not in a buffer of the dead process.
     let path = tmp("unclosed.vtr");
     let opts = WriterOptions {
         block_records: 1000,
@@ -252,7 +242,6 @@ fn finished_sections_reach_the_file_at_once() {
         w.emit_u64(a, t).unwrap();
     }
     w.log(site, 7, &[LogArg::U64(7)]).unwrap();
-    // Two blocks completed on their own; flush() finishes the third and the log block.
     let on_disk = Reader::from_bytes(std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(on_disk.recovered(), Some(0));
     assert_eq!(on_disk.load_signal(a).unwrap().len(), 2000);
@@ -265,7 +254,6 @@ fn finished_sections_reach_the_file_at_once() {
     assert_eq!(Reader::open(&path).unwrap().recovered(), None);
 }
 
-/// Every cut file of the tests above, as (label, bytes).
 fn cut_files(full: &[u8], sections: &[vtr::container::DirEntry]) -> Vec<(String, Vec<u8>)> {
     let mut cuts = Vec::new();
     let last_end = sections.last().unwrap().payload_offset() + sections.last().unwrap().len;
@@ -316,7 +304,6 @@ fn recover_every_cut_file() {
             Ending::Recovered { dropped },
             "{label}"
         );
-        // Every verified section is kept unchanged, then the ending's strings, nodes and record.
         let kept: Vec<_> = r.sections()[..cut.sections().len()]
             .iter()
             .map(|e| (e.kind, e.offset, e.len, e.aux0, e.aux1))
@@ -330,7 +317,6 @@ fn recover_every_cut_file() {
         if cut.signal_count() > 0 {
             let (cv, ct, mut cl) = contents(&cut, a);
             let (rv, mut rt, rl) = contents(&r, a);
-            // Log records are also zero-duration transactions; the ending record is the new one.
             let end = *rl.last().unwrap();
             rt.retain(|&id| id != end);
             assert_eq!((rv, rt), (cv, ct), "{label}");
@@ -341,7 +327,6 @@ fn recover_every_cut_file() {
             );
         }
     }
-    // A complete file is copied as it is.
     std::fs::write(&input, &full).unwrap();
     assert_eq!(vtr::recover(&input, &output).unwrap(), None);
     assert_eq!(std::fs::read(&output).unwrap(), full);
@@ -350,9 +335,6 @@ fn recover_every_cut_file() {
 #[test]
 fn commit_interval_flushes_pending_signal_and_log_records() {
     use std::time::Duration;
-    // Keep blocks below their size limits, wait for the interval, then drive a
-    // full 256-call commit-check cycle. Inline encoding makes the file readable
-    // immediately after the check without depending on thread scheduling.
     for interval in [Duration::ZERO, Duration::from_millis(100)] {
         let path = tmp(&format!("commit{}.vtr", interval.as_millis()));
         let opts = WriterOptions {

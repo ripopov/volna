@@ -8,7 +8,6 @@ fn tmp(name: &str) -> std::path::PathBuf {
     dir.join(name)
 }
 
-/// Declares an 8-bit 2-state wire under `parent`.
 fn byte(w: &mut Writer, parent: Option<NodeId>, name: &str) -> SignalId {
     w.add_var(
         parent,
@@ -35,7 +34,6 @@ enum Kind {
 
 const KINDS: [Kind; 5] = [Kind::Bit, Kind::Byte2, Kind::Byte4, Kind::Real, Kind::Text];
 
-/// A declared signal and the history the test expects to read back.
 struct Expected {
     id: SignalId,
     kind: Kind,
@@ -72,7 +70,6 @@ impl Expected {
             .collect()
     }
 
-    /// Emits the next value, which always differs from the previous one.
     fn emit(&mut self, w: &mut Writer, t: u64) {
         let c = self.emits;
         self.emits += 1;
@@ -154,7 +151,6 @@ fn declare(w: &mut Writer, sigs: &mut Vec<Expected>, t: u64) {
 
 const STEPS: u64 = 60;
 
-/// Writes signals declared at five moments of the run and returns their expected histories.
 fn write_run(path: &std::path::Path, group_size: u32, background: bool) -> Vec<Expected> {
     let opts = WriterOptions {
         group_size,
@@ -165,14 +161,12 @@ fn write_run(path: &std::path::Path, group_size: u32, background: bool) -> Vec<E
     };
     let mut w = Writer::create_with(path, opts).unwrap();
     let mut sigs = Vec::new();
-    // Before the first time step.
     declare(&mut w, &mut sigs, 0);
     for step in 0..STEPS {
         let t = step * 10;
         w.set_time(t).unwrap();
         if step == 25 {
             w.flush().unwrap();
-            // Right after an explicit flush.
             declare(&mut w, &mut sigs, t);
         }
         for (i, s) in sigs.iter_mut().enumerate() {
@@ -181,11 +175,8 @@ fn write_run(path: &std::path::Path, group_size: u32, background: bool) -> Vec<E
             }
         }
         match step {
-            // At time 0 after the first values: what an initial block does.
             0 => declare(&mut w, &mut sigs, t),
-            // In the middle of a block.
             13 => declare(&mut w, &mut sigs, t),
-            // Late in the run.
             50 => declare(&mut w, &mut sigs, t),
             _ => {}
         }
@@ -242,7 +233,6 @@ fn signals_declared_mid_run_read_back() {
                 }
             }
 
-            // Late signals mixed with early ones, with repeated ids.
             let n = sigs.len();
             let picks = [n - 1, 0, 7, n - 1, 12, 3, 22, 7, 16, n - 3];
             let ids: Vec<_> = picks.iter().map(|&i| sigs[i].id).collect();
@@ -256,7 +246,6 @@ fn signals_declared_mid_run_read_back() {
                 assert_eq!(ascii_history(d), sigs[i].history, "{ctx}: load_signals {i}");
             }
 
-            // The merged stream delivers every change once, in time order.
             let mut got: Vec<(u64, u32, String)> = Vec::new();
             rd.for_each_change(0, u64::MAX, |t, s, v| got.push((t, s.0, v.to_ascii())))
                 .unwrap();
@@ -310,7 +299,6 @@ fn late_declarations_survive_recovery() {
     let full = std::fs::read(&path).unwrap();
     let rd = Reader::from_bytes(full.clone()).unwrap();
     assert!(rd.find_node(&["tail"]).is_some());
-    // Cut inside the last signal block written before the chunk declaring `tail`.
     let sections = rd.sections();
     let tail_chunk = sections
         .iter()
@@ -373,7 +361,6 @@ fn nodes_added_mid_run() {
             w.set_time(t).unwrap();
             w.emit_u64(clk, t % 2 + 1).unwrap();
         }
-        // Two subtrees built in interleaved order: one under `top`, one at the root.
         let env = w
             .add_scope(Some(top), "env", ScopeType::Class, "uvm_env")
             .unwrap();
@@ -629,9 +616,6 @@ fn parents_are_validated() {
     assert!((0..rd.hierarchy().len() as u32).all(|i| rd.name(NodeId(i)) != "x"));
 }
 
-/// HIERARCHY sections and file size when 10,000 signals are declared one per
-/// time step, next to the same run with every declaration up front. Run with
-/// `--nocapture` to print the measured sizes and section counts.
 #[test]
 fn late_declaration_overhead() {
     const N: u64 = 10_000;
@@ -664,7 +648,6 @@ fn late_declaration_overhead() {
         w.close().unwrap();
         let rd = Reader::open(&path).unwrap();
         assert_eq!(rd.signal_count() as u64, N);
-        // HIERARCHY and STRINGS sections, header included.
         let (mut n, mut bytes) = (0, 0);
         for e in rd.sections().iter().filter(|e| e.kind == 3 || e.kind == 2) {
             n += (e.kind == 3) as usize;
@@ -680,7 +663,6 @@ fn late_declaration_overhead() {
              one per step {n1} chunks, {h1} B, file {f1} B ({:+.1}%)",
             100.0 * (f1 as f64 / f0 as f64 - 1.0)
         );
-        // One chunk at most per flush of values.
         assert!(n1 as u64 <= 2 + N.checked_div(flush_every).unwrap_or(1));
         assert!(
             f1 as f64 <= f0 as f64 * 1.10,

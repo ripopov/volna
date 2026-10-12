@@ -1,5 +1,4 @@
 //! Save destinations, restore precedence and an explicit-clock save scheduler.
-//! Hosts move opaque bytes and echo tickets. No filesystem or GUI lives here.
 
 use super::Workspace;
 use crate::Instant;
@@ -42,7 +41,6 @@ pub enum Persistence {
     Disabled,
     Auto,
     Explicit(Target),
-    /// VS Code's per-workspace storage preference.
     Storage,
 }
 
@@ -72,8 +70,6 @@ pub fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-/// Read a restore candidate. One saved by an older version counts as missing,
-/// so the next save overwrites it; a newer or malformed one is an error.
 pub(crate) fn read(content: &Content, notices: &mut Vec<String>) -> Result<Option<Workspace>> {
     match content {
         Content::Missing => Ok(None),
@@ -86,8 +82,6 @@ pub(crate) fn read(content: &Content, notices: &mut Vec<String>) -> Result<Optio
     }
 }
 
-/// Fallbacks identify the exact sidecar they were based on, not its timestamp.
-/// The chosen target remains authoritative until a successful explicit change.
 pub fn select(sidecar: Candidate, fallback: Candidate, storage: bool) -> Result<Selection> {
     let mut notices = Vec::new();
     let side = read(&sidecar.content, &mut notices)?;
@@ -147,8 +141,6 @@ struct Pending {
     switch: bool,
 }
 
-/// One outstanding write per editor also serializes Save As with idle saves.
-/// Acknowledgements can advance only the exact snapshot they identify.
 #[derive(Debug, Default)]
 pub struct Scheduler {
     pub policy: Persistence,
@@ -190,12 +182,10 @@ impl Scheduler {
     pub fn enabled(&self) -> bool {
         self.policy != Persistence::Disabled
     }
-    /// Unsaved changes exist and a write to the target is allowed.
     pub(crate) fn wants_write(&self) -> bool {
         self.enabled() && self.dirty() && !self.suspended && self.target.is_some()
     }
 
-    /// Begin a fully loaded workspace, never a partially opened trace.
     pub fn begin(&mut self, target: Option<Target>, supersedes: Option<String>) -> Result<()> {
         ensure!(
             self.outstanding.is_none(),
@@ -241,8 +231,6 @@ impl Scheduler {
         self.explicit = true;
     }
 
-    /// Request a snapshot only when idle or forced. Animation extends the idle
-    /// deadline but does not create revisions. Disabled policy forbids all writes.
     pub fn next(&mut self, now: Instant, animating: bool, force: bool) -> Option<SaveTicket> {
         if !self.enabled() || self.outstanding.is_some() {
             return None;
@@ -277,7 +265,6 @@ impl Scheduler {
         Some(ticket)
     }
 
-    /// Returns false for stale, duplicate, or foreign acknowledgements.
     pub fn acknowledge(
         &mut self,
         ticket: &SaveTicket,

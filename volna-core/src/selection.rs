@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 
 use crate::geometry::Modifiers;
 
-/// Apply a click: shift extends the anchor range, cmd/ctrl toggles, plain replaces.
 pub fn select(
     selected: &mut BTreeSet<usize>,
     anchor: &mut Option<usize>,

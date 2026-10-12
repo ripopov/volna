@@ -5,10 +5,6 @@ use crate::error::Result;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-/// The places a trace's activity index may live: `<trace>.index` beside the
-/// trace (`run.vtr.index`), then a file named by the trace's identity in a
-/// cache directory, used when the trace's directory is read-only. A copy of
-/// the trace elsewhere finds the same cached index.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sidecar {
     pub beside: PathBuf,
@@ -16,8 +12,6 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
-    /// The locations for the trace at `path` with identity `id`; `cache_dir`
-    /// is usually [`default_cache_dir`].
     pub fn new(trace: &Path, id: &Identity, cache_dir: Option<&Path>) -> Sidecar {
         let mut beside = trace.as_os_str().to_owned();
         beside.push(".index");
@@ -35,23 +29,15 @@ impl Sidecar {
         }
     }
 
-    /// Both locations, beside first.
     pub fn paths(&self) -> impl Iterator<Item = &Path> {
         std::iter::once(self.beside.as_path()).chain(self.cached.as_deref())
     }
 
-    /// The first index valid for the trace, with its path. Missing, damaged
-    /// and stale files are passed over: they are rebuilt, never trusted.
     pub fn load(&self, id: &Identity) -> Option<(PathBuf, Index)> {
         self.paths()
             .find_map(|p| Index::open(p, id).ok().map(|i| (p.to_path_buf(), i)))
     }
 
-    /// Writes an index through `build`, which receives the output stream,
-    /// beside the trace or, when its directory refuses the file, in the
-    /// cache. The index goes to a unique temporary file beside its destination
-    /// and is renamed into place only when complete, so an interrupted build never leaves a file a reader
-    /// would load; a failed one removes its temporary file.
     pub fn write(
         &self,
         build: impl FnOnce(&mut dyn Write) -> Result<Summary>,
@@ -59,8 +45,6 @@ impl Sidecar {
         self.write_inner(None, build)
     }
 
-    /// [`write`](Self::write) with cancellation serialized against publication.
-    /// Pass the same control in the builder's [`super::BuildOptions`].
     pub fn write_with_control(
         &self,
         control: &BuildControl,
@@ -137,10 +121,6 @@ fn create_tmp(path: &Path) -> std::io::Result<(std::fs::File, PathBuf)> {
     }
 }
 
-/// The user's cache directory for activity indexes: `$XDG_CACHE_HOME/vtr/index`,
-/// else `~/Library/Caches/vtr/index` on macOS, `%LOCALAPPDATA%\vtr\index` on
-/// Windows and `~/.cache/vtr/index` elsewhere; `None` when the environment
-/// names no home.
 pub fn default_cache_dir() -> Option<PathBuf> {
     let var = |k: &str| {
         std::env::var_os(k)

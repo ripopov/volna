@@ -1,8 +1,4 @@
-//! Direct manipulation of markers: a click on a chip goes to its marker, a
-//! drag moves it as one undo step (Esc cancels, the start shows dotted),
-//! Alt-click or a middle click measures from it, right-click menus list the
-//! lane's verbs, *Copy as Text* hands the host a readable reference, and a
-//! double-click on the header or an empty part of the lane adds a marker.
+//! Marker input tests for navigation, dragging, measurement, menus, and clipboard actions.
 
 use std::sync::Arc;
 use volna_core::testing::a_all;
@@ -51,7 +47,6 @@ fn centre(r: Rect) -> Point {
     point(r.left() + r.width() / 2.0, r.top() + r.height() / 2.0)
 }
 
-/// The middle of marker `ix`'s chip.
 fn chip(app: &mut App, ix: usize) -> Point {
     let l = lane(app);
     let c = l.chips.iter().find(|c| c.markers == (ix..ix + 1)).unwrap();
@@ -86,7 +81,6 @@ fn times(app: &App) -> Vec<(u32, u64)> {
 fn a_click_on_a_chip_goes_to_its_marker_and_a_drag_moves_it_as_one_step() {
     let mut app = app();
     let p = chip(&mut app, 0);
-    // A press that moves less than the slop is a click.
     down(&mut app, p, MouseButton::Left, Modifiers::default());
     assert_eq!(
         app.doc.shared.cursor,
@@ -102,11 +96,9 @@ fn a_click_on_a_chip_goes_to_its_marker_and_a_drag_moves_it_as_one_step() {
     send(&mut app, PointerEvent::Up);
     assert_eq!(app.doc.shared.cursor, Some(1200));
     assert_eq!(times(&app), [(1, 1200), (2, 1600)]);
-    // It was a jump: ` returns.
     app.handle(Command::Action(Action::JumpBack));
     assert_eq!(app.doc.shared.cursor, Some(1100));
 
-    // Measuring from marker 1: the reference follows the drag.
     app.doc.set_reference(Some(Reference::Marker(id(1))));
     let before = app.undo_label().map(str::to_owned);
     let p = chip(&mut app, 0);
@@ -128,7 +120,6 @@ fn a_click_on_a_chip_goes_to_its_marker_and_a_drag_moves_it_as_one_step() {
         .time;
     assert!((1300..1400).contains(&moved), "{moved}");
     assert_eq!(app.doc.reference_time(), Some(moved));
-    // Still dragging: no step yet, and the start shows dotted.
     assert_eq!(app.undo_label().map(str::to_owned), before);
     let theme = Theme::one_dark();
     let ghost = theme.panel.text_muted;
@@ -146,7 +137,6 @@ fn a_click_on_a_chip_goes_to_its_marker_and_a_drag_moves_it_as_one_step() {
         .count();
     assert_eq!(dots, 0, "the dotted line goes with the drag");
 
-    // Past marker 2 the list stays in time order, numbers unchanged.
     let p = chip(&mut app, 0);
     down(&mut app, p, MouseButton::Left, Modifiers::default());
     send(
@@ -186,7 +176,6 @@ fn esc_cancels_a_drag_and_records_nothing() {
         Some(1100),
         "Esc did not also go there"
     );
-    // Dragged away and back: no step either.
     let p = chip(&mut app, 1);
     down(&mut app, p, MouseButton::Left, Modifiers::default());
     send(
@@ -233,7 +222,6 @@ fn right_click(app: &mut App, p: Point) {
     send(app, PointerEvent::Up);
 }
 
-/// Right-click at `at`, then choose `verb` from the menu that opens.
 fn choose(app: &mut App, at: Point, verb: LaneVerb) {
     right_click(app, at);
     assert!(
@@ -352,7 +340,6 @@ fn span_and_measure_menus_offer_their_verbs() {
         "{v:?}"
     );
 
-    // The live span, the R tag and the × share the measurement's menu.
     app.doc.shared.viewport.set(Viewport {
         start: 1000.0,
         end: 2000.0,
@@ -400,7 +387,6 @@ fn a_menu_closes_on_dismiss_and_on_the_next_press() {
     );
     send(&mut app, PointerEvent::Up);
     assert!(app.menu().is_none());
-    // A cluster has no menu.
     app.doc.add_marker(1601);
     let l = lane(&mut app);
     let cluster = l.chips.iter().find(|c| c.is_cluster()).unwrap().rect;
@@ -433,7 +419,6 @@ fn a_double_click_adds_on_the_header_and_the_empty_lane_only() {
         "title"
     );
 
-    // The first click puts the cursor there; the host then sends M.
     down(
         &mut app,
         point(x, layout.header.top() + 4.0),

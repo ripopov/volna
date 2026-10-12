@@ -60,7 +60,6 @@ impl AssetSource for Assets {
     }
 }
 
-/// Register the bundled fonts with the text system.
 pub(crate) fn load_fonts(cx: &App) -> anyhow::Result<()> {
     cx.text_system()
         .add_fonts(FONTS.iter().map(|f| Cow::Borrowed(f.bytes)).collect())

@@ -3,8 +3,6 @@
 use crate::session::Session;
 use serde::{Deserialize, Serialize};
 
-/// Raw source identity used to reject stale or mismatched sidecars. Format
-/// codes match the activity sidecar: 1 is VTR, 2 is FST.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Descriptor {
     pub format: u8,
@@ -27,7 +25,6 @@ impl Descriptor {
         })
     }
 
-    /// Validated library identity. Unknown format codes fail explicitly.
     pub fn identity(&self) -> anyhow::Result<vtr::activity::Identity> {
         Ok(vtr::activity::Identity {
             format: match self.format {
@@ -48,10 +45,6 @@ use super::transport::{ObjectId, Packet, Receive, Receiver, acknowledgement};
 use crate::session::{LoadRequest, LoadResult};
 use std::sync::Arc;
 
-/// One raw-sidecar transfer. Encoded storage, decoded tables and temporary
-/// arrays are admitted before allocation. Checkpoints yield while decoding;
-/// cancellation stops client work and drains the server response. A server
-/// scan already authorized may still publish its cache for other clients.
 pub(super) struct ActivityTransfer<Tag = u64> {
     job: LoadRequest<Tag>,
     receiver: Receiver,

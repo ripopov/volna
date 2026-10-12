@@ -1,15 +1,8 @@
 //! Signal value representation and bit packing.
-//!
-//! Logic codes (one per bit): `0`=0, `1`=1, `2`=X, `3`=Z, `4`=U, `5`=W,
-//! `6`=L, `7`=H, `8`=-. Vectors are packed LSB-first: bit `i` of the vector
-//! (bit 0 = least significant = the last character of a VCD string) is
-//! stored at byte `i/8` (2-state, 1 bit each), `i/4` (4-state, 2 bits each)
-//! or `i/2` (9-state, 4 bits each), in the low-to-high bit positions.
 
 use crate::hierarchy::SignalKind;
 use crate::value::packed_len;
 
-/// A scalar VCD/VHDL logic value. Discriminants are VTR's packed logic codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Logic {
@@ -34,15 +27,11 @@ impl From<bool> for Logic {
     }
 }
 
-/// Logic alphabet supported by each bit of a signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum LogicStates {
-    /// Binary values: 0 and 1.
     Two = 2,
-    /// Verilog values: 0, 1, X and Z.
     Four = 4,
-    /// VHDL values: 0, 1, X, Z, U, W, L, H and don't-care.
     Nine = 9,
 }
 
@@ -56,10 +45,8 @@ pub const LL: u8 = 6;
 pub const LH: u8 = 7;
 pub const LDASH: u8 = 8;
 
-/// ASCII spelling of each logic code.
 pub const CODE_ASCII: [u8; 9] = *b"01xzuwlh-";
 
-/// Maps a VCD/VHDL value character to a logic code (unknown characters map to X).
 #[inline]
 pub fn code_from_ascii(c: u8) -> u8 {
     match c {
@@ -76,7 +63,6 @@ pub fn code_from_ascii(c: u8) -> u8 {
     }
 }
 
-/// Minimum number of states needed to represent `code`.
 #[inline]
 pub fn states_for_code(code: u8) -> u8 {
     match code {
@@ -86,7 +72,6 @@ pub fn states_for_code(code: u8) -> u8 {
     }
 }
 
-/// Reads logic code `i` from a packed vector with `states` states per bit.
 #[inline]
 pub fn get_code(data: &[u8], states: u8, i: usize) -> u8 {
     match states {
@@ -96,7 +81,6 @@ pub fn get_code(data: &[u8], states: u8, i: usize) -> u8 {
     }
 }
 
-/// Writes logic code `c` at bit `i` (the target bits must be zero).
 #[inline]
 pub fn set_code(data: &mut [u8], states: u8, i: usize, c: u8) {
     match states {
@@ -106,11 +90,6 @@ pub fn set_code(data: &mut [u8], states: u8, i: usize, c: u8) {
     }
 }
 
-/// Packs an ASCII vector (MSB first, like VCD) into `out` using `states`
-/// states per bit. Returns `true` when every character was 0 or 1.
-/// Strings shorter than `width` are zero-extended on the left (VCD rule:
-/// left-extend with the MSB for x/z, with 0 otherwise); longer strings are
-/// truncated to the low `width` bits.
 pub fn pack_ascii(s: &[u8], width: u32, states: u8, out: &mut [u8]) -> bool {
     let w = width as usize;
     for b in out.iter_mut() {
@@ -118,7 +97,6 @@ pub fn pack_ascii(s: &[u8], width: u32, states: u8, out: &mut [u8]) -> bool {
     }
     let mut two_state = true;
     let n = s.len();
-    // Character for bit i is s[n-1-i].
     let ext = if n > 0 {
         match s[0] {
             b'x' | b'X' => LX,
@@ -156,7 +134,6 @@ fn mask_for(states: u8) -> u8 {
     }
 }
 
-/// Appends the ASCII spelling (MSB first) of a packed vector to `out`.
 pub fn unpack_ascii(data: &[u8], width: u32, states: u8, out: &mut Vec<u8>) {
     let w = width as usize;
     out.reserve(w);
@@ -166,7 +143,6 @@ pub fn unpack_ascii(data: &[u8], width: u32, states: u8, out: &mut Vec<u8>) {
     }
 }
 
-/// Re-packs a vector from `from` states to `to` states (`to >= from`).
 pub fn widen(data: &[u8], width: u32, from: u8, to: u8, out: &mut Vec<u8>) {
     let start = out.len();
     out.resize(start + packed_len(width, to), 0);
@@ -176,7 +152,6 @@ pub fn widen(data: &[u8], width: u32, from: u8, to: u8, out: &mut Vec<u8>) {
     }
     let dst = &mut out[start..];
     if from == 2 && to == 4 {
-        // Each source byte expands to two bytes (bit i -> bits 2i).
         for (i, &b) in data[..(width as usize).div_ceil(8)].iter().enumerate() {
             let e = SPREAD2[b as usize];
             dst[2 * i] = e as u8;
@@ -202,7 +177,6 @@ pub fn widen(data: &[u8], width: u32, from: u8, to: u8, out: &mut Vec<u8>) {
     }
 }
 
-/// `SPREAD2[b]` places bit i of `b` at bit 2i.
 static SPREAD2: [u16; 256] = {
     let mut t = [0u16; 256];
     let mut b = 0;
@@ -221,7 +195,6 @@ static SPREAD2: [u16; 256] = {
     t
 };
 
-/// `SPREAD4[b]` places bit i of `b` at bit 4i.
 static SPREAD4: [u32; 256] = {
     let mut t = [0u32; 256];
     let mut b = 0;
@@ -240,7 +213,6 @@ static SPREAD4: [u32; 256] = {
     t
 };
 
-/// Packs 2-state little-endian words into a 2-state vector. `words[0]` holds bits 0..32.
 pub fn pack_words32(words: &[u32], width: u32, out: &mut [u8]) {
     let bytes = (width as usize).div_ceil(8);
     for (i, b) in out[..bytes].iter_mut().enumerate() {
@@ -250,7 +222,6 @@ pub fn pack_words32(words: &[u32], width: u32, out: &mut [u8]) {
     trim_top_bits(out, width);
 }
 
-/// Packs 2-state little-endian 64-bit words into a 2-state vector.
 pub fn pack_words64(words: &[u64], width: u32, out: &mut [u8]) {
     let bytes = (width as usize).div_ceil(8);
     for (i, b) in out[..bytes].iter_mut().enumerate() {
@@ -260,7 +231,6 @@ pub fn pack_words64(words: &[u64], width: u32, out: &mut [u8]) {
     trim_top_bits(out, width);
 }
 
-/// Clears bits above `width` in the last byte of a 2-state vector.
 #[inline]
 pub fn trim_top_bits(out: &mut [u8], width: u32) {
     let rem = width % 8;
@@ -270,12 +240,10 @@ pub fn trim_top_bits(out: &mut [u8], width: u32) {
     }
 }
 
-/// Returns true if every code of a `states`-packed vector is 0 or 1.
 pub fn is_two_state(data: &[u8], width: u32, states: u8) -> bool {
     match states {
         2 => true,
         4 => {
-            // Any code >= 2 has its high bit (of the 2-bit group) set.
             let full = width as usize / 4;
             if data[..full].iter().any(|&b| b & 0xAA != 0) {
                 return false;
@@ -302,7 +270,6 @@ pub fn is_two_state(data: &[u8], width: u32, states: u8) -> bool {
     }
 }
 
-/// Converts a packed vector (any states) to 2-state packing; only valid when `is_two_state`.
 pub fn narrow_to_two_state(data: &[u8], width: u32, states: u8, out: &mut Vec<u8>) {
     let start = out.len();
     out.resize(start + packed_len(width, 2), 0);
@@ -316,15 +283,8 @@ pub fn narrow_to_two_state(data: &[u8], width: u32, states: u8, out: &mut Vec<u8
     }
 }
 
-/// A borrowed signal value as stored in the file.
-///
-/// Equality compares packing too: the same 0/1 vector in compact and in
-/// declared packing is not `==`; compare [`to_ascii`](Self::to_ascii) or
-/// [`as_u64`](Self::as_u64) instead.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SignalValue<'a> {
-    /// Packed bit vector. `states` is the packing actually used (2 when the
-    /// value was stored compactly, otherwise the signal's declared states).
     Bits {
         width: u32,
         states: u8,
@@ -335,7 +295,6 @@ pub enum SignalValue<'a> {
 }
 
 impl<'a> SignalValue<'a> {
-    /// ASCII spelling: bit string (MSB first), `Display` of a real, or bytes as lossy UTF-8.
     pub fn to_ascii(&self) -> String {
         match *self {
             SignalValue::Bits {
@@ -352,8 +311,6 @@ impl<'a> SignalValue<'a> {
         }
     }
 
-    /// Value as an integer when it is a vector of at most 64 bits whose codes
-    /// are all 0 or 1 (whatever its packing).
     pub fn as_u64(&self) -> Option<u64> {
         match *self {
             SignalValue::Bits {
@@ -376,7 +333,6 @@ impl<'a> SignalValue<'a> {
         }
     }
 
-    /// Copies the value out of the borrowed buffer.
     pub fn to_owned(&self) -> OwnedSignalValue {
         match *self {
             SignalValue::Bits {
@@ -394,7 +350,6 @@ impl<'a> SignalValue<'a> {
     }
 }
 
-/// Owned variant of [`SignalValue`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum OwnedSignalValue {
     Bits {
@@ -407,7 +362,6 @@ pub enum OwnedSignalValue {
 }
 
 impl OwnedSignalValue {
-    /// Borrowed view, for [`SignalValue::as_u64`] and friends.
     pub fn borrow(&self) -> SignalValue<'_> {
         match self {
             OwnedSignalValue::Bits {
@@ -428,8 +382,6 @@ impl OwnedSignalValue {
     }
 }
 
-/// Appends the default value of a signal before its first change: all X for
-/// 4/9 states, zeros for 2 states, `0.0` for reals, nothing for `VarLen`.
 pub fn default_value(kind: SignalKind, out: &mut Vec<u8>) {
     match kind {
         SignalKind::Bits { width, states } => {
@@ -437,7 +389,6 @@ pub fn default_value(kind: SignalKind, out: &mut Vec<u8>) {
             let start = out.len();
             out.resize(start + n, 0);
             if states != 2 {
-                // All X.
                 let dst = &mut out[start..];
                 for i in 0..width as usize {
                     set_code(dst, states, i, LX);
@@ -473,7 +424,6 @@ mod tests {
         assert_eq!(a, b"x1z0");
         assert!(!is_two_state(&buf, 4, 4));
 
-        // Extension rule.
         let mut buf = [0u8; 1];
         pack_ascii(b"x", 4, 4, &mut buf);
         let mut a = Vec::new();

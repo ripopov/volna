@@ -1,6 +1,5 @@
-//! The single icon set (Lucide) and the bundled fonts, compiled in so every
-//! frontend renders identically. Adding an icon: drop the SVG in
-//! `assets/icons` and add a variant here.
+//! The single icon set (Lucide) and the bundled fonts, compiled in so every frontend
+//! renders identically.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum IconName {
@@ -67,12 +66,10 @@ macro_rules! icons {
         impl IconName {
             pub const ALL: &'static [IconName] = &[$(IconName::$variant),*];
 
-            /// Asset path, e.g. `icons/plus.svg`.
             pub fn path(self) -> &'static str {
                 match self { $(IconName::$variant => concat!("icons/", $name, ".svg")),* }
             }
 
-            /// The SVG source of the icon.
             pub fn svg(self) -> &'static [u8] {
                 match self {
                     $(IconName::$variant => include_bytes!(concat!("../assets/icons/", $name, ".svg"))),*
@@ -142,13 +139,11 @@ icons!(
 );
 
 impl IconName {
-    /// Look an icon up by asset path.
     pub fn from_path(path: &str) -> Option<IconName> {
         IconName::ALL.iter().copied().find(|i| i.path() == path)
     }
 }
 
-/// A bundled font face.
 #[derive(Clone, Copy, Debug)]
 pub struct FontFace {
     pub family: &'static str,
@@ -156,8 +151,6 @@ pub struct FontFace {
     pub bytes: &'static [u8],
 }
 
-/// Inter (UI), JetBrains Mono (mono), and GPUI's web system-font fallback.
-/// The same faces are registered on every platform.
 pub const FONTS: &[FontFace] = &[
     FontFace {
         family: "Inter",

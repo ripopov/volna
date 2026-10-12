@@ -1,7 +1,6 @@
-//! Short names for the traces of a set: the part of each source that tells
-//! it apart from the others.
+//! Short names for the traces of a set: the part of each source that tells it apart from
+//! the others.
 
-/// The last segment of a path or URI.
 pub(crate) fn file_name(source: &str) -> &str {
     source
         .trim_end_matches(['/', '\\'])
@@ -17,18 +16,12 @@ fn segments(source: &str) -> Vec<&str> {
         .collect()
 }
 
-/// A name for each source, in order. Different file names name their
-/// traces (`cpu.vtr`, `dram.fst`); runs of one design in different
-/// directories are named by the first directory that differs, counted from
-/// the file (`runs/base/landing.vtr` and `runs/dram20/landing.vtr` are
-/// `base` and `dram20`). Identical sources share their file name.
 pub fn derive_names(sources: &[&str]) -> Vec<String> {
     let split: Vec<Vec<&str>> = sources.iter().map(|s| segments(s)).collect();
     let file = |s: &[&str], i: usize| s.last().copied().unwrap_or(sources[i]).to_owned();
     if split.len() < 2 {
         return (0..split.len()).map(|i| file(&split[i], i)).collect();
     }
-    // Segments counted from the end, so files at different depths line up.
     fn back<'a>(s: &[&'a str], k: usize) -> Option<&'a str> {
         s.len().checked_sub(k + 1).map(|i| s[i])
     }

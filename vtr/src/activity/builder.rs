@@ -11,10 +11,6 @@ use crate::error::{Error, Result};
 use crate::varint::put_u64;
 use std::io::Write;
 
-/// A signal's state between blocks: its last change (0 before the first one;
-/// changes come after the first time step, so never at 0), the start of its
-/// open stretch and that stretch's largest gap so far. 24 bytes per signal is
-/// all the builder keeps across blocks.
 #[derive(Clone, Copy, Debug, Default)]
 struct Sig {
     last: u64,
@@ -22,30 +18,15 @@ struct Sig {
     gap: u64,
 }
 
-/// Writes an activity index from [`BlockScan`]s added in time order.
-///
-/// Each [`add`](Self::add) decides the block's threshold Δ, keeps the
-/// silences that end in the block and are longer than the smallest Δ of the
-/// blocks their interior touches, and appends one section with the stretches
-/// they close; nothing of the block stays in memory afterwards.
-/// [`finish`](Self::finish) writes the final stretch of every signal, the
-/// directory and the trailer. The output is a pure function of the scans:
-/// rebuilding gives the same bytes.
 pub struct Builder<W: Write> {
     out: FileWriter<W>,
     header: Header,
     sigs: Vec<Sig>,
-    /// Cell ends of the blocks added so far.
     ends: Vec<u64>,
-    /// Suffix minima of the blocks' thresholds: `(block, Δ)` with Δ strictly
-    /// increasing, so the smallest Δ from block `k` on is the first entry at
-    /// or after `k`.
     minima: Vec<(u32, u64)>,
     changes: u64,
     stretches: u64,
     delta: Option<(u64, u64)>,
-    /// Scratch: section columns, the states the section leaves behind, the
-    /// packed body.
     cols: [Vec<u8>; BLOCK_COLUMNS],
     next: Vec<Sig>,
     raw: Vec<u8>,
@@ -54,8 +35,6 @@ pub struct Builder<W: Write> {
 }
 
 impl<W: Write> Builder<W> {
-    /// Starts an index of a trace with `signals` signals whose first time
-    /// step is `t_min`, and writes its header.
     pub fn new(
         out: W,
         identity: Identity,
@@ -88,18 +67,14 @@ impl<W: Write> Builder<W> {
         })
     }
 
-    /// Blocks added so far.
     pub fn blocks_added(&self) -> usize {
         self.ends.len()
     }
 
-    /// End of the last block added, the `prev_end` of the next scan.
     pub fn prev_end(&self) -> Option<u64> {
         self.ends.last().copied()
     }
 
-    /// Stitches the next block of the trace. Its scan must have been made
-    /// with this builder's `t_min` and budget and with [`prev_end`](Self::prev_end).
     pub fn add(&mut self, mut scan: BlockScan) -> Result<()> {
         scan.close();
         let block = scan.block;
@@ -131,7 +106,6 @@ impl<W: Write> Builder<W> {
             return Err(Error::invalid("activity scan names an unknown signal"));
         }
 
-        // The silences that cross into this block join its own histogram.
         let mut hist = scan.hist;
         let mut changes = scan.changes;
         for r in &scan.rows {
@@ -139,7 +113,6 @@ impl<W: Write> Builder<W> {
             if last != 0 && r.first > last {
                 hist[bucket(r.first - last)] += 1;
             } else if last != 0 {
-                // One time step recorded at the end of the previous block too.
                 changes -= 1;
             }
         }
@@ -184,16 +157,12 @@ impl<W: Write> Builder<W> {
         Ok(())
     }
 
-    /// The smallest threshold of the blocks from the cell holding `t` up to
-    /// the last one added (`u64::MAX` when `t` lies after them).
     fn min_delta_from(&self, t: u64) -> u64 {
         let k = self.ends.partition_point(|&e| e < t) as u32;
         let i = self.minima.partition_point(|m| m.0 < k);
         self.minima.get(i).map_or(u64::MAX, |m| m.1)
     }
 
-    /// Encodes the block's section for threshold `delta` into `body` and the
-    /// states it leaves in `next`; returns its rows and the stretches it closes.
     fn encode(&mut self, scan: &BlockScan, delta: u64) -> Result<(u32, u32)> {
         for c in &mut self.cols {
             c.clear();
@@ -208,8 +177,6 @@ impl<W: Write> Builder<W> {
                 open = r.first;
                 gap = 0;
             } else if r.first > s.last {
-                // The silence from the last change before the block. Its
-                // interior starts at `last + 1` and ends in this block.
                 let len = r.first - s.last;
                 if len > self.min_delta_from(s.last.saturating_add(1)).min(delta) {
                     close(&mut self.cols, open, s.last, r.first, gap);
@@ -220,7 +187,6 @@ impl<W: Write> Builder<W> {
                     gap = gap.max(len);
                 }
             }
-            // `r.first == s.last`: one time step recorded at a shared block boundary.
             for c in &scan.cands[r.cand0 as usize..(r.cand0 + r.ncand) as usize] {
                 if c.b - c.a > delta {
                     close(&mut self.cols, open, c.a, c.b, gap.max(c.pre));
@@ -256,7 +222,6 @@ impl<W: Write> Builder<W> {
         Ok((rows, closed))
     }
 
-    /// Writes every signal's final stretch, the directory and the trailer.
     pub fn finish(mut self) -> Result<Summary> {
         for c in &mut self.cols {
             c.clear();
@@ -293,7 +258,6 @@ impl<W: Write> Builder<W> {
     }
 }
 
-/// Appends a closed stretch `[open, a]` followed by the kept silence `(a, b)`.
 fn close(cols: &mut [Vec<u8>; BLOCK_COLUMNS], open: u64, a: u64, b: u64, gap: u64) {
     put_u64(&mut cols[3], a - open);
     put_u64(&mut cols[4], b - a);

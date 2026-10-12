@@ -1,13 +1,11 @@
-//! Scope sizes: the streaming count equals
-//! a brute-force set count on random trees with aliases, fed both in
-//! declaration order and with variables after subscopes, and through a
+//! Scope sizes: the streaming count equals a brute-force set count on random trees with
+//! aliases, fed both in declaration order and with variables after subscopes, and through a
 //! written trace.
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::collections::HashSet;
 use vtr::*;
 
-/// A random scope tree: parent per scope (preorder) and per-scope signals.
 struct Tree {
     parent: Vec<Option<usize>>,
     vars: Vec<Vec<u32>>,
@@ -19,7 +17,6 @@ fn random_tree(rng: &mut StdRng) -> Tree {
     let mut parent = vec![None];
     let mut depth = vec![0];
     for i in 1..n {
-        // Mostly nested, sometimes another root.
         let p = if rng.gen_ratio(1, 12) {
             None
         } else {
@@ -28,7 +25,6 @@ fn random_tree(rng: &mut StdRng) -> Tree {
         depth.push(p.map_or(0, |p: usize| depth[p] + 1));
         parent.push(p);
     }
-    // Preorder requires children after their parent and subtrees contiguous: renumber by DFS.
     let mut kids = vec![Vec::new(); n];
     let mut roots = Vec::new();
     for (i, p) in parent.iter().enumerate() {
@@ -48,7 +44,6 @@ fn random_tree(rng: &mut StdRng) -> Tree {
         new[i] = k;
     }
     let parent = order.iter().map(|&i| parent[i].map(|p| new[p])).collect();
-    // Ports alias: a signal often reappears in nearby scopes.
     let vars = (0..n)
         .map(|_| {
             (0..rng.gen_range(0..6))
@@ -93,7 +88,6 @@ fn triples(s: &ScopeSizes) -> Vec<(u32, u32, u32)> {
         .collect()
 }
 
-/// Feeds the tree in preorder; with `late`, half of each scope's variables come after its subscopes.
 fn stream(t: &Tree, late: bool) -> ScopeSizes {
     let n = t.parent.len();
     let mut c = Census::new();
@@ -137,7 +131,6 @@ fn streaming_count_equals_brute_force() {
     }
 }
 
-/// A recorded census counts any subset of signals per scope exactly.
 #[test]
 fn contributions_count_any_subset() {
     let mut rng = StdRng::seed_from_u64(9);
@@ -201,14 +194,12 @@ fn trace_hierarchy_counts_aliases_once() {
             states: 2,
         };
         let mut ids: Vec<NodeId> = Vec::new();
-        // The tree's signal g becomes the file's first variable of g; later ones alias it.
         let mut declared: Vec<Option<SignalId>> = vec![None; 64];
         for i in 0..t.parent.len() {
             let parent = t.parent[i].map(|p| ids[p]);
             let me = w
                 .add_scope(parent, &format!("s{i}"), ScopeType::Module, "")
                 .unwrap();
-            // Streams sit beside scopes and are not counted.
             if i % 5 == 0 {
                 w.add_stream(Some(me), "tx", "TRANSACTOR").unwrap();
             }

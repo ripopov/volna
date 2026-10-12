@@ -1,5 +1,4 @@
 //! The pipeline panel's workspace schema, capture, validation and resolution.
-//! Preparing content never retains data or changes the live document.
 
 use super::{PipelineModel, RowView, TrackSource};
 use crate::clock::ClockView;
@@ -13,7 +12,6 @@ use serde_json::value::RawValue;
 
 pub(crate) const VERSION: u32 = 1;
 
-/// A pipeline panel: the track path, its navigation, row axis and label column.
 #[derive(Serialize, Deserialize)]
 struct PipelinePanel {
     #[serde(default)]
@@ -35,7 +33,6 @@ struct PipelinePanel {
     )]
     cursor: Option<Box<RawValue>>,
     rows: RowView,
-    /// The two-axis zoom's row cap, when a rows-only zoom raised it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     row_cap: Option<f32>,
     label_width: f32,

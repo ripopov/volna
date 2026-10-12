@@ -1,8 +1,6 @@
-//! Pixel layout of the wave panel for one frame: the three columns, the
-//! visible row range, the scrollbar, and the small interactive rectangles
-//! (format badges, Markers lane chips, column dividers). Pure: computed from the
-//! panel bounds and model state, then read by both the painter and the input
-//! handlers so a click lands on exactly what was drawn.
+//! Pixel layout of the wave panel for one frame: the three columns, the visible row range,
+//! the scrollbar, and the small interactive rectangles (format badges, Markers lane chips,
+//! column dividers).
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -13,25 +11,16 @@ use crate::wave::model::RowHeight;
 use crate::wave::overlay::{LANE_H, MarkerLane, Measuring, SpanClocks, marker_lane};
 use crate::wave::viewport::Viewport;
 
-// Design-time sizes in logical pixels at zoom 1.0; the layout multiplies
-// them by [`LayoutInput::zoom`] so every rectangle scales with the interface.
 pub const MIN_COLUMN: f32 = 72.0;
 const SPLITTER_TOLERANCE: f32 = 4.0;
 pub const SCROLLBAR_W: f32 = 10.0;
 const BADGE_W: f32 = 36.0;
-/// Left padding of a row's name at the top level.
 pub const NAME_PAD: f32 = 12.0;
-/// Each group level indents the names below it by this much.
 pub const INDENT: f32 = 14.0;
-/// A group's chevron sits before its name in a box this wide.
 pub const CHEVRON_W: f32 = 16.0;
 
-/// While several traces are open, the names column starts with a gutter
-/// this wide holding each row's trace letter.
 pub const TRACE_GUTTER: f32 = 20.0;
 
-/// Where a name at `depth` starts in a names column whose left edge is
-/// `left`; a group's chevron sits there and its name follows the chevron.
 pub fn indent_x(left: f32, depth: u8, zoom: f32) -> f32 {
     left + (NAME_PAD + INDENT * f32::from(depth)) * zoom
 }
@@ -40,72 +29,45 @@ pub fn indent_x(left: f32, depth: u8, zoom: f32) -> f32 {
 pub struct WaveLayout {
     pub bounds: Rect,
     pub header: Rect,
-    /// Clock ruler rows below the header, across the whole panel (empty without rulers).
     pub rulers: Rect,
     pub names: Rect,
-    /// Where names indent from: the names column's left edge, after the
-    /// trace gutter when there is one.
     pub name_left: f32,
     pub values: Rect,
     pub waves: Rect,
-    /// The outer divider is coordinated by the dock column.
     pub shared_metadata: bool,
-    /// Visible positions on screen; [`WaveLayout::entry`] maps one to its
-    /// entry in the model's row tree.
     pub rows: Range<usize>,
-    /// Entry index of each visible row, in order.
     pub visible: Arc<[u32]>,
-    /// Height of a default (1×) row; taller rows are whole multiples.
     pub row_h: f32,
-    /// Row tops in multiples of `row_h`, with the content height last.
     tops: Arc<[u32]>,
-    /// The interface zoom this layout was computed at; input handlers use
-    /// it to scale thresholds and to store column widths unzoomed.
     pub zoom: f32,
     pub scroll_y: f32,
     pub max_scroll: f32,
-    /// Track and thumb, when the rows overflow.
     pub scrollbar: Option<(Rect, Rect)>,
-    /// Format badges of the rows on screen (by entry), right-aligned in the
-    /// values column.
     pub badges: Vec<(usize, Rect)>,
-    /// The Markers lane below the rulers, across the whole panel.
     pub marker_lane: MarkerLane,
-    /// Grab zones of the two column dividers.
     pub names_split: Rect,
     pub values_split: Rect,
 }
 
 pub struct LayoutInput<'a> {
     pub bounds: Rect,
-    /// Dock-resolved pixel width; bypasses independent column sizing.
     pub metadata_width: Option<f32>,
-    /// Already zoomed (the theme's `row_height`).
     pub row_h: f32,
-    /// Already zoomed (the theme's `timeline_height`).
     pub header_h: f32,
-    /// Already zoomed height of all clock ruler rows.
     pub ruler_h: f32,
-    /// Interface zoom; column widths below are design sizes it multiplies.
     pub zoom: f32,
     pub names_width: f32,
     pub values_width: f32,
-    /// Whether rows show their trace letter in a gutter (several traces open).
     pub trace_gutter: bool,
-    /// From [`row_tops`]: one entry per visible row plus the content height.
     pub row_tops: Arc<[u32]>,
-    /// Entry index of each visible row (see [`crate::wave::tree::visible`]).
     pub visible: Arc<[u32]>,
     pub scroll_y: f32,
     pub markers: &'a [Marker],
-    /// Labels the spans between markers.
     pub spans: SpanClocks<'a>,
-    /// Adds the Measure lane under the Markers lane.
     pub measuring: Option<Measuring>,
     pub viewport: Viewport,
 }
 
-/// Prefix sums of row height multiples: row `i` spans `tops[i]..tops[i + 1]`.
 pub fn row_tops(heights: impl IntoIterator<Item = RowHeight>) -> Arc<[u32]> {
     let mut top = 0u32;
     std::iter::once(0)
@@ -116,7 +78,6 @@ pub fn row_tops(heights: impl IntoIterator<Item = RowHeight>) -> Arc<[u32]> {
         .collect()
 }
 
-/// Row containing unit offset `unit` (past the end, continuing at 1× steps).
 fn row_at_unit(tops: &[u32], unit: f32) -> usize {
     let count = tops.len().saturating_sub(1);
     let total = tops.last().copied().unwrap_or(0);
@@ -172,8 +133,6 @@ impl WaveLayout {
         let rows_h = (bounds.bottom() - rows_top).max(0.0);
         let names = Rect::new(point(bounds.left(), rows_top), size(names_w, rows_h));
         let values = Rect::new(point(names.right(), rows_top), size(values_w, rows_h));
-        // Use the dock constraint directly: summing the two metadata columns
-        // can round differently from a pipeline's single label column.
         let metadata_w = input.metadata_width.unwrap_or(names_w + values_w);
         let waves_w = (bounds.width() - metadata_w).max(0.0);
         let waves = Rect::new(
@@ -195,7 +154,6 @@ impl WaveLayout {
             let bottom = (scroll_y + rows_h) / row_h;
             (
                 row_at_unit(&tops, scroll_y / row_h),
-                // The last row that starts above the bottom edge, exclusive.
                 tops[..item_count].partition_point(|top| (*top as f32) < bottom),
             )
         } else {
@@ -203,7 +161,6 @@ impl WaveLayout {
         };
         let rows = first.min(last)..last;
 
-        // Badges sit on the first line of a row, like its name and value.
         let mut badges = Vec::new();
         for ix in rows.clone() {
             let y = rows_top + row_h * tops[ix] as f32 - scroll_y;
@@ -282,7 +239,6 @@ impl WaveLayout {
         }
     }
 
-    /// Row index under `y` (may be past the last item; callers bound it).
     pub fn row_at(&self, y: f32) -> Option<usize> {
         if y < self.names.top() {
             return None;
@@ -294,7 +250,6 @@ impl WaveLayout {
         (unit >= 0.0).then(|| row_at_unit(&self.tops, unit))
     }
 
-    /// Top of row `ix` in the panel's coordinate space.
     pub fn row_y(&self, ix: usize) -> f32 {
         let count = self.tops.len().saturating_sub(1);
         let total = self.tops.last().copied().unwrap_or(0);
@@ -305,7 +260,6 @@ impl WaveLayout {
         self.names.top() + self.row_h * unit - self.scroll_y
     }
 
-    /// Height of row `ix`; rows past the end are 1×.
     pub fn row_height(&self, ix: usize) -> f32 {
         let units = match (self.tops.get(ix), self.tops.get(ix + 1)) {
             (Some(top), Some(bottom)) => bottom - top,
@@ -314,22 +268,18 @@ impl WaveLayout {
         self.row_h * units as f32
     }
 
-    /// The entry shown at visible position `pos`.
     pub fn entry(&self, pos: usize) -> Option<usize> {
         self.visible.get(pos).map(|&i| i as usize)
     }
 
-    /// The visible position of entry `entry`, unless a folded group hides it.
     pub fn position(&self, entry: usize) -> Option<usize> {
         self.visible.binary_search(&(entry as u32)).ok()
     }
 
-    /// The entry under `y`, if a row is drawn there.
     pub fn entry_at(&self, y: f32) -> Option<usize> {
         self.entry(self.row_at(y)?)
     }
 
-    /// Top and height of entry `entry`, when it is visible.
     pub fn entry_span(&self, entry: usize) -> Option<(f32, f32)> {
         let pos = self.position(entry)?;
         Some((self.row_y(pos), self.row_height(pos)))
@@ -347,13 +297,11 @@ impl WaveLayout {
         f64::from(self.waves.width()).max(1.0)
     }
 
-    /// Ruler row under `p` when the panel shows `count` rulers.
     pub fn ruler_at(&self, p: Point, count: usize) -> Option<usize> {
         ruler_row(self.rulers, p, count)
     }
 }
 
-/// Row of a ruler band of `count` equal rows under `p`.
 pub fn ruler_row(band: Rect, p: Point, count: usize) -> Option<usize> {
     if count == 0 || !band.contains(p) {
         return None;
@@ -417,7 +365,6 @@ mod tests {
             assert_eq!(chip.rect.left(), l.waves.left() + l.waves.width() / 2.0);
             let (track, _) = l.scrollbar.unwrap();
             assert_eq!(track.width(), SCROLLBAR_W * zoom);
-            // Rows per screen follow the row height.
             let visible = (300.0 - (32.0 + LANE_H) * zoom) / (24.0 * zoom);
             assert_eq!(l.rows.len(), visible.ceil() as usize);
             assert_eq!(l.row_at(l.names.top() + 24.0 * zoom * 3.5), Some(3));
@@ -458,17 +405,14 @@ mod tests {
         );
         assert_eq!(l.row_height(1), 96.0);
         assert_eq!(l.row_height(3), 192.0);
-        // The 5-unit-high viewport ends exactly where row 2 starts.
         assert_eq!(l.rows, 0..2);
         assert_eq!(l.badges.len(), 2);
         assert_eq!(l.badges[1].1.top(), top + 24.0 + 4.0);
         assert_eq!(l.row_at(top + 24.0 + 95.0), Some(1));
         assert_eq!(l.row_at(top + 120.0), Some(2));
         assert_eq!(l.max_scroll, 24.0 * 16.0 - 24.0 * 5.0);
-        // Past the content, hit-testing continues in 1× steps.
         assert_eq!(l.row_at(top + 384.0 + 30.0 - l.scroll_y), Some(6));
 
-        // Scrolled into the middle of the 8× row: it is the first visible row.
         let l = WaveLayout::compute(input(24.0 * 8.0));
         assert_eq!(l.rows, 3..4);
         assert_eq!(l.row_y(3), l.names.top() - 48.0);

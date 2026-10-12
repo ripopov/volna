@@ -1,5 +1,4 @@
-//! Asynchronous complete-history installation. The host handles transport and
-//! yields between `step` calls; results use the same raw contract as local loads.
+//! Asynchronous complete-history installation.
 
 use super::ClientStep;
 use super::history::stream::HistoryDecoder;
@@ -9,12 +8,6 @@ use crate::data::SignalRef;
 use crate::session::LoadResult;
 use std::sync::Arc;
 
-/// Receives one signal batch into [`LoadResult::Signals`]. Each history is
-/// admitted against the object limit and reserved from the budget before
-/// allocation; the reservation follows the history to its last owner. An
-/// object refused by admission is drained and reported as that signal's error,
-/// so later objects in the batch still succeed. The final acknowledgement is
-/// withheld until validation succeeds.
 pub struct SignalTransfer<Tag = u64> {
     receiver: Receiver,
     tag: Tag,
@@ -76,8 +69,6 @@ impl<Tag: Copy> SignalTransfer<Tag> {
                 Err(error) => self.rejected = Some((SignalRef(id), format!("{error:#}"))),
             },
             Receive::Data(bytes) => {
-                // Drain a refused object with normal backpressure so remaining
-                // signals in the batch still complete. No payload is retained.
                 if self.rejected.is_none() {
                     self.builder
                         .as_mut()
@@ -106,7 +97,6 @@ impl<Tag: Copy> SignalTransfer<Tag> {
         Ok(ClientStep::Ack(ack))
     }
 
-    /// Performs at most one bounded history validation step.
     pub fn step(&mut self) -> anyhow::Result<ClientStep<Tag>> {
         let result = self.step_inner();
         self.poison_on_error(result)
@@ -161,7 +151,6 @@ impl<Tag: Copy> SignalTransfer<Tag> {
         !self.failed && self.end_ack.is_none() && self.receiver.is_complete()
     }
 
-    /// A disconnect is successful only after every requested result was delivered.
     pub fn finish(self) -> anyhow::Result<()> {
         anyhow::ensure!(self.is_complete(), "incomplete signal transfer");
         self.receiver.finish()

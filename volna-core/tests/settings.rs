@@ -1,5 +1,5 @@
-//! Settings over the core loop: the editor tab, GUI edits and the write
-//! queue, host deliveries, and the projection into the viewer. Headless.
+//! Settings over the core loop: the editor tab, GUI edits and the write queue, host
+//! deliveries, and the projection into the viewer.
 
 use std::time::Duration;
 use volna_core::testing::a_all;
@@ -83,13 +83,11 @@ fn gui_edits_change_the_document_surgically_and_write_after_idle() {
     assert!(app.tick(t0 + WRITE_IDLE), "outstanding until acknowledged");
     app.settings_saved(ticket, None, t0 + WRITE_IDLE);
     assert!(!app.settings.pending_write());
-    // The watcher echo of that write changes nothing; an external edit does.
     app.settings_external(text.as_bytes());
     assert!(changed_keys(&events(&mut app)).is_empty());
     app.settings_external(b"{\"waves.animation\": \"off\", \"waves.snapPixels\": 0}");
     assert_eq!(changed_keys(&events(&mut app)), vec!["waves.animation"]);
     assert_eq!(app.doc.navigation.animation, Animation::Off);
-    // Reset removes the property; unknown ids and bad values are notices.
     app.handle_at(
         Command::Settings(SettingsCommand::Reset {
             id: "waves.animation".into(),
@@ -98,7 +96,6 @@ fn gui_edits_change_the_document_surgically_and_write_after_idle() {
     );
     assert_eq!(changed_keys(&events(&mut app)), vec!["waves.animation"]);
     assert_eq!(app.settings.text(), "{\"waves.snapPixels\": 0}");
-    // Reset removes a duplicated key entirely, not only the effective one.
     app.settings_external(b"{\"waves.animation\": \"off\", \"waves.animation\": \"reduced\"}");
     events(&mut app);
     app.handle_at(
@@ -169,7 +166,6 @@ fn syntax_errors_keep_values_and_block_gui_edits_until_fixed() {
         vec!["panels.linkByDefault"]
     );
     assert!(app.settings.editable());
-    // New panels take the live default.
     app.open_bytes("t.vtr".into(), Vec::new());
     complete_open(&mut app, ProceduralTrace::session(10));
     app.handle(Command::Action(Action::NewPanel));
@@ -213,10 +209,8 @@ fn the_settings_tab_is_chrome_that_survives_traces_and_never_reaches_a_workspace
     let settings = app.panels.settings_id().expect("tab open");
     assert_eq!(app.panels.focused_id(), settings);
     assert_eq!(app.panels.len(), 2);
-    // Opening again focuses; it is not a second tab.
     app.handle_at(Command::Settings(SettingsCommand::Open), t0);
     assert_eq!(app.panels.len(), 2);
-    // Reveal from the palette filters the editor to one id.
     app.handle_at(
         Command::Settings(SettingsCommand::Reveal {
             id: "waves.snapPixels".into(),
@@ -227,7 +221,6 @@ fn the_settings_tab_is_chrome_that_survives_traces_and_never_reaches_a_workspace
     assert!(!app.settings_view.json);
     app.handle_at(Command::Settings(SettingsCommand::ToggleJson), t0);
     assert!(app.settings_view.json);
-    // A trace opens and closes around the tab; it keeps its id and focus.
     let spec = OpenSpec::Bytes {
         name: "t.vtr".into(),
         bytes: Vec::new(),
@@ -260,7 +253,6 @@ fn the_settings_tab_is_chrome_that_survives_traces_and_never_reaches_a_workspace
         .into_iter()
         .find(|id| *id != settings)
         .unwrap();
-    // The saved workspace never mentions the tab.
     app.handle_at(Command::Panels(PanelsCommand::Focus(waves)), t0);
     app.handle_at(
         Command::Action(volna_core::app::Action::AddOrRenameMarker),
@@ -278,7 +270,6 @@ fn the_settings_tab_is_chrome_that_survives_traces_and_never_reaches_a_workspace
     assert_eq!(json["panels"].as_array().unwrap().len(), 1);
     assert_eq!(json["layout"]["tabs"].as_array().unwrap().len(), 1);
     assert!(!saved.contains("Settings"));
-    // Closing the trace keeps the tab; closing the tab removes it.
     app.handle_at(Command::CloseTrace, t0);
     events(&mut app);
     assert_eq!(app.panels.settings_id(), Some(settings));
@@ -323,7 +314,6 @@ fn zoom_steps_write_the_setting_and_reset_removes_it() {
         app.handle_at(Command::Settings(SettingsCommand::Zoom(ZoomStep::In)), t0);
     }
     assert_eq!(app.settings.resolved().appearance.zoom, 3.0);
-    // A step at the limit is a no-op, not an error notice.
     app.handle_at(Command::Settings(SettingsCommand::Zoom(ZoomStep::In)), t0);
     assert!(
         !events(&mut app)
@@ -342,20 +332,17 @@ fn zoom_steps_write_the_setting_and_reset_removes_it() {
     assert_eq!(app.settings.resolved().appearance.zoom, 1.0);
     assert!(!app.settings.text().contains("appearance.zoom"));
     assert!(app.settings.text().contains("\"waves.snapPixels\": 4"));
-    // The change reaches the file after the idle interval.
     app.handle_at(Command::Settings(SettingsCommand::Zoom(ZoomStep::Out)), t0);
     events(&mut app);
     app.tick(t0 + WRITE_IDLE + Duration::from_millis(1));
     let (_, text) = write(&events(&mut app)).expect("a write");
     assert!(text.contains("\"appearance.zoom\": 0.9"));
-    // An out-of-range file value falls back to the default with a diagnostic.
     app.settings_external(b"{ \"appearance.zoom\": 9 }");
     events(&mut app);
     assert_eq!(app.settings.resolved().appearance.zoom, 1.0);
     assert!(!app.settings.diagnostics().is_empty());
 }
 
-/// A VTR trace with one 32-bit bus of `changes` values.
 fn bus_trace(changes: u64) -> tempfile::NamedTempFile {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
@@ -407,7 +394,6 @@ fn memory_limits_apply_live_so_a_failed_load_succeeds_on_retry() {
         pump(app);
     };
 
-    // Below one history the load fails and says what to raise.
     set(&mut app, "memory.budgetMiB", 1);
     assert_eq!(app.status().memory.unwrap().limit, 1024 * 1024);
     app.handle(Command::AddVars(a_all(vec![0])));
@@ -416,14 +402,12 @@ fn memory_limits_apply_live_so_a_failed_load_succeeds_on_retry() {
     assert!(error.contains("memory budget exceeded"), "{error}");
     assert_eq!(app.status().memory.unwrap().used, resident);
 
-    // Raising it applies at once, without reopening the trace.
     set(&mut app, "memory.budgetMiB", 64);
     assert_eq!(app.status().memory.unwrap().limit, 64 * 1024 * 1024);
     retry(&mut app);
     assert_eq!(row_error(&app), None);
     assert!(app.status().memory.unwrap().used > resident);
 
-    // The object limit is live for a local trace too.
     set(&mut app, "memory.objectMiB", 1);
     retry(&mut app);
     let error = row_error(&app).expect("over the object limit");
@@ -465,10 +449,8 @@ fn memory_menu_offers_checked_presets_and_respects_host_owned_values() {
     assert_eq!(checked(&menu.object), [256]);
     assert_eq!(menu.locked, None);
 
-    // Choosing a preset writes the setting.
     app.handle(menu.budget[4].command());
     assert_eq!(app.settings.resolved().memory.budget_mib, 4096);
-    // A hand-written value is listed in order and checked.
     set(&mut app, "memory.objectMiB", 300);
     let menu = app.memory_menu();
     assert_eq!(menu.object_title, "Object size limit: 300 MiB");
@@ -476,7 +458,6 @@ fn memory_menu_offers_checked_presets_and_respects_host_owned_values() {
     assert_eq!(menu.object[3].mib, 300);
     assert_eq!(menu.object[3].label, "300 MiB");
 
-    // In VS Code the values belong to the host's configuration.
     let mut overrides = BTreeMap::new();
     overrides.insert("memory.budgetMiB".to_owned(), Value::Integer(1536));
     app.set_host_settings(overrides);

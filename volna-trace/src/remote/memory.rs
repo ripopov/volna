@@ -1,18 +1,9 @@
-//! Admission for decoded client storage. Reservations follow the allocations
-//! they pay for, including private builders and shared completed objects.
+//! Admission for decoded client storage.
 
 use std::sync::{Arc, Mutex};
 
 const MIB: u64 = 1024 * 1024;
 
-/// A shared pool of decoded client storage with a total and a per-object limit.
-///
-/// Both limits can change while the pool is live: raising one admits new loads
-/// at once, and
-/// lowering one never evicts; existing reservations stay and only new
-/// admissions are refused. A host uses one budget for histories, metadata,
-/// tracks, indexes and transport scratch. It bounds admitted data, not
-/// process RSS.
 #[derive(Clone, Debug)]
 pub struct MemoryBudget(Arc<Budget>);
 
@@ -24,13 +15,10 @@ struct Budget {
 #[derive(Debug)]
 struct State {
     limit: u64,
-    /// Largest single object an in-process load may admit.
     object_limit: u64,
     used: u64,
 }
 
-/// Admitted bytes, returned to the budget on drop. Carried by the object it
-/// pays for, so the last shared owner releases it.
 #[derive(Debug)]
 pub struct Reservation {
     budget: MemoryBudget,
@@ -72,7 +60,6 @@ impl MemoryBudget {
         self.state().used
     }
 
-    /// Admit one in-process object under the current object limit.
     pub fn reserve_object(&self, what: &str, bytes: u64) -> anyhow::Result<Reservation> {
         check_object(what, bytes, self.object_limit(), "retry")?;
         self.reserve(bytes)
@@ -101,8 +88,6 @@ impl MemoryBudget {
     }
 }
 
-/// Refuse one decoded object above `limit`; `then` says what follows raising
-/// the limit (a retry, or reopening a remote trace that negotiated it).
 pub(crate) fn check_object(what: &str, bytes: u64, limit: u64, then: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         bytes <= limit,
@@ -125,12 +110,10 @@ impl Drop for Reservation {
 }
 
 impl Reservation {
-    /// The admission pool already paying for this immutable owner.
     pub fn budget(&self) -> MemoryBudget {
         self.budget.clone()
     }
 
-    /// Release bytes no longer owned after a pessimistically admitted build.
     pub fn shrink(&mut self, bytes: u64) -> anyhow::Result<()> {
         self.bytes = self
             .bytes
@@ -144,13 +127,10 @@ impl Reservation {
         Ok(())
     }
 
-    /// Bytes retained by this admission owner.
     pub fn bytes(&self) -> u64 {
         self.bytes
     }
 
-    /// Move part of a reservation to an independently owned allocation. Total
-    /// admission is unchanged; dropping either owner releases only its share.
     pub(crate) fn split(&mut self, bytes: u64) -> anyhow::Result<Self> {
         self.bytes = self
             .bytes
@@ -161,7 +141,6 @@ impl Reservation {
             bytes,
         })
     }
-    /// Extend one object's reservation as its checked decoded lengths arrive.
     pub(crate) fn grow(&mut self, bytes: u64) -> anyhow::Result<()> {
         let total = self
             .bytes
@@ -172,8 +151,6 @@ impl Reservation {
         Ok(())
     }
 
-    /// Admit additional storage for one object before growing its allocations.
-    /// Both the total pool and the current per-object limit apply.
     pub fn grow_object(&mut self, what: &str, bytes: u64) -> anyhow::Result<()> {
         let total = self
             .bytes

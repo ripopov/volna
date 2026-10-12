@@ -1,13 +1,8 @@
-//! Row colours: a row or group stores one of a few
-//! named theme colours, never RGB, and the theme resolves the name per
-//! appearance at the contrast floor of every wave stroke.
-//!
-//! Red and yellow are not offered, so a colour never passes for X or Z.
+//! Row colours: a row or group stores one of a few named theme colours, never RGB, and the
+//! theme resolves the name per appearance at the contrast floor of every wave stroke.
 
 use super::tree::{self, Entry};
 
-/// A named row colour. A row without one uses its group's, else the
-/// theme's default signal colour (green), which the menu calls Default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tint {
     Blue,
@@ -18,15 +13,12 @@ pub enum Tint {
 }
 
 impl Tint {
-    /// Every colour, in menu order after Default.
     pub const ALL: [Tint; 5] = [Tint::Blue, Tint::Cyan, Tint::Violet, Tint::Pink, Tint::Grey];
 
-    /// The position in [`Tint::ALL`] and in `Theme::wave_tints`.
     pub fn index(self) -> usize {
         self as usize
     }
 
-    /// The name a workspace stores and commands use.
     pub fn id(self) -> &'static str {
         match self {
             Tint::Blue => "blue",
@@ -41,7 +33,6 @@ impl Tint {
         Self::ALL.into_iter().find(|t| t.id() == id)
     }
 
-    /// The menu and palette label; `None` is Default.
     pub fn label(tint: Option<Self>) -> &'static str {
         match tint {
             None => "Default",
@@ -54,8 +45,6 @@ impl Tint {
     }
 }
 
-/// The colour entry `i` is drawn in: its own, else the nearest enclosing
-/// group's, else `None` for the theme default.
 pub fn ink(items: &[Entry], i: usize) -> Option<Tint> {
     let mut at = i;
     loop {
@@ -66,8 +55,6 @@ pub fn ink(items: &[Entry], i: usize) -> Option<Tint> {
     }
 }
 
-/// Stored colours: a name, where an unknown one reads as Default so a
-/// workspace from a later palette still opens.
 pub(crate) mod serde_name {
     use super::Tint;
     use serde::{Deserialize, Deserializer, Serializer};
@@ -85,13 +72,9 @@ pub(crate) mod serde_name {
     }
 }
 
-/// [`ink`] for rows visited in increasing entry order, such as the painted
-/// rows of a frame: the first row walks up to its ancestors once, later
-/// rows reuse the colours of the groups above them.
 #[derive(Default)]
 pub(crate) struct InkWalk {
     started: bool,
-    /// Open groups above the current row: their depth and colour.
     groups: Vec<(u8, Option<Tint>)>,
 }
 
@@ -149,7 +132,6 @@ mod tests {
     #[test]
     fn the_walk_from_any_row_matches_ink() {
         use Tint::*;
-        // a, [G cyan: b, [H: c, [I pink: d, e]], f], g, [J: h]
         let items = vec![
             leaf(0, None),
             group(0, Some(Cyan)),
@@ -188,7 +170,6 @@ mod tests {
             for (i, want) in expected.iter().enumerate().skip(start) {
                 assert_eq!(walk.ink(&items, i), *want, "from {start}, row {i}");
             }
-            // Skipping a folded group's rows keeps the walk right.
             let mut walk = InkWalk::default();
             for i in (start..items.len()).filter(|i| !(6..8).contains(i)) {
                 assert_eq!(walk.ink(&items, i), expected[i]);

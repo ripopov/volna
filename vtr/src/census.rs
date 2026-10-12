@@ -1,68 +1,22 @@
-//! Scope sizes: how many distinct signals, variables and scopes each scope
-//! holds, subscopes included.
-//!
-//! A signal aliased by several variables below a scope counts once there
-//! (ports name the nets of their parents, so summing variables overcounts).
-//! [`Census`] is a format-neutral streaming counter fed in the order a
-//! hierarchy is declared (`$scope` … `$upscope`);
-//! [`Hierarchy::scope_sizes`] is its front end for a VTR hierarchy.
-//!
-//! The method is colour-set-size counting (Hui, CPM 1992): every scope that
-//! holds a signal adds one, the lowest common ancestor of each pair of
-//! consecutive (in preorder) scopes holding it subtracts one, and a subtree
-//! sum gives the distinct count. Tarjan's offline LCA answers each pair as
-//! the second scope opens, so the count is one pass, linear in variables
-//! plus scopes (with the near-constant union-find factor). Memory is 24
-//! bytes per scope and 4 per signal; variables are never stored.
-//!
-//! A [`recording`](Census::recording) census also keeps each signal's +1 and
-//! −1 weights as [`Contributions`], so the distinct count of any subset of
-//! signals, such as the signals that change in a window, is a sum over the
-//! subset's lists and one subtree pass: linear in the subset's variables plus
-//! the scopes, however often it is asked.
-//!
-//! ```
-//! let mut c = vtr::Census::new();
-//! let top = c.enter();
-//! c.var(0); // clk
-//! let a = c.enter();
-//! c.var(0); // a port aliasing clk
-//! c.var(1);
-//! c.leave();
-//! c.leave();
-//! let s = c.finish();
-//! assert_eq!((s.signals(top), s.variables(top), s.scopes(top)), (2, 3, 2));
-//! assert_eq!(s.signals(a), 2);
-//! ```
+//! Scope sizes: how many distinct signals, variables and scopes each scope holds, subscopes
+//! included.
 
 use crate::hierarchy::{Hierarchy, NodeId, NodeKind};
 
 const NONE: u32 = u32::MAX;
 
-/// Streaming scope-size counter. Scopes are numbered in the order they are
-/// entered (preorder); [`var`](Self::var) adds a variable of a signal to the
-/// innermost open scope.
 #[derive(Debug, Default)]
 pub struct Census {
     parent: Vec<u32>,
-    /// Union-find over scopes (closed subtrees join their parent's set) and
-    /// the open ancestor that represents each set (`NONE` once its root closed).
     uf: Vec<u32>,
     anc: Vec<u32>,
-    /// Weights: +1 per scope holding a signal, −1 at each LCA. Partial sums
-    /// can dip below zero; the subtree sums cannot, so wrapping `u32`
-    /// arithmetic is exact.
     signals: Vec<u32>,
     variables: Vec<u32>,
-    /// Last scope that held each signal.
     last: Vec<u32>,
     open: Vec<u32>,
-    /// With [`recording`](Self::recording): every weight as (signal, scope
-    /// with [`NEGATIVE`] set for −1).
     record: Option<Vec<(u32, u32)>>,
 }
 
-/// Marks a −1 weight in [`Contributions`].
 const NEGATIVE: u32 = 1 << 31;
 
 impl Census {
@@ -70,9 +24,6 @@ impl Census {
         Self::default()
     }
 
-    /// A census that also keeps every signal's weights for
-    /// [`finish_recorded`](Self::finish_recorded): 8 bytes per recorded
-    /// weight while counting, 4 once finished, at most two weights per variable.
     pub fn recording() -> Self {
         Census {
             record: Some(Vec::new()),
@@ -80,8 +31,6 @@ impl Census {
         }
     }
 
-    /// Opens a scope inside the innermost open one (or as a root) and
-    /// returns its index.
     pub fn enter(&mut self) -> u32 {
         let i = self.parent.len() as u32;
         self.parent.push(self.open.last().copied().unwrap_or(NONE));
@@ -93,10 +42,6 @@ impl Census {
         i
     }
 
-    /// Adds a variable naming `signal` to the innermost open scope.
-    ///
-    /// # Panics
-    /// When no scope is open.
     pub fn var(&mut self, signal: u32) {
         let i = *self.open.last().expect("Census::var outside a scope");
         self.variables[i as usize] += 1;
@@ -115,7 +60,6 @@ impl Census {
         if prev != NONE {
             let root = self.find(prev);
             let l = self.anc[root as usize];
-            // A signal shared across roots has no common ancestor.
             if l != NONE {
                 self.signals[l as usize] = self.signals[l as usize].wrapping_sub(1);
                 if let Some(r) = &mut self.record {
@@ -126,10 +70,6 @@ impl Census {
         self.last[g] = i;
     }
 
-    /// Closes the innermost open scope.
-    ///
-    /// # Panics
-    /// When no scope is open.
     pub fn leave(&mut self) {
         let i = self.open.pop().expect("Census::leave without a scope");
         let p = self.parent[i as usize];
@@ -143,13 +83,10 @@ impl Census {
         }
     }
 
-    /// Number of scopes open (entered and not yet left).
     pub fn depth(&self) -> usize {
         self.open.len()
     }
 
-    /// [`finish`](Self::finish), and the recorded weights grouped by signal
-    /// (empty unless the census was [`recording`](Self::recording)).
     pub fn finish_recorded(mut self) -> (ScopeSizes, Contributions) {
         let record = self.record.take().unwrap_or_default();
         let signals = record
@@ -179,7 +116,6 @@ impl Census {
         (sizes, contributions)
     }
 
-    /// Closes any scopes still open and sums the subtrees.
     pub fn finish(mut self) -> ScopeSizes {
         while !self.open.is_empty() {
             self.leave();
@@ -217,20 +153,14 @@ impl Census {
     }
 }
 
-/// Every signal's weights from a [`recording`](Census::recording) census:
-/// +1 at each scope holding it, −1 at the lowest common ancestor of each
-/// consecutive pair of them. Summed over a set of signals and then over each
-/// subtree, they give every scope's number of distinct signals of the set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Contributions {
     parent: Vec<u32>,
-    /// Weights of signal `s` are `weights[off[s]..off[s + 1]]`.
     off: Vec<u32>,
     weights: Vec<u32>,
 }
 
 impl Contributions {
-    /// Number of scopes counted.
     pub fn len(&self) -> usize {
         self.parent.len()
     }
@@ -239,15 +169,10 @@ impl Contributions {
         self.parent.is_empty()
     }
 
-    /// Heap bytes held.
     pub fn memory_bytes(&self) -> u64 {
         ((self.parent.len() + self.off.len() + self.weights.len()) * 4) as u64
     }
 
-    /// Writes into `out` (one entry per scope, in the order scopes were
-    /// entered) how many distinct signals of `signals` each scope holds,
-    /// subscopes included. `signals` must not repeat a signal; signals the
-    /// census never saw count nowhere.
     pub fn count(&self, signals: impl IntoIterator<Item = u32>, out: &mut Vec<u32>) {
         out.clear();
         out.resize(self.parent.len(), 0);
@@ -275,8 +200,6 @@ impl Contributions {
     }
 }
 
-/// Per-scope totals, subscopes included, indexed by the order scopes were
-/// entered.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScopeSizes {
     parent: Vec<u32>,
@@ -286,7 +209,6 @@ pub struct ScopeSizes {
 }
 
 impl ScopeSizes {
-    /// Number of scopes counted.
     pub fn len(&self) -> usize {
         self.parent.len()
     }
@@ -295,37 +217,27 @@ impl ScopeSizes {
         self.parent.is_empty()
     }
 
-    /// The enclosing scope, `None` for a root.
     pub fn parent(&self, scope: u32) -> Option<u32> {
         Some(self.parent[scope as usize]).filter(|&p| p != NONE)
     }
 
-    /// Distinct signals named at or below `scope`.
     pub fn signals(&self, scope: u32) -> u32 {
         self.signals[scope as usize]
     }
 
-    /// Variables at or below `scope`; aliases count every time.
     pub fn variables(&self, scope: u32) -> u32 {
         self.variables[scope as usize]
     }
 
-    /// Scopes at or below `scope`, itself included.
     pub fn scopes(&self, scope: u32) -> u32 {
         self.scopes[scope as usize]
     }
 }
 
 impl Hierarchy {
-    /// Scope sizes, and the scope node of each [`ScopeSizes`] index (scopes
-    /// in preorder). Streams hold no variables and are not counted.
-    ///
-    /// Requires [`build_index`](Self::build_index) (a [`crate::Reader`]'s
-    /// hierarchy is indexed).
     pub fn scope_sizes(&self) -> (Vec<NodeId>, ScopeSizes) {
         let mut c = Census::new();
         let mut nodes = Vec::new();
-        // Preorder with explicit leave markers: `None` closes a scope.
         let mut stack: Vec<Option<NodeId>> = self
             .roots()
             .filter(|&n| self.kind(n) == NodeKind::Scope)

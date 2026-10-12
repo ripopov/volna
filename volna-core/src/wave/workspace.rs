@@ -1,5 +1,4 @@
 //! The wave panel's workspace schema, capture, validation and resolution.
-//! Preparing content never retains data or changes the live document.
 
 use super::{
     Tint,
@@ -29,8 +28,6 @@ struct Columns {
     values: f32,
 }
 
-/// A wave row: a signal with its format, a generator's transaction lane, a
-/// clock, or a group holding rows.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Row {
@@ -67,7 +64,6 @@ enum Row {
         )]
         tint: Option<Tint>,
     },
-    /// A declared clock by its path, drawn from its stretches.
     Clock {
         #[serde(default, skip_serializing_if = "TraceId::is_a")]
         trace: TraceId,
@@ -81,7 +77,6 @@ enum Row {
         )]
         tint: Option<Tint>,
     },
-    /// A named group; its rows follow it on screen, indented.
     Group {
         name: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -96,7 +91,6 @@ enum Row {
         tint: Option<Tint>,
         #[serde(default, skip_serializing_if = "SavedStyle::is_activity")]
         style: SavedStyle,
-        /// A stacked group without its peak band says `false`.
         #[serde(default = "shows_peak", skip_serializing_if = "is_true")]
         peak: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,7 +107,6 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
-/// The group renderer; activity is the default and is not written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SavedStyle {
@@ -130,7 +123,6 @@ impl SavedStyle {
 }
 
 impl SavedStyle {
-    /// The stored style and peak switch of `style`.
     fn of(style: GroupStyle) -> (Self, bool) {
         match style {
             GroupStyle::Activity => (Self::Activity, true),
@@ -154,7 +146,6 @@ impl SavedStyle {
     }
 }
 
-/// Rows as the tree a workspace stores: each group holds its rows.
 fn nest(items: &[Entry], row: &dyn Fn(&WaveRow) -> Row) -> Vec<Row> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -181,8 +172,6 @@ fn nest(items: &[Entry], row: &dyn Fn(&WaveRow) -> Row) -> Vec<Row> {
     out
 }
 
-/// The stored tree as pre-order rows with depths, refusing groups nested
-/// deeper than [`tree::MAX_DEPTH`].
 fn flatten(rows: Vec<Row>, depth: u8, out: &mut Vec<(u8, Row)>) -> Result<()> {
     for row in rows {
         ensure!(
@@ -223,23 +212,14 @@ fn flatten(rows: Vec<Row>, depth: u8, out: &mut Vec<(u8, Row)>) -> Result<()> {
     Ok(())
 }
 
-/// A signal row drawn as a plot.
 #[derive(Debug, Serialize, Deserialize)]
 struct SavedAnalog {
     draw: AnalogDraw,
     range: AnalogRange,
 }
 
-/// The wave panel format: version 2 added transaction lanes as typed rows,
-/// version 3 analog rows, version 4 groups (rows as a tree; `selected`
-/// counts rows in pre-order, groups included), version 5 row colours
-/// (`tint`, a name; an unknown one reads as Default), version 6 stacked
-/// groups (`"style": "stack"`, and `"peak": false` without the peak band;
-/// activity is not written), version 7 overlaid groups (independent lines,
-/// drawing and shared range settings, and per-signal overlay visibility).
 pub(crate) const VERSION: u32 = 7;
 
-// RawValue distinguishes an omitted local cursor from an explicitly saved null.
 #[derive(Serialize, Deserialize)]
 struct WavePanel {
     id: PanelId,
@@ -259,7 +239,6 @@ struct WavePanel {
     columns: Columns,
     rows: Vec<Row>,
     selected: BTreeSet<usize>,
-    /// Clock rulers, snapping clock and cycle origin.
     #[serde(default, skip_serializing_if = "ClockView::is_default")]
     clocks: ClockView,
 }
@@ -523,7 +502,6 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         ));
     }
     w.restore_rows(items);
-    // Selected rows inside folded groups select the group instead.
     w.selected = saved.selected;
     w.anchor = w.selected.first().copied();
     w.fix_hidden_selection();

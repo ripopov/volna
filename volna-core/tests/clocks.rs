@@ -1,9 +1,7 @@
-//! Declared clocks in Volna: clock rulers and their
-//! cursor chips, snapping and stepping, readouts, clock rows, pipelines counted in
-//! their stream's clock (also on a Kanata import), workspaces and remote
-//! loading. Headless: commands in, state and scenes out.
+//! Declared clocks in Volna: clock rulers and their cursor chips, snapping and stepping,
+//! readouts, clock rows, pipelines counted in their stream's clock (also on a Kanata
+//! import), workspaces and remote loading.
 
-// Exercise the executable handler directly over bounded test sockets; no server library is needed.
 #[cfg(unix)]
 #[path = "../../volna-server/src/server.rs"]
 mod server;
@@ -26,7 +24,6 @@ use volna_trace::data::source::Lookup;
 use volna_trace::session::{OpenSpec, Session};
 
 const BOUNDS: Rect = Rect::from_xywh(0.0, 0.0, 1200.0, 600.0);
-/// The page's DVFS core clock (ps): 334, then 500, then 1000 ps.
 const CORE: [(u64, u64, u64); 3] = [(400, 19772, 334), (20272, 49772, 500), (50772, 99772, 1000)];
 
 fn core_edges() -> Vec<u64> {
@@ -35,9 +32,6 @@ fn core_edges() -> Vec<u64> {
         .collect()
 }
 
-/// A picosecond trace: the core clock declared with its dumped waveform, a
-/// 2 ns bus clock gated from 30 to 40 ns, a pipeline stream counted in the
-/// core clock and a signal.
 fn fixture() -> Arc<dyn Session> {
     use vtr::{Direction, ScopeType, SignalKind, TxStatus, Value, VarType};
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
@@ -69,7 +63,6 @@ fn fixture() -> Arc<dyn Session> {
     w.clock_run(bus, 1000, 2000).unwrap();
     w.clock_stop(bus, 30000).unwrap();
     w.clock_run(bus, 41000, 2000).unwrap();
-    // The dumped waveform: rising at every edge, falling half a period later.
     let mut changes: Vec<(u64, u64)> = Vec::new();
     for &(b, e, p) in &CORE {
         for k in 0..=(e - b) / p {
@@ -83,7 +76,6 @@ fn fixture() -> Arc<dyn Session> {
         w.set_time(t).unwrap();
         w.emit_u64(clk, v).unwrap();
     }
-    // Instructions whose stages start on core edges.
     let edges = core_edges();
     let f = w.intern("F");
     let x = w.intern("X");
@@ -125,7 +117,6 @@ fn scope(session: &dyn Session, path: &[&str]) -> usize {
     }
 }
 
-/// A wave panel showing the core clock's waveform, clocks loaded.
 fn waves() -> (App, Arc<dyn Session>, PanelId) {
     let session = fixture();
     let mut app = App::new();
@@ -172,7 +163,6 @@ fn clocks_load_with_the_trace_and_rulers_tick_edges_labels_and_speed_flags() {
         .unwrap()
         .clone();
     assert_eq!(bus.stretches().len(), 2);
-    // Without pipelines no ruler is shown by default.
     frame(&mut app, panel, &theme);
     assert_eq!(
         app.panels
@@ -202,13 +192,11 @@ fn clocks_load_with_the_trace_and_rulers_tick_edges_labels_and_speed_flags() {
     for want in ["core_clk", "bus_clk", "→ 2.00 GHz"] {
         assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
     }
-    // Cycle labels are multiples of the stretch's step: 20 at 334 ps and 10 at 500 ps here.
     let labels: Vec<i64> = texts.iter().filter_map(|t| t.parse().ok()).collect();
     assert!(
         labels.contains(&0) && labels.contains(&40) && labels.contains(&60),
         "{labels:?}"
     );
-    // The gated bus clock is hatched while stopped (hatch lines in the ruler band).
     let hatch = app.scene().prims.iter().any(
         |p| matches!(p, volna_core::scene::Prim::Lines { color, .. } if *color == theme.wave_dense),
     );
@@ -233,14 +221,12 @@ fn each_ruler_has_a_cursor_chip_with_its_cycle_and_go_to_counts_the_selected_clo
     app.doc.shared.cursor = Some(edges[12] + 167);
     frame(&mut app, panel, &theme);
     let texts: Vec<String> = app.scene().texts().map(str::to_owned).collect();
-    // The time ruler keeps its time chip; every ruler adds its own cycle chip.
     assert!(texts.iter().any(|t| t == "4.575 ns"), "{texts:?}");
     assert!(
         texts.iter().any(|t| t == "12 + 0.50"),
         "core chip: {texts:?}"
     );
     assert!(texts.iter().any(|t| t == "1 + 0.79"), "bus chip: {texts:?}");
-    // Go to cycle counts the selected clock (the first ruler by default), centred.
     app.handle(Command::Clocks(ClockCommand::GoToCycle(100)));
     assert_eq!(app.doc.shared.cursor, Some(edges[100]));
     app.handle(Command::Clocks(ClockCommand::GoToCycle(1_000_000)));
@@ -254,7 +240,6 @@ fn each_ruler_has_a_cursor_chip_with_its_cycle_and_go_to_counts_the_selected_clo
     ))));
     app.handle(Command::Clocks(ClockCommand::GoToCycle(10)));
     assert_eq!(app.doc.shared.cursor, Some(1000 + 10 * 2000));
-    // A custom origin renumbers every clock of the panel.
     app.handle(Command::Clocks(ClockCommand::Select(a(
         "top.core_clk".into()
     ))));
@@ -291,7 +276,6 @@ fn clicks_snap_to_the_selected_clock_and_brackets_step_cycles() {
     });
     frame(&mut app, panel, &theme);
     let edges = core_edges();
-    // A click on the bus ruler selects the bus clock and snaps to its edge.
     let layout = app.panels.waves(panel).unwrap().last_layout().clone();
     let bus_row = point(
         waves_x(&app, panel, 5050.0),
@@ -310,7 +294,6 @@ fn clicks_snap_to_the_selected_clock_and_brackets_step_cycles() {
             .map(|k| k.item.as_str()),
         Some("top.bus_clk")
     );
-    // Select the core clock: header clicks snap to its edges.
     app.handle(Command::Clocks(ClockCommand::Select(a(
         "top.core_clk".into()
     ))));
@@ -324,7 +307,6 @@ fn clicks_snap_to_the_selected_clock_and_brackets_step_cycles() {
     app.handle(Command::Action(Action::PrevCycle));
     app.handle(Command::Action(Action::PrevCycle));
     assert_eq!(app.doc.shared.cursor, Some(edges[6]));
-    // Stepping crosses a change of speed without inventing edges.
     app.doc.shared.cursor = Some(19772);
     app.handle(Command::Action(Action::NextCycle));
     assert_eq!(app.doc.shared.cursor, Some(20272));
@@ -345,30 +327,22 @@ fn the_status_bar_reads_cycles_and_the_reference_to_cursor_measure() {
     app.doc.shared.cursor = Some(edges[10]);
     app.handle(Command::Action(Action::AddOrRenameMarker));
     app.doc.shared.cursor = Some(edges[50] + 167);
-    // A marker alone measures nothing: only the reference does.
     assert_eq!(app.status().measure, None);
     app.doc.shared.cursor = Some(edges[10]);
     app.handle(Command::Action(Action::SetReference));
     app.doc.shared.cursor = Some(edges[50] + 167);
     let s = app.status();
     assert_eq!(s.clocks, ["core_clk 50 + 0.50", "bus_clk 8 + 0.13"]);
-    // Counted, not divided: the marker is on core edge 10 and the cursor
-    // half a cycle past edge 50; on bus_clk the marker is 0.33 into cycle 1
-    // and the cursor 0.13 into cycle 8, so 6.8 cycles, where subtracting
-    // cycle numbers said 7.
     assert_eq!(
         s.measure.as_deref(),
         Some("R → cursor 13.53 ns · 40.5 core_clk · 6.8 bus_clk")
     );
-    // Both ends on core edges: a whole count.
     app.doc.shared.cursor = Some(edges[50]);
     let s = app.status();
     assert!(s.measure.unwrap().contains(" · 40 core_clk · "));
-    // Before the reference the measure is negative.
     app.doc.shared.cursor = Some(edges[4]);
     let s = app.status();
     assert!(s.measure.unwrap().starts_with("R → cursor −"));
-    // It stays put while other markers come and go near the cursor.
     app.handle(Command::Action(Action::AddOrRenameMarker));
     assert!(app.status().measure.unwrap().contains(" · −6 core_clk · "));
 }
@@ -393,11 +367,9 @@ fn a_clock_row_draws_from_stretches_and_survives_a_workspace() {
         app.scene().texts().any(|t| t == "1 + 0.25"),
         "value column shows the cycle"
     );
-    // Next edge on the selected clock row steps through its edges.
     app.handle(Command::Action(Action::MoveSelectionDown));
     app.handle(Command::Action(Action::NextEdge));
     assert_eq!(app.doc.shared.cursor, Some(5000));
-    // Save and restore: the row and the panel's clock choices come back.
     app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(
         "top.bus_clk".into()
     ))));
@@ -454,7 +426,6 @@ fn a_pipeline_counts_in_its_stream_clock_and_its_clock_becomes_the_default_ruler
     pump(&mut app);
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, waves);
-    // Rows stay put when the cursor moves (the pipeline tests' convention).
     app.handle(Command::PipelineActivity(
         pipeline,
         volna_core::pipeline::ActivityCommand::Toggle,
@@ -467,7 +438,6 @@ fn a_pipeline_counts_in_its_stream_clock_and_its_clock_becomes_the_default_ruler
     });
     frame(&mut app, pipeline, &theme);
     frame(&mut app, waves, &theme);
-    // The pipeline's clock is every panel's default ruler.
     assert_eq!(
         app.panels
             .waves(waves)
@@ -480,7 +450,6 @@ fn a_pipeline_counts_in_its_stream_clock_and_its_clock_becomes_the_default_ruler
     frame(&mut app, pipeline, &theme);
     let layout = app.panels.pipeline(pipeline).unwrap().last_layout().clone();
     let edges = core_edges();
-    // A click inside cycle 5 puts the cursor on its edge, not on a whole time unit.
     let viewport = app
         .panels
         .pipeline(pipeline)
@@ -495,7 +464,6 @@ fn a_pipeline_counts_in_its_stream_clock_and_its_clock_becomes_the_default_ruler
         point(x, layout.row_y(3) + layout.rows.row_px / 2.0),
     );
     assert_eq!(app.doc.shared.cursor, Some(edges[5]));
-    // Hovering a stage reads its cycles.
     let y = layout.row_y(3) + layout.rows.row_px / 2.0;
     let stage_x = layout.cells.left()
         + viewport.x_of(edges[4] as f64 + 100.0, layout.cells_width_f64()) as f32;
@@ -551,7 +519,6 @@ fn a_kanata_import_counts_its_pipeline_in_the_cycle_clock() {
     let theme = Theme::one_dark();
     frame(&mut app, pipeline, &theme);
     let p = app.panels.pipeline(pipeline).unwrap();
-    // The stream's clock is the pipeline's default ruler.
     assert_eq!(p.last_layout().rulers.height(), 16.0 * theme.zoom);
     assert!(app.scene().texts().any(|t| t == "cycle"));
     let layout = p.last_layout().clone();
@@ -564,7 +531,6 @@ fn a_kanata_import_counts_its_pipeline_in_the_cycle_clock() {
             position: point(x, y),
         },
     ));
-    // Cycle 1 of the import (time 101), counted from the first recorded cycle.
     assert!(
         app.status()
             .hover
@@ -602,7 +568,6 @@ fn clocks_load_through_the_remote_protocol_like_any_track() {
     let mut app = App::new();
     let budget = MemoryBudget::new(256 << 20);
     let mut stream = client_end;
-    // Drive the connection until no command is left and every result is delivered.
     let mut drive = |app: &mut App, client: &mut RemoteClient| loop {
         let Some(command) = client.take_command().unwrap() else {
             return;
@@ -623,8 +588,6 @@ fn clocks_load_through_the_remote_protocol_like_any_track() {
                         let opened = matches!(&result, volna_core::LoadResult::Opened { .. });
                         app.deliver(result);
                         if opened {
-                            // The open delivered: submit the clock loads it queued;
-                            // client-side work (scope sizes) stays local.
                             for request in app.take_requests() {
                                 if request.remote_id().is_some() {
                                     client.submit(request).map_err(|_| "rejected").unwrap();
@@ -646,7 +609,6 @@ fn clocks_load_through_the_remote_protocol_like_any_track() {
         name: "remote.vtr".into(),
         limits: Default::default(),
     }));
-    // The host connects for the open request, under its trace and generation.
     let Some(volna_core::LoadRequest::Open {
         trace, generation, ..
     }) = app.take_requests().pop()
@@ -717,7 +679,6 @@ fn a_clock_generator_adds_as_a_ruler_or_as_a_waveform() {
         None,
         "a variable declares no clock"
     );
-    // Add as Ruler: the wave panel shows the clock's ruler, and adding it again changes nothing.
     app.handle(Command::AddClockRulers(a_all(vec![member, Member::Var(0)])));
     app.handle(Command::AddClockRulers(a_all(vec![member])));
     frame(&mut app, panel, &theme);
@@ -728,7 +689,6 @@ fn a_clock_generator_adds_as_a_ruler_or_as_a_waveform() {
     );
     assert_eq!(w.last_layout().rulers.height(), 16.0 * theme.zoom);
     assert_eq!(w.items().len(), 1, "a ruler adds no row");
-    // Add as Waveform: a clock row, not a transaction lane of its stretches.
     app.handle(Command::AddToWaves(a_all(vec![member])));
     let w = app.panels.waves(panel).unwrap();
     assert!(matches!(&w.items()[1].row, WaveRow::Clock(c) if c.key.item == "top.bus_clk"));
@@ -747,7 +707,6 @@ fn a_ruler_context_menu_hides_it() {
     ))));
     frame(&mut app, panel, &theme);
     let layout = app.panels.waves(panel).unwrap().last_layout().clone();
-    // A right click on the second ruler opens its menu.
     let at = point(
         layout.waves.left() + 40.0,
         layout.rulers.top() + 1.5 * 16.0 * theme.zoom,
@@ -784,7 +743,6 @@ fn spans_between_markers_count_cycles_and_zoom_on_a_double_click() {
         app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(path.into()))));
     }
     let edges = core_edges();
-    // Two markers in view, one far right of it.
     for t in [edges[10], edges[50], edges[150]] {
         app.doc.shared.cursor = Some(t);
         app.handle(Command::Action(Action::AddOrRenameMarker));
@@ -823,7 +781,6 @@ fn spans_between_markers_count_cycles_and_zoom_on_a_double_click() {
     };
     assert!(texts(&mut app).contains(&span.labels[0]));
 
-    // Hovering gives the full measurement with 1/Δt.
     let (x0, x1) = lane.shown(span);
     let mid = point((x0 + x1) / 2.0, lane.band.top() + lane.band.height() / 2.0);
     assert_eq!(lane.hit(mid), Some(LaneHit::Span(0)));
@@ -841,12 +798,10 @@ fn spans_between_markers_count_cycles_and_zoom_on_a_double_click() {
         assert!(shown.iter().any(|t| t == want), "{want} in {shown:?}");
     }
 
-    // A click on it moves the cursor as on the header.
     click(&mut app, panel, mid);
     let cursor = app.doc.shared.cursor.unwrap();
     assert!(cursor > edges[10] && cursor < edges[50], "{cursor}");
 
-    // A double-click zooms to the span, which is navigation.
     let undo = app.undo_label().map(str::to_owned);
     let id = |n| MarkerId::new(n).unwrap();
     app.handle(Command::ZoomToSpan(panel, id(1), id(2)));
@@ -890,7 +845,6 @@ fn a_dragged_marker_snaps_to_the_selected_clock_and_copies_its_cycles() {
         modifiers: Modifiers::default(),
     };
     app.handle(Command::Pointer(panel, press));
-    // Two pixels past edge 20, with the grab offset kept.
     let x = waves_x(&app, panel, edges[20] as f64) + (grab.x - chip.left()) + 2.0;
     app.handle(Command::Pointer(
         panel,
@@ -906,7 +860,6 @@ fn a_dragged_marker_snaps_to_the_selected_clock_and_copies_its_cycles() {
     );
     assert_eq!(app.undo_label(), Some("Move marker 1"));
 
-    // Copy as Text names the cycle of every ruler clock.
     frame(&mut app, panel, &theme);
     let chip = app
         .panels
@@ -973,8 +926,6 @@ fn the_navigator_counts_distances_in_the_selected_clock() {
     );
 }
 
-/// A clock gated into bursts far narrower than a pixel still shows where
-/// it runs when zoomed out: the bursts merge into a band.
 #[test]
 fn sub_pixel_bursts_of_a_gated_clock_draw_a_band() {
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
@@ -984,7 +935,6 @@ fn sub_pixel_bursts_of_a_gated_clock_draw_a_band() {
         .add_scope(None, "top", vtr::ScopeType::Module, "top")
         .unwrap();
     let clock = w.add_clock(Some(top), "gclk").unwrap();
-    // 2000 bursts of three edges, 20 ps long, one every 1000 ps.
     for k in 0..2000u64 {
         w.clock_run(clock, k * 1000, 10).unwrap();
         w.clock_stop(clock, k * 1000 + 25).unwrap();

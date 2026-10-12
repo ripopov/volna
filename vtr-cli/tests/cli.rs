@@ -128,7 +128,6 @@ fn waveform_queries_export_and_activity() {
     assert!(ok(d, &["active", "run.vtr", "--from", "100", "--to", "200"]).is_empty());
     ok(d, &["to-vcd", "run.vtr", "out.vcd"]);
     ok(d, &["convert", "out.vcd", "roundtrip.vtr"]);
-    // Replacing the source invalidates the old sidecar identity.
     std::fs::remove_file(d.join("run.vtr")).unwrap();
     ok(
         d,

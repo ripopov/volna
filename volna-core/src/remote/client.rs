@@ -1,4 +1,5 @@
 //! Viewer demand and analysis coordination over the standalone trace client.
+
 use super::ClientStep;
 use crate::session::{LoadRequest, LoadResult};
 use crate::trace::TraceId;
@@ -25,7 +26,6 @@ struct Resolution {
     counts: Arc<crate::data::ActivityCounts>,
     budget: MemoryBudget,
 }
-/// Adapts viewer requests and demand to raw loading; transport and decoding belong to `volna-trace`.
 pub struct RemoteClient {
     inner: TraceClient<TraceId>,
     resolutions: Vec<Resolution>,
@@ -480,7 +480,6 @@ mod tests {
         };
         let mut app = App::new();
         app.set_session(result.unwrap());
-        // Routed as frontends do: client-side work (scope sizes) stays local.
         let enqueue = |app: &mut App, client: &mut RemoteClient| {
             for request in app.take_requests() {
                 if request.remote_id().is_some() {
@@ -632,7 +631,6 @@ mod tests {
             });
             assert!(matches!(step, ClientStep::Yield));
             assert!(client.take_command().unwrap().is_none());
-            // Cross the allowance scan and enter admitted index construction.
             for _ in 0..5 {
                 step = client.step().unwrap();
                 assert!(matches!(step, ClientStep::Yield));

@@ -1,6 +1,7 @@
+/* Starlight layout and navigation styled with shared Volna design tokens. */
+
 @import '../../design-system/styles.css';
 
-/* Starlight owns layout and navigation; Volna owns visual roles and component foundations. */
 :root,
 :root[data-theme='light'] {
   --sl-font: var(--font-sans);
@@ -44,7 +45,6 @@ body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
 h1, h2, h3, h4 { font-weight: var(--weight-semibold); letter-spacing: var(--heading-tracking); }
 .site-title { color: var(--text-1); gap: var(--space-3); font-size: var(--text-h3); font-weight: var(--weight-semibold); }
 .site-title img { height: 2rem; }
-/* Starlight uses .header for both the outer bar and its inner layout row. */
 header.header { padding-block: 0; border-bottom: var(--border-width) solid var(--border); }
 .volna-header { display: flex; align-items: center; gap: var(--space-2); height: 100%; }
 .volna-header > .header { flex: 1; min-width: 0; }
@@ -53,7 +53,6 @@ header.header { padding-block: 0; border-bottom: var(--border-width) solid var(-
 .volna-site-links a:hover, .volna-site-links a[aria-current='page'] { color: var(--accent-text); background: var(--accent-soft); }
 @media (max-width: 50rem) { .volna-site-links { gap: 0; padding-inline: 0; } .volna-site-links a { font-size: var(--text-xs); padding: var(--space-1); } }
 volna-panel-controls { display: none; flex: none; gap: var(--space-1); }
-/* Desktop preferences must not hide Starlight's mobile popover or sticky contents menu. */
 @media (min-width: 50rem) {
   .volna-header > .header { display: flex; }
   volna-panel-controls:not([hidden]) { display: flex; }
@@ -85,7 +84,6 @@ volna-panel-controls { display: none; flex: none; gap: var(--space-1); }
 .pagination-links a:hover { background: var(--surface-card-hover); }
 :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .hero { padding-block: var(--space-8) var(--space-6); gap: var(--space-6); }
-/* Text-only heroes use the full content column instead of reserving an image column. */
 .hero:not(:has(> img, > .hero-html)) { grid-template-columns: minmax(0, 1fr); }
 .hero h1 { max-width: none; font-size: var(--text-display); font-weight: var(--weight-semibold); letter-spacing: var(--heading-tracking); line-height: var(--leading-heading); }
 .hero .tagline { max-width: 58ch; font-size: var(--text-md); line-height: var(--leading-normal); color: var(--text-2); }
@@ -98,7 +96,6 @@ volna-panel-controls { display: none; flex: none; gap: var(--space-1); }
 :root:has(.v-viewer-frame) .sl-markdown-content { max-width: none; }
 :root:has(.v-viewer-frame) .sl-markdown-content > p { max-width: 74ch; }
 
-/* Imported Mermaid SVGs use semantic tokens so manual theme changes also update diagrams. */
 .sl-markdown-content svg[id^='mermaid'] { display: block; width: 100%; height: auto; min-width: 480px; padding: var(--space-6); background: var(--surface-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); }
 .sl-markdown-content svg[id^='mermaid'] .node :is(rect,polygon,path) { fill: var(--accent-soft) !important; stroke: var(--accent) !important; }
 .sl-markdown-content svg[id^='mermaid'] :is(text,.nodeLabel,.edgeLabel) { color: var(--text-1) !important; fill: var(--text-1) !important; font-family: var(--font-sans) !important; }

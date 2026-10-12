@@ -1,4 +1,5 @@
 //! Progress, cancellation and concurrent publication of activity sidecars.
+
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use vtr::activity::{

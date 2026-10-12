@@ -1,11 +1,4 @@
 //! Headless tests of undo and redo (`volna/README.md`, "Undo and redo").
-//!
-//! The model-based test drives seeded random commands, gestures, navigation,
-//! undo and redo over the landing trace (signals, groups, lanes, clocks,
-//! pipelines, tables and transaction panels) and checks the journal against
-//! the undoable projection of the workspace: the capture with its
-//! navigation fields cleared. Focused tests cover grouping, gestures,
-//! memory, loads, labels, context and clearing.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,11 +61,6 @@ fn opened(session: Arc<dyn Session>) -> App {
     app
 }
 
-/// What undo must restore exactly: the workspace capture without
-/// navigation (focus, active tabs, sash sizes, viewports, cursors,
-/// scrolling, column widths, selection, folds, the selected clock,
-/// pipeline row zoom, transaction sections and unpinned records) or chrome
-/// (the sidebar).
 fn projection(app: &App) -> Value {
     let bytes = Workspace::capture(app, volna_core::testing::paths("trace.vtr"), None)
         .unwrap()
@@ -143,7 +131,6 @@ fn strip_folds(rows: &mut Value) {
     }
 }
 
-/// A small deterministic generator (xorshift64*).
 struct Rng(u64);
 
 impl Rng {
@@ -163,8 +150,6 @@ impl Rng {
     }
 }
 
-/// Where the model-based test stands: the projection at every undo depth
-/// (counted from the start of the history, evicted steps included).
 struct Oracle {
     states: Vec<Value>,
     revision: u64,
@@ -185,7 +170,6 @@ impl Oracle {
         app.history.evicted() as usize + app.history.undo_steps().count()
     }
 
-    /// Check the state after an input of `kind`.
     fn check(&mut self, app: &App, kind: Kind, what: &str) {
         let p = projection(app);
         let depth = Self::depth(app);
@@ -239,7 +223,6 @@ enum Kind {
     Redo,
 }
 
-/// The fixture's catalogue, for choosing arguments.
 struct Catalog {
     vars: usize,
     scopes: usize,
@@ -282,7 +265,6 @@ impl Driver {
     }
 
     fn send(&mut self, command: Command) {
-        // Mostly slow input; now and then quick repeats that may merge.
         let ms = if self.rng.chance(3) { 200 } else { 1500 };
         self.now += Duration::from_millis(ms);
         self.app.handle_at(command, self.now);
@@ -300,7 +282,6 @@ impl Driver {
         self.send(Command::Pointer(id, event));
     }
 
-    /// Select some visible rows of the focused wave panel (navigation).
     fn select_rows(&mut self) -> bool {
         let id = self.focused();
         let n = self.rng.below(3) + 1;
@@ -320,7 +301,6 @@ impl Driver {
         true
     }
 
-    /// Where the name of visible row `pos` is, as of the last layout.
     fn name_point(&self, pos: usize, frac: f32) -> Option<Point> {
         let w = self.app.panels.waves(self.focused())?;
         let l = w.last_layout();
@@ -332,8 +312,6 @@ impl Driver {
             .then(|| point(l.names.left() + 60.0, y + l.row_h * frac))
     }
 
-    /// Press a row's name, drag it to another row, then release or press
-    /// Esc. One gesture, so one step at most.
     fn drag_rows(&mut self, cancel: bool) -> bool {
         let visible = self
             .app
@@ -364,8 +342,6 @@ impl Driver {
         true
     }
 
-    /// Drag a marker chip some way along its lane, or only click it, then
-    /// release or cancel with Esc: one step, or none.
     fn drag_marker(&mut self, cancel: bool) -> bool {
         let Some(lane) = self
             .app
@@ -400,8 +376,6 @@ impl Driver {
         true
     }
 
-    /// Drag a row's bottom edge down a few rows and back or not, then
-    /// release or cancel with Esc.
     fn drag_height(&mut self, cancel: bool) -> bool {
         let Some(w) = self.app.panels.waves(self.focused()) else {
             return false;
@@ -427,7 +401,6 @@ impl Driver {
             position: point(x, bottom + grow * row_h),
         });
         if self.rng.chance(3) {
-            // Back where it started: no step.
             self.pointer(PointerEvent::Move {
                 position: point(x, bottom - 1.0),
             });
@@ -439,8 +412,6 @@ impl Driver {
         true
     }
 
-    /// A second run of the design as trace B: it joins, closes (with its
-    /// rows and panels), is renamed, and has rows and pipelines of its own.
     fn trace_input(&mut self) -> (Kind, String) {
         let b = TraceId::new(1).unwrap();
         if self.app.doc.traces().get(b).is_none() {
@@ -454,7 +425,6 @@ impl Driver {
         }
         let command = match self.rng.below(8) {
             0 => Command::RemoveTrace(b),
-            // Refused while B is open: A holds the workspace.
             1 => Command::RemoveTrace(TraceId::A),
             2 => Command::RenameTrace(
                 b,
@@ -485,7 +455,6 @@ impl Driver {
         (Kind::Edit, self.run(command))
     }
 
-    /// One random input; returns its kind and a description.
     fn input(&mut self) -> (Kind, String) {
         if self.rng.chance(12) {
             return self.trace_input();
@@ -530,7 +499,6 @@ impl Driver {
             46 => match self.rng.below(3) {
                 0 => action(Action::ToggleAnalog),
                 1 => action(Action::ToggleStack),
-                // The peak band's check in the group menu.
                 _ => {
                     use volna_core::wave::model::MenuAction;
                     self.send(Command::OpenSignalMenu(id));
@@ -559,7 +527,6 @@ impl Driver {
                         .rng
                         .chance(2)
                         .then(|| format!("g{}", self.rng.below(9)));
-                    // Naming later still joins the group's step.
                     self.now += Duration::from_secs(5);
                     return (
                         Kind::Edit,
@@ -575,7 +542,6 @@ impl Driver {
             53 => (Kind::Look, Command::Action(Action::FoldGroupDeep)),
             54 => (Kind::Look, Command::Action(Action::UnfoldGroupDeep)),
             55..=56 => {
-                // Half the time on a marker, where M opens its name field.
                 let on_marker = self.rng.below(self.app.doc.markers().len() * 2);
                 let t = match self.app.doc.markers().get(on_marker) {
                     Some(m) => m.time,
@@ -618,7 +584,6 @@ impl Driver {
             61 => action(Action::SplitRight),
             62 => action(Action::SplitDown),
             63 => action(Action::NewPanel),
-            // Closing a lone start panel closes the trace; not here.
             64..=65 if !self.app.panels.focused().kind.is_start() => action(Action::ClosePanel),
             66 => (Kind::Edit, Command::Panels(PanelsCommand::CloseOthers(id))),
             67..=68 => (Kind::Look, Command::Action(Action::FocusNextPanel)),
@@ -710,7 +675,6 @@ impl Driver {
                 };
                 (Kind::Look, Command::Action(walk))
             }
-            // The reference is navigation state: never a step.
             98 => {
                 let measure = match self.rng.below(3) {
                     0 => Action::SetReference,
@@ -730,8 +694,6 @@ impl Driver {
         text
     }
 
-    /// Select a record of a resident generator (the first by identity, so a
-    /// seed replays the same inputs) and show it in a transaction panel.
     fn show_record(&mut self) -> String {
         let Some(generator) = self
             .app
@@ -757,7 +719,6 @@ impl Driver {
         self.run(Command::ShowTransaction { from: id })
     }
 
-    /// Reverse the tabs of the focused panel's group, as the dock would.
     fn rearrange(&mut self) -> String {
         let mut layout = self.app.panels.layout().clone();
         fn reverse(layout: &mut Layout) -> bool {
@@ -781,7 +742,6 @@ impl Driver {
     }
 }
 
-/// Runs `steps` random inputs; returns the labels of the steps they made.
 fn model_based(
     seed: u64,
     steps: usize,
@@ -799,7 +759,6 @@ fn model_based(
         oracle.check(&d.app, kind, &what);
         labels.extend(d.app.undo_label().map(str::to_owned));
     }
-    // Everything undoes back to the oldest kept step, and redoes again.
     while d.app.can_undo() {
         d.send(Command::Undo);
         oracle.check(&d.app, Kind::Undo, &format!("seed {seed}: unwinding"));
@@ -811,7 +770,6 @@ fn model_based(
     labels
 }
 
-/// `VOLNA_UNDO_SEEDS=n` runs `n` more seeds for exploration.
 #[test]
 fn every_panel_kind_adopts_and_retires_through_restore_split_close_and_undo() {
     let mut d = Driver::new(17);
@@ -857,7 +815,6 @@ fn every_panel_kind_adopts_and_retires_through_restore_split_close_and_undo() {
         TransactionCommand::Pin(true),
     ));
 
-    // A prepared view is a description, not a second live set of owners.
     let budget = d
         .app
         .doc
@@ -946,7 +903,6 @@ fn random_commands_undo_and_redo_to_every_earlier_cockpit() {
     for seed in [1, 7, 42, 1234, 99991].into_iter().chain(100..100 + more) {
         labels.extend(model_based(seed, 400, None));
     }
-    // The second trace joined, was renamed and closed with what showed it.
     for step in ["Add trace B", "Rename trace B", "Close trace B"] {
         assert!(labels.contains(step), "no {step:?} step in {labels:?}");
     }
@@ -978,9 +934,6 @@ fn a_small_cap_evicts_the_oldest_steps_and_keeps_the_newest() {
     assert!(d.app.history.evicted() >= 1);
 }
 
-// -- focused behaviour --------------------------------------------------------
-
-/// The landing trace with four signals in one wave panel.
 fn four_rows() -> (App, PanelId, Instant) {
     let mut app = opened(landing());
     let now = Instant::now();
@@ -1007,7 +960,6 @@ fn names(app: &App, id: PanelId) -> Vec<String> {
         .collect()
 }
 
-/// What undo and redo announced since the last call.
 fn notices(app: &mut App) -> Vec<String> {
     app.take_events()
         .into_iter()
@@ -1043,7 +995,6 @@ fn repeated_format_presses_merge_within_the_window_only() {
     app.handle(Command::Undo);
     app.handle(Command::Undo);
     assert_eq!(format(&app), original);
-    // Another selection is another target: no merge.
     app.handle_at(Command::Action(Action::CycleFormat), t);
     select(&mut app, id, &[2]);
     app.handle_at(
@@ -1060,7 +1011,6 @@ fn a_new_group_and_its_name_are_one_step() {
     let steps = app.history.undo_steps().count();
     app.handle_at(Command::Action(Action::GroupSelection), now);
     assert_eq!(app.undo_label(), Some("Group 2 rows"));
-    // Typing the name takes a while; it still joins the group's step.
     app.handle_at(
         Command::CommitText(app.text_edit().unwrap().target, Some("bus".into())),
         now + Duration::from_secs(30),
@@ -1114,7 +1064,6 @@ fn a_drag_is_one_step_esc_leaves_none_and_back_to_start_leaves_none() {
     let before = steps(&app);
     let original = names(&app, id);
 
-    // Move row 0 below row 2: one step on release.
     let (a, b) = (at(&app, 0, 0.5), at(&app, 2, 0.8));
     press(&mut app, a);
     to(&mut app, point(a.x, a.y + 6.0));
@@ -1131,7 +1080,6 @@ fn a_drag_is_one_step_esc_leaves_none_and_back_to_start_leaves_none() {
     assert_eq!(names(&app, id), original);
     frame(&mut app, id);
 
-    // Resize a row and cancel with Esc: the height comes back, no step.
     let heights = |app: &App| -> Vec<u8> {
         app.panels
             .waves(id)
@@ -1158,7 +1106,6 @@ fn a_drag_is_one_step_esc_leaves_none_and_back_to_start_leaves_none() {
         "a cancelled gesture keeps redo"
     );
 
-    // ⌘Z during a drag rolls it back too, and does not undo more.
     let e = edge(&app, 1);
     press(&mut app, e);
     to(&mut app, point(e.x, e.y + 60.0));
@@ -1168,7 +1115,6 @@ fn a_drag_is_one_step_esc_leaves_none_and_back_to_start_leaves_none() {
     app.handle_at(Command::Pointer(id, PointerEvent::Up), now);
     frame(&mut app, id);
 
-    // Out and back: no step.
     let e = edge(&app, 1);
     press(&mut app, e);
     to(&mut app, point(e.x, e.y + 60.0));
@@ -1185,7 +1131,6 @@ fn undo_restores_the_selection_focus_and_announces_the_label() {
     select(&mut app, id, &[1, 2]);
     app.handle(Command::Action(Action::RemoveSelected));
     assert_eq!(app.undo_label(), Some("Remove 2 rows"));
-    // Focus moves away; undo brings it back with the rows selected.
     app.handle(Command::Action(Action::SplitRight));
     let split = app.panels.focused_id();
     assert_ne!(split, id);
@@ -1213,10 +1158,8 @@ fn undo_restores_the_selection_focus_and_announces_the_label() {
         split,
         "redoing the split focuses it"
     );
-    // Nothing left.
     app.handle(Command::Redo);
     assert_eq!(notices(&mut app), ["Nothing to redo"]);
-    // The next edit clears the status line.
     app.handle(Command::AddVars(a_all(vec![5])));
     assert_eq!(app.status().announcement, None);
 }
@@ -1224,7 +1167,6 @@ fn undo_restores_the_selection_focus_and_announces_the_label() {
 #[test]
 fn navigation_never_makes_a_step_and_undo_keeps_the_time_axis() {
     let (mut app, id, _) = four_rows();
-    // A marker to walk to, away from the cursor.
     app.doc.shared.cursor = Some(5);
     app.handle(Command::Action(Action::AddOrRenameMarker));
     app.doc.shared.cursor = Some(0);
@@ -1249,7 +1191,6 @@ fn navigation_never_makes_a_step_and_undo_keeps_the_time_axis() {
     app.handle(Command::ToggleSidebar);
     app.handle(Command::SetFilter("clk".into()));
     assert_eq!(app.history.revision(), revision);
-    // Undo after zooming: rows change, the viewport does not.
     let vp = app.panels.waves(id).unwrap().viewport(&app.doc);
     app.handle(Command::Undo);
     assert_eq!(app.panels.waves(id).unwrap().items().len(), 4);
@@ -1268,7 +1209,6 @@ fn removed_rows_come_back_sharing_resident_histories() {
             .unwrap()
     };
     let kept = history_of(&app, 0);
-    // A second panel keeps row 0's history resident.
     app.handle(Command::Action(Action::SplitDown));
     app.handle(Command::Panels(PanelsCommand::Focus(id)));
     select(&mut app, id, &[0]);
@@ -1283,7 +1223,6 @@ fn removed_rows_come_back_sharing_resident_histories() {
         "no load for a resident signal"
     );
 
-    // With no copy left, undo queues one load and shows loading.
     app.handle(Command::Undo);
     assert_eq!(app.panels.len(), 1);
     select(&mut app, id, &[3]);
@@ -1310,7 +1249,6 @@ fn an_add_undone_before_its_load_ignores_the_late_delivery() {
         app.deliver(request.perform());
     }
     assert!(app.panels.get(id).is_none(), "the start panel came back");
-    // Redo during pending loads re-adds the rows, which load.
     app.handle(Command::Redo);
     pump(&mut app);
     let w = app.panels.waves(id).unwrap();
@@ -1370,7 +1308,6 @@ fn a_closed_panel_comes_back_with_its_rows_and_title() {
     assert_eq!(names(&app, right), rows);
     assert_eq!(app.panels.get(right).unwrap().title(), "bus");
     assert_eq!(app.panels.waves(right).unwrap().loaded_count(), 4);
-    // Closing the last content panel leaves a start panel; undo reverses it.
     app.handle(Command::Panels(PanelsCommand::CloseOthers(right)));
     app.handle(Command::Action(Action::ClosePanel));
     assert!(app.panels.focused().kind.is_start());
@@ -1400,7 +1337,6 @@ fn markers_rulers_titles_columns_and_pins_round_trip() {
         app.handle(Command::Action(Action::AddOrRenameMarker));
     }
     assert_eq!(app.undo_label(), Some("Add marker 3"));
-    // ⇧M removes the marker at the cursor; its number is free again.
     set_cursor(&mut app, 200);
     app.handle(Command::Action(Action::RemoveMarkerAtCursor));
     assert_eq!(app.undo_label(), Some("Remove marker 2"));
@@ -1422,7 +1358,6 @@ fn markers_rulers_titles_columns_and_pins_round_trip() {
     assert_eq!(app.undo_label(), Some("Remove all markers"));
     app.handle(Command::Undo);
     assert_eq!(app.doc.markers().len(), 3);
-    // M on a marker opens its name field; the name is one step.
     set_cursor(&mut app, 300);
     app.handle(Command::Action(Action::AddOrRenameMarker));
     assert_eq!(app.doc.markers().len(), 3, "M on a marker adds none");
@@ -1449,7 +1384,6 @@ fn markers_rulers_titles_columns_and_pins_round_trip() {
     app.handle(Command::Redo);
     assert_eq!(app.panels.waves(id).unwrap().nav.clocks().rulers, shown);
 
-    // A table's columns.
     app.handle(Command::OpenTable {
         selected: a_all(vec![generator]),
         clicked: None,
@@ -1477,7 +1411,6 @@ fn markers_rulers_titles_columns_and_pins_round_trip() {
     app.handle(Command::Undo);
     assert_eq!(columns(&app), before);
 
-    // A transaction panel pinned on a record comes back pinned on it.
     pump(&mut app);
     let track = app
         .doc
@@ -1537,7 +1470,6 @@ fn the_history_is_cleared_with_the_trace_and_never_saved() {
         .unwrap();
     assert_eq!(with, without, "the workspace file holds no history");
 
-    // Restoring a workspace replaces what the steps name.
     let plan = Workspace::parse(&with)
         .unwrap()
         .prepare(&app, TRACE, LOCATION)
@@ -1617,7 +1549,6 @@ fn stacking_and_the_peak_band_are_steps_that_restore_the_workspace() {
     app.handle(Command::Redo);
     app.handle(Command::Redo);
     assert_eq!(projection(&app), hidden);
-    // Folding the stacked group is navigation, not a step.
     app.handle(Command::Action(Action::PanLeft));
     assert_eq!(app.undo_label(), Some("Hide peak of total"));
 }
@@ -1690,10 +1621,8 @@ fn a_trace_arriving_during_a_drag_is_a_step_of_its_own() {
     );
     frame(&mut app, id);
     assert_ne!(heights(&app), flat, "the drag resizes live");
-    // Trace B finishes opening mid-drag.
     app.add_session(landing()).unwrap();
     assert_eq!(app.doc.traces().loaded().count(), 2);
-    // Esc rolls back the drag only.
     app.handle_at(Command::Action(Action::ClearSelection), now);
     app.handle_at(Command::Pointer(id, PointerEvent::Up), now);
     assert_eq!(heights(&app), flat);

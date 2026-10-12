@@ -1,7 +1,5 @@
-//! Activity index: the sidecar round-trips
-//! through the loader and agrees with every change of every signal, rebuilds
-//! byte for byte at any thread count, follows the threshold rule, and is
-//! rejected for any other trace.
+//! Activity index tests for exact classification, deterministic builds, and trace
+//! validation.
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::path::{Path, PathBuf};
@@ -14,10 +12,6 @@ fn tmpdir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
-/// A trace of mixed kinds and rhythms over many small blocks: clocks,
-/// bursts with long sleeps, rare events, constants, copies that the writer
-/// stores as dynamic aliases, repeated values in one time step and changes
-/// at the first time step.
 fn random_trace(path: &Path, seed: u64, steps: usize, block_records: usize) {
     let mut rng = StdRng::seed_from_u64(seed);
     let opts = WriterOptions {
@@ -53,7 +47,6 @@ fn random_trace(path: &Path, seed: u64, steps: usize, block_records: usize) {
         SignalKind::VarLen,
     ];
     let n = rng.gen_range(20..90);
-    // (signal, kind, per-step change probability while awake, copy of)
     let mut sigs = Vec::new();
     for i in 0..n {
         let kind = kinds[rng.gen_range(0..kinds.len())];
@@ -100,7 +93,6 @@ fn random_trace(path: &Path, seed: u64, steps: usize, block_records: usize) {
             vals[i] = v;
             emit(&mut w, s, kind, v);
             if rng.gen_ratio(1, 40) {
-                // A glitch: two values in one time step are one change.
                 emit(&mut w, s, kind, v + 7);
                 emit(&mut w, s, kind, v);
             }
@@ -128,7 +120,6 @@ fn emit(w: &mut Writer, s: SignalId, kind: SignalKind, v: u64) {
     }
 }
 
-/// Every change of every signal after the first time step, one per time step.
 fn changes(r: &Reader) -> (u64, Vec<Vec<u64>>) {
     let t_min = if r.block_count() > 0 {
         r.block_range(0).0
@@ -159,17 +150,12 @@ fn index_of(r: &Reader, opts: &BuildOptions) -> (Vec<u8>, activity::Summary, Ind
     (image, summary, index)
 }
 
-/// The cells the interior `[x, y]` of a silence touches, by block ends.
 fn cells(index: &Index, x: u64, y: u64) -> std::ops::RangeInclusive<usize> {
     let ends: Vec<u64> = index.blocks().iter().map(|b| b.end).collect();
     let cell = |t: u64| ends.partition_point(|&e| e < t).min(ends.len() - 1);
     cell(x)..=cell(y)
 }
 
-/// Checks the stretch lists against the changes: stretches start and end at
-/// changes, the silences between them are real, gaps are exact, and every
-/// silence inside a stretch is at most the smallest Δ of the cells its
-/// interior touches, which is what makes wide windows exact.
 fn check_against_changes(index: &Index, t_min: u64, ch: &[Vec<u64>]) {
     assert_eq!(index.t_min(), t_min);
     assert_eq!(index.signal_count() as usize, ch.len());
@@ -214,7 +200,6 @@ fn check_against_changes(index: &Index, t_min: u64, ch: &[Vec<u64>]) {
     }
 }
 
-/// Dynamic aliases stored in the file's blocks.
 fn alias_count(path: &Path, r: &Reader) -> usize {
     let bytes = std::fs::read(path).unwrap();
     let c = vtr::container::Container::parse(&bytes).unwrap();
@@ -280,7 +265,6 @@ fn round_trip_matches_every_change() {
             );
             assert_eq!(summary.blocks as usize, r.block_count());
             assert_eq!(index.budget(), budget);
-            // Δ is a power of two within a quarter of its cell.
             for (k, b) in index.blocks().iter().enumerate() {
                 let span = if k == 0 {
                     b.end - b.start + 1
@@ -302,8 +286,6 @@ fn round_trip_matches_every_change() {
     );
 }
 
-/// Windows of log-uniform width: placed uniformly, starting or ending
-/// exactly on a change, or starting or ending on a block's boundary.
 fn windows(rng: &mut StdRng, r: &Reader, ch: &[Vec<u64>], n: usize) -> Vec<(u64, u64)> {
     let (lo, hi) = r.time_range().unwrap();
     let span = hi - lo + 1;
@@ -359,10 +341,6 @@ fn truth(ch: &[Vec<u64>], t0: u64, t1: u64) -> Vec<SignalId> {
         .collect()
 }
 
-/// `classify` is never wrong and decides every window at least `exact_width`
-/// wide; an undecided window touches at most two blocks; `resolve` of the
-/// undecided signals completes the exact answer, and `resolve` of every
-/// signal is the exact answer on its own.
 #[test]
 fn classify_and_resolve_match_every_change() {
     let dir = tmpdir();
@@ -468,8 +446,6 @@ fn rebuild_is_byte_identical_at_any_thread_count() {
     assert!(images.windows(2).all(|w| w[0] == w[1]));
 }
 
-/// Builds from synthetic scans: one signal whose silences in a block are
-/// 2, 4, 8, … 2^12 time units long, and blocks of very different sizes.
 #[test]
 fn threshold_follows_each_blocks_budget() {
     let id = Identity {
@@ -484,7 +460,6 @@ fn threshold_follows_each_blocks_budget() {
     let mut image = Vec::new();
     let mut b = Builder::new(&mut image, id, 1, 0, budget).unwrap();
     let mut starts = Vec::new();
-    // Byte sizes allow 12, 5, 0 and 100 stretches in memory (20 bytes each at 4%).
     for bytes in [6_000u64, 2_500, 1, 50_000] {
         let start = b.prev_end().map_or(1, |e| e + 1);
         let mut times = vec![start];
@@ -502,9 +477,6 @@ fn threshold_follows_each_blocks_budget() {
     b.finish().unwrap();
     let index = Index::decode(&image, &id).unwrap();
     let deltas: Vec<u64> = index.blocks().iter().map(|b| b.delta).collect();
-    // 12 silences fit (Δ 1 keeps all); 5 fit from Δ 2^7 (lengths 2^8..2^12,
-    // counted with the silence into the block); none fit: Δ reaches its
-    // quarter-span cap; 100 fit.
     let cap = |k: usize| {
         let span = index.blocks()[k].end - index.blocks()[k - 1].end;
         1u64 << (63 - (span / 4).leading_zeros())
@@ -513,7 +485,6 @@ fn threshold_follows_each_blocks_budget() {
     assert_eq!(deltas[1], 1 << 8);
     assert_eq!(deltas[2], cap(2));
     assert_eq!(deltas[3], 1);
-    // The zero-length disk budget pushes every block to its cap.
     let mut image = Vec::new();
     let tight = Budget {
         disk: 0.0,
@@ -603,7 +574,6 @@ fn sidecar_is_bound_to_its_trace() {
     let image = std::fs::read(&written).unwrap();
     drop(r);
 
-    // Replaced by a re-simulated trace: another identity, the old index is ignored.
     random_trace(&path, 6, 800, 200);
     let r2 = Reader::open(&path).unwrap();
     let id2 = Identity::of(&r2).unwrap();
@@ -615,7 +585,6 @@ fn sidecar_is_bound_to_its_trace() {
     assert!(Sidecar::new(&path, &id2, None).load(&id2).is_none());
     drop(r2);
 
-    // Truncated, or recovered without its trailer: no identity at all.
     let bytes = std::fs::read(&path).unwrap();
     let cut = dir.path().join("cut.vtr");
     std::fs::write(&cut, &bytes[..bytes.len() - 100]).unwrap();
@@ -624,7 +593,6 @@ fn sidecar_is_bound_to_its_trace() {
     assert!(matches!(Identity::of(&r3), Err(Error::Invalid(_))));
     assert!(activity::build(&r3, Vec::new(), &BuildOptions::default()).is_err());
 
-    // A damaged or foreign-version index fails clearly.
     assert!(Index::decode(&image[..image.len() - 1], &id).is_err());
     let mut flipped = image.clone();
     flipped[200] ^= 0x40;
@@ -660,7 +628,6 @@ fn read_only_directory_falls_back_to_the_cache() {
     assert_eq!(Some(&written), sidecar.cached.as_ref());
     assert!(written.starts_with(&cache));
     assert!(!sidecar.beside.exists());
-    // A copy of the trace elsewhere finds the same cached index.
     let copy = dir.path().join("copy.vtr");
     std::fs::copy(&path, &copy).unwrap();
     let found = Sidecar::new(&copy, &id, Some(&cache)).load(&id).unwrap();
@@ -791,8 +758,6 @@ fn malformed_sidecar_directory_lengths_fail_without_allocation_or_overflow() {
         bad[count..count + 8].copy_from_slice(&invalid.to_le_bytes());
         assert!(Index::decode(&bad, &identity).is_err());
     }
-    // The first directory entry's payload length must not wrap around the
-    // section header, on native readers or the 32-bit WASM client.
     let mut bad = bytes.clone();
     bad[count + 24..count + 32].copy_from_slice(&u64::MAX.to_le_bytes());
     assert!(Index::decode(&bad, &identity).is_err());

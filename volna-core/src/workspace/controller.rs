@@ -1,5 +1,5 @@
-//! Workspace lifecycle over the core's command/event loop. Hosts only read,
-//! write and choose locations; interpretation and save ordering stay here.
+//! Workspace lifecycle over the core's command/event loop.
+
 use super::{
     RestorePlan, Workspace,
     persistence::{self, Candidate, Persistence, SaveTicket, Scheduler, Target},
@@ -14,26 +14,20 @@ pub struct State {
     pub scheduler: Scheduler,
     pub state: super::state::State,
     pub recent: super::recent::View,
-    /// Trace A's durable identity: it owns the workspace.
     pub trace_uri: Option<String>,
     pub notices: Vec<String>,
     pub(crate) loading: bool,
     opening_uri: Option<String>,
     pending: Option<Transition>,
-    /// A workspace waiting for the other traces it names to open.
     waiting: Option<Waiting>,
 }
 
-/// A workspace to restore once the traces it names are open.
 struct Waiting {
     workspace: Box<Workspace>,
-    /// Where it was read from: its trace paths are relative to this.
     origin: Target,
-    /// Where it saves to from now on.
     target: Target,
     supersedes: Option<String>,
     notices: Vec<String>,
-    /// Chosen with Open Workspace, rather than found beside trace A.
     explicit: bool,
     traces: std::collections::BTreeSet<TraceId>,
 }
@@ -44,7 +38,6 @@ enum Transition {
         uri: Option<String>,
     },
     Close,
-    /// Open Workspace, once the open workspace is flushed.
     OpenWorkspace(Box<Waiting>),
     Restore {
         plan: Box<RestorePlan>,
@@ -54,8 +47,6 @@ enum Transition {
     Quit,
 }
 
-/// How the core opens a trace a workspace names: a local file by its path.
-/// Other locations are the host's to open.
 fn spec_for(uri: &str) -> Result<OpenSpec> {
     #[cfg(not(target_family = "wasm"))]
     if let Ok(url) = url::Url::parse(uri)
@@ -67,7 +58,6 @@ fn spec_for(uri: &str) -> Result<OpenSpec> {
     anyhow::bail!("{uri} is not a local file")
 }
 
-/// The URI of every trace but A that `waiting` names, by letter.
 fn resolve_traces(waiting: &Waiting) -> Result<Vec<(TraceId, String)>> {
     let location = waiting.origin.location();
     waiting
@@ -84,7 +74,6 @@ impl App {
         self.workspace.scheduler.policy = policy;
     }
 
-    /// Native and web hosts supply a canonical, durable resource identity.
     pub fn open_resource(&mut self, spec: OpenSpec, trace_uri: String) {
         self.transition(Transition::Open {
             spec,
@@ -115,7 +104,6 @@ impl App {
     }
 
     fn transition(&mut self, transition: Transition) {
-        // Quit is final: nothing queued after it replaces it.
         if matches!(self.workspace.pending, Some(Transition::Quit)) {
             return self.advance_transition();
         }
@@ -160,8 +148,6 @@ impl App {
                 }
             }
             Transition::OpenWorkspace(waiting) => {
-                // Detach from the flushed workspace first: the traces the
-                // new one opens and closes must never save into the old.
                 if !self.begin_unsaved() {
                     return;
                 }
@@ -188,7 +174,6 @@ impl App {
         }
     }
 
-    /// Detach the scheduler from its target; false when it refused.
     fn begin_unsaved(&mut self) -> bool {
         match self.workspace.scheduler.begin(None, None) {
             Ok(()) => true,
@@ -226,8 +211,6 @@ impl App {
         }
     }
 
-    /// Automatic candidates are read together, including read failures. A
-    /// malformed candidate suspends autosave so it cannot be overwritten.
     pub fn restore_candidates(&mut self, trace_uri: &str, sidecar: Candidate, fallback: Candidate) {
         if !self.workspace.loading || self.workspace.trace_uri.as_deref() != Some(trace_uri) {
             return;
@@ -279,8 +262,6 @@ impl App {
         self.changed();
     }
 
-    /// An automatic restore failed: keep the destination for an explicit
-    /// Save, and pause autosave so the file is not overwritten.
     fn restore_failed(&mut self, target: Target, error: anyhow::Error) {
         self.workspace.loading = false;
         let _ = self.workspace.scheduler.begin(Some(target), None);
@@ -289,13 +270,7 @@ impl App {
         self.notice(text);
     }
 
-    /// Restore `waiting` once every trace it names is open. A workspace
-    /// chosen with Open Workspace makes the trace set its own: it opens the
-    /// traces it names and closes the others. One restored beside trace A
-    /// only opens what it names under free letters: traces the user opened
-    /// with A (`volna A B`) stay, and its rows resolve against them.
     fn restore_when_open(&mut self, mut waiting: Waiting) -> Result<()> {
-        // Resolve every path before changing any trace.
         let traces = resolve_traces(&waiting)?;
         let named: std::collections::BTreeSet<TraceId> =
             waiting.workspace.traces.iter().map(|t| t.letter).collect();
@@ -303,8 +278,6 @@ impl App {
             let slot = self.doc.traces().get(letter);
             if let Some(slot) = slot {
                 if slot.uri.as_deref() == Some(uri.as_str()) || !waiting.explicit {
-                    // Automatic restores use an existing slot even when its
-                    // URI differs. Resolve rows only after its hierarchy arrives.
                     if matches!(slot.state(), crate::trace::SlotState::Loading) {
                         waiting.traces.insert(letter);
                     }
@@ -331,7 +304,6 @@ impl App {
         for trace in extra {
             self.drop_trace(trace);
         }
-        // Autosave waits with the restore; an automatic one already waits.
         if !waiting.traces.is_empty() {
             self.workspace.loading = true;
         }
@@ -340,8 +312,6 @@ impl App {
         self.restore_if_ready()
     }
 
-    /// Take a trace out without journaling it: a workspace about to be
-    /// restored replaces the whole session, history included.
     fn drop_trace(&mut self, trace: TraceId) {
         self.forget_trace(trace);
     }
@@ -365,7 +335,6 @@ impl App {
             .workspace
             .prepare(self, &uri, waiting.origin.location())?;
         if waiting.explicit {
-            // The open workspace is flushed before the restore replaces it.
             self.workspace.loading = false;
             self.notice_all(waiting.notices);
             self.transition(Transition::Restore {
@@ -385,13 +354,10 @@ impl App {
         Ok(())
     }
 
-    /// A trace a waiting workspace named finished opening.
     pub(crate) fn workspace_trace_joined(&mut self, trace: TraceId) {
         self.workspace_trace_settled(trace, None);
     }
 
-    /// A trace a waiting workspace named failed to open; its rows restore
-    /// unresolved.
     pub(crate) fn workspace_trace_failed(&mut self, trace: TraceId, error: String) {
         self.workspace_trace_settled(trace, Some(error));
     }
@@ -415,7 +381,6 @@ impl App {
         self.changed();
     }
 
-    /// Prepare first, then flush the previous workspace before the atomic commit.
     pub fn open_workspace(&mut self, target: Target, bytes: &[u8]) -> Result<()> {
         ensure!(
             self.workspace.scheduler.enabled(),
@@ -427,8 +392,6 @@ impl App {
             .as_deref()
             .context("open the referenced trace first")?;
         let workspace = Workspace::parse(bytes)?;
-        // Validate before flushing or changing traces. Resolve again after
-        // the requested recordings open, rather than reusing their old identities.
         workspace.prepare(self, trace_uri, target.location())?;
         let waiting = Waiting {
             workspace: Box::new(workspace),
@@ -439,7 +402,6 @@ impl App {
             explicit: true,
             traces: Default::default(),
         };
-        // The open workspace is flushed before any of its traces change.
         self.transition(Transition::OpenWorkspace(Box::new(waiting)));
         Ok(())
     }
@@ -494,9 +456,7 @@ impl App {
             return;
         }
         if let Some(error) = error {
-            // A failed flush cancels the transition and keeps all live state.
             self.workspace.pending = None;
-            // A retry failing the same way is not news.
             let text = format!("Workspace not saved: {error}");
             if !self.workspace.notices.contains(&text) {
                 self.workspace

@@ -1,5 +1,4 @@
-//! Toolkit-neutral docking tree. External proposals are validated before
-//! normalization; malformed trees are never silently repaired on restore.
+//! Toolkit-neutral docking tree.
 
 use std::collections::BTreeSet;
 
@@ -18,7 +17,6 @@ pub enum Axis {
     Vertical,
 }
 
-/// Tab selection uses stable identity, including in the serialized form.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Layout {
@@ -41,7 +39,6 @@ impl Layout {
         }
     }
 
-    /// Layout order, including inactive tabs, for keyboard cycling.
     pub fn panels(&self) -> Vec<PanelId> {
         let mut ids = Vec::new();
         self.collect(false, &mut ids);
@@ -121,8 +118,6 @@ impl Layout {
         Ok(())
     }
 
-    /// Whether two trees hold the same panels in the same groups and
-    /// splits, whatever their sash sizes and active tabs (navigation).
     pub fn same_shape(&self, other: &Layout) -> bool {
         match (self, other) {
             (Self::Tabs { tabs: a, .. }, Self::Tabs { tabs: b, .. }) => a == b,
@@ -142,7 +137,6 @@ impl Layout {
         }
     }
 
-    /// The active tab in the group containing a particular panel.
     pub fn active_for(&self, id: PanelId) -> Option<PanelId> {
         match self {
             Self::Tabs { tabs, active } => tabs.contains(&id).then_some(*active),
@@ -177,7 +171,6 @@ impl Layout {
         };
     }
 
-    /// Put `new` where `id` is, keeping the group, order and activity.
     pub(crate) fn replace(&mut self, id: PanelId, new: PanelId) {
         let Some(Self::Tabs { tabs, active }) = self.group_mut(id) else {
             return;
@@ -192,8 +185,6 @@ impl Layout {
         }
     }
 
-    /// Remove a tab without changing a surviving active tab. Return the
-    /// next tab in its own group as the preferred focus successor.
     pub(crate) fn remove(&mut self, id: PanelId) -> Option<PanelId> {
         let Some(Self::Tabs { tabs, active }) = self.group_mut(id) else {
             return None;
@@ -209,8 +200,6 @@ impl Layout {
         next
     }
 
-    /// Bottom-up normalization preserves the relative space of surviving
-    /// siblings and multiplies shares when flattening same-axis splits.
     pub(crate) fn normalized(self) -> Option<Self> {
         match self {
             Self::Tabs { ref tabs, .. } if tabs.is_empty() => None,

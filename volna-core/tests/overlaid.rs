@@ -1,5 +1,5 @@
-//! Group overlays: shared scales, independent gaps and envelopes, exact
-//! probes, row edits, workspace persistence, and worker summary lifetimes.
+//! Group overlays: shared scales, independent gaps and envelopes, exact probes, row edits,
+//! workspace persistence, and worker summary lifetimes.
 
 use std::sync::Arc;
 use volna_core::Theme;
@@ -23,8 +23,6 @@ use volna_trace::session::OpenSpec;
 const TRACE: &str = "file:///tmp/overlaid.vtr";
 const LOCATION: &str = "file:///tmp/overlaid.vtr.volna.json";
 
-/// The group contains two 8-bit buses, a bit, text, and an event. Values
-/// change at different times; q is undefined from 40 through 49 ns.
 fn fixture(changes: usize) -> (tempfile::NamedTempFile, App, PanelId) {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();

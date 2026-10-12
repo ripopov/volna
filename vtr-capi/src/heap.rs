@@ -1,12 +1,4 @@
-//! libvtr's heap: its own, not the C library's. Heap corruption in the
-//! program under test can leave glibc's arena locked for ever (a double free
-//! detected under the arena lock aborts with the lock held), and a crash
-//! guard must still be able to finish the trace. Small blocks come from
-//! mimalloc, without its `override` feature, so the application's `malloc`
-//! is untouched. Blocks of 1 MiB and more are mapped directly and grow in
-//! place with `mremap`, as glibc grows them: mimalloc's copy-on-grow held
-//! both copies of the largest buffers and raised the peak memory of a
-//! 60-million-change run from 343 to 600 MiB.
+//! libvtr's heap: its own, not the C library's.
 
 use std::alloc::{GlobalAlloc, Layout};
 
@@ -56,7 +48,7 @@ unsafe impl GlobalAlloc for VtrHeap {
     #[inline]
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         if large(&layout) {
-            return map(layout.size()); // anonymous mappings are zeroed
+            return map(layout.size());
         }
         mimalloc::MiMalloc.alloc_zeroed(layout)
     }

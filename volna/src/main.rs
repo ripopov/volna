@@ -1,4 +1,5 @@
 //! Native entry point; library and test workspaces never opt into persistence.
+
 #[cfg(not(target_family = "wasm"))]
 fn main() {
     use volna::native_workspace::{Options, Store};

@@ -1,17 +1,10 @@
-//! Bounded text for recorded values. Every panel that shows a transaction
-//! attribute, event or stage formats it here, so the table preview, the
-//! transaction panel and the clipboard agree on radix, escaping and the
-//! byte budget that stops a pathological value from being materialized.
+//! Bounded text for recorded values.
 
 use volna_trace::data::transactions::AttributeValue;
 
-/// Bytes of one projected value (a table cell, one detail row).
 pub const PREVIEW_BYTES: usize = 256;
-/// Bytes one clipboard copy may produce.
 pub const COPY_BYTES: usize = 64 * 1024;
 
-/// How an integer attribute is written. Cycled per key by the reader, never
-/// recorded in the trace.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Radix {
     #[default]
@@ -43,7 +36,6 @@ impl Radix {
         }
     }
 
-    /// A signed integer; negative values keep their sign before the base.
     pub fn format_i64(self, value: i64) -> String {
         let magnitude = value.unsigned_abs();
         let sign = if value < 0 { "-" } else { "" };
@@ -59,7 +51,6 @@ impl Radix {
     }
 }
 
-/// Whether a value is an integer a radix applies to.
 pub fn is_integer(value: &AttributeValue) -> bool {
     matches!(
         value,
@@ -70,12 +61,10 @@ pub fn is_integer(value: &AttributeValue) -> bool {
     )
 }
 
-/// One attribute value in at most `limit` bytes, decimal integers.
 pub fn format_attribute(value: &AttributeValue, limit: usize) -> String {
     format_attribute_radix(value, Radix::Dec, limit)
 }
 
-/// One attribute value in at most `limit` bytes, integers in `radix`.
 pub fn format_attribute_radix(value: &AttributeValue, radix: Radix, limit: usize) -> String {
     let text = match value {
         AttributeValue::Null => "null".into(),
@@ -103,7 +92,6 @@ pub fn format_attribute_radix(value: &AttributeValue, radix: Radix, limit: usize
     truncate(text, limit)
 }
 
-/// Bytes the complete value would need, where a projection can lose data.
 pub fn attribute_value_min_bytes(value: &AttributeValue) -> usize {
     match value {
         AttributeValue::Text(value) => value.len(),
@@ -114,7 +102,6 @@ pub fn attribute_value_min_bytes(value: &AttributeValue) -> usize {
     }
 }
 
-/// `key=value · key=value` in at most `limit` bytes, and whether it was cut.
 pub fn format_attributes(attributes: &[(String, AttributeValue)], limit: usize) -> (String, bool) {
     if attributes.is_empty() {
         return ("no attributes".into(), false);
@@ -141,7 +128,6 @@ pub fn format_attributes(attributes: &[(String, AttributeValue)], limit: usize) 
     (out, cut)
 }
 
-/// A dotted path in at most `limit` bytes; sets `truncated` when it was cut.
 pub fn join_path_limited(path: &[String], limit: usize, truncated: &mut bool) -> String {
     let mut out = String::new();
     for (index, part) in path.iter().enumerate() {
@@ -209,7 +195,6 @@ pub fn push_limited(out: &mut String, value: &str, limit: usize) {
     out.push_str(&value[..end]);
 }
 
-/// Append without truncating: a clipboard copy is complete or refused.
 pub fn append_exact(out: &mut String, value: &str, limit: usize) -> anyhow::Result<()> {
     anyhow::ensure!(
         out.len()

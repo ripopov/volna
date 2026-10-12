@@ -1,5 +1,5 @@
-//! Headless pipeline panel tests: open a track from the sidebar, load it,
-//! paint it, navigate it, save and restore it. No GPU, no window.
+//! Headless pipeline panel tests: open a track from the sidebar, load it, paint it,
+//! navigate it, save and restore it.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,10 +25,6 @@ use volna_trace::session::{OpenSpec, Session};
 
 const STAGES: [&str; 3] = ["F", "D", "X"];
 
-/// A trace with a PIPELINE stream of `n` instructions (three lane-0 stages
-/// each, a stall overlay on every seventh, instruction 3 flushed, the last
-/// one left open), an unrecognized stream with one stage-less record, and a
-/// counter signal on the same cycle time base.
 fn fixture(n: u64) -> Arc<dyn Session> {
     fixture_with_stages(n, &STAGES)
 }
@@ -116,7 +112,6 @@ fn stream_track(session: &dyn Session, path: &[&str]) -> TrackRef {
         .unwrap()
 }
 
-/// Perform every queued load synchronously.
 fn pump(app: &mut App) {
     loop {
         let requests = app.take_requests();
@@ -136,12 +131,10 @@ fn frame(app: &mut App, id: PanelId, theme: &Theme) {
     app.render_panel(id, theme, &mut MonoMeasure);
 }
 
-/// Open the fixture's pipeline stream from the scope tree (Enter on its row).
 fn opened(n: u64) -> (App, Arc<dyn Session>, PanelId, PanelId) {
     let session = fixture(n);
     let mut app = App::new();
     app.set_session(session.clone());
-    // The first rows turn the start panel into a waveform panel.
     app.handle(Command::AddVars(a_all(vec![0])));
     let waves = app.panels.focused_id();
     assert!(app.panels.waves(waves).is_some());
@@ -153,8 +146,6 @@ fn opened(n: u64) -> (App, Arc<dyn Session>, PanelId, PanelId) {
     app.handle(Command::ScopesKey(Key::Enter));
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, waves);
-    // These baseline painting/input tests inspect explicitly positioned rows.
-    // Follow behavior is exercised separately below.
     app.handle(Command::PipelineActivity(
         pipeline,
         volna_core::pipeline::ActivityCommand::Toggle,
@@ -185,7 +176,7 @@ fn activity_follows_cursor_then_view_center_and_preserves_other_axes() {
     let top = p.rows.value.top;
     frame(&mut app, pipeline, &theme);
     assert_eq!(app.panels.pipeline(pipeline).unwrap().rows.value.top, top);
-    app.doc.shared.cursor = Some(1); // outside the view: anchor its center
+    app.doc.shared.cursor = Some(1);
     frame(&mut app, pipeline, &theme);
     let p = app.panels.pipeline(pipeline).unwrap();
     assert!(p.last_layout().row_range.contains(&500));
@@ -199,7 +190,6 @@ fn activity_follows_cursor_then_view_center_and_preserves_other_axes() {
         }
     );
     assert_eq!(app.panels.waves(waves).unwrap().scroll_y, wave_rows);
-    // Local links use the same policy without mutating shared navigation.
     app.handle(Command::Panels(PanelsCommand::ToggleLink {
         panel: pipeline,
         dim: LinkDim::Viewport,
@@ -366,7 +356,7 @@ fn activity_keeps_long_overlaps_points_and_generator_row_offsets() {
     });
     app.doc.shared.cursor = Some(500);
     let theme = Theme::one_dark();
-    frame(&mut app, panel, &theme); // follow tolerates an undelivered track
+    frame(&mut app, panel, &theme);
     pump(&mut app);
     frame(&mut app, panel, &theme);
     let p = app.panels.pipeline(panel).unwrap();
@@ -520,9 +510,6 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
         .collect();
     let layout = p.last_layout().clone();
     let viewport = p.nav.viewport(&app.doc);
-    // One quad per visible lane-0 stage of the visible rows (each stage is one
-    // cycle wide; the fit viewport shows the whole trace).
-    // Flushed instructions keep their cells but draw them hollow.
     let (mut expected, mut hollow) = (0, 0);
     for r in layout.row_range.clone() {
         let (_, tx) = set.get(r).unwrap();
@@ -576,7 +563,6 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
         "the producer's unit"
     );
 
-    // The generator of the loaded stream is resident: opening it queues nothing.
     let generator = Member::Generator(0);
     app.handle(Command::ActivateMembers(a_all(vec![generator])));
     assert_eq!(app.panels.len(), 3);
@@ -587,13 +573,11 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
         app.panels.pipeline(second).unwrap().rows(&app.doc),
         Rows::Ready(set) if set.len() == 40
     ));
-    // Activating the stream again focuses its panel instead of opening one.
     app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
         scope(session.as_ref(), &["cpu", "thread0"]),
     )])));
     assert_eq!(app.panels.len(), 3);
     assert_eq!(app.panels.focused_id(), pipeline);
-    // An unrecognized stream kind opens all the same, as one stage-less cell.
     let bus = scope(session.as_ref(), &["cpu", "bus"]);
     app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(bus)])));
     pump(&mut app);
@@ -614,7 +598,6 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
         let (mut app, _, _, pipeline) = opened(200);
         pump(&mut app);
         let theme = Theme::one_dark().zoomed(zoom);
-        // Begin rectangular, with enough room to zoom the nearest square.
         app.panels
             .pipeline_mut(pipeline)
             .unwrap()
@@ -636,7 +619,6 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
                 p.nav.viewport(&app.doc).width(),
             )
         };
-        // Ctrl/Cmd+wheel restores square cells and applies its step immediately.
         app.handle(Command::Pointer(
             pipeline,
             PointerEvent::Wheel {
@@ -673,7 +655,6 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
             after.2 / zoom,
             "stored at interface zoom 1.0"
         );
-        // A pinch is immediate and also keeps the anchor.
         app.handle(Command::Pointer(
             pipeline,
             PointerEvent::Pinch {
@@ -742,7 +723,6 @@ fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
         .nav
         .viewport(&app.doc);
     assert_ne!(local, shared_after);
-    // Trackpad deltas pan both axes without animation.
     let rows_before = app.panels.pipeline(pipeline).unwrap().rows.value;
     app.handle_at(
         Command::Pointer(
@@ -765,7 +745,6 @@ fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
     );
     assert!(p.rows.value.top > rows_before.top);
     assert_eq!(p.rows.value.row_px, rows_before.row_px);
-    // Ctrl over the time header also restores square cells.
     let viewport_before = p.nav.viewport(&app.doc);
     let anchor_x = cells.left() + 200.0;
     let time_before = p.last_layout().time_at(&viewport_before, anchor_x);
@@ -803,7 +782,6 @@ fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
     assert!((f64::from(p.rows.value.row_px) - side).abs() < 1e-5);
     assert_eq!(p.follow, volna_core::pipeline::FollowActivity::Suspended);
     let rows_before = p.rows.value;
-    // Keyboard: ↓ scrolls rows; = scales square cells up to their shared cap.
     app.handle_at(Command::Action(Action::MoveSelectionDown), now);
     app.tick(now + Duration::from_secs(1));
     let p = app.panels.pipeline(pipeline).unwrap();
@@ -813,7 +791,6 @@ fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
     app.handle_at(Command::Action(Action::ZoomIn), now);
     app.tick(now + Duration::from_secs(1));
     let p = app.panels.pipeline(pipeline).unwrap();
-    // A cycle and a row stop together at 24 px.
     let expected = (width / 2.0).max(f64::from(cells.width()) / 24.0);
     assert!((p.nav.viewport(&app.doc).width() - expected).abs() < 1e-6);
     assert!((p.rows.value.row_px - (row_px * 2.0).min(24.0)).abs() < 1e-3);
@@ -1138,7 +1115,6 @@ fn box_zoom_freezes_displayed_animation_and_follow_then_animates_both_targets() 
     ] {
         box_pointer(&mut app, id, event, press_time);
     }
-    // A cursor change would move followed rows on the next layout without the guard.
     app.doc.shared.cursor = Some(before.start as u64);
     app.tick(now + Duration::from_secs(1));
     frame(&mut app, id, &theme);
@@ -1328,7 +1304,6 @@ fn wheel_zoom_restores_squares_after_box_zoom() {
     let theme = Theme::one_dark();
     let (mut app, id, cells) = box_view(&theme);
     let now = Instant::now();
-    // Establish square cells, then change time through the linked view.
     wheel_with(&mut app, id, in_box(cells, 0.5, 0.5), 0.0, 120.0, ctrl());
     app.doc
         .shared
@@ -1364,7 +1339,6 @@ fn wheel_zoom_restores_squares_after_box_zoom() {
     assert_square_cells(&mut app, id, &theme, 1.0);
 }
 
-/// Visible time width and painted row height after a frame.
 fn scales(app: &mut App, id: PanelId, theme: &Theme) -> (f64, f32) {
     frame(app, id, theme);
     let p = app.panels.pipeline(id).unwrap();
@@ -1378,7 +1352,6 @@ fn same_scales(a: (f64, f32), b: (f64, f32)) -> bool {
     (a.0 / b.0 - 1.0).abs() < 1e-6 && (a.1 / b.1 - 1.0).abs() < 1e-4
 }
 
-/// Verify painted row height against a cycle of the stream clock.
 fn assert_square_cells(app: &mut App, id: PanelId, theme: &Theme, period: f64) {
     let (time, row_px) = scales(app, id, theme);
     let width = f64::from(app.panels.pipeline(id).unwrap().last_layout().cells.width());
@@ -1450,7 +1423,6 @@ fn pipeline_wheel_restores_nearest_squares_after_linked_waveform_zoom() {
                         < 1e-6
                 );
                 assert!((p.last_layout().rows.row_at(cells.height() * 0.5) - row).abs() < 1e-5);
-                // Subsequent small deltas scale the restored square directly.
                 wheel_with(&mut app, pipeline, pointer, 0.0, -pipeline_delta, ctrl());
                 assert_square_cells(&mut app, pipeline, &theme, 1.0);
                 let next = scales(&mut app, pipeline, &theme);
@@ -1523,7 +1495,6 @@ fn square_cells_use_the_stream_clock_period_instead_of_time_units() {
         let theme = Theme::one_dark().zoomed(zoom);
         let cells = cells(&mut app, pipeline, &theme);
         let before = scales(&mut app, pipeline, &theme);
-        // The demo stream uses a 10 ns clock, rather than one time unit per cycle.
         let nearest = (f64::from(cells.width()) / before.0 * 10.0 * f64::from(before.1))
             .sqrt()
             .min(24.0 * f64::from(zoom));
@@ -1598,7 +1569,6 @@ fn square_zoom_stops_at_fit_and_retraces_its_scales() {
         let (mut app, _, _, pipeline) = opened(10_000);
         pump(&mut app);
         let cells = cells(&mut app, pipeline, &theme);
-        // Begin square, well away from either shared limit.
         app.doc.shared.viewport.set(Viewport {
             start: 5000.0,
             end: 5000.0 + f64::from(cells.width()) / (16.0 * f64::from(zoom)),
@@ -1623,7 +1593,6 @@ fn square_zoom_stops_at_fit_and_retraces_its_scales() {
             path.push(next);
             assert!(path.len() < 64, "zoom-out never ends");
         }
-        // Every full step doubles visible time and halves row height.
         for pair in path.windows(2).take(path.len() - 2) {
             assert!(same_scales(pair[1], (pair[0].0 * 2.0, pair[0].1 * 0.5)));
         }
@@ -1634,7 +1603,6 @@ fn square_zoom_stops_at_fit_and_retraces_its_scales() {
         assert!(p.nav.viewport(&app.doc).width() > app.doc.limits().1 as f64);
         assert!(layout.row_y(0) >= layout.cells.top() - 0.01);
         assert!(layout.row_y(10_000) <= layout.cells.bottom() + 0.01);
-        // The final step is cut short; all preceding scales retrace exactly.
         let full = path.len() - 2;
         app.doc.shared.viewport.set(Viewport {
             start: 5000.0,
@@ -1672,7 +1640,6 @@ fn square_zoom_stops_both_axes_at_the_row_cap_and_alt_wheel_can_raise_it() {
         let px_per_cycle = f64::from(cells.width()) / last.0;
         assert!((px_per_cycle - 24.0 * f64::from(zoom)).abs() < 1e-6);
         assert!((last.1 - 24.0 * zoom).abs() < 1e-4);
-        // Alt+wheel zooms rows only, up to 48 px; that height becomes the cap.
         for _ in 0..3 {
             let modifiers = Modifiers {
                 alt: true,
@@ -1693,12 +1660,10 @@ fn square_zoom_stops_both_axes_at_the_row_cap_and_alt_wheel_can_raise_it() {
         let restored = scales(&mut app, pipeline, &theme);
         assert!((f64::from(restored.1) - nearest).abs() < 1e-4);
         assert_square_cells(&mut app, pipeline, &theme, 1.0);
-        // Continue to the raised shared cap.
         wheel_with(&mut app, pipeline, pointer, 0.0, 120.0, ctrl());
         let tall = scales(&mut app, pipeline, &theme);
         assert!((tall.1 - 48.0 * zoom).abs() < 1e-4);
         assert_square_cells(&mut app, pipeline, &theme, 1.0);
-        // The Row Height actions step rows and reset them to 18 px.
         let now = Instant::now();
         app.handle_at(Command::Action(Action::DecreaseRowHeight), now);
         app.tick(now + Duration::from_secs(1));
@@ -1800,7 +1765,6 @@ fn zoom_fit_keeps_square_cells_and_fits_short_and_tall_traces() {
             let side = (fitted.1 * 2.0).min(24.0 * zoom);
             assert!((next.1 - side).abs() < 1e-4);
             assert_square_cells(&mut app, pipeline, &theme, 1.0);
-            // Horizontal pan must retain the scale even with spare time space.
             wheel_with(&mut app, pipeline, pointer, 40.0, 0.0, Modifiers::default());
             assert_square_cells(&mut app, pipeline, &theme, 1.0);
             assert!(same_scales(scales(&mut app, pipeline, &theme), next));
@@ -1853,7 +1817,6 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
             "markers a cycle apart share a chip"
         );
         assert_eq!(texts(&lane).last().unwrap(), "4");
-        // One labelled span from the cluster to marker 4.
         assert_eq!(lane.spans.len(), 1);
         assert_eq!(lane.spans[0].first, 2);
         let label = lane.spans[0]
@@ -1871,8 +1834,6 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
     }
     let centre = |r: Rect| point(r.left() + r.width() / 2.0, r.top() + r.height() / 2.0);
 
-    // The display list, in a dark and a light theme: a marker's chip and line
-    // in its palette colours, a cluster in the badge colours.
     let light = Theme::from_host(&volna_core::theme::vscode::host_palette(include_str!(
         "fixtures/vscode/light-modern.txt"
     )));
@@ -1908,7 +1869,6 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
             Prim::Text { text, color, .. } if text == "4" && *color == colours.text)));
     }
 
-    // A click on a chip moves the shared cursor onto its marker, from either panel.
     let lane = marker_lane(&mut app, pipeline, &theme);
     press(
         &mut app,
@@ -1923,7 +1883,6 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
         "the value cell names the marker under the cursor"
     );
 
-    // Hovering a cluster lists its markers, and a click zooms to them.
     let lane = marker_lane(&mut app, waves, &theme);
     let cluster = centre(lane.chips[0].rect);
     let members = lane.chips[0].markers.len();
@@ -1948,8 +1907,6 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
         assert_eq!(texts(&marker_lane(&mut app, id, &theme)), ["1", "2", "3"]);
     }
 
-    // Shift-click only goes to the marker; ⇧M then removes the one at the
-    // cursor. A click beside the chips moves the cursor like the header.
     let lane = marker_lane(&mut app, pipeline, &theme);
     let shift = Modifiers {
         shift: true,
@@ -2035,7 +1992,6 @@ fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
             .any(|t| t == format!("{expected} cycle"))
     );
     assert!(app.status().cursor.unwrap().ends_with("cycle"));
-    // A drag past the threshold pans instead of setting the cursor.
     let before = app
         .panels
         .pipeline(pipeline)
@@ -2065,7 +2021,6 @@ fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
         .nav
         .viewport(&app.doc);
     assert!(after.start < before.start);
-    // Hover names the instruction and the stage for the status bar.
     frame(&mut app, pipeline, &theme);
     let (row, hover_at) = {
         let p = app.panels.pipeline(pipeline).unwrap();
@@ -2089,15 +2044,12 @@ fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
     let hover = app.status().hover.unwrap();
     assert!(hover.starts_with(&format!("#{row} · D [")), "{hover}");
     assert!(hover.contains("op"), "{hover}");
-    // The click also selected the row it landed on, and Escape unwinds the
-    // selection before the cursor.
     assert!(app.doc.selection().is_some());
     app.handle(Command::Action(Action::ClearSelection));
     assert_eq!(app.doc.selection(), None);
     assert_eq!(app.doc.shared.cursor, Some(expected));
     app.handle(Command::Action(Action::ClearSelection));
     assert_eq!(app.doc.shared.cursor, None);
-    // The label divider resizes the dock column shared with the waveform.
     let split = app
         .panels
         .pipeline(pipeline)
@@ -2186,7 +2138,6 @@ fn overview_uses_physical_pixel_presence_with_bounded_output() {
     let layout = app.panels.pipeline(pipeline).unwrap().last_layout().clone();
     assert!(layout.is_overview());
     assert_eq!(layout.device_scale, 1.25);
-    // Outward-rounded physical pixels must still respect the logical cells clip.
     let mut clips = Vec::new();
     for prim in &app.scene().prims {
         match prim {
@@ -2267,7 +2218,6 @@ fn flushed_and_open_rows_are_told_apart_by_colour() {
                 && a.y >= layout.row_y(11) && b.y <= layout.row_y(12)))
     });
     assert!(dashed, "the open row ends with a dashed edge");
-    // The flushed label is muted and marked; the open one muted.
     let muted = app
         .scene()
         .prims
@@ -2315,7 +2265,6 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     assert_eq!(panel_json["cursor"], 7);
     assert_eq!(panel_json["label_width"], 240.0);
     assert_eq!(panel_json["row_cap"], 40.0);
-    // Restore into a fresh app over the same session.
     let mut restored = App::new();
     restored.set_session(session.clone());
     let plan = Workspace::parse(&saved.to_bytes().unwrap())
@@ -2344,7 +2293,6 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     assert_eq!(p.label_width, 240.0);
     assert_eq!(p.row_cap, 40.0);
     assert!(restored.panels.waves(waves).is_some());
-    // The restored panel retains the track and loads it.
     let requests = restored.take_requests();
     assert!(
         requests
@@ -2359,8 +2307,6 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
         restored.panels.pipeline(pipeline).unwrap().rows(&restored.doc),
         Rows::Ready(set) if set.len() == 30
     ));
-    // A track path that is not in the trace restores unresolved and is
-    // written back unchanged.
     let mut altered = json.clone();
     for panel in altered["panels"].as_array_mut().unwrap() {
         if panel["kind"] == "pipeline" {
@@ -2412,7 +2358,6 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
         .find(|p| p["kind"] == "pipeline")
         .unwrap();
     assert_eq!(kept["track"], serde_json::json!(["gone", "stream"]));
-    // Invalid saved rows are rejected as a whole.
     let mut bad = json.clone();
     for panel in bad["panels"].as_array_mut().unwrap() {
         if panel["kind"] == "pipeline" {
@@ -2440,7 +2385,6 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
         .into_iter()
         .find(|r| matches!(r, LoadRequest::Track { .. }))
         .unwrap();
-    // A split shares the load; closing one panel keeps the track.
     app.handle(Command::Action(Action::SplitRight));
     let split = app.panels.focused_id();
     assert!(app.panels.pipeline(split).unwrap().is_attached());
@@ -2458,7 +2402,6 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
         app.doc.track(a(track)).is_none(),
         "late delivery is a no-op"
     );
-    // Close-others from the wave panel releases every pipeline panel.
     app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(0)])));
     let generator = app
         .panels
@@ -2470,7 +2413,6 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
     app.handle(Command::Panels(PanelsCommand::CloseOthers(waves)));
     assert_eq!(app.panels.len(), 1);
     assert!(app.doc.track(generator).is_none());
-    // A failed load shows the error and the retry button reloads.
     let mut failing = App::new();
     failing.set_session(session.clone());
     failing.handle(Command::OpenPipeline { track: a(track) });
@@ -2534,7 +2476,6 @@ fn a_stream_opened_first_replaces_the_start_panel_and_rows_find_a_waveform_tab()
     assert!(app.panels.pipeline(pipeline).unwrap().is_attached());
     pump(&mut app);
     assert!(app.doc.track(a(track)).is_some());
-    // Rows added while the pipeline is focused open a waveform tab beside it.
     app.handle(Command::AddVars(a_all(vec![0])));
     assert_eq!(app.panels.len(), 2);
     let waves = app.panels.focused_id();
@@ -2546,13 +2487,11 @@ fn a_stream_opened_first_replaces_the_start_panel_and_rows_find_a_waveform_tab()
             active: waves
         }
     );
-    // More rows with the pipeline focused reuse and focus that panel.
     app.handle(Command::Panels(PanelsCommand::Focus(pipeline)));
     app.handle(Command::AddVars(a_all(vec![0])));
     assert_eq!(app.panels.len(), 2);
     assert_eq!(app.panels.focused_id(), waves);
     assert_eq!(app.panels.waves(waves).unwrap().items().len(), 2);
-    // Closing both leaves a start panel and releases the track.
     app.handle(Command::Panels(PanelsCommand::Close(waves)));
     app.handle(Command::Panels(PanelsCommand::Close(pipeline)));
     assert_eq!(app.panels.len(), 1);
@@ -2602,8 +2541,6 @@ fn the_checked_in_showcase_has_two_pipeline_streams_on_a_cycle_time_base() {
         );
         assert!(app.scene().texts().any(|t| t.contains(": lw   a1, 0(a2)")));
     }
-    // Without rows, the first stream takes the start panel's place: no
-    // waveform panel is opened for a transaction-only session.
     assert_eq!(app.panels.len(), 2);
     assert!(app.panels.iter().all(|p| p.kind.pipeline().is_some()));
     assert!(counts.iter().all(|n| *n > 500), "{counts:?}");
@@ -2612,8 +2549,6 @@ fn the_checked_in_showcase_has_two_pipeline_streams_on_a_cycle_time_base() {
 
 #[test]
 fn the_feature_showcase_cpu_paints_stage_cells_and_stall_bands() {
-    // Feature showcase: a five-stage in-order pipeline with
-    // its waits on a second lane and squashed wrong-path instructions.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../volna/examples/feature_showcase.vtr");
     let session = OpenSpec::Path(path).open().unwrap();
@@ -2659,7 +2594,6 @@ fn the_feature_showcase_cpu_paints_stage_cells_and_stall_bands() {
 
 #[test]
 fn the_theme_showcase_runs_the_c910_stage_ladder_with_flushed_and_open_rows() {
-    // Volna theme fixture: stage ladder colours.
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/volna-theme.vtr");
     let session = OpenSpec::Path(path).open().unwrap();
@@ -2706,8 +2640,6 @@ fn the_theme_showcase_runs_the_c910_stage_ladder_with_flushed_and_open_rows() {
 fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     use volna_core::transaction::TxPanelState;
     use volna_trace::data::transactions::TransactionRef;
-    // Written by integrations/verilator/pipeline/run.py --update-example: the
-    // demo_core tracer's instructions and bus requests, and the tb clock.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../volna/examples/pipeline_demo.vtr");
     let session = OpenSpec::Path(path).open().unwrap();
@@ -2736,8 +2668,6 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
         .pipeline(id)
         .expect("a PIPELINE stream opens a pipeline panel");
     assert_eq!(p.clock(&app.doc).unwrap().path, "TOP.tb.clk");
-    // The package writes its default lane as "": those stages are the cells,
-    // each in a ladder colour, and the stall lane is the overlay band.
     assert_eq!(p.palette().primary_lane(), "");
     assert_eq!(p.palette().names(), ["F", "D", "Q", "X", "C", "R"]);
     let Rows::Ready(set) = p.rows(&app.doc) else {
@@ -2757,8 +2687,6 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
         ],
         [5, 1, 5, 1]
     );
-    // Row 0 is the first instruction: X from 45 to 55 ns, cycle 4 of a clock whose
-    // first edge is at 5 ns. Hovering reads cycles; a click selects the row.
     let layout = p.last_layout().clone();
     let viewport = p.nav.viewport(&app.doc);
     let y = layout.row_y(0) + layout.rows.row_px / 2.0;
@@ -2806,11 +2734,6 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     );
 }
 
-/// Half a million C910-shaped instructions, or the file in `VOLNA_PIPELINE_TRACE`
-/// (with its stream path in `VOLNA_PIPELINE_STREAM`): prints load, palette, layout
-/// and paint times and the process's resident memory. A measurement, not a gate:
-///
-///     cargo test --release -p volna-core --test pipeline half_million -- --ignored --nocapture
 #[test]
 #[ignore]
 fn half_million_rows_load_lay_out_and_paint() {
@@ -2865,7 +2788,6 @@ fn half_million_rows_load_lay_out_and_paint() {
                 let tx = w.begin_tx(insn, begin).unwrap();
                 let r = next();
                 let aborted = r % 5 == 0;
-                // ID IR IS IQ RF, then one of EX/BJ/FX or AG DC DA WB, then CM RT.
                 let mut path = vec![0usize, 1, 2, 3, 4];
                 match (r >> 8) % 6 {
                     0 => path.push(8),
@@ -2912,7 +2834,6 @@ fn half_million_rows_load_lay_out_and_paint() {
     let t0 = Clock::now();
     let session = OpenSpec::Path(path).open().unwrap();
     let mut app = App::new();
-    // VOLNA_OBJECT_MIB raises the object size limit (default 256 MiB).
     if let Ok(mib) = std::env::var("VOLNA_OBJECT_MIB") {
         for (id, v) in [
             ("memory.budgetMiB", 8192),
@@ -3048,8 +2969,6 @@ fn the_pipeline_measures_from_the_reference_like_the_waves() {
         ))
     );
     app.doc.shared.cursor = Some(b);
-    // Both panels show the same Measure lane, and the pipeline's rows move
-    // down under it.
     for id in [waves, pipeline] {
         let lane = marker_lane(&mut app, id, &theme);
         let m = lane.measure.expect("the Measure lane");
@@ -3065,7 +2984,6 @@ fn the_pipeline_measures_from_the_reference_like_the_waves() {
     let lane = marker_lane(&mut app, pipeline, &theme);
     assert_eq!(cells_top, lane.strip().bottom());
 
-    // Alt-click and a middle click in the cells measure from a cycle there.
     let x = (lane.time_left + lane.band.right()) / 2.0;
     let p = point(x, cells_top + 3.0);
     let alt = Modifiers {
@@ -3092,7 +3010,6 @@ fn the_pipeline_measures_from_the_reference_like_the_waves() {
     app.handle(Command::Pointer(pipeline, PointerEvent::Up));
     assert_eq!(app.doc.reference_time(), Some(t));
 
-    // The × at the end of the label column clears it.
     let clear = marker_lane(&mut app, pipeline, &theme)
         .measure
         .unwrap()
@@ -3141,14 +3058,12 @@ fn a_pipeline_chip_goes_on_click_moves_onto_cycles_on_drag_and_esc_cancels() {
             },
         ))
     };
-    // Under the slop: a click, which goes to the marker.
     down(&mut app, p);
     to(&mut app, p.x + 2.0);
     app.handle(Command::Pointer(pipeline, PointerEvent::Up));
     assert_eq!(app.doc.shared.cursor, Some(a));
     assert_eq!(app.doc.markers()[0].time, a);
 
-    // A drag lands on the cycle under the flag, and is one step.
     down(&mut app, p);
     to(&mut app, p.x + 40.0);
     to(&mut app, p.x + 83.0);
@@ -3164,7 +3079,6 @@ fn a_pipeline_chip_goes_on_click_moves_onto_cycles_on_drag_and_esc_cancels() {
     assert_eq!(app.undo_label(), Some("Move marker 1"));
     assert_eq!(app.doc.shared.cursor, Some(a), "a drag keeps the cursor");
 
-    // Esc during a drag puts it back and records nothing.
     let lane = marker_lane(&mut app, pipeline, &theme);
     let chip = lane.chips[0].rect;
     let p = point(chip.left() + 3.0, chip.top() + chip.height() / 2.0);
@@ -3196,8 +3110,6 @@ fn dock_timelines(
 }
 
 fn timeline_frames(app: &mut App, waves: PanelId, pipeline: PanelId, width: f32, theme: &Theme) {
-    // Different vertical origins reproduce a stacked dock. Pipeline goes first
-    // to ensure alignment never depends on the order canvases are laid out.
     app.layout_panel(
         pipeline,
         Rect::from_xywh(25.0, 350.0, width, 300.0),
@@ -3295,8 +3207,6 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
         drag_divider(&mut app, waves, wave_split, 25.0 + 350.0 * theme.zoom);
         timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
         assert_eq!(aligned_metadata(&app, waves, pipeline), 350.0 * theme.zoom);
-        // Both renderers consume the same geometry for their ruler, marker
-        // lane and cursor, even after pan and zoom change the shared interval.
         wheel_with(&mut app, pipeline, point(900.0, 450.0), 0.0, 120.0, ctrl());
         timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
         aligned_metadata(&app, waves, pipeline);
@@ -3484,8 +3394,6 @@ fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans
             .shared_metadata
     );
 
-    // A full-width panel above two narrower panels has a different time
-    // area from either child, even though they all have shared navigation.
     app.handle(Command::Panels(PanelsCommand::SetLayout {
         layout: stack(vec![
             Layout::single(pipeline),

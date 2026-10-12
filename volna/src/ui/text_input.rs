@@ -1,8 +1,4 @@
-//! A minimal single-line text field (filter box, group name editor). Handles
-//! printable input, backspace, word delete, escape and its own text undo:
-//! its key context binds ⌘Z / Ctrl+Z, so undo in a field edits the text and
-//! never the cockpit (`volna/README.md`, "Undo and redo"). No IME or selection; enough
-//! for a filter or a name.
+//! A minimal single-line text field (filter box, group name editor).
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -18,8 +14,6 @@ actions!(text_input, [UndoText, RedoText]);
 
 const CONTEXT: &str = "TextInput";
 
-/// Text undo and redo keys, on every platform: the innermost key context
-/// wins, so these shadow the workspace's cockpit undo while a field has focus.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-z", UndoText, Some(CONTEXT)),
@@ -30,7 +24,6 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// What changed the text last: runs of typing or deleting undo together.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditKind {
     Type,
@@ -40,9 +33,7 @@ enum EditKind {
 
 pub enum TextInputEvent {
     Changed,
-    /// Enter was pressed.
     Submit,
-    /// Escape was pressed with empty text (any text, when plain).
     Cancel,
 }
 
@@ -50,17 +41,9 @@ pub struct TextInput {
     text: String,
     placeholder: SharedString,
     focus_handle: FocusHandle,
-    /// An editor rather than a filter: no search icon or clear button, it
-    /// fills its box, and Escape cancels at once.
     plain: bool,
-    /// The whole text is selected: typing replaces it, Backspace clears it,
-    /// and any other key just drops the selection.
     all_selected: bool,
-    /// The colour of what the field names (a marker's): a thicker outline
-    /// in it, square on the left where the field meets its chip, and the
-    /// selection tinted with it.
     accent: Option<Hsla>,
-    /// Text before each undoable edit, and text undone.
     undo: Vec<String>,
     redo: Vec<String>,
     last_edit: Option<EditKind>,
@@ -89,7 +72,6 @@ impl TextInput {
         }
     }
 
-    /// Select the whole text, as a rename starts: typing replaces it.
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         if !self.all_selected && !self.text.is_empty() {
             self.all_selected = true;
@@ -97,13 +79,11 @@ impl TextInput {
         }
     }
 
-    /// An editor that fills its box (see the `plain` field).
     pub fn plain(mut self) -> Self {
         self.plain = true;
         self
     }
 
-    /// Outline the field in `color` (see the `accent` field).
     pub fn accent(mut self, color: Hsla) -> Self {
         self.accent = Some(color);
         self
@@ -124,8 +104,6 @@ impl TextInput {
         }
     }
 
-    /// Replace the text without emitting `Changed` (the model already
-    /// knows); the text undo starts over from it.
     pub fn set_text(&mut self, text: String, cx: &mut Context<Self>) {
         if self.text != text {
             self.text = text;
@@ -136,7 +114,6 @@ impl TextInput {
         }
     }
 
-    /// Append text (used when another view forwards a typed character).
     pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
         if text.is_empty() || text.chars().any(|c| c.is_control()) {
             return;
@@ -144,8 +121,6 @@ impl TextInput {
         self.edit(EditKind::Type, |t| t.push_str(text), cx);
     }
 
-    /// Change the text as an undoable edit; a run of one kind of edit
-    /// undoes at once.
     fn edit(&mut self, kind: EditKind, f: impl FnOnce(&mut String), cx: &mut Context<Self>) {
         let before = self.text.clone();
         f(&mut self.text);

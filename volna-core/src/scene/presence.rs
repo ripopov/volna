@@ -52,8 +52,6 @@ impl PresenceMask {
         }
     }
 
-    /// Maximal occupied runs, in row order. Zero and full words are skipped
-    /// together, so a solid image does not require visiting individual pixels.
     pub fn runs(&self) -> impl Iterator<Item = (usize, Range<usize>)> + '_ {
         (0..self.height).flat_map(move |y| {
             let mut x = 0;

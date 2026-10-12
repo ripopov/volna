@@ -8,7 +8,6 @@ fn tmp(name: &str) -> std::path::PathBuf {
     dir.join(name)
 }
 
-/// A run with value changes and log records of its own, ended as given.
 fn write(name: &str, end: Option<Ending>, background: bool) -> std::path::PathBuf {
     let path = tmp(name);
     let opts = WriterOptions {
@@ -86,7 +85,6 @@ fn every_ending_round_trips() {
             let r = Reader::open(&path).unwrap();
             assert_eq!(r.recovered(), None);
             assert_eq!(r.ending().unwrap(), (end, Some(2990)), "{end:?}");
-            // The record is an ordinary FATAL log record: every log reader shows it, last.
             let mut last = None;
             r.visit_log(
                 &LogQuery {
@@ -155,12 +153,10 @@ fn the_stream_is_reserved() {
         w.add_stream(None, ending::STREAM, LOG_STREAM_KIND),
         Err(Error::Invalid(_))
     ));
-    // Only at the root.
     let top = w.add_scope(None, "top", ScopeType::Module, "").unwrap();
     w.add_stream(Some(top), ending::STREAM, LOG_STREAM_KIND)
         .unwrap();
     w.close_with(Ending::Exited { status: 1 }).unwrap();
-    // Closing twice keeps the first ending.
     w.close_with(Ending::Exited { status: 2 }).unwrap();
     let r = Reader::open(tmp("reserved.vtr")).unwrap();
     assert_eq!(r.ending().unwrap(), (Ending::Exited { status: 1 }, Some(0)));

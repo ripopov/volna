@@ -15,7 +15,6 @@ use volna_trace::data::source::Lookup;
 fn linked_app() -> App {
     let mut app = App::new();
     app.set_session(Arc::new(ProceduralTrace::new(100)));
-    // The open's own work: count scope sizes.
     for request in app.take_requests() {
         app.deliver(request.perform());
     }
@@ -27,7 +26,6 @@ fn panel(app: &mut App, command: PanelsCommand) {
     app.handle(Command::Panels(command));
 }
 
-/// A collection whose start panel already gave way to a waveform panel.
 fn wave_panels() -> Panels {
     let mut p = Panels::new();
     let start = p.focused_id();
@@ -68,7 +66,6 @@ fn focused_actions_update_one_shared_value_and_unlink_snapshots_the_displayed_fr
     app.tick(now + std::time::Duration::from_secs(1));
     assert_eq!(app.panels.waves(a).unwrap().viewport(&app.doc), retained);
     assert_ne!(app.panels.waves(b).unwrap().viewport(&app.doc), shared);
-    // Even with no followers, the last shared position remains authoritative.
     panel(
         &mut app,
         PanelsCommand::ToggleLink {
@@ -462,18 +459,15 @@ fn close_others_keeps_any_kind_and_a_lone_settings_tab_gets_a_start_panel() {
     assert_eq!(app.panels.len(), 1);
     assert_eq!(app.panels.focused_id(), id);
     app.panels.validate().unwrap();
-    // From the settings tab, close-others leaves settings plus a start panel.
     app.handle(Command::Settings(SettingsCommand::Open));
     let settings = app.panels.settings_id().unwrap();
     app.handle(Command::Panels(PanelsCommand::CloseOthers(settings)));
     assert_eq!(app.panels.len(), 2);
     assert_eq!(app.panels.focused_id(), settings);
     let start = app.panels.iter().find(|p| p.kind.is_start()).unwrap().id;
-    // The placeholder is the last content: its tab offers no close.
     assert!(app.panels.can_close(settings));
     assert!(!app.panels.can_close(start));
     app.panels.validate().unwrap();
-    // Rows added now go to a waveform panel in the placeholder's spot.
     app.handle(Command::AddVars(a_all(vec![0])));
     assert_eq!(app.panels.len(), 2);
     let waves = app.panels.focused_id();
@@ -488,14 +482,12 @@ fn the_start_panel_gives_way_to_content_and_returns_when_the_last_panel_closes()
     let start = app.panels.focused_id();
     assert!(app.panels.focused().kind.is_start());
     assert_eq!(app.panels.len(), 1);
-    // Splitting the placeholder asks for a waveform panel, not a split.
     app.handle(Command::Action(Action::SplitRight));
     let waves = app.panels.focused_id();
     assert_ne!(waves, start);
     assert_eq!(app.panels.len(), 1);
     assert!(app.panels.get(start).is_none());
     assert!(app.panels.waves(waves).unwrap().nav.link.viewport);
-    // Every panel closes; the last content panel becomes a fresh start panel.
     app.handle(Command::Action(Action::SplitRight));
     let second = app.panels.focused_id();
     assert!(app.panels.can_close(waves) && app.panels.can_close(second));
@@ -507,7 +499,6 @@ fn the_start_panel_gives_way_to_content_and_returns_when_the_last_panel_closes()
     assert!(app.panels.focused().kind.is_start());
     assert!(again > second);
     app.panels.validate().unwrap();
-    // Closing the placeholder changes nothing; the app action closes the trace.
     assert!(!app.panels.can_close(again));
     let revision = app.panels.revision();
     assert!(app.panels.close(again).unwrap().is_empty());

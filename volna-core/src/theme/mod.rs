@@ -1,9 +1,5 @@
-//! Resolved design tokens. Host colours are resolved once, never while painting a row.
-//!
-//! [`Theme`] is generic over its colour type so a frontend can map the resolved
-//! palette into its own colour representation once (`theme.map(...)`) and keep
-//! reading the same field names. All resolution logic runs on the core
-//! [`Color`] type; metrics are logical pixels.
+//! Resolved design tokens.
+
 pub mod builtin;
 mod palette;
 mod volna;
@@ -19,7 +15,6 @@ use crate::scene::FontRole;
 use crate::wave::Tint;
 use volna_trace::data::ValueKind;
 
-/// A resolved surface or interaction state. Cheap to copy into closures.
 #[derive(Clone, Copy, Debug)]
 pub struct Surface<C = Color> {
     pub bg: C,
@@ -30,7 +25,6 @@ pub struct Surface<C = Color> {
     pub icon_muted: C,
     pub icon_accent: C,
     pub error: C,
-    /// Amber, for measurements over budget.
     pub warning: C,
     values: [C; 5],
 }
@@ -100,55 +94,39 @@ pub struct Theme<C = Color> {
     pub input_border: C,
     pub scrollbar_thumb: C,
     pub scrollbar_thumb_hover: C,
-    /// Pipeline/input, log/output, generic stream/inout; contrasted against sidebar surfaces.
     pub sidebar_tints: [C; 3],
-    // Waveforms
     pub wave_signal: C,
     pub wave_high_fill: C,
     pub wave_undef: C,
-    /// The tint under an unknown stretch, beneath its hatch.
     pub wave_undef_fill: C,
     pub wave_highimp: C,
     pub wave_dontcare: C,
     pub wave_weak: C,
     pub wave_dense: C,
-    /// Arrow colour when multiple event occurrences share a pixel.
     pub wave_event_coalesced: C,
     pub wave_bus_text: C,
     pub wave_tick: C,
     pub wave_tick_text: C,
     pub wave_row_selected: C,
     pub wave_row_hover: C,
-    /// Shade over time and rows outside the trace, where panning and
-    /// zooming may reach but no data exists.
     pub wave_outside: C,
     pub wave_cursor: C,
     pub wave_cursor_inactive: C,
     pub wave_cursor_text: C,
-    /// Row colours by [`Tint::index`], at the contrast floor of
-    /// `wave_signal` on the canvas and of the name stripe on the panel
-    /// surfaces. Default is `wave_signal`.
     pub wave_tints: [C; 5],
-    /// Relation arrows drawn for the selected pipeline row: edges that end
-    /// at it, and edges that start from it.
     pub tx_relation_in: C,
     pub tx_relation_out: C,
-    /// The tint over a flushed (aborted) pipeline row.
     pub wave_flush: C,
-    /// Stage names inside stage cells.
     pub stage_text: C,
-    /// How stage fills are computed from pipeline order.
     pub stages: StageLadder,
     pub markers: [MarkerColors<C>; 6],
 
-    // Typography (font families are the bundled faces, see `icons::FONTS`)
     pub ui_font: &'static str,
     pub mono_font: &'static str,
     pub ui_size: f32,
     pub ui_size_small: f32,
     pub mono_size: f32,
 
-    // Metrics in logical pixels (multiples of the 4px grid)
     pub row_height: f32,
     pub header_height: f32,
     pub titlebar_height: f32,
@@ -156,20 +134,12 @@ pub struct Theme<C = Color> {
     pub timeline_height: f32,
     pub icon_size: f32,
     pub splitter_grab: f32,
-    /// The interface zoom the metrics above already include (1.0 = the
-    /// design sizes). Painters multiply their own pixel constants by it.
     pub zoom: f32,
-    /// Digital trace width in logical pixels, independent of interface zoom.
     pub digital_wave_width: f32,
-    /// Analog curve width at interface zoom 1; dense envelopes use hairlines.
     pub analog_wave_width: f32,
-    /// Vertical padding on each side of a waveform at interface zoom 1.
     pub wave_spacing: f32,
 }
 
-/// The themes one window paints with: the chrome (bars, sidebar, table,
-/// transaction panel, menus) and the panels drawn against time (waves and
-/// pipeline). They differ only for Volna Mixed.
 #[derive(Clone, Copy, Debug)]
 pub struct Themes<C = Color> {
     pub chrome: Theme<C>,
@@ -177,7 +147,6 @@ pub struct Themes<C = Color> {
 }
 
 impl<C: Copy> Themes<C> {
-    /// One theme for the whole window.
     pub fn uniform(theme: Theme<C>) -> Self {
         Self {
             chrome: theme,
@@ -194,9 +163,6 @@ fn ca(hex: u32, a: f32) -> Color {
 }
 
 impl<C: Copy> Theme<C> {
-    /// The colours of a trace's letter badge. Traces take the categorical
-    /// marker palette in letter order, so each has the contrast measured
-    /// for marker chips.
     pub fn trace(&self, trace: crate::trace::TraceId) -> MarkerColors<C> {
         self.markers[trace.index() % self.markers.len()]
     }
@@ -221,7 +187,6 @@ impl<C: Copy> Theme<C> {
         ][value_index(kind)]
     }
 
-    /// The stroke of a row drawn in `tint`; `None` is the default signal colour.
     pub fn ink(&self, tint: Option<Tint>) -> C {
         tint.map_or(self.wave_signal, |t| self.wave_tints[t.index()])
     }
@@ -230,7 +195,6 @@ impl<C: Copy> Theme<C> {
         self.markers[index % self.markers.len()]
     }
 
-    /// Family name for a font role.
     pub fn font_family(&self, role: FontRole) -> &'static str {
         match role {
             FontRole::Mono => self.mono_font,
@@ -238,7 +202,6 @@ impl<C: Copy> Theme<C> {
         }
     }
 
-    /// Convert every colour, keeping metrics and fonts.
     pub fn map<D: Copy>(&self, f: impl Fn(C) -> D) -> Theme<D> {
         let f = &f;
         Theme {
@@ -308,8 +271,6 @@ impl<C: Copy> Theme<C> {
         }
     }
 
-    /// The same theme at interface zoom `factor`: every font size and metric
-    /// is the design size times `factor`, whatever zoom `self` already has.
     pub fn zoomed(&self, factor: f32) -> Self
     where
         C: Copy,
@@ -335,21 +296,16 @@ impl<C: Copy> Theme<C> {
         t
     }
 
-    /// A design-time pixel size at this theme's zoom.
     pub fn scale(&self, px: f32) -> f32 {
         px * self.zoom
     }
 }
 
 impl Theme<Color> {
-    /// This theme for a row drawn in `tint`: the signal stroke, its high
-    /// fill and its dense band take the tint; X, Z, weak values, the cursor
-    /// and markers keep theirs. `None` is the theme itself.
     pub fn inked(&self, tint: Option<Tint>) -> Self {
         self.with_signal_ink(self.ink(tint))
     }
 
-    /// Apply a resolved numeric group member colour to its individual row.
     pub(crate) fn with_signal_ink(&self, ink: Color) -> Self {
         let mut t = *self;
         t.wave_signal = ink;
@@ -358,8 +314,6 @@ impl Theme<Color> {
         t
     }
 
-    /// The surfaces a tint stroke is read on: the canvas plain, selected
-    /// and hovered, and the name column's panel, selection and hover.
     pub fn tint_backgrounds(&self) -> [Color; 6] {
         [
             self.editor.bg,
@@ -371,14 +325,11 @@ impl Theme<Color> {
         ]
     }
 
-    /// Resolve the row colours from blue, cyan, violet, pink and grey
-    /// sources through the stroke contrast floor.
     fn resolve_tints(&mut self, sources: [Color; 5]) {
         let backgrounds = self.tint_backgrounds();
         self.wave_tints = sources.map(|c| stroke(c, &backgrounds));
     }
 
-    /// Native and standalone-web defaults, unchanged by host theming.
     pub fn one_dark() -> Self {
         let surface = |bg| Surface {
             bg: c(bg),
@@ -478,7 +429,6 @@ impl Theme<Color> {
             analog_wave_width: 1.25,
             wave_spacing: 5.0,
         };
-        // One Dark's blue, cyan and purple; a pink and the muted grey.
         t.resolve_tints([0x74ade8, 0x6eb4bf, 0xb477cf, 0xf07fbf, 0xa9afbc].map(c));
         t
     }
@@ -502,9 +452,6 @@ impl Theme<Color> {
         } else {
             [0x287b38, 0xa1260d, 0x895503, 0x005fb8, 0xb05b00, 0x8040a0]
         };
-        // Charts are fills in the host. For thin strokes/chips use their RGB at full
-        // coverage rather than flattening alpha into a desaturated background tint.
-        // Fully transparent entries carry no visible colour and use the fallback.
         let charts: [Color; 6] = std::array::from_fn(|i| opaque(p.charts[i], c(fallback[i])));
         let resolve = |pair, bg, fg| Surface::resolve(pair, bg, fg, p, accent, charts);
         t.appearance = p.appearance;
@@ -574,7 +521,6 @@ impl Theme<Color> {
         }
         t.wave_row_selected = accent.with_alpha(if hc { 0.08 } else { 0.10 });
         t.wave_row_hover = t.editor.text.with_alpha(0.04);
-        // Darken, except on a black high-contrast background.
         t.wave_outside = match (dark, hc) {
             (true, true) => t.editor.text.with_alpha(0.12),
             (true, false) => c(0).with_alpha(0.22),
@@ -620,8 +566,6 @@ impl Theme<Color> {
         t.wave_cursor_text = fallback_text(t.editor.text, t.wave_cursor);
         t.tx_relation_in = stroke(charts[3], &backgrounds);
         t.tx_relation_out = stroke(charts[0], &backgrounds);
-        // Blue and purple are the host's; cyan sits between its green and
-        // blue, pink between its purple and red. Red and yellow are X and Z.
         let hue_between = |a: Color, b: Color, toward: f32| {
             let mut d = b.h - a.h;
             if d > 0.5 {
@@ -663,15 +607,11 @@ impl Surface<Color> {
     ) -> Self {
         let bg = over(pair.background.unwrap_or(parent), parent);
         let text = foreground(pair.foreground, fallback, bg);
-        // Shared adornment colours are not a supplied foreground/background pair.
-        // Fall back to the surface text if they disappear on a different surface.
         let secondary = |color: Option<Color>, fallback| {
             color
                 .filter(|c| contrast(over(*c, bg), bg) >= 3.0)
                 .unwrap_or(fallback)
         };
-        // Keep muted labels on the main text's side of the surface: a blue bar
-        // with white labels must not acquire dark muted text from a light editor.
         let muted = secondary(
             p.muted.filter(|c| {
                 (luminance(over(*c, bg)) >= luminance(bg))
@@ -716,8 +656,6 @@ fn opaque(color: Option<Color>, fallback: Color) -> Color {
         .unwrap_or(fallback)
         .with_alpha(1.0)
 }
-// Respect the host's chosen contrast (including subdued text). Only invisible
-// supplied foregrounds and missing tokens need fallback repair.
 fn foreground(color: Option<Color>, fallback: Color, bg: Color) -> Color {
     color
         .filter(|c| contrast(over(*c, bg), bg) > 1.05)
@@ -734,7 +672,6 @@ fn fallback_text(color: Color, bg: Color) -> Color {
     }
 }
 
-/// Composite `fg` over an opaque `bg`.
 pub fn over(fg: Color, bg: Color) -> Color {
     if fg.a == 1.0 {
         return fg;
@@ -759,14 +696,11 @@ pub(crate) fn luminance(color: Color) -> f32 {
     };
     0.2126 * linear(c[0]) + 0.7152 * linear(c[1]) + 0.0722 * linear(c[2])
 }
-/// WCAG contrast ratio of two opaque colours.
 pub fn contrast(a: Color, b: Color) -> f32 {
     let a = luminance(a);
     let b = luminance(b);
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
-/// Only thin graphics need a contrast floor. Change HSL lightness alone, preserving
-/// hue/saturation, and choose the nearest passing lightness. Called at resolution.
 fn stroke(color: Color, backgrounds: &[Color]) -> Color {
     let passes = |color| backgrounds.iter().all(|bg| contrast(color, *bg) >= 3.0);
     if passes(color) {

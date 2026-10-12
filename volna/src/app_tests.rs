@@ -1,6 +1,5 @@
-//! GPUI adapter tests: the load loop runs on the GPUI executor and theme
-//! changes leave core state alone. Viewer semantics are tested headlessly in
-//! `volna-core`.
+//! GPUI adapter tests: the load loop runs on the GPUI executor and theme changes leave core
+//! state alone.
 
 use super::*;
 use gpui_kit::TestAppContext;
@@ -168,7 +167,6 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
                 vcx.run_until_parked();
                 assert_eq!(navigation(&mut vcx), (33, true, false));
             }
-            // Following a Related link after Back replaces the forward branch.
             click(&mut vcx, "tx-back");
             window
                 .update(&mut vcx, |ws, window, cx| {
@@ -189,7 +187,6 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
             vcx.run_until_parked();
             assert_eq!(navigation(&mut vcx), (33, true, false));
 
-            // The header stays outside the scrolling record body.
             window
                 .update(&mut vcx, |ws, window, cx| {
                     for key in SectionKey::ALL {
@@ -304,8 +301,6 @@ fn loads_run_on_the_executor_and_fill_rows(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-/// Scope rows remain free of inline counts when signal totals are ready
-/// but no activity index is available, in light and dark themes alike.
 #[gpui_kit::test]
 fn scope_rows_without_activity_hide_counts_in_both_themes(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -314,7 +309,6 @@ fn scope_rows_without_activity_hide_counts_in_both_themes(cx: &mut TestAppContex
     init(cx);
     let window = cx.add_window(Workspace::new);
     let trace = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/picorv32.vtr");
-    // A fresh copy has no cached activity sidecar from previously opened examples.
     let directory = tempfile::tempdir().unwrap();
     let specimen = directory.path().join("picorv32.vtr");
     std::fs::copy(trace, &specimen).unwrap();
@@ -378,8 +372,6 @@ fn scope_rows_without_activity_hide_counts_in_both_themes(cx: &mut TestAppContex
     }
 }
 
-/// With an activity index beside the trace, scope rows show an activity
-/// meter without inline counts in light and dark themes alike.
 #[gpui_kit::test]
 fn scope_rows_show_activity_meters_in_both_themes(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -404,7 +396,6 @@ fn scope_rows_show_activity_meters_in_both_themes(cx: &mut TestAppContext) {
         .unwrap();
     let mut vcx = VisualTestContext::from_window(window.into(), cx);
     vcx.run_until_parked();
-    // The first frame asks for the classification; its result paints the next.
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     vcx.run_until_parked();
     let root = window
@@ -489,8 +480,6 @@ fn feature_showcase_workspace_restores_with_scope_activity_meters(cx: &mut TestA
     window
         .update(cx, |ws, window, cx| {
             ws.app.set_session(session.clone());
-            // Restore the startup layout before the first scope-count request
-            // reaches the executor, as loading a workspace sidecar can do.
             saved
                 .prepare(&ws.app, &uri, &format!("{uri}.volna.json"))
                 .unwrap()
@@ -530,7 +519,6 @@ fn feature_showcase_workspace_restores_with_scope_activity_meters(cx: &mut TestA
 fn latest_open_wins_and_a_stale_open_cannot_replace_the_trace(cx: &mut TestAppContext) {
     init(cx);
     let window = cx.add_window(Workspace::new);
-    // Take the slow open's request out of the queue so it can complete late.
     let trace = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/picorv32.vtr");
     let slow = window
         .update(cx, |ws, _, cx| {
@@ -707,7 +695,6 @@ fn native_idle_save_reopens_a_copied_trace_with_its_workspace(cx: &mut TestAppCo
 fn settings_tab_results_json_view_and_palette_render(cx: &mut TestAppContext) {
     use volna_core::app::SettingsCommand;
     init(cx);
-    // Dialogs (the palette) need the component root, as in production.
     let mut workspace = None;
     let root = cx.add_window(|window, cx| {
         let ws = cx.new(|cx| Workspace::new(window, cx));
@@ -731,7 +718,6 @@ fn settings_tab_results_json_view_and_palette_render(cx: &mut TestAppContext) {
             ws.app.panels.settings_id().expect("tab open")
         })
         .unwrap();
-    // The tab renders without a trace, then with one, in every mode.
     for query in [
         "",
         "snap px",
@@ -800,7 +786,6 @@ fn settings_tab_results_json_view_and_palette_render(cx: &mut TestAppContext) {
         .update(cx, |ws, window, cx| {
             assert_eq!(ws.app.panels.settings_id(), Some(settings));
             assert_eq!(ws.app.panels.len(), 2);
-            // The edit was refused while the document is broken.
             assert!(ws.app.settings.text().contains(",,"));
             ws.open_palette(window, cx);
         })
@@ -820,8 +805,6 @@ fn settings_tab_results_json_view_and_palette_render(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-/// `appearance.zoom` scales gpui-kit's rem size, Volna's chrome and the wave
-/// table together, and changes it like a theme change: viewer state stays.
 #[gpui_kit::test]
 fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
     cx: &mut TestAppContext,
@@ -855,7 +838,6 @@ fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
             w.anchor = Some(2);
             w.names_width = 260.0;
             w.scroll_y = 48.0;
-            // A second group so the settings tab and a wave panel are both visible.
             ws.dispatch(Command::Action(Action::SplitRight), Some(window), cx);
             ws.dispatch(Command::Settings(SettingsCommand::Open), Some(window), cx);
             ws.dispatch(
@@ -900,23 +882,18 @@ fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
                 assert_eq!(t.zoom, zoom);
                 assert_eq!(t.row_height, design_row * zoom);
                 assert_eq!(t.ui_size, design_font * zoom);
-                // gpui-kit's Root derives the rem size from this font size.
                 assert_eq!(
                     gpui_kit::component::Theme::global(cx).font_size,
                     px(design_font * zoom)
                 );
                 assert_eq!(f32::from(window.rem_size()), design_font * zoom);
-                // The settings tab is open and has a live view.
                 assert_eq!(ws.app.panels.settings_id(), Some(settings));
                 let view = ws.settings_view(settings, window, cx);
                 assert!(view.read(cx).json.is_none());
-                // The wave panel was laid out and painted at this zoom.
                 let w = ws.app.panels.waves(waves).unwrap();
                 let layout = w.last_layout();
                 assert_eq!(layout.zoom, zoom, "wave panel rendered at zoom {zoom}");
                 assert_eq!(layout.row_h, design_row * zoom);
-                // Hit regions scale too; the names column is clamped to the
-                // (narrow, split) test panel at 2x, so check it where it fits.
                 assert_eq!(layout.names_split.width(), 8.0 * zoom);
                 if zoom <= 1.0 {
                     assert_eq!(layout.names.width(), 260.0 * zoom);
@@ -924,7 +901,6 @@ fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
                     assert!(layout.names.width() >= 72.0 * zoom);
                 }
                 assert!(layout.bounds.width() > 0.0 && w.frames_painted > 0);
-                // Viewer state is untouched, as for a theme change.
                 assert!(
                     matches!(ws.app.trace_state(), TraceState::Loaded(s) if Arc::ptr_eq(&s, &source))
                 );
@@ -932,12 +908,10 @@ fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
                 assert_eq!(w.names_width, 260.0);
                 assert!(w.selected.contains(&2));
                 assert_eq!(ws.app.doc.markers()[0].time, 30);
-                // The first visible row is the same at every zoom.
                 assert_eq!(w.scroll_y, 48.0 * zoom);
             })
             .unwrap();
     }
-    // Keyboard steps go through the settings file; reset removes the key.
     window
         .update(cx, |ws, window, cx| {
             ws.dispatch(
@@ -978,9 +952,6 @@ fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
         .unwrap();
 }
 
-/// A workspace hosted inside the component `Root`, updated like a plain window.
-/// Tabs close from their own close button after the title, as in Zed, and
-/// from a middle click; the toolbar no longer carries a close button.
 #[gpui_kit::test]
 fn tab_close_buttons_and_middle_click_close_their_own_tab(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, MouseButton, VisualTestContext};
@@ -1024,7 +995,6 @@ fn tab_close_buttons_and_middle_click_close_their_own_tab(cx: &mut TestAppContex
             "tab {id:?}"
         );
     }
-    // Press the second tab's close button.
     let tab = bounds(&mut vcx, format!("tab-{}", second.0)).unwrap();
     let close = bounds(&mut vcx, format!("tab-close-{}", second.0)).expect("close button");
     assert!(
@@ -1041,7 +1011,6 @@ fn tab_close_buttons_and_middle_click_close_their_own_tab(cx: &mut TestAppContex
             assert_eq!(ws.app.panels.settings_id(), Some(settings));
         })
         .unwrap();
-    // A middle click on the title closes a tab too.
     let tab = bounds(&mut vcx, format!("tab-{}", settings.0)).unwrap();
     vcx.simulate_mouse_move(tab.center(), None, Modifiers::default());
     vcx.simulate_mouse_down(tab.center(), MouseButton::Middle, Modifiers::default());
@@ -1055,8 +1024,6 @@ fn tab_close_buttons_and_middle_click_close_their_own_tab(cx: &mut TestAppContex
         .unwrap();
 }
 
-/// The signal menu's Height submenu is reachable from the keyboard, and the
-/// row-height actions reach the core through GPUI's action dispatch.
 #[gpui_kit::test]
 fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -1093,8 +1060,6 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
             })
             .unwrap()
     };
-    // All three new rows are selected: Shift+F10, then (past Group
-    // selection and Color) Height ▸ 2×.
     vcx.simulate_keystrokes("shift-f10");
     vcx.run_until_parked();
     assert!(
@@ -1112,7 +1077,6 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
             assert!(ws.wave_menu.is_none());
         })
         .unwrap();
-    // Palette actions act on the selection.
     vcx.update(|window, cx| {
         window.dispatch_action(Box::new(IncreaseRowHeight), cx);
     });
@@ -1132,8 +1096,6 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
     assert_eq!(heights(&mut vcx), [1, 1, 1]);
 }
 
-/// ⌘C / ⌘V (ctrl on Linux) on the wave panel duplicate rows that share data,
-/// and ⌘X removes them.
 #[gpui_kit::test]
 fn wave_copy_paste_keys_duplicate_rows(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -1207,7 +1169,6 @@ fn wave_copy_paste_keys_duplicate_rows(cx: &mut TestAppContext) {
     );
 }
 
-/// The status bar meter appears with a trace and fills with the used share.
 #[gpui_kit::test]
 fn status_bar_memory_meter_tracks_the_budget(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -1242,7 +1203,6 @@ fn status_bar_memory_meter_tracks_the_budget(cx: &mut TestAppContext) {
         .update(&mut vcx, |ws, _, _| ws.app.status().memory.unwrap())
         .unwrap();
     assert!(memory.used > 0);
-    // The label sits inside the pill, on top of the fill.
     let pill = bounds(&mut vcx, "status-memory").unwrap();
     assert_eq!(f32::from(pill.size.width), MEMORY_PILL_W);
     let label = bounds(&mut vcx, "status-memory-label").unwrap();
@@ -1261,11 +1221,9 @@ fn status_bar_memory_meter_tracks_the_budget(cx: &mut TestAppContext) {
         "{fill:?} for {memory:?}"
     );
 
-    // Clicking the meter opens its menu; Memory budget ▸ 1 GiB applies live.
     use gpui_kit::Modifiers;
     vcx.simulate_click(pill.center(), Modifiers::default());
     vcx.run_until_parked();
-    // Keep the pointer off the popup so hover cannot steer the keyboard.
     vcx.simulate_mouse_move(
         gpui_kit::point(gpui_kit::px(1.0), gpui_kit::px(1.0)),
         None,
@@ -1276,7 +1234,6 @@ fn status_bar_memory_meter_tracks_the_budget(cx: &mut TestAppContext) {
             .update(&mut vcx, |ws, _, _| ws.status_menu.is_some())
             .unwrap()
     );
-    // At the right edge of the window the submenus open to the left.
     vcx.simulate_keystrokes("down left down down enter");
     vcx.run_until_parked();
     window
@@ -1292,7 +1249,6 @@ fn status_bar_memory_meter_tracks_the_budget(cx: &mut TestAppContext) {
         .unwrap();
     assert!(label.ends_with("/ 1 GiB"), "{label}");
 
-    // Memory Settings… opens the Settings tab filtered to the memory page.
     vcx.simulate_click(pill.center(), Modifiers::default());
     vcx.run_until_parked();
     vcx.simulate_keystrokes("up enter");
@@ -1305,9 +1261,6 @@ fn status_bar_memory_meter_tracks_the_budget(cx: &mut TestAppContext) {
         .unwrap();
 }
 
-/// Long transient text is cropped in the message slot: it moves neither the
-/// memory meter nor anything else on the right, and a narrow window clips
-/// the left context before any right-hand tool.
 #[gpui_kit::test]
 fn status_bar_groups_stay_put_under_long_messages(cx: &mut TestAppContext) {
     use gpui_kit::{VisualTestContext, px, size};
@@ -1360,8 +1313,6 @@ fn status_bar_groups_stay_put_under_long_messages(cx: &mut TestAppContext) {
     let bar = slot.size.height;
     assert!(f32::from(bar) <= 24.0, "one line: {slot:?}");
 
-    // Too narrow for everything: the message empties, the left group is
-    // clipped, and the right group keeps its full width at the edge.
     vcx.simulate_resize(size(px(560.0), px(700.0)));
     let right = bounds(&mut vcx, "status-right");
     let meter = bounds(&mut vcx, "status-memory");
@@ -1644,15 +1595,12 @@ impl RootWindow {
     ) -> anyhow::Result<R> {
         use gpui_kit::AppContext as _;
         let workspace = self.workspace.clone();
-        // Lease only the workspace: dialogs update the root themselves.
         cx.update_window(self.root.into(), move |_, window, cx| {
             workspace.update(cx, |ws, cx| f(ws, window, cx))
         })
     }
 }
 
-/// `A` on the wave panel draws the selected vector as a plot and back, and
-/// the format popup hosts its Draw and Range sections.
 #[gpui_kit::test]
 fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -1706,7 +1654,6 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
         row(&mut vcx),
         (Some(volna_core::wave::analog::AnalogDraw::Step), 3)
     );
-    // A frame paints the plot; then the badge opens the format popup.
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     window
         .update(&mut vcx, |ws, window, cx| {
@@ -1744,7 +1691,6 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
             assert!(ws.wave_menu.is_some(), "the popup is hosted");
         })
         .unwrap();
-    // Escape closes the popup and returns the keys to the panel.
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
     assert!(
@@ -1757,9 +1703,6 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
     assert_eq!(row(&mut vcx), (None, 1));
 }
 
-/// Row colours: the signal menu hosts a Color
-/// submenu, and the palette's `Color: …` commands colour the selection as
-/// one undo step.
 #[gpui_kit::test]
 fn color_submenu_and_palette_commands_colour_the_selection(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -1792,7 +1735,6 @@ fn color_submenu_and_palette_commands_colour_the_selection(cx: &mut TestAppConte
         })
         .unwrap();
     vcx.run_until_parked();
-    // The hosted popup renders with its Color submenu.
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     window
         .update(&mut vcx, |ws, _, _| {
@@ -1847,9 +1789,6 @@ fn color_submenu_and_palette_commands_colour_the_selection(cx: &mut TestAppConte
         .unwrap();
 }
 
-/// Stacked areas from the keyboard and the group menu: `Shift+A` stacks a selected group as one
-/// step, the stacked row paints, the menu's Draw section shows it checked
-/// and its Activity entry unstacks it, and the palette lists the command.
 #[gpui_kit::test]
 fn shift_a_and_the_group_menu_stack_and_unstack_a_group(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -1878,7 +1817,6 @@ fn shift_a_and_the_group_menu_stack_and_unstack_a_group(cx: &mut TestAppContext)
         .unwrap();
     let mut vcx = VisualTestContext::from_window(root.into(), cx);
     vcx.run_until_parked();
-    // Escape keeps the name "Group 1"; the group stays selected.
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
     let style = |vcx: &mut VisualTestContext| {
@@ -1928,7 +1866,6 @@ fn shift_a_and_the_group_menu_stack_and_unstack_a_group(cx: &mut TestAppContext)
                 (&peak.action, peak.checked),
                 (&MenuAction::Peak(false), true)
             );
-            // The popup answers a choice with the command it carries.
             let panel = ws.app.panels.focused_id();
             ws.dispatch(
                 Command::MenuSelect(panel, MenuAction::Stack(false)),
@@ -1953,9 +1890,6 @@ fn shift_a_and_the_group_menu_stack_and_unstack_a_group(cx: &mut TestAppContext)
     );
 }
 
-/// Groups from the keyboard: `G` groups the selection and opens the name
-/// editor over the group, typing and Enter rename it, `F2` and Escape leave
-/// the name, `Alt+←`/`Alt+→` fold and unfold, and `Shift+G` dissolves it.
 #[gpui_kit::test]
 fn group_keys_and_the_hosted_name_editor(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -2031,7 +1965,6 @@ fn group_keys_and_the_hosted_name_editor(cx: &mut TestAppContext) {
             .is_none(),
         "a group's name field keeps the input's outline"
     );
-    // The name starts selected, so typing replaces it.
     vcx.simulate_keystrokes("a x i enter");
     vcx.run_until_parked();
     assert_eq!(
@@ -2049,7 +1982,6 @@ fn group_keys_and_the_hosted_name_editor(cx: &mut TestAppContext) {
             .update(&mut vcx, |ws, _, _| ws.rename.is_none())
             .unwrap()
     );
-    // The keys are the panel's again: F2 reopens the editor, Escape keeps the name.
     vcx.simulate_keystrokes("f2");
     vcx.run_until_parked();
     assert!(
@@ -2065,22 +1997,18 @@ fn group_keys_and_the_hosted_name_editor(cx: &mut TestAppContext) {
             .unwrap()
     );
     assert_eq!(outline(&mut vcx)[1], "-axi");
-    // After an arrow key the name is no longer selected and typing appends.
     vcx.simulate_keystrokes("f2 right 2 enter");
     vcx.run_until_parked();
     assert_eq!(outline(&mut vcx)[1], "-axi2");
-    // Enter alone keeps the selected name.
     vcx.simulate_keystrokes("f2 enter");
     vcx.run_until_parked();
     assert_eq!(outline(&mut vcx)[1], "-axi2");
-    // A double-click on the group's name opens the editor with the keys.
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let at = window
         .update(&mut vcx, |ws, _, _| {
             let w = ws.app.panels.focused_waves().unwrap();
             let l = w.last_layout();
             let (y, _) = l.entry_span(1).unwrap();
-            // The middle of the name, clear of the chevron and the sidebar's sash.
             let on_name: Vec<_> = (0..400)
                 .map(|dx| volna_core::geometry::point(l.names.left() + dx as f32, y + 4.0))
                 .filter(|&p| w.group_name_at(p) == Some(1))
@@ -2120,8 +2048,6 @@ fn group_keys_and_the_hosted_name_editor(cx: &mut TestAppContext) {
     assert_eq!(outline(&mut vcx), names);
 }
 
-/// A wave row becomes a tree item with its level, selection and, for a
-/// group, its expanded state.
 #[test]
 fn wave_rows_are_tree_items() {
     use gpui_kit::accesskit::Role;
@@ -2153,9 +2079,6 @@ fn wave_rows_are_tree_items() {
     assert_eq!(leaf.is_expanded(), None);
 }
 
-/// Undo keys reach the history from the panels; in the group name editor
-/// and the filter box they edit the text instead. The Edit menu and the
-/// palette name the steps (`volna/README.md`, "Undo and redo").
 #[gpui_kit::test]
 fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -2209,7 +2132,6 @@ fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppCo
     vcx.run_until_parked();
     assert_eq!(rows(&mut vcx).len(), 3);
 
-    // The Edit menu and the palette name the step.
     let edit_menu = |vcx: &mut VisualTestContext| {
         vcx.update(|_, cx| {
             let menus = cx.get_menus().expect("the application menu");
@@ -2271,7 +2193,6 @@ fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppCo
     }
     assert_eq!(rows(&mut vcx), all);
 
-    // In the group name editor, undo edits the name.
     window
         .update(&mut vcx, |ws, _, _| {
             let w = ws.app.panels.focused_waves_mut().unwrap();
@@ -2319,7 +2240,6 @@ fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppCo
     assert_eq!(steps(&mut vcx), grouped, "naming joins the group's step");
     assert_eq!(rows(&mut vcx)[1], "a");
 
-    // In the filter box too; the panel's undo then takes the group back.
     window
         .update(&mut vcx, |ws, window, cx| {
             let handle = ws.filter.read(cx).focus_handle(cx);
@@ -2350,8 +2270,6 @@ fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppCo
     assert_eq!(rows(&mut vcx), all);
 }
 
-/// `.` `,` `1`–`9` and `` ` `` walk the focused panel's cursor between
-/// markers, and the status bar says where it landed.
 #[gpui_kit::test]
 fn marker_walk_keys_move_the_cursor(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -2404,8 +2322,6 @@ fn marker_walk_keys_move_the_cursor(cx: &mut TestAppContext) {
     assert_eq!(state(&mut vcx), (Some(far), Some("No marker 9".into())));
 }
 
-/// Numbered placement and jumps use the same marker identities; panel focus
-/// has a separate modifier so placing marker 2 keeps the active panel.
 #[gpui_kit::test]
 fn ctrl_digits_place_and_move_markers_while_bare_digits_jump(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -2494,8 +2410,6 @@ fn ctrl_digits_place_and_move_markers_while_bare_digits_jump(cx: &mut TestAppCon
         .unwrap();
 }
 
-/// `M` on a marker, or a double-click on its chip, opens a name field over
-/// the chip; the field keeps the keys the panel binds, and `↵` names it.
 #[gpui_kit::test]
 fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppContext) {
     use gpui_kit::{
@@ -2558,7 +2472,6 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
     assert!(
         f32::from(field.origin.x) > chip.left() && f32::from(field.origin.y) >= chip.top() - 4.0
     );
-    // Outlined in marker 1's chip colour.
     let (accent, chip) = window
         .update(&mut vcx, |ws, _, cx| {
             let chip = crate::theme::core_theme(cx)
@@ -2572,7 +2485,6 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
         })
         .unwrap();
     assert_eq!(accent, Some(chip));
-    // `2` and `.` walk markers in the panel, but type into the field.
     vcx.simulate_keystrokes("r e q space 2 . enter");
     draw(&mut vcx);
     assert_eq!(names(&mut vcx), (Some("req 2.".into()), None, Some(near)));
@@ -2581,7 +2493,6 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
         "Enter closes the field"
     );
 
-    // A double-click on marker 2's chip opens its field; Escape cancels.
     let chip = window
         .update(&mut vcx, |ws, _, _| {
             ws.app.panels.focused().kind.marker_lane().unwrap().chips[1].rect
@@ -2625,7 +2536,6 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
     draw(&mut vcx);
     assert_eq!(names(&mut vcx), (Some("req 2.".into()), None, Some(far)));
     assert!(vcx.debug_bounds("marker-name").is_none());
-    // Double-click again and type a name.
     for click_count in [1, 2] {
         vcx.simulate_event(MouseDownEvent {
             button: MouseButton::Left,
@@ -2650,7 +2560,6 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
     );
 }
 
-/// A double-click on the span between two markers zooms the panel to them.
 #[gpui_kit::test]
 fn double_click_on_a_span_zooms_to_it(cx: &mut TestAppContext) {
     use gpui_kit::{
@@ -2716,9 +2625,6 @@ fn double_click_on_a_span_zooms_to_it(cx: &mut TestAppContext) {
     assert!(v.width() < (b - a) * 1.5, "zoomed in to the span: {v:?}");
 }
 
-/// `R` measures from the cursor, `⇧R` stops, `Z` zooms to the measurement,
-/// a double-click on the live span zooms to it too, and the Measure lane's
-/// `×` clears the reference.
 #[gpui_kit::test]
 fn reference_keys_and_a_double_click_on_the_live_span(cx: &mut TestAppContext) {
     use gpui_kit::{
@@ -2771,7 +2677,6 @@ fn reference_keys_and_a_double_click_on_the_live_span(cx: &mut TestAppContext) {
         "{v:?}"
     );
 
-    // Zoom out again, then double-click the live span.
     vcx.simulate_keystrokes("f");
     vcx.run_until_parked();
     vcx.update(|window, cx| window.draw(cx).clear(cx));
@@ -2813,7 +2718,6 @@ fn reference_keys_and_a_double_click_on_the_live_span(cx: &mut TestAppContext) {
         v.start < fa && v.end > fb && v.width() < (fb - fa) * 1.5,
         "{v:?}"
     );
-    // A click on the Measure lane's × clears the reference.
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let clear = window
         .update(&mut vcx, |ws, _, _| {
@@ -2842,9 +2746,6 @@ fn reference_keys_and_a_double_click_on_the_live_span(cx: &mut TestAppContext) {
     assert_eq!(reference(&mut vcx), None);
 }
 
-/// A marker chip drags with the mouse as one step, a right-click hosts its
-/// menu, *Copy as Text* reaches the clipboard, and a double-click on the
-/// time header adds a marker.
 #[gpui_kit::test]
 fn marker_chips_drag_open_menus_copy_and_double_click_adds(cx: &mut TestAppContext) {
     use gpui_kit::{
@@ -2921,7 +2822,6 @@ fn marker_chips_drag_open_menus_copy_and_double_click_adds(cx: &mut TestAppConte
     assert!(moved > a, "{moved} > {a}");
     assert_eq!(label.as_deref(), Some("Move marker 1"));
 
-    // A right-click on the chip hosts its menu; Copy as Text fills the clipboard.
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let (x, y) = chip(&mut vcx);
     vcx.simulate_event(MouseDownEvent {
@@ -2957,7 +2857,6 @@ fn marker_chips_drag_open_menus_copy_and_double_click_adds(cx: &mut TestAppConte
         .unwrap_or_default();
     assert!(copied.contains(" marker 1 at "), "{copied}");
 
-    // A double-click on the time header marks where it lands.
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let (hx, hy) = window
         .update(&mut vcx, |ws, _, _| {
@@ -2994,9 +2893,6 @@ fn marker_chips_drag_open_menus_copy_and_double_click_adds(cx: &mut TestAppConte
     assert_eq!(last, cursor);
 }
 
-/// `'` opens the palette's marker mode: rows in time order, filtered by
-/// typing, where `⇧↵` measures from the highlighted marker, `Del` removes it
-/// and keeps the list, `F2` renames it and `↵` goes to it.
 #[gpui_kit::test]
 fn the_marker_navigator_lists_filters_and_acts_on_markers(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -3060,15 +2956,12 @@ fn the_marker_navigator_lists_filters_and_acts_on_markers(cx: &mut TestAppContex
     let (one, three) = rows(&mut vcx).unwrap();
     assert!(one.top() < three.top(), "in time order");
 
-    // Typing filters by name words. With nothing highlighted, Del edits the
-    // query as usual: removing the stray "x" brings “req B” back.
     vcx.simulate_input(" req bx");
     vcx.run_until_parked();
     assert_eq!(shown(&mut vcx), [false; 3]);
     vcx.simulate_keystrokes("left delete");
     vcx.run_until_parked();
     assert_eq!(shown(&mut vcx), [false, false, true]);
-    // ⇧↵ measures from the match without moving the cursor.
     vcx.simulate_keystrokes("shift-enter");
     vcx.run_until_parked();
     let (reference, cursor) = window
@@ -3085,7 +2978,6 @@ fn the_marker_navigator_lists_filters_and_acts_on_markers(cx: &mut TestAppContex
     assert_eq!(cursor, Some(start), "no jump");
     assert_eq!(shown(&mut vcx), [false; 3], "the palette closed");
 
-    // Del removes the highlighted marker and keeps the list open.
     vcx.simulate_keystrokes("'");
     vcx.run_until_parked();
     vcx.simulate_keystrokes("delete");
@@ -3096,7 +2988,6 @@ fn the_marker_navigator_lists_filters_and_acts_on_markers(cx: &mut TestAppContex
         .unwrap();
     assert_eq!(label.as_deref(), Some("Remove marker 1"));
 
-    // F2 opens the highlighted marker's name field.
     vcx.simulate_keystrokes("f2");
     vcx.run_until_parked();
     let edit = window
@@ -3106,7 +2997,6 @@ fn the_marker_navigator_lists_filters_and_acts_on_markers(cx: &mut TestAppContex
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
 
-    // ↵ goes to a marker found by number.
     vcx.simulate_keystrokes("'");
     vcx.run_until_parked();
     vcx.simulate_input("3");
@@ -3119,9 +3009,6 @@ fn the_marker_navigator_lists_filters_and_acts_on_markers(cx: &mut TestAppContex
     assert_eq!(cursor, Some(times[2]));
 }
 
-/// Typing "mar…" in the palette shows markers under the commands, filtered
-/// by the other words, and *Find Marker… (@)* switches the open palette to
-/// the marker mode.
 #[gpui_kit::test]
 fn the_palette_offers_markers_when_the_query_asks_for_them(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -3187,7 +3074,6 @@ fn the_palette_offers_markers_when_the_query_asks_for_them(cx: &mut TestAppConte
         "the other words filter"
     );
 
-    // Find Marker… switches to @ in place: the palette stays open with all.
     vcx.simulate_keystrokes("escape");
     vcx.run_until_parked();
     vcx.simulate_input("find marker");
@@ -3195,7 +3081,6 @@ fn the_palette_offers_markers_when_the_query_asks_for_them(cx: &mut TestAppConte
     vcx.simulate_keystrokes("enter");
     vcx.run_until_parked();
     assert_eq!(shown(&mut vcx), [true; 3]);
-    // Still the palette: ↵ goes to the first marker and closes it.
     vcx.simulate_keystrokes("enter");
     vcx.run_until_parked();
     assert_eq!(shown(&mut vcx), [false; 3]);
@@ -3207,8 +3092,6 @@ fn the_palette_offers_markers_when_the_query_asks_for_them(cx: &mut TestAppConte
     assert_eq!(at.0, Some(at.1));
 }
 
-/// A command chosen in the palette with the keyboard runs in the panel
-/// that had focus before the palette opened.
 #[gpui_kit::test]
 fn palette_commands_chosen_by_keyboard_reach_the_panel(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -3252,8 +3135,6 @@ fn palette_commands_chosen_by_keyboard_reach_the_panel(cx: &mut TestAppContext) 
     vcx.run_until_parked();
     assert_eq!(markers(&mut vcx), 0, "Remove All Markers ran");
 
-    // A command that opens a name field leaves the keys in it once the
-    // palette has closed.
     vcx.simulate_keystrokes("m");
     vcx.run_until_parked();
     assert_eq!(markers(&mut vcx), 1);
@@ -3274,9 +3155,6 @@ fn palette_commands_chosen_by_keyboard_reach_the_panel(cx: &mut TestAppContext) 
     assert_eq!(name.as_deref(), Some("irq"));
 }
 
-/// The start page lists what was opened, newest first; the keys reopen it,
-/// a missing file stays listed, and a workspace is listed as itself
-/// (`volna/README.md`, "Workspace persistence").
 #[gpui_kit::test]
 fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
     use crate::native_workspace::{Store, file_uri};
@@ -3361,7 +3239,6 @@ fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
     assert_eq!(labels.len(), 3, "{labels:?}");
     assert!(labels[0].starts_with("Open Recent: b.vtr — "), "{labels:?}");
 
-    // The missing file: the usual error, and the entry stays.
     vcx.simulate_keystrokes("down enter");
     draw(&mut vcx);
     window
@@ -3371,7 +3248,6 @@ fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
         .unwrap();
     assert_eq!(names(&mut vcx).len(), 2);
 
-    // Enter on the newest entry reopens it.
     vcx.simulate_keystrokes("home enter");
     draw(&mut vcx);
     let workspace_file = temporary.path().join("debug.volna.json");
@@ -3395,7 +3271,6 @@ fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
     draw(&mut vcx);
     assert!(workspace_file.exists());
 
-    // A workspace opened by path is listed as itself, naming its trace.
     window
         .update(&mut vcx, |ws, window, cx| {
             ws.dispatch(Command::CloseTrace, Some(window), cx);
@@ -3416,7 +3291,6 @@ fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
     draw(&mut vcx);
     assert_eq!(names(&mut vcx)[0].0, "debug");
 
-    // Digits open by position; Delete removes the selected entry.
     vcx.simulate_keystrokes("3");
     draw(&mut vcx);
     assert!(
@@ -3440,10 +3314,6 @@ fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
     assert!(!saved.contains("a.vtr"));
 }
 
-/// Two traces side by side: the
-/// title bar shows a chip per trace, the scope tree heads each trace's
-/// scopes with its own row, a chip click selects that row, the command
-/// line's second file joins the first, and a pipeline tab names its trace.
 #[gpui_kit::test]
 fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
     use gpui_kit::Modifiers;
@@ -3470,7 +3340,6 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
     };
     window
         .update(cx, |ws, _, cx| {
-            // This test needs both trace rows in view; build banners have their own test.
             ws.app.handle(Command::Settings(SettingsCommand::Set {
                 id: "hierarchy.activityIndex".into(),
                 value: volna_core::settings::Value::Text("never".into()),
@@ -3516,7 +3385,6 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
         })
         .unwrap();
     draw(&mut vcx);
-    // The palette names each trace's verbs; A closes only with everything.
     window
         .update(&mut vcx, |ws, _, _| {
             let labels: Vec<String> = crate::palette::commands(&ws.app, "")
@@ -3535,7 +3403,6 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
             assert!(!labels.iter().any(|l| l == "Close Trace A cpu.vtr"));
         })
         .unwrap();
-    // Closing B leaves A alone, named plainly again.
     window
         .update(&mut vcx, |ws, window, cx| {
             ws.dispatch(Command::RemoveTrace(b_id), Some(window), cx);
@@ -3547,8 +3414,6 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
     assert!(vcx.debug_bounds("trace-row-A").is_none());
 }
 
-/// Volna Mixed is a light window around a Volna Dark wave panel whatever the
-/// system says; `volna` follows the system everywhere, waves included.
 #[gpui_kit::test]
 fn volna_mixed_is_a_light_window_with_dark_waves_whatever_the_system(cx: &mut TestAppContext) {
     init(cx);
@@ -3572,7 +3437,6 @@ fn volna_mixed_is_a_light_window_with_dark_waves_whatever_the_system(cx: &mut Te
         assert!(ws.app.panels.waves(waves).is_some());
         (waves, ws.app.doc.generation())
     });
-    // The theme the wave panel's canvas paints with.
     let panel_theme = |cx: &mut TestAppContext| {
         cx.update(|cx| {
             crate::canvas::PanelCanvas::new(workspace.clone(), waves, generation).core_theme(cx)
@@ -3589,7 +3453,6 @@ fn volna_mixed_is_a_light_window_with_dark_waves_whatever_the_system(cx: &mut Te
         })
     };
     let chrome = |cx: &mut TestAppContext| cx.update(|cx| *crate::theme::core_theme(cx));
-    // A light system: light chrome, dark waves.
     set(cx, Some("volna-mixed"), false);
     assert_eq!(chrome(cx).editor.bg, light.editor.bg);
     cx.update(|cx| {
@@ -3600,11 +3463,9 @@ fn volna_mixed_is_a_light_window_with_dark_waves_whatever_the_system(cx: &mut Te
         assert_eq!(crate::theme::canvas_theme(cx).editor.bg, dark.editor.bg);
     });
     assert_eq!(panel_theme(cx).wave_signal, dark.wave_signal);
-    // The system turns dark: nothing changes.
     set(cx, None, true);
     assert_eq!(chrome(cx).editor.bg, light.editor.bg);
     assert_eq!(panel_theme(cx).editor.bg, dark.editor.bg);
-    // `volna` follows the system, in the waves too.
     set(cx, Some("volna"), true);
     assert_eq!(chrome(cx).editor.bg, dark.editor.bg);
     set(cx, None, false);
@@ -3612,8 +3473,6 @@ fn volna_mixed_is_a_light_window_with_dark_waves_whatever_the_system(cx: &mut Te
     assert_eq!(chrome(cx).editor.bg, light.editor.bg);
 }
 
-/// With a trace open the Settings tab sits in the dock; its search box
-/// still receives letters the wave keymap binds (`m`, `f`, `s`).
 #[gpui_kit::test]
 fn settings_search_takes_wave_keys_while_a_trace_is_open(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -3695,7 +3554,6 @@ fn activity_build_banner_drives_build_dismiss_and_cancel(cx: &mut TestAppContext
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("activity-banner-A").is_none());
     assert!(!trace.with_extension("vtr.index").exists());
-    // Reopening offers again; Build installs the index through the executor.
     window
         .update(&mut vcx, |ws, _, cx| ws.open_path(trace.clone(), cx))
         .unwrap();
@@ -3706,7 +3564,6 @@ fn activity_build_banner_drives_build_dismiss_and_cancel(cx: &mut TestAppContext
         .expect("Build after reopen");
     vcx.simulate_click(build.center(), Modifiers::default());
     vcx.run_until_parked();
-    // The build and then the census/classification finish through the load loop.
     for _ in 0..3 {
         vcx.update(|window, cx| window.draw(cx).clear(cx));
         vcx.run_until_parked();
@@ -3718,7 +3575,6 @@ fn activity_build_banner_drives_build_dismiss_and_cancel(cx: &mut TestAppContext
             assert!(ws.app.doc.session(TraceId::A).unwrap().activity().is_some());
         })
         .unwrap();
-    // Hold the queued load to draw and click Cancel deterministically.
     let other = dir.path().join("other.vtr");
     std::fs::copy(&trace, &other).unwrap();
     window
@@ -3748,7 +3604,6 @@ fn activity_build_banner_drives_build_dismiss_and_cancel(cx: &mut TestAppContext
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("activity-banner-A").is_none());
     assert!(!other.with_extension("vtr.index").exists());
-    // Several missing indexes keep the scope tree usable rather than filling its panel.
     let mut paths = Vec::new();
     for i in 0..4 {
         let path = dir.path().join(format!("trace-{i}.vtr"));
@@ -3767,7 +3622,6 @@ fn activity_build_banner_drives_build_dismiss_and_cancel(cx: &mut TestAppContext
     assert!(tree.size.height >= panel.size.height * 0.4);
 }
 
-/// The remote offer is ordinary GPUI chrome over the shared activity model.
 #[gpui_kit::test]
 fn remote_activity_banner_names_the_reader_and_dismisses(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext};
@@ -3917,8 +3771,6 @@ fn clicking_waveform_appearance_steppers_repaints_visible_panels(cx: &mut TestAp
     }
 }
 
-/// The overlay action reaches the core through the Waves key context, and
-/// the native group popup exposes its drawing and amplitude choices.
 #[gpui_kit::test]
 fn shift_o_toggles_group_overlays_and_hosts_their_menu(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
@@ -4098,7 +3950,6 @@ fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut T
             );
             assert_eq!(ws.app.doc.shared.cursor, Some(time));
             assert_eq!(ws.app.panels.focused_id(), detail);
-            // Workspace chrome retains the core panel selection.
             window.focus(&ws.focus_handle, cx);
             cx.notify();
         })

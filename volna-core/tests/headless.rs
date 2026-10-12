@@ -1,5 +1,4 @@
-//! Headless viewer tests: feed commands, assert on model state and on the
-//! display list. No GPU, no window, every platform.
+//! Headless viewer tests: feed commands, assert on model state and on the display list.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
@@ -23,8 +22,6 @@ use volna_trace::data::{
 };
 use volna_trace::session::{OpenSpec, Session};
 
-/// A procedural source that counts loads, can fail on demand, and has an
-/// alias variable sharing signal 0.
 struct Source {
     inner: ProceduralTrace,
     hierarchy: Hierarchy,
@@ -62,8 +59,6 @@ impl Session for Source {
     }
 }
 
-/// Perform every queued load synchronously, like a frontend with an
-/// executor that finishes before the next frame.
 fn pump(app: &mut App) {
     loop {
         let requests = app.take_requests();
@@ -86,12 +81,10 @@ fn frame(app: &mut App, theme: &Theme) {
     app.render_panel(app.panels.focused_id(), theme, &mut MonoMeasure);
 }
 
-/// A trace with an empty waveform panel where the start panel was.
 fn loaded_app(n: usize) -> (App, Arc<Source>) {
     let source = Source::new(n);
     let mut app = App::new();
     app.set_session(source.clone());
-    // The open's own work: count scope sizes.
     for request in app.take_requests() {
         app.deliver(request.perform());
     }
@@ -100,7 +93,6 @@ fn loaded_app(n: usize) -> (App, Arc<Source>) {
     (app, source)
 }
 
-/// The generation trace A's loads are requested under.
 fn loads(app: &App) -> u64 {
     app.doc.traces().get(TraceId::A).unwrap().generation()
 }
@@ -224,7 +216,6 @@ fn aliases_share_pending_and_loaded_histories() {
     app.handle(Command::AddVars(a_all(vec![0, alias, 0])));
     assert_eq!(app.doc.pending_count(), 1);
     assert_eq!(app.take_requests().len(), 1);
-    // Rows share one history once it arrives.
     let signal = source.hierarchy.var(0).signal;
     let history = source.inner.load_signal(signal).unwrap();
     app.deliver(LoadResult::Signals {
@@ -265,7 +256,6 @@ fn stale_results_cannot_fill_rows_or_clear_new_pending_loads() {
     app.handle(Command::AddVars(a_all(vec![0])));
     let old = loads(&app);
     let _stale = app.take_requests();
-    // Reopening even the same session creates a new generation.
     app.set_session(source.clone());
     app.handle(Command::AddVars(a_all(vec![0])));
     let signal = source.hierarchy.var(0).signal;
@@ -439,7 +429,6 @@ fn latest_open_wins_and_a_stale_open_cannot_replace_the_trace() {
         generation: new_gen,
         result: Ok(current.clone()),
     });
-    // The slow open completes later and must not apply.
     app.deliver(LoadResult::Opened {
         trace: TraceId::A,
         generation: slow_gen,
@@ -509,7 +498,6 @@ fn cursor_markers_and_selection_follow_the_document() {
     pump(&mut app);
     frame(&mut app, &theme);
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();
-    // Click in the waves of row 1 sets the cursor and selects the row.
     let p = point(layout.waves.left() + 300.0, layout.row_y(1) + 12.0);
     app.handle(Command::Pointer(
         app.panels.focused_id(),
@@ -521,8 +509,6 @@ fn cursor_markers_and_selection_follow_the_document() {
     ));
     app.handle(Command::Pointer(app.panels.focused_id(), PointerEvent::Up));
     let cursor = app.doc.shared.cursor.expect("cursor set");
-    // Row 1 was already selected (new rows select themselves), so a plain
-    // click keeps the multi-selection, as a drag start should.
     assert_eq!(
         app.panels
             .focused_waves()
@@ -553,7 +539,6 @@ fn cursor_markers_and_selection_follow_the_document() {
             .collect::<Vec<_>>(),
         vec![1]
     );
-    // Markers are document state.
     app.handle(Command::Action(Action::AddOrRenameMarker));
     app.handle(Command::Action(Action::AddOrRenameMarker));
     assert_eq!(app.doc.markers().len(), 1, "duplicate marker is ignored");
@@ -563,7 +548,6 @@ fn cursor_markers_and_selection_follow_the_document() {
         app.scene().texts().any(|t| t == "1"),
         "marker chip is painted"
     );
-    // Shift-click on the chip no longer removes it; ⇧M removes the marker at the cursor.
     let chip = app
         .panels
         .focused_waves()
@@ -595,13 +579,11 @@ fn cursor_markers_and_selection_follow_the_document() {
             .contains(&Event::Announce("No marker at the cursor".into())),
         "⇧M with no marker at the cursor says so"
     );
-    // Escape: clear selection first, then cursor.
     app.handle(Command::Action(Action::ClearSelection));
     assert!(app.panels.focused_waves().unwrap().selected.is_empty());
     assert_eq!(app.doc.shared.cursor, Some(cursor));
     app.handle(Command::Action(Action::ClearSelection));
     assert_eq!(app.doc.shared.cursor, None);
-    // Name-column clicks select with modifiers.
     let name_p = |row: usize| point(layout.names.left() + 20.0, layout.row_y(row) + 12.0);
     app.handle(Command::Pointer(
         app.panels.focused_id(),
@@ -821,7 +803,6 @@ fn zoom_pan_and_fit_are_deterministic_with_an_explicit_clock() {
     let panned = app.panels.focused_waves().unwrap().viewport(&app.doc);
     assert!(panned.start > zoomed.start);
     assert!((panned.width() - zoomed.width()).abs() < 1e-6);
-    // Drag-pan with the right button.
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();
     let before = app.panels.focused_waves().unwrap().viewport(&app.doc).start;
     app.handle(Command::Pointer(
@@ -843,7 +824,6 @@ fn zoom_pan_and_fit_are_deterministic_with_an_explicit_clock() {
         app.panels.focused_waves().unwrap().viewport(&app.doc).start > before,
         "drag left pans right"
     );
-    // Wheel with the secondary modifier zooms about the pointer, immediately.
     let dragged = app.panels.focused_waves().unwrap().viewport(&app.doc);
     app.handle(Command::Pointer(
         app.panels.focused_id(),
@@ -867,8 +847,6 @@ fn zoom_pan_and_fit_are_deterministic_with_an_explicit_clock() {
             .width()
             > dragged.width()
     );
-    // Fit leaves a 12 px margin on each side, so the shade outside the
-    // trace shows that all of it is on screen.
     app.handle_at(Command::Action(Action::ZoomFit), t0);
     app.tick(t0 + Duration::from_secs(1));
     let fitted = app.panels.focused_waves().unwrap().viewport(&app.doc);
@@ -890,7 +868,6 @@ fn zoom_pan_and_fit_are_deterministic_with_an_explicit_clock() {
     assert!(status.px_per.as_deref().unwrap().starts_with("1 px = "));
 }
 
-/// A 1-bit history with a burst of changes in the middle of a quiet trace.
 struct Burst;
 
 impl SignalHistory for Burst {
@@ -904,7 +881,7 @@ impl SignalHistory for Burst {
         match i {
             0 => 0,
             1001 => 100_000,
-            i => 50_000 + i as u64, // 1000 changes within 1000 time units
+            i => 50_000 + i as u64,
         }
     }
     fn value(&self, i: Option<usize>) -> WaveValue {
@@ -973,8 +950,6 @@ fn dense_columns_collapse_into_one_band_and_zooming_in_resolves_edges() {
     app.handle(Command::AddVars(a_all(vec![0])));
     pump(&mut app);
     frame(&mut app, &theme);
-    // An aliased column is the signal colour at a strength that follows its
-    // change count; the burst puts a hundred changes in every column.
     let aliased =
         |c: &volna_core::Color| c.with_alpha(1.0) == theme.wave_signal && (0.3..1.0).contains(&c.a);
     let dense: Vec<_> = app.scene().quads().filter(|(_, c)| aliased(c)).collect();
@@ -991,7 +966,6 @@ fn dense_columns_collapse_into_one_band_and_zooming_in_resolves_edges() {
         (f64::from(band.width()) - expected_w).abs() <= 2.0,
         "band {band:?} vs {expected_w}"
     );
-    // Zoomed in far enough, every change is its own edge and nothing is dense.
     let t0 = Instant::now();
     app.doc.shared.viewport.value.start = 50_100.0;
     app.doc.shared.viewport.value.end = 50_120.0;
@@ -1038,7 +1012,6 @@ fn format_menu_and_translator_cycle() {
         .expect("menu opened");
     assert_eq!(menu.kind, WaveMenuKind::Format);
     assert!(menu.items().any(|i| i.checked));
-    // Formats, then the Draw section of a numeric vector.
     assert!(menu.items().all(|item| matches!(
         item.action,
         volna_core::wave::model::MenuAction::Format(_)
@@ -1087,7 +1060,6 @@ fn format_menu_and_translator_cycle() {
             .id(),
         format
     );
-    // Escape closes an open menu before touching the selection.
     app.handle(Command::Pointer(
         app.panels.focused_id(),
         PointerEvent::Down {
@@ -1236,7 +1208,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
     let waves = app.panels.focused_id();
     let row_h = app.panels.waves(waves).unwrap().last_layout().row_h;
 
-    // A plain right-click on row 1 selects it alone; 1× is checked.
     app.handle(Command::Action(Action::ClearSelection));
     let layout = app.panels.waves(waves).unwrap().last_layout().clone();
     app.handle(Command::Pointer(
@@ -1255,7 +1226,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
     assert!(app.panels.waves(waves).unwrap().menu.is_none());
     assert_eq!(heights(&app), [1, 4, 1, 1]);
 
-    // Mixed heights check nothing; a choice applies to the whole group.
     app.handle(Command::Action(Action::SelectAll));
     app.handle(Command::OpenSignalMenu(waves));
     assert_eq!(height_checks(&app), Vec::<u8>::new());
@@ -1268,8 +1238,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
     assert_eq!(height_checks(&app), [2]);
     app.handle(Command::MenuDismiss(waves));
 
-    // Only row 2 becomes 8×. Everything below it moves down, and a click
-    // anywhere in its height lands on it.
     app.handle(Command::Action(Action::ClearSelection));
     frame(&mut app, &theme);
     let layout = app.panels.waves(waves).unwrap().last_layout().clone();
@@ -1320,8 +1288,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
     app.handle(Command::Pointer(waves, PointerEvent::Up));
     assert!(app.panels.waves(waves).unwrap().selected.contains(&2));
 
-    // The selected row's highlight and its waveform span all eight lines;
-    // its name stays on the first line.
     let name = app.panels.waves(waves).unwrap().items()[2]
         .name()
         .to_owned();
@@ -1368,7 +1334,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
 fn row_height_actions_step_presets_and_keep_the_anchor_row_on_screen() {
     let theme = Theme::one_dark();
     let (mut app, _) = loaded_app(100);
-    // Aliased rows of one variable are independent rows.
     app.handle(Command::AddVars(a_all(vec![0; 60])));
     pump(&mut app);
     frame(&mut app, &theme);
@@ -1397,7 +1362,6 @@ fn row_height_actions_step_presets_and_keep_the_anchor_row_on_screen() {
         let h = heights(&app);
         assert_eq!((h[5], h[30], h[6]), (expected, expected, 1), "{action:?}");
         frame(&mut app, &theme);
-        // Row 5 grew above the viewport; row 30 did not move on screen.
         assert_eq!(
             app.panels.waves(waves).unwrap().last_layout().row_y(30),
             before,
@@ -1416,7 +1380,6 @@ fn row_names(app: &App, panel: volna_core::panels::PanelId) -> Vec<String> {
         .collect()
 }
 
-/// Point on the name cell of `row`, `frac` of the way down it.
 fn name_point(app: &App, row: usize, frac: f32) -> volna_core::geometry::Point {
     let layout = app.panels.focused_waves().unwrap().last_layout();
     point(
@@ -1478,7 +1441,6 @@ fn dragging_signal_names_reorders_rows_and_keeps_them_selected() {
     let names = row_names(&app, waves);
     let order = |ix: &[usize]| ix.iter().map(|&i| names[i].clone()).collect::<Vec<_>>();
 
-    // A press that barely moves is a click: it selects without a drop line.
     press_row(&mut app, 4, 0.5, Modifiers::default());
     move_row(&mut app, 4, 0.6);
     frame(&mut app, &theme);
@@ -1489,8 +1451,6 @@ fn dragging_signal_names_reorders_rows_and_keeps_them_selected() {
     let w = app.panels.focused_waves().unwrap();
     assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [4]);
 
-    // Drag row 4 into the upper half of row 1: the line marks the gap above
-    // row 1 and the drop inserts it there.
     press_row(&mut app, 4, 0.5, Modifiers::default());
     move_row(&mut app, 2, 0.5);
     move_row(&mut app, 1, 0.25);
@@ -1508,8 +1468,6 @@ fn dragging_signal_names_reorders_rows_and_keeps_them_selected() {
     assert_eq!(w.anchor, Some(1));
     assert!(w.drag.is_none());
 
-    // A scattered group moves together, in order, to the end. Pressing on a
-    // selected row keeps the group; the lower half of the last row is the end.
     press_row(&mut app, 0, 0.5, Modifiers::default());
     release(&mut app);
     let ctrl = Modifiers {
@@ -1530,8 +1488,6 @@ fn dragging_signal_names_reorders_rows_and_keeps_them_selected() {
     let w = app.panels.focused_waves().unwrap();
     assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [4, 5]);
 
-    // A drop that would not change the order shows no line and is a click:
-    // the group narrows to the pressed row.
     frame(&mut app, &theme);
     press_row(&mut app, 5, 0.5, Modifiers::default());
     move_row(&mut app, 4, 0.3);
@@ -1542,7 +1498,6 @@ fn dragging_signal_names_reorders_rows_and_keeps_them_selected() {
     let w = app.panels.focused_waves().unwrap();
     assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [5]);
 
-    // Escape cancels a drag in flight.
     frame(&mut app, &theme);
     press_row(&mut app, 5, 0.5, Modifiers::default());
     move_row(&mut app, 0, 0.1);
@@ -1558,7 +1513,6 @@ fn dragging_rows_past_an_edge_scrolls_and_keeps_heights_with_their_rows() {
     let waves = app.panels.focused_id();
     app.handle(Command::AddVars(a_all((0..40).map(|i| i % 8))));
     pump(&mut app);
-    // Row 0 is 4× tall; it keeps its height wherever it goes.
     frame(&mut app, &theme);
     press_row(&mut app, 0, 0.5, Modifiers::default());
     release(&mut app);
@@ -1591,7 +1545,6 @@ fn dragging_rows_past_an_edge_scrolls_and_keeps_heights_with_their_rows() {
         panic!("dragging with a gap");
     };
     assert!(gap > 20, "gap follows the scroll: {gap}");
-    // Leaving the edge zone stops scrolling.
     move_to(&mut app, point(40.0, bottom - 100.0));
     frame(&mut app, &theme);
     assert!(!app.is_animating());
@@ -1616,11 +1569,9 @@ fn copied_rows_paste_as_duplicates_sharing_data_in_any_wave_panel() {
     pump(&mut app);
     assert_eq!(source.loads.load(SeqCst), 3);
     let names = row_names(&app, waves);
-    // Paste with an empty clipboard is a no-op.
     app.handle(Command::Action(Action::PasteSignals));
     assert_eq!(row_names(&app, waves), names);
 
-    // Style the "clock" row, then duplicate it three times.
     app.panels.focused_waves_mut().unwrap().selected = [0].into();
     app.handle(Command::Action(Action::CycleFormat));
     app.handle(Command::Action(Action::IncreaseRowHeight));
@@ -1663,7 +1614,6 @@ fn copied_rows_paste_as_duplicates_sharing_data_in_any_wave_panel() {
         "the clipboard does not hold trace data"
     );
 
-    // Paste goes below the selection and works in another wave panel.
     app.panels.focused_waves_mut().unwrap().selected = [1, 2].into();
     app.handle(Command::Action(Action::CopySignals));
     app.handle(Command::Action(Action::NewPanel));
@@ -1677,7 +1627,6 @@ fn copied_rows_paste_as_duplicates_sharing_data_in_any_wave_panel() {
     );
     assert!(app.take_requests().is_empty());
 
-    // Cut and paste moves rows; data dropped meanwhile loads again.
     app.handle(Command::Action(Action::SelectAll));
     app.handle(Command::Action(Action::CutSignals));
     assert!(row_names(&app, other).is_empty());
@@ -1708,7 +1657,6 @@ fn copied_rows_paste_as_duplicates_sharing_data_in_any_wave_panel() {
             .all(|row| row.signal().unwrap().history.is_some())
     );
 
-    // The signal menu offers Paste only with rows on the clipboard.
     app.handle(Command::OpenSignalMenu(other));
     let has_paste = |app: &App| {
         app.panels
@@ -1735,7 +1683,6 @@ fn copied_rows_paste_as_duplicates_sharing_data_in_any_wave_panel() {
 #[test]
 fn status_reports_memory_budget_use_as_signals_load_and_unload() {
     use volna_core::app::MemoryStatus;
-    // A real VTR trace: procedural sessions own no resident data to account.
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
     let (_, bus) = writer
@@ -1807,7 +1754,6 @@ fn sidebar_models_follow_scope_selection_and_keys() {
     assert!(events.contains(&Event::RevealScopeRow(1)));
     assert_ne!(app.scopes.selected, root);
     assert_eq!(app.variables.scope, app.scopes.selected_scope());
-    // Filtering across the whole trace when no scope is selected.
     app.variables.set_scope(app.doc.traces(), None);
     app.handle(Command::SetFilter(h.var(0).name.to_owned()));
     assert!(
@@ -1816,7 +1762,6 @@ fn sidebar_models_follow_scope_selection_and_keys() {
             .contains(&a(volna_trace::data::Member::Var(0)))
     );
     assert!(app.variables.show_scope());
-    // Enter adds the selection (or all).
     app.handle(Command::VariablesKey(Key::Down, Modifiers::default()));
     app.handle(Command::VariablesKey(Key::Enter, Modifiers::default()));
     assert_eq!(app.panels.focused_waves().unwrap().items().len(), 1);
@@ -1827,7 +1772,6 @@ fn sidebar_models_follow_scope_selection_and_keys() {
     assert!(app.take_events().contains(&Event::FocusFilter));
     app.handle(Command::ExpandAllScopes(false));
     assert_eq!(app.scopes.visible.len(), h.roots().len());
-    // The selected child is now hidden; a key moves it to its visible root.
     assert_eq!(
         h.scope(app.scopes.selected_scope().unwrap().item).parent,
         h.roots().first()
@@ -1849,7 +1793,6 @@ fn layout_hit_regions_and_scene_cursors_agree() {
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();
     assert!(layout.scrollbar.is_some(), "40 rows overflow 600 px");
     assert!(layout.max_scroll > 0.0);
-    // Wheel scrolls rows; the layout clamps.
     app.handle(Command::Pointer(
         app.panels.focused_id(),
         PointerEvent::Wheel {
@@ -1865,7 +1808,6 @@ fn layout_hit_regions_and_scene_cursors_agree() {
         app.panels.focused_waves().unwrap().scroll_y,
         app.panels.focused_waves().unwrap().last_layout().max_scroll
     );
-    // Dragging the names divider resizes the column and pins the resize cursor.
     let split = app
         .panels
         .focused_waves()
@@ -1906,7 +1848,6 @@ fn layout_hit_regions_and_scene_cursors_agree() {
                 .badges
                 .len()
     );
-    // Clip pushes and pops balance.
     let (mut depth, mut max_depth) = (0i32, 0);
     for p in &app.scene().prims {
         match p {

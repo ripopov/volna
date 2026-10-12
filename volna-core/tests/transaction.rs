@@ -1,6 +1,5 @@
-//! Headless Transaction panel tests over the checked-in example traces: the
-//! document selection and its writers, the prepared view of a record, jumps
-//! that load another track, history, pinning, limits and the workspace.
+//! Headless transaction panel tests for selection, loading, history, pinning, and
+//! persistence.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,7 +46,6 @@ fn frame(app: &mut App, id: PanelId) {
     app.render_panel(id, &theme, &mut MonoMeasure);
 }
 
-/// The catalog track whose dotted path is `path`.
 fn track(session: &dyn Session, path: &str) -> TrackRef {
     session
         .tracks()
@@ -57,8 +55,6 @@ fn track(session: &dyn Session, path: &str) -> TrackRef {
         .id
 }
 
-/// The record of `track` whose `vtr.label` is `label`: tests name records the
-/// way a reader sees them, so they do not depend on the writer's id order.
 fn labelled(session: &dyn Session, track: TrackRef, label: &str) -> TransactionRef {
     use volna_trace::data::transactions::AttributeValue;
     let loaded = session.load_track(track).unwrap();
@@ -76,7 +72,6 @@ fn labelled(session: &dyn Session, track: TrackRef, label: &str) -> TransactionR
         .id
 }
 
-/// A trace with one pipeline panel open, loaded and laid out.
 fn with_pipeline(name: &str, stream: &str) -> (App, Arc<dyn Session>, PanelId) {
     let session = example(name);
     let mut app = App::new();
@@ -86,7 +81,6 @@ fn with_pipeline(name: &str, stream: &str) -> (App, Arc<dyn Session>, PanelId) {
     });
     let pipeline = app.panels.focused_id();
     pump(&mut app);
-    // Rows at the top, not following activity, so positions are predictable.
     app.handle(Command::PipelineActivity(
         pipeline,
         volna_core::pipeline::ActivityCommand::Toggle,
@@ -119,7 +113,6 @@ fn select(app: &mut App, panel: PanelId, track: TrackRef, id: u64) {
     });
 }
 
-/// Select a record in the pipeline and show it; returns the new panel.
 fn show(app: &mut App, pipeline: PanelId, track: TrackRef, id: u64) -> PanelId {
     select(app, pipeline, track, id);
     app.handle(Command::ShowTransaction { from: pipeline });
@@ -225,7 +218,6 @@ fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
 fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-    // The operand-stalled add is on screen when the panel opens.
     let (row, position, cycle) = {
         let p = app.panels.pipeline(pipeline).unwrap();
         let Rows::Ready(set) = p.rows(&app.doc) else {
@@ -261,7 +253,6 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
     let p = app.panels.pipeline(pipeline).unwrap();
     assert_eq!(p.selected_row(&app.doc), Some(row));
 
-    // The painter outlines the row and draws its four wakeups as arrows.
     frame(&mut app, pipeline);
     let theme = Theme::one_dark();
     let arrows = app
@@ -275,7 +266,6 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
         .count();
     assert_eq!(arrows, 2, "one batch into the row and one out of it");
 
-    // Enter opens a Transaction panel beside the pipeline, showing the record.
     app.handle(Command::ShowTransaction { from: pipeline });
     let panel = app.panels.focused_id();
     let v = view(&app, panel);
@@ -284,7 +274,6 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
         v.identity.label.as_deref(),
         Some("80000008: add  a3, a1, a0")
     );
-    // A second Enter focuses the same panel instead of opening another one.
     app.handle(Command::ShowTransaction { from: pipeline });
     assert_eq!(app.panels.focused_id(), panel);
     let count = app
@@ -294,7 +283,6 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
         .count();
     assert_eq!(count, 1);
 
-    // ↓ moves the selection; the unpinned panel follows it.
     app.handle(Command::Panels(volna_core::panels::PanelsCommand::Focus(
         pipeline,
     )));
@@ -303,7 +291,6 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
     assert_eq!(p.selected_row(&app.doc), Some(row + 1));
     assert_ne!(view(&app, panel).identity.id, TransactionRef(4));
 
-    // Escape clears the highlight but not the page being read, then the cursor.
     app.handle(Command::Action(Action::ClearSelection));
     assert_eq!(app.doc.selection(), None);
     assert!(app.doc.shared.cursor.is_some());
@@ -337,7 +324,6 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
         v.timing.begin_text
     );
 
-    // One primary lane with five cells, in the pipeline's ladder colours.
     assert_eq!(v.lifeline.len(), 1);
     let lane = &v.lifeline[0];
     assert!(lane.primary);
@@ -347,7 +333,6 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     assert_eq!(lane.cells[3].swatch, palette.swatch("M"));
     assert!((lane.cells[3].width - 10.0 / 14.0).abs() < 1e-4);
 
-    // The label is the title, never a row; the pc cycles its radix per key.
     let keys: Vec<_> = v.attributes.rows.iter().map(|a| a.key.as_str()).collect();
     assert_eq!(keys, ["insn_id", "pc", "iteration"]);
     assert_eq!(v.attributes.total, 3);
@@ -362,7 +347,6 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     ));
     assert_eq!(view(&app, panel).attributes.rows[1].value, "0x80000060");
 
-    // The cache miss is a stage attribute, shown as a chip on its stage.
     let m = v.stages.rows.iter().find(|s| s.name == "M").unwrap();
     assert!(
         m.attributes
@@ -371,8 +355,6 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     );
     assert!((m.share - 10.0 / 14.0).abs() < 1e-4);
 
-    // Relations by kind and direction; the caused bus read is on a track no
-    // panel has loaded, so it names that track and loads on a jump.
     let related: Vec<_> = v
         .related
         .rows
@@ -398,7 +380,6 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
         Some("instruction 24 causes request")
     );
 
-    // Times link to the shared cursor, and the lifetime to the viewport.
     app.handle(Command::Transaction(panel, TransactionCommand::Cursor(36)));
     assert_eq!(app.doc.shared.cursor, Some(36));
     assert!(
@@ -413,7 +394,6 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     let target = app.doc.shared.viewport.target();
     assert!(target.start <= 33.0 && target.end >= 47.0 && target.width() < 20.0);
 
-    // The complete record copies as TSV.
     let tsv = app
         .panels
         .transaction(panel)
@@ -448,7 +428,6 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
     assert_eq!(v.related.rows[0].role, RefRole::Parent);
     assert_eq!(v.related.rows[0].target.transaction, TransactionRef(33));
     assert!(v.related.rows[0].loaded);
-    // The jump is the selection now; the cpu0 pipeline has no row for it.
     assert_eq!(app.doc.selection().unwrap().id, TransactionRef(34));
     assert_eq!(
         app.panels
@@ -457,16 +436,13 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
             .selected_row(&app.doc),
         None
     );
-    // Seen from the instruction, the loaded bus read is also its child.
     let model = app.panels.transaction(panel).unwrap();
     assert!(model.can_go_back() && !model.can_go_forward());
 
     app.handle(Command::Transaction(panel, TransactionCommand::Back));
     let v = view(&app, panel);
     assert_eq!(v.identity.id, TransactionRef(33));
-    // Back released the bus track, so its child edge is no longer known.
     assert!(!v.related.rows.iter().any(|r| r.role == RefRole::Child));
-    // Any panel holding that generator makes the child reachable again.
     let focused = app.panels.focused_id();
     app.handle(Command::OpenPipeline {
         track: a(track(session.as_ref(), "soc.l2.bus")),
@@ -482,7 +458,6 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
     assert_eq!(app.doc.selection().unwrap().id, TransactionRef(33));
     assert!(app.panels.transaction(panel).unwrap().can_go_forward());
 
-    // Reveal scrolls the pipeline to the row and fits time to the lifetime.
     app.handle_at(Command::RevealTransaction { panel }, Instant::now());
     assert_eq!(app.panels.focused_id(), pipeline);
     frame(&mut app, pipeline);
@@ -490,12 +465,10 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
     let row = p.selected_row(&app.doc).unwrap();
     assert!(p.last_layout().row_range.contains(&row));
 
-    // Closing the pipeline keeps the panel's record: it retains its own track.
     app.handle(Command::Panels(volna_core::panels::PanelsCommand::Close(
         pipeline,
     )));
     assert_eq!(view(&app, panel).identity.id, TransactionRef(33));
-    // Reveal now opens the record's track as a pipeline.
     app.handle(Command::RevealTransaction { panel });
     assert!(app.panels.pipeline(app.panels.focused_id()).is_some());
 }
@@ -510,7 +483,6 @@ fn a_pinned_panel_keeps_its_record_and_the_next_one_opens_beside_it() {
     assert_ne!(first, second);
     assert_eq!(view(&app, first).identity.id, TransactionRef(4));
     assert_eq!(view(&app, second).identity.id, TransactionRef(33));
-    // Unpinning adopts the current selection.
     app.handle(Command::Transaction(first, TransactionCommand::Pin(false)));
     assert_eq!(view(&app, first).identity.id, TransactionRef(33));
     assert!(app.debug_state().contains("transaction"));
@@ -553,7 +525,6 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
         .find(|a| a.key == "message")
         .unwrap();
     assert_eq!(message.value, "DMA → memory: café ✓");
-    // One event, one stage on a non-primary lane of its own record.
     assert_eq!(v.events.rows.len(), 1);
     assert_eq!(
         (v.events.rows[0].name.as_str(), v.events.rows[0].time),
@@ -561,7 +532,6 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     );
     assert_eq!(v.event_ticks.len(), 1);
     assert_eq!(v.stages.rows[0].lane, "memory");
-    // The firmware span that parents it lives on another, unloaded stream.
     let parent = &v.related.rows[0];
     assert_eq!(parent.role, RefRole::Parent);
     assert_eq!(parent.target.transaction, submission);
@@ -573,7 +543,6 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
             .any(|r| r.group == "request · from" && r.target.transaction == instruction)
     );
 
-    // The limit cuts rows, never the count; the filter narrows the rows.
     app.panels
         .transaction_mut(panel)
         .unwrap()
@@ -595,7 +564,6 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     ));
     assert!(view(&app, panel).attributes.collapsed);
 
-    // A record still open at the end has no fabricated end.
     select(&mut app, pipeline, write, unfinished.0);
     let v = view(&app, panel);
     assert_eq!(v.identity.status, TxStatus::Open);
@@ -632,8 +600,6 @@ fn a_restored_panel_loads_without_another_track_consumer() {
         assert_eq!(view(&restored, panel).identity.id, TransactionRef(33));
         assert_eq!(restored.panels.transaction(panel).unwrap().pinned(), pinned);
 
-        // Close and undo use the same adoption path as restore. The last owner
-        // releases the generator; reopening loads it again under the saved ID.
         restored.handle(Command::Panels(volna_core::panels::PanelsCommand::Close(
             panel,
         )));
@@ -688,7 +654,6 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
     assert_eq!(v.identity.id, TransactionRef(33));
     assert_eq!(v.attributes.rows[1].value, "0x80000060");
     assert!(v.events.collapsed);
-    // The unpinned panel keeps its displayed record and follows new selections.
     assert_eq!(view(&restored, free).identity.id, TransactionRef(4));
     for id in [33, 4] {
         select(&mut restored, pipeline, insn, id);
@@ -725,7 +690,6 @@ fn a_table_row_is_the_document_selection() {
     app.handle(Command::ShowTransaction { from: table });
     let panel = app.panels.focused_id();
     assert_eq!(view(&app, panel).identity.id, selection.id);
-    // A jump elsewhere in the same generator moves the table's highlight.
     let other = session_first_other(&app, read, selection.id);
     app.handle(Command::Transaction(
         panel,

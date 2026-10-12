@@ -1,24 +1,17 @@
 //! Signal value representation shared by histories, translators and the renderer.
 
-/// One logic bit, reduced to what the waveform renderer needs to draw it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Bit {
-    /// No recorded sample, rather than an unknown logic state.
     Unavailable,
     Zero,
     One,
-    /// Unknown (`x`, `u`, `w`).
     X,
-    /// High impedance (`z`).
     Z,
-    /// Don't-care (`-`).
     DontCare,
-    /// Any other VHDL-style code (`l`, `h`): weak drive.
     Other,
 }
 
 impl Bit {
-    /// Map a VCD/VHDL logic character to a [`Bit`].
     pub fn from_ascii(c: u8) -> Bit {
         match c {
             b'0' => Bit::Zero,
@@ -41,7 +34,6 @@ impl Bit {
     }
 }
 
-/// Classification of a value used to pick its colour.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum ValueKind {
     Normal,
@@ -51,20 +43,12 @@ pub enum ValueKind {
     Weak,
 }
 
-/// The storage shape of a signal, independent of the HDL variable type.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SignalShape {
-    /// Timestamped occurrences, not a held logic level (VTR and FST event
-    /// variables). History times are occurrences, including same-time
-    /// duplicates; no level is held between them.
     Event,
-    /// A single logic bit.
     Bit,
-    /// A vector of `width` logic bits (`width >= 2`).
     Vector { width: u32 },
-    /// An IEEE double.
     Real,
-    /// A variable-length string.
     Text,
 }
 
@@ -93,20 +77,12 @@ impl SignalShape {
     }
 }
 
-/// An owned signal value handed to translators.
 #[derive(Clone, PartialEq, Debug)]
 pub enum WaveValue {
-    /// No recorded value is available at this time. Distinct from a recorded
-    /// X, a NaN real, or an empty byte string. FST histories start with it;
-    /// VTR histories start with the format-defined initial value.
     Unavailable,
-    /// MSB-first logic characters from the alphabet `01xzuwlh-`.
     Bits(String),
     Real(f64),
     Text(String),
-    /// Uninterpreted variable-length bytes (VTR VarLen, FST strings and
-    /// complete FST port payloads). Text presentation may escape them; the
-    /// raw query value never guesses a character encoding.
     Bytes(Vec<u8>),
 }
 
@@ -120,12 +96,10 @@ impl WaveValue {
     }
 }
 
-/// Kind of a bit string, with the priority `x > z > - > weak`, like Surfer.
 pub fn kind_of_bits(bits: &[u8]) -> ValueKind {
     kind_of_codes(bits.iter().copied())
 }
 
-/// [`kind_of_bits`] over ASCII logic codes from any source; stops at the first X.
 pub fn kind_of_codes(bits: impl IntoIterator<Item = u8>) -> ValueKind {
     let mut kind = ValueKind::Normal;
     for c in bits {

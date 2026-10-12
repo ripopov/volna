@@ -1,6 +1,5 @@
-//! Headless tests of row colours: the Color menu
-//! and command, inheritance through groups, Default, ungrouping, the
-//! clipboard, undo, workspaces and the painter.
+//! Headless tests of row colours: the Color menu and command, inheritance through groups,
+//! Default, ungrouping, the clipboard, undo, workspaces and the painter.
 
 use std::sync::Arc;
 
@@ -22,8 +21,6 @@ const VALID: usize = 1;
 const DATA: usize = 2;
 const ERR: usize = 3;
 
-/// `top.clk`, `top.axi.valid`, `top.axi.data[15:0]` (X over 400–600) and
-/// `top.err`.
 fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
@@ -89,7 +86,6 @@ fn pump(app: &mut App) {
     }
 }
 
-/// The trace with its four variables in the waveform panel.
 fn app() -> (tempfile::NamedTempFile, App, PanelId) {
     let (file, session) = trace();
     let mut app = App::new();
@@ -127,7 +123,6 @@ fn own(app: &App, id: PanelId) -> Vec<Option<Tint>> {
     waves(app, id).items().iter().map(|e| e.tint()).collect()
 }
 
-/// The Color submenu of the open signal menu: each choice and its check.
 fn color_menu(app: &App, id: PanelId) -> Vec<(Option<Tint>, bool)> {
     let menu = waves(app, id).menu.as_ref().expect("signal menu open");
     let items = menu
@@ -175,7 +170,6 @@ fn the_menu_colours_the_selection_in_one_step_and_checks_only_shared_colours() {
     );
     assert_eq!(app.undo_label(), Some("Color 2 signals Blue"));
 
-    // Applying what is already there records nothing.
     set_tint(&mut app, Some(Tint::Blue));
     app.handle(Command::Undo);
     assert_eq!(inks(&app, id), [None; 4]);
@@ -183,7 +177,6 @@ fn the_menu_colours_the_selection_in_one_step_and_checks_only_shared_colours() {
     app.handle(Command::Redo);
     assert_eq!(own(&app, id)[VALID], Some(Tint::Blue));
 
-    // A mixed selection checks nothing; a shared colour is checked.
     select(&mut app, id, &[CLK, VALID]);
     app.handle(Command::OpenSignalMenu(id));
     assert!(color_menu(&app, id).iter().all(|(_, checked)| !checked));
@@ -199,7 +192,6 @@ fn the_menu_colours_the_selection_in_one_step_and_checks_only_shared_colours() {
     );
     app.handle(Command::MenuDismiss(id));
 
-    // One row names itself; Default clears it.
     select(&mut app, id, &[DATA]);
     set_tint(&mut app, None);
     assert_eq!(app.undo_label(), Some("Color data Default"));
@@ -218,7 +210,6 @@ fn groups_pass_their_colour_down_and_ungrouping_keeps_it() {
         },
         Some("axi".into()),
     ));
-    // clk, [axi: valid, data], err
     select(&mut app, id, &[1]);
     set_tint(&mut app, Some(Tint::Cyan));
     assert_eq!(app.undo_label(), Some("Color axi Cyan"));
@@ -236,12 +227,10 @@ fn groups_pass_their_colour_down_and_ungrouping_keeps_it() {
     );
     assert_eq!(own(&app, id)[2], None, "valid inherits");
 
-    // Default on a member hands it back to its group.
     set_tint(&mut app, None);
     assert_eq!(inks(&app, id)[3], Some(Tint::Cyan));
     app.handle(Command::Undo);
 
-    // The group row was the colour source; its rows keep what they showed.
     select(&mut app, id, &[1]);
     app.handle(Command::Action(Action::Ungroup));
     assert_eq!(
@@ -254,7 +243,6 @@ fn groups_pass_their_colour_down_and_ungrouping_keeps_it() {
         [None, Some(Tint::Cyan), None, Some(Tint::Pink), None]
     );
 
-    // Copied rows keep the colour they are drawn in.
     select(&mut app, id, &[2]);
     app.handle(Command::Action(Action::CopySignals));
     select(&mut app, id, &[4]);
@@ -318,7 +306,6 @@ fn named_commands_colour_the_selection() {
     assert_eq!(Command::named("colorRed"), None);
 }
 
-/// Colours of the line strokes and fills inside `area`.
 fn inks_in(scene: &Scene, area: Rect) -> Vec<volna_core::Color> {
     let inside = |p: Point| area.contains(p);
     scene
@@ -356,7 +343,6 @@ fn a_tinted_row_draws_its_ink_and_keeps_x_red_and_a_name_stripe() {
     assert!(drawn.contains(&theme.wave_undef), "X stays red");
     assert!(!drawn.contains(&theme.wave_signal));
 
-    // Untinted rows are unchanged, and only the tinted one has a stripe.
     let (y, h) = row(VALID);
     let other = Rect::from_xywh(l.waves.left(), y + 1.0, l.waves.width(), h - 2.0);
     assert!(inks_in(scene, other).contains(&theme.wave_signal));
@@ -392,7 +378,6 @@ fn the_draw_walk_matches_the_ink_query_in_nested_groups() {
         },
         Some("inner".into()),
     ));
-    // clk, [outer: valid, [inner: data]], err
     select(&mut app, id, &[1]);
     set_tint(&mut app, Some(Tint::Violet));
     assert_eq!(
@@ -406,8 +391,6 @@ fn the_draw_walk_matches_the_ink_query_in_nested_groups() {
             None
         ]
     );
-    // Painting from the middle of the tree reaches the same colours: the
-    // data row inside both groups is violet on screen.
     let theme = Theme::one_dark();
     let violet = theme.ink(Some(Tint::Violet));
     frame(&mut app, id);
@@ -416,7 +399,6 @@ fn the_draw_walk_matches_the_ink_query_in_nested_groups() {
     let (y, h) = l.entry_span(4).unwrap();
     let wave = Rect::from_xywh(l.waves.left(), y + 1.0, l.waves.width(), h - 2.0);
     assert!(inks_in(scene, wave).contains(&violet));
-    // Dissolving both groups at once keeps every row violet.
     select(&mut app, id, &[1, 3]);
     app.handle(Command::Action(Action::Ungroup));
     assert_eq!(

@@ -1,8 +1,5 @@
-//! Walking and jumping between markers: `.` and `,` step in time order, the
-//! digit keys go to a marker by number, and `` ` `` swaps with the place
-//! before the last jump. All of it is navigation: the view keeps its zoom,
-//! pans only when the marker is near or past an edge, and nothing reaches
-//! the undo journal.
+//! Walking and jumping between markers: `.` and `,` step in time order, the digit keys go
+//! to a marker by number, and `` ` `` swaps with the place before the last jump.
 
 use std::sync::Arc;
 use volna_core::testing::a_all;
@@ -26,7 +23,6 @@ fn id(n: u32) -> MarkerId {
     MarkerId::new(n).unwrap()
 }
 
-/// Where the shared view is headed.
 fn view(app: &App) -> Viewport {
     app.doc.shared.viewport.target()
 }
@@ -43,9 +39,6 @@ fn centred_on(v: Viewport, t: u64) -> bool {
     ((v.start + v.end) / 2.0 - t as f64).abs() < 1e-6 * v.width()
 }
 
-/// A view a tenth of the trace wide, and markers 1 to 4 at: a tenth into
-/// the view, its middle, far off screen to the right, and in the view's
-/// last 5%.
 struct Scene {
     view: Viewport,
     at: [u64; 4],
@@ -92,7 +85,6 @@ fn walking_keeps_the_zoom_and_pans_only_near_or_past_an_edge() {
     );
     assert_eq!(said(&app).as_deref(), Some("At marker 2 · ` returns"));
 
-    // Marker 4 is on screen but in the last 5%: centre it, same width.
     app.handle(Command::Action(Action::NextMarker));
     assert_eq!(app.doc.shared.cursor, Some(s.at[3]));
     assert!(same_width(view(&app), s.view));
@@ -104,7 +96,6 @@ fn walking_keeps_the_zoom_and_pans_only_near_or_past_an_edge() {
     assert!(same_width(view(&app), s.view));
     assert!(centred_on(view(&app), s.at[2]));
 
-    // Nothing further: the cursor and view stay, and the status bar says so.
     let far = view(&app);
     app.handle(Command::Action(Action::NextMarker));
     assert_eq!(app.doc.shared.cursor, Some(s.at[2]));
@@ -116,7 +107,6 @@ fn walking_keeps_the_zoom_and_pans_only_near_or_past_an_edge() {
     assert_eq!(said(&app).as_deref(), Some("At marker 4 · ` returns"));
     assert!(same_width(view(&app), near_four) && centred_on(view(&app), s.at[3]));
 
-    // By number, including one that does not exist.
     app.handle(Command::Action(Action::GoToMarker(id(1))));
     assert_eq!(app.doc.shared.cursor, Some(s.at[0]));
     app.handle(Command::Action(Action::GoToMarker(id(7))));
@@ -127,7 +117,6 @@ fn walking_keeps_the_zoom_and_pans_only_near_or_past_an_edge() {
     app.handle(Command::Action(Action::PrevMarker));
     assert_eq!(said(&app).as_deref(), Some("No marker before the cursor"));
 
-    // The next key clears the status line.
     app.handle(Command::Action(Action::ZoomIn));
     assert_eq!(said(&app), None);
 
@@ -188,7 +177,6 @@ fn back_swaps_with_the_place_before_the_last_jump() {
         "twice more is back at the start"
     );
 
-    // A jump to where the cursor already is keeps the return place.
     app.handle(Command::Action(Action::GoToMarker(id(3))));
     app.handle(Command::Action(Action::GoToMarker(id(3))));
     app.handle(Command::Action(Action::JumpBack));
@@ -226,8 +214,6 @@ fn reveal_pans_only_outside_the_middle_ninety_percent() {
             assert!(centred_on(after, t));
         }
     }
-    // At the trace's end the view may stop short of centring, but the time
-    // still lands in its middle 90%.
     app.doc.shared.viewport.set(view);
     assert!(nav.reveal(&mut app.doc, hi, now));
     let after = app.doc.shared.viewport.target();
@@ -257,20 +243,17 @@ fn unlinked_cursors_walk_and_return_on_their_own() {
     }));
     let cursor = |app: &App, p| app.panels.waves(p).unwrap().cursor(&app.doc);
 
-    // B walks its own cursor; A keeps the shared one.
     app.handle(Command::Action(Action::NextMarker));
     assert_eq!(cursor(&app, b), Some(s.at[1]));
     assert_eq!(cursor(&app, a), Some(s.at[0]));
     app.handle(Command::Action(Action::GoToMarker(id(4))));
     assert_eq!(cursor(&app, b), Some(s.at[3]));
 
-    // A walks the shared cursor; B's stays put.
     app.handle(Command::Panels(PanelsCommand::Focus(a)));
     app.handle(Command::Action(Action::GoToMarker(id(3))));
     assert_eq!(cursor(&app, a), Some(s.at[2]));
     assert_eq!(cursor(&app, b), Some(s.at[3]));
 
-    // Each panel returns from its own last jump.
     app.handle(Command::Action(Action::JumpBack));
     assert_eq!(cursor(&app, a), Some(s.at[0]));
     assert_eq!(cursor(&app, b), Some(s.at[3]));
@@ -346,7 +329,6 @@ fn m_on_a_marker_opens_its_name_field_and_the_chip_grows_to_the_name() {
     let edit = app.text_edit().expect("the name field is open");
     assert_eq!(edit.target, EditTarget::Marker { panel, id: id(2) });
     assert_eq!((edit.text.as_str(), edit.select_all), ("", true));
-    // Over the chip, after its number, inside the lane.
     let l = lane(&app);
     let chip = l.chips.iter().find(|c| c.markers.contains(&1)).unwrap();
     let rect = edit.rect.expect("the chip is in view");
@@ -366,8 +348,6 @@ fn m_on_a_marker_opens_its_name_field_and_the_chip_grows_to_the_name() {
         .unwrap();
     assert_eq!(chip.text, "2 req B");
 
-    // Opening again starts with the name; cancelling keeps it, and an
-    // empty name returns the chip to its number.
     app.handle(Command::Action(Action::AddOrRenameMarker));
     let edit = app.text_edit().unwrap();
     assert_eq!(edit.text, "req B");
@@ -385,7 +365,6 @@ fn m_on_a_marker_opens_its_name_field_and_the_chip_grows_to_the_name() {
         .unwrap();
     assert_eq!(chip.text, "2");
 
-    // A stale answer is ignored.
     app.handle(Command::CommitText(target, Some("late".into())));
     assert_eq!(app.doc.markers()[1].label, None);
 }
@@ -409,13 +388,11 @@ fn renaming_by_chip_reveals_the_marker_and_follows_panel_focus() {
     let mut app = app();
     let s = scene(&mut app);
     let a = app.panels.focused_id();
-    // Marker 3 is off the view: naming it pans there, keeping the zoom.
     app.handle(Command::RenameMarker(a, id(3)));
     assert!(centred_on(view(&app), s.at[2]) && same_width(view(&app), s.view));
     app.tick(Instant::now() + std::time::Duration::from_secs(5));
     frame(&mut app);
     assert!(app.text_edit().unwrap().rect.is_some());
-    // The field belongs to its panel: another focused panel shows none.
     app.handle(Command::Panels(PanelsCommand::Split {
         panel: a,
         axis: Axis::Vertical,
@@ -432,7 +409,6 @@ fn renaming_by_chip_reveals_the_marker_and_follows_panel_focus() {
     );
     app.handle(Command::CommitText(edit.target, Some("irq".into())));
     assert_eq!(app.doc.markers()[3].label.as_deref(), Some("irq"));
-    // Removing the marker closes a field open on it.
     app.handle(Command::RenameMarker(a, id(1)));
     assert!(app.text_edit().is_some());
     assert!(app.doc.remove_marker(id(1)));
@@ -447,7 +423,6 @@ fn the_tooltip_of_a_chip_has_the_full_name() {
     let s = scene(&mut app);
     let long = "the first beat of the read burst on AXI";
     assert!(app.doc.rename_marker(id(1), long));
-    // Zoomed out, marker 2 is close enough that the name is cut before it.
     app.doc.shared.viewport.set(Viewport {
         start: s.view.start,
         end: s.view.start + s.view.width() * 4.0,

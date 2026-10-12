@@ -1,7 +1,6 @@
+//! C++ and SystemVerilog keyed tracker integration tests.
+
 #![cfg(target_os = "linux")]
-//! The keyed tracker (vtr_track.hpp) and the tracker part of the vtr_trace
-//! package (vtr_trace_dpi.hpp): builds tests/track_test.cpp against the static
-//! library, runs it, and reads its recordings back with the Rust reader.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,8 +9,6 @@ use vtr::{Reader, TxQuery, Value};
 
 mod support;
 
-/// Every transaction of a file, ordered by id, as `id stream/generator [b..e] status`
-/// lines followed by attributes, events, stages (`name@lane b..e`) and relations.
 fn dump(path: &Path) -> String {
     let r = Reader::open(path).unwrap();
     let mut txs = r.transactions(&TxQuery::default()).unwrap();
@@ -93,7 +90,6 @@ fn tracker_and_package() {
     eprintln!("{}", String::from_utf8_lossy(&out.stderr));
     assert!(out.status.success(), "track_test failed:\n{stdout}");
 
-    // Call results, open counts before and after detach(), diagnostics and warnings.
     let want = "\
 RET 2 1 2 2 2
 OPEN 1 0
@@ -112,12 +108,6 @@ WARN2 vtr_trace: TOP.tb.core.u_vtr.bus: clock TOP.tb.core.u_vtr.nope is not decl
 ";
     assert_eq!(stdout, want);
 
-    // Part A. fe 1 and 2 fold into iid 5 (bind_oldest takes the oldest first) and end
-    // together, with the pc replaced at 14; abort_younger(iid 6) ends fe 4 and 5 and
-    // keeps iid 6; the stale fe 7 and iid 9 names abort their old items at 17;
-    // abort_keyspace(fe) ends the items still named in fe at 18; iid 6 is open at
-    // close with its buffered pc written, its main-lane EX stage open and its mem lane
-    // stage ended at 14.
     let a = "\
 1 cpu.pipeline/instruction [10..15] ok
   pc=0x1000
@@ -161,8 +151,6 @@ WARN2 vtr_trace: TOP.tb.core.u_vtr.bus: clock TOP.tb.core.u_vtr.nope is not decl
 ";
     assert_eq!(dump(&out_dir.join("track_a.vtr")), a);
 
-    // Part C: the six oldest items fold under one key and end together; the other 994
-    // end at 4, each exactly once.
     let r = Reader::open(out_dir.join("track_c.vtr")).unwrap();
     let txs = r.transactions(&TxQuery::default()).unwrap();
     assert_eq!(txs.len(), 1000);
@@ -175,9 +163,6 @@ WARN2 vtr_trace: TOP.tb.core.u_vtr.bus: clock TOP.tb.core.u_vtr.nope is not decl
         .iter()
         .all(|t| t.status == vtr::TxStatus::Ok && (t.end == 3 || t.end == 4)));
 
-    // Part B, first file: the tracker and its clock declared before the open are
-    // replayed; the call made before the open left nothing; open_at back-dates to the
-    // saved vtr_now(); the item open at close keeps the label bound through "rob".
     let b1 = "\
 1 TOP.tb.core.clk/edges [50..150] open
   vtr.period=10t
@@ -200,7 +185,6 @@ WARN2 vtr_trace: TOP.tb.core.u_vtr.bus: clock TOP.tb.core.u_vtr.nope is not decl
         .expect("pipeline counted in TOP.tb.core.clk");
     assert_eq!(Some(clock), r.find_clock("TOP.tb.core.clk"));
 
-    // Second file: the first file's keys were dropped at its close notice.
     let b2 = "\
 1 TOP.tb.core.clk/edges [50..210] open
   vtr.period=10t

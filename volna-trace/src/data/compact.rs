@@ -1,12 +1,5 @@
-//! Compact immutable histories for loaders that decode values themselves
-//! (FST): `u64` change times and fixed-stride packed values.
-//!
-//! Logic values use VTR's codes: 1, 2 or 4 bits per bit for 2, 4 or 9 states,
-//! least significant bit first ([`vtr::signal::get_code`]). An entry of at most
-//! 8 bits takes a power-of-two slot inside a byte, so a two-state clock costs
-//! one bit per change; wider entries are byte-aligned so a [`ValueView`]
-//! borrows them in place. A signal starts two-state and is repacked when a
-//! value needs more states.
+//! Compact immutable histories for loaders that decode values themselves (FST): `u64`
+//! change times and fixed-stride packed values.
 
 use anyhow::ensure;
 
@@ -14,7 +7,6 @@ use super::value_view::{LogicView, ValueView};
 use super::{Bit, SignalHistory, SignalShape, WaveValue};
 use vtr::signal::{CODE_ASCII, code_from_ascii, get_code, pack_ascii, states_for_code};
 
-/// Every byte value, so a sub-byte entry can be viewed as a one-byte slice.
 static BYTES: [u8; 256] = {
     let mut all = [0u8; 256];
     let mut i = 0;
@@ -33,7 +25,6 @@ fn code_bits(states: u8) -> u32 {
     }
 }
 
-/// Bits one entry occupies: a power of two up to 8, else whole bytes.
 fn slot_bits(width: u32, states: u8) -> u64 {
     let bits = u64::from(width) * u64::from(code_bits(states));
     if bits <= 8 {
@@ -59,7 +50,6 @@ impl Layout {
     }
 }
 
-/// Packed entry `i` of `data`: a view into it, or into [`BYTES`] for sub-byte slots.
 fn entry(data: &[u8], slot: u64, i: usize) -> &[u8] {
     if slot <= 8 {
         let bit = i * slot as usize;
@@ -71,7 +61,6 @@ fn entry(data: &[u8], slot: u64, i: usize) -> &[u8] {
     }
 }
 
-/// Append a packed entry (`bytes` holds at least the entry's bits).
 fn push_entry(data: &mut Vec<u8>, slot: u64, len: usize, bytes: &[u8]) {
     if slot <= 8 {
         let bit = len * slot as usize;
@@ -181,7 +170,6 @@ impl SignalHistory for CompactHistory {
     }
 }
 
-/// Collects one signal's changes during a load.
 pub(crate) struct CompactBuilder {
     shape: SignalShape,
     layout: Layout,
@@ -191,7 +179,6 @@ pub(crate) struct CompactBuilder {
 }
 
 impl CompactBuilder {
-    /// Logic and real shapes; text and events keep their own histories.
     pub(crate) fn new(shape: SignalShape) -> Option<Self> {
         let layout = match shape {
             SignalShape::Bit | SignalShape::Vector { .. } => Layout::logic(shape.width(), 2),
@@ -223,7 +210,6 @@ impl CompactBuilder {
         Ok(())
     }
 
-    /// Append an MSB-first ASCII logic value of exactly the declared width.
     pub(crate) fn push_logic(&mut self, t: u64, text: &[u8]) -> anyhow::Result<()> {
         let Layout::Logic { width, states, .. } = self.layout else {
             anyhow::bail!("logic value for a real signal");
@@ -232,10 +218,7 @@ impl CompactBuilder {
             text.len() == width as usize,
             "logic value width differs from its declaration"
         );
-        // Two-state fast path: the value as an integer, written little-endian.
         if states == 2 && width <= 64 {
-            // Branch-free: '0' and '1' differ only in their low bit, and data
-            // bits are unpredictable, so a per-character branch mispredicts.
             let mut acc = 0u64;
             let mut binary = true;
             for &c in text {
@@ -275,7 +258,6 @@ impl CompactBuilder {
         Ok(())
     }
 
-    /// Repack every entry with `to` states per bit.
     fn widen(&mut self, to: u8) -> anyhow::Result<()> {
         let Layout::Logic {
             width,
@@ -313,7 +295,6 @@ impl CompactBuilder {
         Ok(())
     }
 
-    /// The finished history, its buffers trimmed to their contents.
     pub(crate) fn finish(mut self) -> CompactHistory {
         self.times.shrink_to_fit();
         self.data.shrink_to_fit();

@@ -1,7 +1,4 @@
-//! GPUI chrome for the reduced table. Row decisions, bounded preparation and
-//! exact identities stay in `volna-core`; this module hosts the controls and
-//! the clipboard integration. The selected record is read in the Transaction
-//! panel, which every selecting panel shares.
+//! GPUI chrome for the reduced table.
 
 use crate::dock::CanvasPanelView;
 use crate::theme::theme;
@@ -257,8 +254,6 @@ impl CanvasPanelView {
             .into_any_element()
     }
 
-    /// Enter, the Details button and a double-click all open the record in a
-    /// Transaction panel: the first one that is not pinned, or a new one.
     fn show_transaction(&self, window: &mut Window, cx: &mut Context<Self>) {
         _ = self.ws.update(cx, |ws, cx| {
             ws.dispatch_if_current(

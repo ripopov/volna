@@ -67,13 +67,7 @@ impl TransactionColumn {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ColumnSet {
     Transactions(Vec<TransactionColumn>),
-    /// `true` entries correspond to the fixed captured signal order. Time is
-    /// represented separately and can also be hidden, but at least one data
-    /// column is always retained.
-    Signals {
-        time: bool,
-        visible: Vec<bool>,
-    },
+    Signals { time: bool, visible: Vec<bool> },
 }
 
 impl ColumnSet {
@@ -104,8 +98,6 @@ impl ColumnSet {
         }
         true
     }
-    /// Show or hide the time column (`0`) or signal column `index - 1`,
-    /// keeping at least one data column. Returns whether anything changed.
     pub fn toggle_signal(&mut self, index: usize) -> bool {
         let Self::Signals { time, visible } = self else {
             return false;

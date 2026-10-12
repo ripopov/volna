@@ -1,10 +1,5 @@
-//! Paint the wave panel into a [`Scene`]: the three aligned columns (names,
-//! values, waves) plus the timeline header, cursor, markers and a scrollbar.
-//!
-//! Waveforms are sampled per pixel column: for every column the painter asks
-//! the history for the index of the last change at the column's right edge
-//! (an exponential search from the previous column's index), so the cost of a
-//! frame is O(columns x log(changes)) regardless of trace length.
+//! Paint the wave panel into a [`Scene`]: the three aligned columns (names, values, waves)
+//! plus the timeline header, cursor, markers and a scrollbar.
 
 mod overlaid;
 
@@ -34,30 +29,18 @@ use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::TxStatus;
 use volna_trace::data::{Bit, SignalHistory, SignalShape, ValueKind, WaveValue};
 
-// Pixel constants are design sizes at zoom 1.0; the painter multiplies them
-// by the theme's zoom. Borders and decorative hairlines stay one pixel;
-// trace widths come from the theme.
-/// Keep room for distinct digital levels and analog strokes when padding
-/// would otherwise consume a short row. Spacing is a design size; stroke
-/// widths follow their respective zoom policies.
 fn trace_pad(height: f32, t: &Theme) -> f32 {
     let min_height = (2.0 * t.digital_wave_width)
         .max(2.0 * t.analog_wave_width * t.zoom)
         .max(2.0);
     (t.wave_spacing * t.zoom).min(((height - min_height) / 2.0).max(0.0))
 }
-/// Segments narrower than this are drawn as a dense band instead of a hexagon.
 const MIN_SEGMENT_PX: usize = 5;
-/// Room a numeric member's colour swatch takes before its name.
 const SWATCH_W: f32 = 14.0;
-/// Layers other than the one under the pointer fade to this opacity.
 const STACK_DIM: f32 = 0.35;
-/// Opacity of the peak band over the canvas.
 const PEAK_ALPHA: f32 = 0.13;
-/// A stack's hover readout lists at most this many layers.
 const STACK_READOUT_LAYERS: usize = 16;
 
-/// A trace's letter, centred in `cell` on its badge colour, clipped to `clip`.
 pub(crate) fn trace_letter(
     p: &mut TextPainter<'_>,
     t: &Theme,
@@ -90,7 +73,6 @@ pub(crate) fn trace_letter(
     });
 }
 
-/// Truncate `text` to at most `max_chars` characters, appending an ellipsis.
 fn truncate_chars(text: &str, max_chars: usize) -> Option<String> {
     let n = text.chars().count();
     if n <= max_chars {
@@ -104,8 +86,6 @@ fn truncate_chars(text: &str, max_chars: usize) -> Option<String> {
     Some(s)
 }
 
-/// `text` cut to fit `max_w` in `font`, ending in an ellipsis when cut;
-/// `None` when not even one character and the ellipsis fit.
 fn fit_width(
     p: &mut TextPainter<'_>,
     text: &str,
@@ -123,7 +103,6 @@ fn fit_width(
             .chain(std::iter::once(&'…'))
             .collect::<String>()
     };
-    // The longest prefix that fits, by bisection over its length.
     let (mut lo, mut hi) = (0usize, chars.len());
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
@@ -144,7 +123,6 @@ fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     }
 }
 
-/// Paint `model` using the layout from its last [`WaveModel::layout`] call.
 pub fn paint(
     model: &WaveModel,
     doc: &Document,
@@ -187,7 +165,6 @@ pub fn paint(
     };
     let clocks = model.nav.clocks();
 
-    // -- backgrounds and chrome ------------------------------------------
     p.scene.fill(bounds, t.editor.bg);
     p.scene.fill(
         Rect::new(
@@ -201,7 +178,6 @@ pub fn paint(
     );
     p.scene.fill(layout.header, t.panel.bg);
 
-    // -- tick grid in the waves area ---------------------------------------
     let (tick_list, unit) = column.ticks(base, t.zoom);
     overlay::grid(&mut p, &column, &tick_list);
     overlay::cycle_grid(&mut p, &column, clocks, &doc.clocks);
@@ -209,9 +185,6 @@ pub fn paint(
         overlay::outside_time(&mut p, &column, doc.limits());
     }
 
-    // -- rows ----------------------------------------------------------------
-    // Text sits on a row's first line (`row_h`); tall rows give the waveform
-    // their full height.
     let row_h = layout.row_h;
     let mut inks = crate::wave::tint::InkWalk::default();
     let plots = GroupPlots::of(model, doc, &layout.visible, theme);
@@ -223,7 +196,6 @@ pub fn paint(
         };
         let entry = &model.items()[ix];
         let row = &entry.row;
-        // A coloured row paints with a theme whose signal ink is its colour.
         let ink = plots.ink(ix, inks.ink(model.items(), ix), theme);
         let inked;
         let t: &Theme = match ink {
@@ -262,7 +234,6 @@ pub fn paint(
             p.scene.fill(left_row, t.hover.bg);
             p.scene.fill(wave_row, t.wave_row_hover);
         }
-        // One guide per enclosing group, down the rows it holds.
         for d in 0..entry.depth {
             let x = snap(indent_x(layout.name_left, d, t.zoom) + z(CHEVRON_W / 2.0));
             p.scene.clipped(layout.names, |scene| {
@@ -278,7 +249,6 @@ pub fn paint(
             );
             trace_letter(&mut p, t, trace, gutter, layout.names);
         }
-        // A stripe on the name marks a coloured row at a glance.
         if ink.is_some() {
             let stripe = Rect::from_xywh(layout.names.left(), y, z(3.0).max(2.0), full_h);
             p.scene
@@ -306,13 +276,10 @@ pub fn paint(
                 continue;
             }
             WaveRow::Group(g) => {
-                // Groups are divided by a 1px border rather than zebra stripes.
                 p.scene.fill(
                     Rect::from_xywh(bounds.left(), snap(y), bounds.width(), 1.0),
                     t.border_variant,
                 );
-                // Numeric group plots stay visible when folded; other folded
-                // groups draw their members' merged activity.
                 let members = if g.collapsed && !g.is_plot() {
                     model.group_histories(ix)
                 } else {
@@ -355,7 +322,6 @@ pub fn paint(
             }
         };
 
-        // Numeric group members share the plot's colour and a solid swatch.
         let name_x = match plots.members.get(&ix) {
             Some(member) => {
                 let color = if member.hidden {
@@ -371,8 +337,6 @@ pub fn paint(
             None => name_x,
         };
 
-        // Name column: the leaf name in the interface face, then a muted
-        // range badge in the mono face for vectors when both fit.
         {
             let pad = z(12.0);
             let avail = layout.names.right() - name_x - pad;
@@ -389,7 +353,6 @@ pub fn paint(
             };
             let full_w = p.width(&item.name, FontRole::Ui, t.ui_size);
             let names_rect = layout.names;
-            // The badge shows only beside the whole name.
             let show_dims = !dims.is_empty() && full_w + dims_w <= avail;
             if let Some(name) = fit_width(&mut p, &item.name, FontRole::Ui, t.ui_size, avail) {
                 let name_w = p.width(&name, FontRole::Ui, t.ui_size);
@@ -416,7 +379,6 @@ pub fn paint(
             }
         }
 
-        // A tall plot says how it is drawn under its name.
         if let Some(a) = &item.analog
             && full_h >= 2.0 * row_h - 0.5
         {
@@ -433,7 +395,6 @@ pub fn paint(
             });
         }
 
-        // Values column: value at cursor plus the format badge.
         {
             let pad = z(8.0);
             let badge = layout
@@ -481,7 +442,6 @@ pub fn paint(
             };
             let max_chars = (avail / char_w).floor().max(0.0) as usize;
             let values_rect = layout.values;
-            // A number keeps its last digits here too, as a bus label does.
             let number = item.history.is_some() && item.translator.numeric_kind().is_some();
             if let Some(text) = fit_label(&value_text, max_chars, number) {
                 p.scene.clipped(values_rect, |scene| {
@@ -527,7 +487,6 @@ pub fn paint(
             }
         }
 
-        // Waves column.
         match (&item.history, &item.error) {
             (Some(h), _)
                 if let Some(a) = &item.analog
@@ -590,7 +549,6 @@ pub fn paint(
                 });
             }
             (None, None) => {
-                // Loading: a thin muted bar where the trace will be.
                 let bar = Rect::new(
                     point(waves.left() + z(8.0), y + full_h / 2.0),
                     size(z(96.0), 1.0),
@@ -600,14 +558,11 @@ pub fn paint(
         }
     }
 
-    // -- empty placeholder -------------------------------------------------
     if layout.rows.is_empty() && doc.is_loaded() {
         let area = Rect::new(
             point(bounds.left(), layout.names.top()),
             size(bounds.width(), layout.names.height()),
         );
-        // The empty-state message spans the table, so give it one surface
-        // instead of crossing differently themed name/value columns.
         p.scene.fill(area, t.editor.bg);
         let cx_ = area.left() + area.width() / 2.0;
         let cy = area.top() + area.height() / 2.0;
@@ -636,8 +591,6 @@ pub fn paint(
         );
     }
 
-    // Where dragged rows will land: a line from the level they take across
-    // every column at the gap, or an outline of the folded group they join.
     if let Some(Drag::Rows {
         gap: Some(gap),
         depth,
@@ -720,7 +673,6 @@ pub fn paint(
         });
     }
 
-    // -- header: column titles, tick labels, unit -----------------------------
     let panel_theme = t.panel;
     let header = layout.header;
     p.scene.clipped(
@@ -783,7 +735,6 @@ pub fn paint(
         cursor,
     );
 
-    // -- markers and cursor --------------------------------------------------------
     overlay::marker_lane_paint(
         &mut p,
         &column,
@@ -811,7 +762,6 @@ pub fn paint(
         &mut p,
     );
 
-    // -- borders --------------------------------------------------------------
     let drag = model.drag;
     let near_names = model
         .pointer
@@ -850,9 +800,6 @@ pub fn paint(
         ),
         t.border_variant,
     );
-    // Pointer shapes: the dividers resize, badges and chips are clickable;
-    // only an active drag pins the resize cursor.
-    // Row bottom edges in the names column resize rows.
     let resizing = match drag {
         Some(Drag::RowHeight { row, .. }) => Some(row),
         _ => model.edge_hover,
@@ -906,7 +853,6 @@ pub fn paint(
         }
     }
 
-    // -- scrollbar -----------------------------------------------------------------
     if let Some((track, thumb)) = layout.scrollbar {
         let hovered = model.pointer.is_some_and(|mp| track.contains(mp))
             || matches!(drag, Some(Drag::Scroll { .. }));
@@ -919,11 +865,6 @@ pub fn paint(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Waveform painting
-// ---------------------------------------------------------------------------
-
-/// Where row `wave_row` plots its values, once its range is known.
 fn analog_plot(a: &Analog, wave_row: Rect, t: &Theme) -> Option<Plot> {
     let (lo, hi) = a.shown.or(a.target)?;
     Some(Plot {
@@ -936,8 +877,6 @@ fn analog_plot(a: &Analog, wave_row: Rect, t: &Theme) -> Option<Plot> {
     })
 }
 
-/// A number in the row's format: the translator formats the value that
-/// reads back as `v`, or a plain number when it has none.
 fn analog_label(item: &DisplayedSignal, v: f64) -> String {
     item.translator
         .numeric_kind()
@@ -952,15 +891,12 @@ fn analog_label(item: &DisplayedSignal, v: f64) -> String {
         })
 }
 
-/// The overlap of two rectangles (empty when they are disjoint).
 fn intersect(a: Rect, b: Rect) -> Rect {
     let (l, t) = (a.left().max(b.left()), a.top().max(b.top()));
     let (r, bt) = (a.right().min(b.right()), a.bottom().min(b.bottom()));
     Rect::from_xywh(l, t, (r - l).max(0.0), (bt - t).max(0.0))
 }
 
-/// Paint a row as a plot: guides, the zero line, undefined spans, the fill
-/// under the curve, the curve, sample dots and, from 2×, range labels.
 #[allow(clippy::too_many_arguments)]
 fn paint_analog_row(
     item: &DisplayedSignal,
@@ -977,7 +913,6 @@ fn paint_analog_row(
     let clip = intersect(wave_row, waves);
     let plot = analog_plot(a, wave_row, t);
     let g = plot.map(|plot| analog::geometry(series, a.draw, vp, &plot, t.zoom));
-    // A long history waits for its summary rather than scanning every change.
     let (Some(plot), Some(g)) = (plot, g.filter(|g| !g.waiting)) else {
         if series.building {
             p.scene.clipped(clip, |scene| {
@@ -1059,7 +994,6 @@ fn paint_analog_row(
             );
         }
     });
-    // Range labels at the top and bottom from 2× up.
     let Some((lo, hi)) = a.target else { return };
     if wave_row.height() < 2.0 * row_h - 0.5 {
         return;
@@ -1093,8 +1027,6 @@ fn paint_analog_row(
     }
 }
 
-/// Over every visible plot: a dot where the cursor crosses the curve and,
-/// under the pointer, a readout of the sample or dense column there.
 fn paint_analog_overlays(
     model: &WaveModel,
     doc: &Document,
@@ -1224,9 +1156,6 @@ fn paint_analog_overlays(
     }
 }
 
-/// Paint occurrences, coalescing timestamps that occupy the same pixel.
-/// Returns each coalesced arrow's x, its count and the room to its right
-/// before the next arrow, for the caller to label with its count.
 pub fn paint_event_row(
     h: &dyn SignalHistory,
     vp: &Viewport,
@@ -1238,8 +1167,6 @@ pub fn paint_event_row(
     if area.width() <= 0.0 || vp.width() <= 0.0 {
         return counts;
     }
-    // Search strictly before the viewport so duplicate timestamps at its
-    // left edge are all included in the first marker's count.
     let mut i = if vp.start <= 0.0 {
         0
     } else {
@@ -1247,18 +1174,13 @@ pub fn paint_event_row(
             .map_or(0, |last| last + 1)
     };
     let pad = trace_pad(area.height(), t);
-    // One primitive per colour, not one per arrow.
     let (mut plain, mut coalesced) = (Vec::new(), Vec::new());
     while i < h.len() && h.time(i) as f64 <= vp.end {
         let x = vp.x_of(h.time(i) as f64, area.width() as f64).floor();
         let screen_x = area.left() + x as f32;
         let top = area.top() + pad;
         let bottom = (area.bottom() - pad).max(top);
-        // Surfer's event glyph: a full-height stem with a filled upward
-        // arrowhead, 5 px wide and one fifth of the trace height.
         let head_height = (bottom - top) * 0.2;
-        // Count all occurrences in this pixel, but exclude those beyond the
-        // inclusive viewport end. Binary search keeps dense rows bounded.
         let next = vp.time_at(x + 1.0, area.width() as f64).ceil();
         let last_time = ((next as u64).saturating_sub(1)).min(vp.end.floor() as u64);
         let end = h
@@ -1303,7 +1225,6 @@ pub fn paint_event_row(
     counts
 }
 
-/// "×n" beside each coalesced event arrow that has room for it.
 fn paint_event_counts(
     counts: &[(f32, usize, f32)],
     area: Rect,
@@ -1330,7 +1251,6 @@ fn paint_event_counts(
     }
 }
 
-/// Paint a 1-bit trace by sampling one pixel column at a time.
 pub fn paint_bit_row(
     h: &dyn SignalHistory,
     vp: &Viewport,
@@ -1342,11 +1262,6 @@ pub fn paint_bit_row(
     paint_bits(h, vp, area, t, scene, true, columns);
 }
 
-/// A 1-bit trace: a level line per stretch, an edge per change, and
-/// aliased columns where a pixel holds two or more changes. X is a
-/// mid-level line over its hatched tint, Z a bare line at mid level,
-/// don't-care dotted and weak dashed; `high_fill` fills high stretches.
-/// Only pixel `columns` of the area are drawn.
 fn paint_bits(
     h: &dyn SignalHistory,
     vp: &Viewport,
@@ -1379,7 +1294,6 @@ fn paint_bits(
     let mut run_start = columns.start;
     let mut dense: Vec<marks::Aliased> = Vec::new();
     let mut kinds = marks::KindReader::new(h, true);
-    // Dotted and dashed levels are collected per kind and stroked once.
     let mut dotted: Vec<[Point; 2]> = Vec::new();
     let mut dashed: Vec<[Point; 2]> = Vec::new();
 
@@ -1426,7 +1340,6 @@ fn paint_bits(
         let idx1 = index_at_x(h, vp, wf, (x + 1) as f64, Some(hint));
         let n = changes_between(idx, idx1);
         if n < 2 && !dense.is_empty() {
-            // An aliased stretch ends at the first column with fewer than two changes.
             marks::paint_aliased(scene, t, &dense, x0, top, bottom);
             dense.clear();
         }
@@ -1471,12 +1384,10 @@ fn paint_bits(
     scene.lines(dashed, t.wave_weak, t.digital_wave_width);
 }
 
-/// A dash pattern at the theme's zoom.
 fn scaled((on, off): (f32, f32), t: &Theme) -> (f32, f32) {
     (on * t.zoom, off * t.zoom)
 }
 
-/// Index of the last change at or before the time under pixel `x`.
 fn index_at_x(
     h: &dyn SignalHistory,
     vp: &Viewport,
@@ -1501,21 +1412,14 @@ struct Segment {
     dense: bool,
 }
 
-/// Half-width of a bus hexagon's slant on each side of a change, design px.
 const SLANT_PX: f32 = 4.0;
-/// Gap between a slant and its label, design px.
 const LABEL_GAP_PX: f32 = 4.0;
 
-/// How a bus value is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BusLook {
-    /// Every bit 0 on a numeric row: a low line, no label.
     Zero,
-    /// Every bit Z: a bare line at mid level.
     Floating,
-    /// Every bit unknown: the hatched X hexagon.
     Unknown,
-    /// Any other value: an outlined hexagon with its label.
     Value,
 }
 
@@ -1535,10 +1439,6 @@ fn bus_look(value: &WaveValue, numeric: bool) -> BusLook {
     }
 }
 
-/// Fit a label into `max_chars` monospace cells. A number keeps its last
-/// digits behind a leading ellipsis, where neighbouring values differ; text
-/// keeps its beginning. A label that would show fewer than two characters
-/// is dropped rather than shown as a lone ellipsis.
 pub(crate) fn fit_label(text: &str, max_chars: usize, number: bool) -> Option<String> {
     let n = text.chars().count();
     if n <= max_chars {
@@ -1560,8 +1460,6 @@ pub(crate) fn fit_label(text: &str, max_chars: usize, number: bool) -> Option<St
     })
 }
 
-/// The label of a partly unknown value in runs: unknown digits in the X
-/// colour, floating ones in the Z colour, the rest in `text`.
 fn label_runs(label: &str, t: &Theme, text: Color) -> Vec<(usize, String, Color)> {
     let mut runs: Vec<(usize, String, Color)> = Vec::new();
     for (i, c) in label.chars().enumerate() {
@@ -1578,8 +1476,6 @@ fn label_runs(label: &str, t: &Theme, text: Color) -> Vec<(usize, String, Color)
     runs
 }
 
-/// Fill a hexagon from `xa` to `xb` with slants `tw` wide (open ends have
-/// none), column by column through the slants so the fill stays crisp.
 #[allow(clippy::too_many_arguments)]
 fn fill_hexagon(
     scene: &mut Scene,
@@ -1617,7 +1513,6 @@ fn fill_hexagon(
     }
 }
 
-/// Paint a multi-bit trace as slanted "hexagon" segments with value text.
 fn paint_bus_row(
     h: &dyn SignalHistory,
     translator: &dyn Translator,
@@ -1639,7 +1534,6 @@ fn paint_bus_row(
     let midf = top + (bottom - top) / 2.0;
     let numeric = translator.numeric_kind().is_some();
 
-    // Column sampling → segments, with each changing column's count and kinds.
     let mut segments: Vec<Segment> = Vec::new();
     let mut columns: Vec<(usize, marks::Kinds)> = vec![(0, marks::Kinds::NONE); w_px];
     let mut kinds = marks::KindReader::new(h, false);
@@ -1687,7 +1581,6 @@ fn paint_bus_row(
             dense: false,
         });
     }
-    // Segments too narrow to draw meaningfully become dense, then merge neighbours.
     for seg in segments.iter_mut() {
         if !seg.dense
             && seg.x_end - seg.x_start < MIN_SEGMENT_PX
@@ -1708,7 +1601,6 @@ fn paint_bus_row(
     }
     let segments = merged;
 
-    // Paint. Horizontal edges are crisp quads; slants are stroked lines.
     let mut slants: Vec<(Color, Vec<[Point; 2]>)> = Vec::new();
     let slant_w = SLANT_PX * t.zoom;
     let mut texts: Vec<(f32, String, Color)> = Vec::new();
@@ -1717,7 +1609,6 @@ fn paint_bus_row(
             let xa = x0 + seg.x_start as f32;
             let xb = x0 + seg.x_end as f32;
             if seg.dense {
-                // Every column of an aliased stretch counts as at least two changes.
                 let entering = marks::Kinds::of(h.value_view(seg.idx).kind());
                 let aliased: Vec<marks::Aliased> = (seg.x_start..seg.x_end)
                     .map(|x| marks::Aliased {
@@ -1748,7 +1639,6 @@ fn paint_bus_row(
             let color = match look {
                 BusLook::Unknown => t.wave_undef,
                 BusLook::Floating => t.wave_highimp,
-                // A partly unknown or floating value keeps the signal outline.
                 _ if matches!(kind, ValueKind::Undef | ValueKind::HighImp) => t.wave_signal,
                 _ => t.value_color(kind),
             };
@@ -1768,7 +1658,6 @@ fn paint_bus_row(
                     continue;
                 }
                 BusLook::Zero => {
-                    // Zero reads as idle: the slants run into a low line; hover still reads it.
                     if rb > la {
                         scene.fill(
                             Rect::from_xywh(
@@ -1809,7 +1698,6 @@ fn paint_bus_row(
                     }
                 }
                 BusLook::Value if !numeric && kind == ValueKind::Normal => {
-                    // States get a tint, so a recurring state is known before its label is read.
                     let tint = t.value_tint(&translator.translate(&value).text);
                     fill_hexagon(
                         scene,
@@ -1845,7 +1733,6 @@ fn paint_bus_row(
                 lines.push([point(xb, midf), point(xb - tw, topf)]);
                 lines.push([point(xb, midf), point(xb - tw, botf)]);
             }
-            // Text, one slant and a gap in from each end.
             let avail = seg_w - 2.0 * (tw + LABEL_GAP_PX * t.zoom);
             if avail >= char_w {
                 let max_chars = (avail / char_w).floor() as usize;
@@ -1888,24 +1775,17 @@ fn paint_bus_row(
     });
 }
 
-/// Where one lane, clock or group row is painted and what it reads.
 struct LaneCells<'a> {
     layout: &'a WaveLayout,
-    /// Visible position of the row.
     pos: usize,
-    /// Where its name starts, after the indentation of its depth.
     name_x: f32,
     viewport: Viewport,
     cursor: Option<u64>,
     text: Color,
     muted: Color,
-    /// Why the enclosing numeric group leaves this row out of its plot.
     left_out: Option<&'static str>,
 }
 
-/// A clock row: its name, its cycle at the cursor in the values column, and
-/// a square wave drawn from its stretches (a band where edges are denser
-/// than pixels).
 fn paint_clock_row(
     row: &crate::wave::model::ClockRow,
     view: &crate::clock::ClockView,
@@ -1975,16 +1855,9 @@ fn paint_clock_row(
     }
 }
 
-/// A clock under 3px per half period is a band labelled with its frequency
-/// and period; a gap between its stretches is a dashed low line marked
-/// "gated".
 const CLOCK_BAND_HALF_PX: f64 = 3.0;
-/// Gaps at least this wide (design px) say "gated".
 const GATED_LABEL_PX: f32 = 52.0;
 
-/// A declared clock: where its edges are 3px apart or more, a square wave
-/// without the high fill, whose stripes would only add noise; closer, a
-/// band labelled "500.00 MHz · 2 ns"; between stretches, a dashed low line.
 #[allow(clippy::too_many_arguments)]
 fn paint_clock_wave(
     timeline: &std::sync::Arc<vtr::clock::ClockTimeline>,
@@ -2007,8 +1880,6 @@ fn paint_clock_wave(
     let bottom = area.bottom() - trace_pad(area.height(), t);
     let col = |time: u64| vp.x_of(time as f64, wf).clamp(0.0, wf);
     let history = crate::clock::ClockHistory::new(timeline.clone());
-    // The stretches in view (they are sorted and disjoint) and the gaps
-    // between them, in time order.
     let all = timeline.stretches();
     let lo = all.partition_point(|s| (s.end as f64) < vp.start);
     let hi = lo + all[lo..].partition_point(|s| (s.begin as f64) <= vp.end);
@@ -2025,9 +1896,7 @@ fn paint_clock_wave(
         gaps.push((from, last));
     }
     let mut dashed: Vec<[Point; 2]> = Vec::new();
-    // Each label with the span it must fit in: a band's inside it, "gated" in its gap.
     let mut labels: Vec<(f32, f32, String, Color)> = Vec::new();
-    // A running clock too fast to draw edge by edge: a shaded band.
     let band = |scene: &mut Scene, xa: f32, xb: f32| {
         scene.fill(
             Rect::from_xywh(xa, top, xb - xa, bottom - top),
@@ -2049,8 +1918,6 @@ fn paint_clock_wave(
     };
     let x = |a: f64| area.left() + a as f32;
     p.scene.clipped(clip, |scene| {
-        // Bursts narrower than half a pixel, merged while less than a pixel
-        // apart, so a gated clock zoomed out still shows where it runs.
         let mut narrow: Option<(f64, f64)> = None;
         let flush = |scene: &mut Scene, run: &mut Option<(f64, f64)>| {
             if let Some((a, b)) = run.take() {
@@ -2130,22 +1997,14 @@ fn paint_clock_wave(
     }
 }
 
-/// What a group row shows besides its place.
 struct GroupCells<'a> {
     row: &'a GroupRow,
-    /// Rows below it that are not groups.
     count: usize,
-    /// Loaded histories of the signals below it.
     members: &'a [std::sync::Arc<dyn SignalHistory>],
-    /// Its name is being edited; the frontend draws the editor there.
     renaming: bool,
-    /// The pointer, when it hovers the row and may read values.
     reading: Option<Point>,
 }
 
-/// A group: a chevron, its name and member count. Folded, it also reads its
-/// members at the cursor ("2 of 9 changed · 1 X"), draws their merged
-/// activity, and under the pointer lists their values.
 fn paint_group_row(
     group: &GroupCells<'_>,
     model: &WaveModel,
@@ -2163,7 +2022,6 @@ fn paint_group_row(
     let full_h = layout.row_height(cells.pos);
     let g = group.row;
 
-    // Chevron: › folded, ⌄ open.
     let cx = cells.name_x + z(CHEVRON_W / 2.0);
     let cy = y + row_h / 2.0;
     let a = z(3.5);
@@ -2209,7 +2067,6 @@ fn paint_group_row(
         return;
     }
 
-    // Values column: how many members change at the cursor, and how many are X.
     if let Some(c) = cells.cursor {
         let reading = group::Reading::at(group.members, c);
         let text = reading.text();
@@ -2243,12 +2100,10 @@ fn paint_group_row(
         });
     }
 
-    // Waves column: the members' merged activity in the bus shape.
     let wave_row = Rect::from_xywh(waves.left(), y, waves.width(), full_h);
     let summary = doc.group_summary(&group::key(group.members));
     paint_group_summary(group.members, summary, &cells.viewport, wave_row, waves, p);
 
-    // Under the pointer: each member's value at that time.
     let Some(pointer) = group.reading.filter(|pt| waves.contains(*pt)) else {
         return;
     };
@@ -2349,9 +2204,6 @@ fn paint_group_row(
     });
 }
 
-/// A folded group's activity: a box between consecutive changes of any
-/// member, a band where changes are denser than boxes can show, and the X
-/// colour wherever a member is undefined.
 fn paint_group_summary(
     members: &[std::sync::Arc<dyn SignalHistory>],
     summary: Option<&group::SummaryLoad>,
@@ -2365,8 +2217,6 @@ fn paint_group_summary(
     if w_px == 0 || members.is_empty() {
         return;
     }
-    // Few visible changes are walked; more read the summary, and while it
-    // builds the row says so rather than scanning on the UI thread.
     let columns = if group::visible_changes(members, vp) <= group::WALK_MAX {
         group::walk(members, vp, w_px)
     } else {
@@ -2395,7 +2245,6 @@ fn paint_group_summary(
     let bottom = area.bottom() - trace_pad(area.height(), t);
     let mid = top + (bottom - top) / 2.0;
 
-    // Column counts → segments, as the bus painter does.
     let mut segments: Vec<(usize, usize, bool)> = Vec::new();
     let mut start = 0usize;
     for (x, c) in columns.iter().enumerate() {
@@ -2434,8 +2283,6 @@ fn paint_group_summary(
         let mut undef_slants: Vec<[Point; 2]> = Vec::new();
         for (a, b, dense) in merged {
             let (xa, xb) = (x0 + a as f32, x0 + b as f32);
-            // A box's first column holds the change into it, and with it the
-            // value before; only a band's own columns all count.
             let own = if dense || a == 0 { a } else { (a + 1).min(b) };
             let undefined = columns[own..b].iter().any(|c| c.undefined);
             if dense {
@@ -2443,7 +2290,6 @@ fn paint_group_summary(
                 scene.fill(Rect::from_xywh(xa, top, xb - xa, bottom - top), color);
                 continue;
             }
-            // Undefined stretches inside a box are filled column by column.
             let mut x = own;
             while x < b {
                 if !columns[x].undefined {
@@ -2500,7 +2346,6 @@ fn paint_group_summary(
     });
 }
 
-/// A solid colour key shared by member names and group probe readouts.
 fn paint_member_swatch(scene: &mut Scene, origin: Point, height: f32, color: Color, t: &Theme) {
     let y = snap(origin.y + height / 2.0);
     scene.lines(
@@ -2515,8 +2360,6 @@ struct GroupMember {
     hidden: bool,
 }
 
-/// Numeric groups of one frame: their members, colours, and nonnumeric
-/// rows excluded from their plots. Inner groups supply their members' ink.
 #[derive(Default)]
 struct GroupPlots {
     groups: std::collections::HashMap<usize, (Vec<stack::Layer>, Vec<Color>)>,
@@ -2536,13 +2379,11 @@ impl GroupPlots {
     fn of(model: &WaveModel, doc: &Document, visible: &[u32], t: &Theme) -> Self {
         let mut plots = Self::default();
         let items = model.items();
-        // Pre-order lets an inner numeric group override its members' ink.
         for i in visible.iter().map(|&i| i as usize) {
             let overlaid = model.is_overlaid(i);
             if !overlaid && !model.is_stacked(i) {
                 continue;
             }
-            // Include unloaded members so loading cannot shift later colours.
             let entries = model.numeric_members(i);
             let colors: Vec<Color> = entries
                 .iter()
@@ -2594,36 +2435,27 @@ impl GroupPlots {
     }
 }
 
-/// What a painted stacked row hands to the overlays drawn above the cursor.
 struct StackRow {
     plot: Plot,
     clip: Rect,
-    /// The layers' entries and colours, in list order.
     entries: Vec<usize>,
     colors: Vec<Color>,
     frame: stack::Frame,
-    /// Each column's extremes of the total, when the peak band shows.
     peaks: Vec<stack::Peak>,
-    /// The sum at the cursor, when it is defined.
     at_cursor: Option<f64>,
-    /// The pointer and what it reads.
     readout: Option<(Point, stack::Readout)>,
 }
 
-/// A horizontal run of one band, merged over spans while its pixels agree.
 #[derive(Clone, Copy, PartialEq)]
 struct Band {
     x0: f32,
     x1: f32,
     top: f32,
     bottom: f32,
-    /// A positive part, whose gap is at its top; a negative one has it at
-    /// its bottom.
     up: bool,
 }
 
 impl Band {
-    /// Extend `run` with `next` when it continues it, else flush `run`.
     fn push(run: &mut Option<Band>, next: Band, out: &mut Vec<Band>) {
         match run {
             Some(r) if r.x1 == next.x0 && r.top == next.top && r.bottom == next.bottom => {
@@ -2634,14 +2466,6 @@ impl Band {
     }
 }
 
-/// A stacked group's own row: under its name what it stacks, the sum at
-/// the cursor in its value cell and, in its waves cell, every layer in
-/// list order with the last on the baseline. Positive parts go up from
-/// zero and negative ones down, a one-pixel gap between layers; where a
-/// layer is undefined the rest of the column is hatched; when the scale
-/// holds both signs, zero and the net sum are lines. The scale is the whole
-/// trace's (the visible window's while it is walked), from two rows up
-/// labelled at the top and bottom.
 #[allow(clippy::too_many_arguments)]
 fn paint_stack_row(
     layers: &[stack::Layer],
@@ -2701,7 +2525,6 @@ fn paint_stack_row(
     }
     let vp = &cells.viewport;
     let frame = stack::frame(layers, vp, width);
-    // Long layers wait for their summaries rather than walk on the UI thread.
     if frame.waiting() {
         p.scene.clipped(clip, |scene| {
             scene.text(
@@ -2720,8 +2543,6 @@ fn paint_stack_row(
         _ => None,
     };
     let (lo, hi) = stack::clean_range(total.map_or_else(|| frame.extent(), |s| s.range()));
-    // Means hide bursts: zoomed out, the band reaches each column's own
-    // extremes of the total, walked when few changes are in view.
     let peaks = match (peak && !frame.exact, total) {
         (false, _) => Vec::new(),
         _ if stack::visible_changes(layers, vp) <= stack::WALK_MAX => {
@@ -2793,7 +2614,6 @@ fn paint_stack_row(
                 bottom: from.max(to),
                 up: true,
             };
-            // The band from the means to the column's peak, above and below.
             match peaks.get(s).copied().flatten().filter(|_| !c.undefined) {
                 Some((low, high)) => {
                     let (top, bottom) = (plot.y_of(c.top).round(), plot.y_of(c.bottom).round());
@@ -2831,7 +2651,6 @@ fn paint_stack_row(
                 undefined.extend(undef_up.take());
                 undefined.extend(undef_down.take());
             }
-            // The net sum, where the scale holds both signs.
             match stack::total(values).filter(|_| plot.lo < 0.0) {
                 Some(sum) => {
                     let ny = snap(plot.y_of(sum)) + 0.5;
@@ -2870,7 +2689,6 @@ fn paint_stack_row(
                 Some(h) if h != *k => colors[*k].with_alpha(STACK_DIM),
                 _ => colors[*k],
             };
-            // A pixel of canvas between layers, when a layer has room for it.
             let (top, bottom) = match (b.bottom - b.top >= 3.0, b.up) {
                 (true, true) => (b.top + 1.0, b.bottom),
                 (true, false) => (b.top, b.bottom - 1.0),
@@ -2898,7 +2716,6 @@ fn paint_stack_row(
         }
         scene.lines(std::mem::take(&mut net), t.editor.text, z(1.25).max(1.0));
     });
-    // The scale at the top and bottom from 2× up.
     if full_h >= 2.0 * row_h - 0.5 {
         let size = t.ui_size_small;
         let label_h = z(14.0);
@@ -2940,9 +2757,6 @@ fn paint_stack_row(
     })
 }
 
-/// Over every painted stack: a dot on the sum at the cursor and, under the
-/// pointer, every layer top to bottom with its value and share, then the
-/// sum; in a dense column the values are means over the column.
 fn paint_stack_overlays(
     rows: &[StackRow],
     model: &WaveModel,
@@ -3109,8 +2923,6 @@ fn paint_stack_overlays(
     }
 }
 
-/// A bar prepared for painting: its lifetime, the solid stage spans inside
-/// it, and a caption when one fits.
 struct Bar {
     rect: Rect,
     color: Color,
@@ -3119,10 +2931,6 @@ struct Bar {
     selected: bool,
 }
 
-/// Paint a transaction lane: the generator name (with the number of folded
-/// sub-rows), the records open at the cursor, and the bars or, zoomed out,
-/// the density strip. One window visit per frame bounds the work by the
-/// visible records.
 fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut TextPainter<'_>) {
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
@@ -3138,8 +2946,6 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
     };
     let folded = generator.map_or(0, |g| lane::folded(g.depth(), lane.height));
 
-    // Name column: the generator, a "+N" chip while sub-rows are folded,
-    // and on taller rows the record count and the stacking.
     let pad = cells.name_x - names.left();
     let name_w = p.width(&lane.name, FontRole::Ui, t.ui_size);
     let name_color = if lane.track().is_some() {
@@ -3214,7 +3020,6 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
         }
     }
 
-    // Values column: the records open at the cursor.
     let (value, value_color) = match data {
         _ if cells.left_out.is_some() => (cells.left_out.unwrap().into(), cells.muted),
         LaneData::Ready(g) => match cells.cursor {
@@ -3243,7 +3048,6 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
         });
     }
 
-    // Waves column.
     let status = match data {
         LaneData::Ready(g) => {
             let width = f64::from(waves.width()).max(1.0);
@@ -3298,7 +3102,6 @@ fn paint_lane_bars(
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
     let width = f64::from(waves.width()).max(1.0);
-    // Clamp far-off-screen coordinates so rectangles stay finite and small.
     let x_of = |time: u64| {
         (waves.left() + viewport.x_of(time as f64, width) as f32)
             .clamp(waves.left() - z(8.0), waves.right() + z(8.0))
@@ -3379,7 +3182,6 @@ fn paint_lane_bars(
                 );
             }
         }
-        // Folded bars overlap where hatched.
         let step = z(4.0).max(3.0);
         for (a, b) in hatch {
             let (xa, xb) = (x_of(a), x_of(b));
@@ -3412,8 +3214,6 @@ fn paint_lane_bars(
     });
 }
 
-/// One column per pixel: its height is the share of the generator's depth
-/// open there, and a red cap marks a failed record.
 fn paint_lane_density(
     generator: &crate::data::loaded_tracks::LoadedGenerator,
     viewport: &Viewport,
@@ -3471,7 +3271,6 @@ mod tests {
             fit_label("dot product loop", 6, false).as_deref(),
             Some("dot p…")
         );
-        // Fewer than two characters would show: dropped, never a lone ellipsis.
         assert_eq!(fit_label("80000210", 2, true), None);
         assert_eq!(fit_label("5", 1, true).as_deref(), Some("5"));
         assert_eq!(fit_label("", 4, false), None);
@@ -3597,30 +3396,24 @@ mod tests {
     #[test]
     fn buses_draw_zero_low_z_mid_and_unknowns_hatched() {
         let t = Theme::volna(true);
-        // 0: zero, 100: a value, 200: all X, 300: all Z.
         let h = bus(&[(100, "10000000"), (200, "xxxxxxxx"), (300, "zzzzzzzz")]);
         let scene = paint_bus(&h, "hex", &t);
         let texts: Vec<_> = scene.texts().collect();
-        // Zero is idle: no label. The value and the unknown are labelled.
         assert_eq!(texts, ["80", "xx"]);
         let quads: Vec<_> = scene.quads().collect();
-        // The zero stretch is a low line from its left edge to its slant.
         assert!(quads.iter().any(|(r, c)| *c == t.wave_signal
             && r.left() == 0.0
             && r.top() == 18.0
             && r.height() == 1.0));
-        // All X: tinted and hatched inside its hexagon.
         assert!(
             quads
                 .iter()
                 .any(|(r, c)| *c == t.wave_undef_fill && r.left() >= 200.0 && r.right() <= 300.0)
         );
         assert!(scene.prims.iter().any(|p| matches!(p, Prim::Lines { color, .. } if *color == t.wave_undef.with_alpha(marks::HATCH_ALPHA))));
-        // All Z: one bare line at mid level, no hexagon.
         let z: Vec<_> = quads.iter().filter(|(_, c)| *c == t.wave_highimp).collect();
         assert_eq!(z.len(), 1);
         assert_eq!((z[0].0.left(), z[0].0.height()), (299.0, 1.0));
-        // Slants run 4px either side of a change.
         let slants = scene.prims.iter().find_map(|p| match p {
             Prim::Lines {
                 segments, color, ..
@@ -3708,7 +3501,6 @@ mod tests {
                 _ => None,
             })
         };
-        // A change is drawn in the pixel column whose right edge reaches it.
         assert!(
             scene
                 .quads()
@@ -3724,7 +3516,6 @@ mod tests {
                 .any(|(r, c)| c == t.wave_undef && r.left() == 100.0 && r.height() == 1.0),
             "a mid-level line"
         );
-        // Dotted: a dash every 3px; dashed: every 7px.
         let dotted: usize = lines(t.wave_dontcare).sum();
         let dashed: usize = lines(t.wave_weak).sum();
         assert!((32..=35).contains(&dotted), "{dotted}");
@@ -3735,9 +3526,6 @@ mod tests {
     fn aliased_columns_show_their_strength_and_their_unknowns() {
         let t = Theme::volna(true);
         let bits = |s: &str| WaveValue::Bits(s.into());
-        // Columns of 400 units at 1px per 100: 0..100 toggles 0/1 twice per
-        // column, 100..200 toggles thirty times, 200..300 mixes in X, and
-        // 300..400 changes only between unknowns.
         let mut times = Vec::new();
         let mut values = Vec::new();
         for c in 0..4u64 {
@@ -3809,7 +3597,6 @@ mod tests {
     #[test]
     fn clocks_show_periods_bands_and_gated_gaps() {
         let t = Theme::volna(true);
-        // 2 ns from 0 to 400, gated until 600, then 4 ns to 1000.
         let timeline = std::sync::Arc::new(
             vtr::clock::ClockTimeline::new(vec![(0, 400, 2), (600, 1000, 4)], false).unwrap(),
         );
@@ -3837,7 +3624,6 @@ mod tests {
         });
         let texts: Vec<_> = whole.texts().collect();
         assert_eq!(texts, ["500.00 MHz · 2 ns", "250.00 MHz · 4 ns", "gated"]);
-        // No high fill on a clock: its band is the only wide translucent quad.
         assert!(whole.quads().all(|(_, c)| c != t.wave_high_fill));
         assert!(
             whole
@@ -3845,7 +3631,6 @@ mod tests {
                 .iter()
                 .any(|p| matches!(p, Prim::Lines { color, .. } if *color == t.wave_weak))
         );
-        // Closer, edges 3px apart or more are a square wave again, without labels.
         let close = draw(Viewport {
             start: 100.0,
             end: 200.0,
@@ -3864,7 +3649,6 @@ mod tests {
         let t = Theme::volna(true);
         let h = VecHistory {
             shape: SignalShape::Event,
-            // Three in one pixel, one alone, then two squeezed next to a neighbour.
             times: vec![100, 100, 100, 200, 390, 390, 392],
             values: vec![WaveValue::Bits("1".into()); 7],
             initial: WaveValue::Unavailable,

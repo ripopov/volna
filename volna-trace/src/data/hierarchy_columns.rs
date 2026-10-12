@@ -1,4 +1,5 @@
 //! Flat resident hierarchy storage and its streaming builder.
+
 use super::source::*;
 use super::value::SignalShape;
 use std::collections::HashMap;
@@ -7,7 +8,6 @@ pub(crate) const NONE: u32 = u32::MAX;
 pub(crate) const SCOPE_WORDS: usize = 6;
 pub(crate) const VAR_WORDS: usize = 8;
 
-/// UTF-8 dictionary, with no allocation per name in the resident model.
 #[derive(Debug, Default)]
 pub(crate) struct Names {
     pub bytes: Vec<u8>,
@@ -17,8 +17,6 @@ impl Names {
     pub fn get(&self, id: u32) -> &str {
         let i = id as usize;
         let bytes = &self.bytes[self.offsets[i] as usize..self.offsets[i + 1] as usize];
-        // SAFETY: Only ColumnBuilder creates this dictionary, from valid str
-        // values. The immutable owner never exposes its buffers for mutation.
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
     pub fn len(&self) -> usize {
@@ -29,7 +27,6 @@ impl Names {
     }
 }
 
-/// Compressed sparse row membership, shared by reader and column views.
 #[derive(Debug, Default)]
 pub(crate) struct Links {
     pub roots: Vec<u32>,
@@ -219,7 +216,6 @@ impl std::hash::Hasher for IdentityHash {
         self.0 = value;
     }
 }
-/// Streaming column builder. The dictionary's hash index is discarded at finish.
 #[derive(Debug, Default)]
 pub(crate) struct ColumnBuilder {
     pub columns: Columns,
@@ -312,7 +308,6 @@ impl ColumnBuilder {
     }
 }
 impl HierarchyBuilder {
-    /// Freeze owned fixture declarations into the production column model.
     pub fn finish(self) -> Hierarchy {
         let mut out = ColumnBuilder::default();
         for scope in self.scopes {

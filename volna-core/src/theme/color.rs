@@ -1,10 +1,7 @@
 //! CSS colour parsing shared by host JSON and the VS Code adapter.
+
 use crate::color::Color;
 
-/// Parse the CSS colour syntaxes VS Code emits (and the common variants):
-/// `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(r, g, b)`, `rgba(r, g, b, a)`
-/// with comma- or space-separated components (`/` before alpha), integer or
-/// percentage channels, and `transparent`.
 pub fn parse_css_color(text: &str) -> Option<Color> {
     let text = text.trim();
     if text.eq_ignore_ascii_case("transparent") {

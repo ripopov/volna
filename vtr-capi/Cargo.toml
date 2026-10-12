@@ -13,14 +13,11 @@ crate-type = ["cdylib", "staticlib"]
 doc = false
 
 [features]
-# libvtr allocates from its own heap so a locked application heap cannot block
-# the crash guard's rescue. This increases memory use and is opt-in.
 private-heap = ["dep:mimalloc"]
 
 [dependencies]
 vtr.workspace = true
 vtr-guard = { path = "../vtr-guard" }
-# mimalloc without `override`, so the application's malloc is untouched.
 mimalloc = { version = "0.1", default-features = false, optional = true }
 libc = "0.2"
 

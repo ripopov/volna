@@ -1,5 +1,4 @@
 //! Parent graphs cross generator boundaries only after an explicit request.
-//! Cancellation and navigation must invalidate pending loads and balance holds.
 
 use std::collections::HashMap;
 use std::sync::{

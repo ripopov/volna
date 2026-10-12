@@ -1,53 +1,33 @@
 //! Clocks: declared steady stretches of rising edges (SPEC section 7.4).
-//!
-//! A clock is a stream of kind [`STREAM_KIND`] with one generator,
-//! [`GENERATOR`]. Each transaction of that generator is a *stretch*: `begin`
-//! is its first edge, `end` its last edge, and the attribute [`KEY_PERIOD`]
-//! the spacing between them (absent for a stretch of a single edge). Edge
-//! counts and cycle numbers are computed here, never stored.
 
 use crate::error::{Error, Result};
 use crate::hierarchy::NodeId;
 
-/// Stream kind of a clock.
 pub const STREAM_KIND: &str = "CLOCK";
-/// Name of a clock stream's only generator.
 pub const GENERATOR: &str = "edges";
-/// Stretch attribute: spacing of its edges (a *time* value).
 pub const KEY_PERIOD: &str = "vtr.period";
-/// Stream attribute: path of the clock that the stream's stages are counted in (a *str*).
 pub const KEY_CLOCK: &str = "vtr.clock";
 
-/// A clock: an index into the writer's clocks or into [`Reader::clocks`](crate::Reader::clocks).
-/// Both follow declaration order, so one file gives the same ids on both sides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClockId(pub u32);
 
-/// A clock declared in a file.
 #[derive(Clone, Debug)]
 pub struct ClockInfo {
     pub id: ClockId,
-    /// The CLOCK stream; its name is the clock's name and its path the clock's path.
     pub stream: NodeId,
-    /// The stream's `edges` generator.
     pub generator: NodeId,
-    /// Full path of the stream joined with '.'.
     pub path: String,
 }
 
-/// One steady stretch: edges at `begin, begin + period, ..., end`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stretch {
     pub begin: u64,
     pub end: u64,
-    /// Edge spacing; 0 for a stretch of a single edge.
     pub period: u64,
-    /// Cycle number of `begin`: the number of edges in all earlier stretches.
     pub first_cycle: u64,
 }
 
 impl Stretch {
-    /// Number of edges in the stretch.
     pub fn edges(&self) -> u64 {
         (self.end - self.begin)
             .checked_div(self.period)
@@ -59,33 +39,22 @@ impl Stretch {
     }
 }
 
-/// The cycle that contains a time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CycleAt {
-    /// Number of the last edge at or before the time; the first recorded edge is cycle 0.
     pub cycle: u64,
-    /// Time of that edge.
     pub edge: u64,
-    /// Time of the following recorded edge, if any.
     pub next_edge: Option<u64>,
-    /// Position within the cycle, in `[0, 1)`; 0 when there is no next edge.
     pub fraction: f64,
-    /// The clock is not running in this cycle: it is the last edge of a clock that was
-    /// stopped, or a gap between stretches longer than twice the periods on both sides.
     pub stopped: bool,
 }
 
-/// The complete, immutable history of one clock.
 #[derive(Clone, Debug, Default)]
 pub struct ClockTimeline {
     stretches: Vec<Stretch>,
-    /// The last stretch was still running when the file was closed.
     open: bool,
 }
 
 impl ClockTimeline {
-    /// Builds a timeline from `(begin, end, period)` stretches in any order.
-    /// `open` marks the last one as running at close.
     pub fn new(mut raw: Vec<(u64, u64, u64)>, open: bool) -> Result<ClockTimeline> {
         raw.sort_unstable();
         let mut stretches = Vec::with_capacity(raw.len());
@@ -123,33 +92,28 @@ impl ClockTimeline {
         &self.stretches
     }
 
-    /// True when the clock was still running when the file was closed.
     pub fn is_open(&self) -> bool {
         self.open
     }
 
-    /// Number of recorded edges.
     pub fn edge_count(&self) -> u64 {
         self.stretches
             .last()
             .map_or(0, |s| s.first_cycle + s.edges())
     }
 
-    /// Index of the stretch holding the last edge at or before `t`.
     fn stretch_at(&self, t: u64) -> Option<usize> {
         self.stretches
             .partition_point(|s| s.begin <= t)
             .checked_sub(1)
     }
 
-    /// Edge number within stretch `s` of the last edge at or before `t` (`t >= s.begin`).
     fn index_in(s: &Stretch, t: u64) -> u64 {
         (t - s.begin)
             .checked_div(s.period)
             .map_or(0, |k| k.min(s.edges() - 1))
     }
 
-    /// Time of the edge after edge `k` of stretch `i`, if recorded.
     fn following(&self, i: usize, k: u64) -> Option<u64> {
         let s = &self.stretches[i];
         if k + 1 < s.edges() {
@@ -159,7 +123,6 @@ impl ClockTimeline {
         }
     }
 
-    /// The cycle containing `t`, or `None` before the first edge.
     pub fn cycle_at(&self, t: u64) -> Option<CycleAt> {
         let i = self.stretch_at(t)?;
         let s = &self.stretches[i];
@@ -190,7 +153,6 @@ impl ClockTimeline {
         })
     }
 
-    /// Time of edge `cycle`.
     pub fn edge(&self, cycle: u64) -> Option<u64> {
         let i = self
             .stretches
@@ -201,7 +163,6 @@ impl ClockTimeline {
         (k < s.edges()).then(|| s.edge(k))
     }
 
-    /// First edge strictly after `t`.
     pub fn next_edge(&self, t: u64) -> Option<u64> {
         match self.stretch_at(t) {
             None => self.stretches.first().map(|s| s.begin),
@@ -209,7 +170,6 @@ impl ClockTimeline {
         }
     }
 
-    /// Last edge strictly before `t`.
     pub fn prev_edge(&self, t: u64) -> Option<u64> {
         self.cycle_at(t.checked_sub(1)?).map(|c| c.edge)
     }

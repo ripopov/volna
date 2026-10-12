@@ -1,8 +1,5 @@
-//! Several traces in one window: the
-//! trace chips in the title bar and their menu, a trace's name field, and
-//! adding traces by dialog, command line and drop. What a chip says and
-//! what every choice does come from the core (`App::trace_chips`,
-//! `Command::AddTrace` and its siblings).
+//! Several traces in one window: the trace chips in the title bar and their menu, a trace's
+//! name field, and adding traces by dialog, command line and drop.
 
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
@@ -19,15 +16,12 @@ use crate::theme::{ThemePx, core_theme, hsla, theme};
 use crate::ui::TextInput;
 use crate::ui::text_input::TextInputEvent;
 
-/// The name field of a trace being renamed, hosted in its chip.
 pub(crate) struct TraceRename {
     pub trace: TraceId,
     pub input: Entity<TextInput>,
     _subscription: Subscription,
 }
 
-/// A trace's letter on its colour: the same badge the wave rows' gutter
-/// paints, for chips and the scope tree.
 pub(crate) fn letter_badge(trace: TraceId, cx: &gpui_kit::App) -> impl IntoElement {
     let t = theme(cx);
     let colors = core_theme(cx).trace(trace);
@@ -47,9 +41,6 @@ pub(crate) fn letter_badge(trace: TraceId, cx: &gpui_kit::App) -> impl IntoEleme
 }
 
 impl Workspace {
-    /// The traces as chips, each naming its letter, name, format and unit;
-    /// a click selects its row in the scope tree, a right click opens its
-    /// menu. Only while several traces are open: one trace is named plainly.
     pub(crate) fn render_trace_chips(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let chips = self.app.trace_chips();
         if chips.len() < 2 {
@@ -141,8 +132,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// A trace's menu, from its chip or its row in the scope tree: rename,
-    /// close it, or add another.
     pub(crate) fn open_trace_menu(
         &mut self,
         trace: TraceId,
@@ -209,8 +198,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Open the name field in a trace's chip; Enter renames the trace (an
-    /// undoable step), Escape keeps its name.
     pub(crate) fn start_trace_rename(
         &mut self,
         trace: TraceId,
@@ -258,8 +245,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Add a trace from disk beside the open ones (Add Trace…, the command
-    /// line, a drop). With nothing open it is an ordinary open.
     #[cfg(not(target_family = "wasm"))]
     pub fn add_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
         if !self.app.doc.is_loaded() && self.app.doc.traces().is_empty() {
@@ -283,7 +268,6 @@ impl Workspace {
         self.after(None, cx);
     }
 
-    /// Open the first path and add the others: `volna A.vtr B.fst`.
     #[cfg(not(target_family = "wasm"))]
     pub fn open_paths(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
         let mut paths = paths.into_iter();
@@ -295,7 +279,6 @@ impl Workspace {
         }
     }
 
-    /// Ask for traces to add beside the open ones.
     pub(crate) fn add_trace_dialog(&mut self, cx: &mut Context<Self>) {
         #[cfg(not(target_family = "wasm"))]
         {
@@ -326,9 +309,6 @@ impl Workspace {
         }
     }
 
-    /// Files dropped on the window: with nothing open they open (the first)
-    /// and join it (the rest); over open traces a menu at the drop point
-    /// offers to replace them or to add the files beside them.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn drop_paths(
         &mut self,

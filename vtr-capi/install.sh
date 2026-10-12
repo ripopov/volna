@@ -75,10 +75,6 @@ if $private_heap; then
     build_args+=(--features private-heap)
 fi
 
-# rustc reports the native libraries required by a staticlib for the selected
-# toolchain and target. Cargo can reuse a fresh artifact without repeating this
-# note, so retain it alongside that artifact for subsequent installs. Remove
-# terminal colors from the diagnostic because CI may request colored Cargo output.
 if ! CARGO_TERM_COLOR=never "${cargo_cmd[@]}" rustc "${build_args[@]}" -- --print native-static-libs >"$build_log" 2>&1; then
     cat "$build_log" >&2
     die 'Cargo could not build vtr-capi'

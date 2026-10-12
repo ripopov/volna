@@ -1,5 +1,5 @@
-//! Container members and bounded whole-trace search, with shared selection,
-//! presentation metadata and keyboard behavior.
+//! Container members and bounded whole-trace search, with shared selection, presentation
+//! metadata and keyboard behavior.
 
 use std::collections::BTreeSet;
 
@@ -12,7 +12,6 @@ use volna_trace::data::{Direction, Hierarchy, Member, ScopeId, ScopeRole, Signal
 
 const MAX_SEARCH_ROWS: usize = 5000;
 
-/// A borrowed view of raw log attributes. Missing provenance stays missing.
 pub struct LogSite<'a> {
     pub severity: String,
     pub file: Option<&'a str>,
@@ -132,20 +131,14 @@ pub struct MemberListModel {
     pub anchor: Option<usize>,
 }
 
-/// What a key press asked for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MemberKeyOutcome {
     pub changed: bool,
-    /// Members to activate through the application's shared command path.
     pub activate: Option<Vec<Traced<Member>>>,
-    /// Row to scroll into view.
     pub reveal: Option<usize>,
-    /// Typing started filtering: the frontend should focus its filter box.
     pub focus_filter: bool,
 }
 
-/// Whether `name` lowercased contains `lower` (already lowercase). ASCII
-/// names, the usual HDL case, are compared in place without allocating.
 fn contains_folded(name: &str, lower: &str) -> bool {
     if lower.is_empty() {
         return true;
@@ -160,7 +153,6 @@ fn contains_folded(name: &str, lower: &str) -> bool {
 }
 
 impl MemberListModel {
-    /// Start over for a new set of traces.
     pub fn reset(&mut self, traces: &TraceSet) {
         self.scope = None;
         self.search_everywhere = false;
@@ -168,7 +160,6 @@ impl MemberListModel {
         self.rebuild(traces);
     }
 
-    /// A trace left: stop listing its members.
     pub fn remove_trace(&mut self, traces: &TraceSet, trace: TraceId) {
         if self.scope.is_some_and(|s| s.trace == trace) {
             self.scope = None;
@@ -203,7 +194,6 @@ impl MemberListModel {
                         .map(|g| scope.with(Member::Generator(g))),
                 );
             }
-            // Searching looks through every open trace.
             None if !filter.is_empty() => {
                 for (trace, session) in traces.loaded() {
                     let h = session.hierarchy();
@@ -251,12 +241,10 @@ impl MemberListModel {
         !self.filter.is_empty()
     }
 
-    /// Rows show full paths while searching across the whole trace set.
     pub fn show_scope(&self) -> bool {
         (self.scope.is_none() || self.search_everywhere) && self.is_searching()
     }
 
-    /// Whether any listed variable has a port direction worth a column.
     pub fn show_direction(&self, traces: &TraceSet) -> bool {
         self.rows.iter().any(|m| {
             m.item.var().is_some_and(|v| {
@@ -267,8 +255,6 @@ impl MemberListModel {
         })
     }
 
-    /// The selected members, or every listed variable when nothing is
-    /// selected.
     pub fn selected_or_all(&self) -> Vec<Traced<Member>> {
         if self.selected.is_empty() {
             self.rows
@@ -310,8 +296,6 @@ impl MemberListModel {
         }
     }
 
-    /// Where the listed members live: the scope's path, kind and component,
-    /// after its trace's letter while several traces are open.
     pub fn breadcrumb(&self, traces: &TraceSet) -> String {
         if self.search_everywhere || self.show_scope() {
             let whole = if traces.is_combined() {
@@ -347,7 +331,6 @@ impl MemberListModel {
         }
     }
 
-    /// Placeholder text when there is nothing to list.
     pub fn placeholder(&self, traces: &TraceSet) -> Option<&'static str> {
         if traces.first_loaded().is_none() {
             Some("Open a trace to browse variables")
@@ -408,8 +391,6 @@ impl MemberListModel {
                 out.changed = !self.selected.is_empty();
                 self.selected.clear();
             }
-            // Typing starts filtering: the frontend appends to its own text box
-            // and reports the new filter back.
             Key::Char(text) if !text.is_empty() && !modifiers.platform && !modifiers.control => {
                 out.focus_filter = true;
                 out.changed = true;

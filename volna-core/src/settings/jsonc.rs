@@ -1,23 +1,16 @@
-//! A tolerant JSON parser for `settings.json` (comments, trailing commas, a
-//! byte-order mark, CRLF) that records the byte spans of top-level properties,
-//! and the surgical edits that change one property while keeping every other
-//! byte, comment included.
+//! Tolerant JSONC parsing and edits that preserve untouched settings text.
 
 use std::ops::Range;
 
-/// One top-level property with its byte spans in the source text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
     pub key: String,
     pub key_span: Range<usize>,
     pub value_span: Range<usize>,
     pub value: serde_json::Value,
-    /// 1-based line of the key.
     pub line: usize,
 }
 
-/// A parsed document. `braces` is `None` for an empty (blank) text, which is
-/// treated as `{}` for resolution and seeded on the first edit.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Document {
     pub entries: Vec<Entry>,
@@ -26,7 +19,6 @@ pub struct Document {
 
 impl Document {
     pub fn get(&self, key: &str) -> Option<&Entry> {
-        // Duplicate keys: the last one wins, as in JSON.
         self.entries.iter().rev().find(|e| e.key == key)
     }
 }
@@ -44,12 +36,10 @@ impl std::fmt::Display for SyntaxError {
     }
 }
 
-/// 1-based line of a byte offset.
 fn line_of(text: &str, offset: usize) -> usize {
     text[..offset.min(text.len())].matches('\n').count() + 1
 }
 
-/// Offset of the first byte of the line containing `at`.
 fn line_start(text: &str, at: usize) -> usize {
     text[..at].rfind('\n').map_or(0, |i| i + 1)
 }
@@ -87,7 +77,6 @@ impl<'a> Parser<'a> {
         self.bytes[self.pos..].starts_with(s.as_bytes())
     }
 
-    /// Skip whitespace and comments.
     fn skip(&mut self) -> Result<(), SyntaxError> {
         loop {
             while self
@@ -249,8 +238,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse `{ ... }` at the cursor; returns (key, value) pairs and records
-    /// entries with spans when `record` is set (top level only).
     fn object(
         &mut self,
         mut record: Option<&mut Vec<Entry>>,
@@ -309,7 +296,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Parse a settings document. Blank text is an empty document.
 pub fn parse(text: &str) -> Result<Document, SyntaxError> {
     let mut parser = Parser {
         text,
@@ -341,7 +327,6 @@ pub fn parse(text: &str) -> Result<Document, SyntaxError> {
     })
 }
 
-/// Whether `range` of `text` holds a comma outside comments.
 fn has_comma(text: &str, range: Range<usize>) -> bool {
     let slice = &text[range];
     let bytes = slice.as_bytes();
@@ -364,7 +349,6 @@ fn has_comma(text: &str, range: Range<usize>) -> bool {
     false
 }
 
-/// Locate a separator using the parser's whitespace/comment rules.
 fn comma_after(text: &str, at: usize) -> Option<usize> {
     let mut parser = Parser {
         text,
@@ -380,7 +364,6 @@ fn newline(text: &str) -> &'static str {
     if text.contains("\r\n") { "\r\n" } else { "\n" }
 }
 
-/// The indentation of the first property, or two spaces.
 fn indent(text: &str, doc: &Document) -> String {
     if let Some(first) = doc.entries.first() {
         let prefix = &text[line_start(text, first.key_span.start)..first.key_span.start];
@@ -391,10 +374,6 @@ fn indent(text: &str, doc: &Document) -> String {
     "  ".into()
 }
 
-/// Set `key` to `value`, replacing only the value span of a present key or
-/// inserting one property before the closing brace. Inserted properties never
-/// carry a trailing comma. `seed` are properties written into a document
-/// that has no braces yet (the `$schema` line).
 pub fn set(
     text: &str,
     doc: &Document,
@@ -439,10 +418,6 @@ pub fn set(
     result
 }
 
-/// Remove the property `key` with its line (when the key started the line),
-/// its trailing comma and a same-line comment. Removing the last property
-/// also drops the comma that preceded it, so a strictly valid document stays
-/// strictly valid. A document left with nothing but whitespace becomes `{}`.
 pub fn remove(text: &str, doc: &Document, key: &str) -> String {
     let Some(entry) = doc.get(key) else {
         return text.to_owned();
@@ -460,7 +435,6 @@ pub fn remove(text: &str, doc: &Document, key: &str) -> String {
     } else {
         entry.key_span.start
     };
-    // `[ \t]*,?[ \t]*(//[^\n]*)?\r?\n?`
     let mut end = skip_blanks(bytes, entry.value_span.end);
     let comma = comma_after(text, entry.value_span.end);
     let had_comma = comma.is_some();
@@ -482,7 +456,6 @@ pub fn remove(text: &str, doc: &Document, key: &str) -> String {
         }
     }
     let mut out = String::with_capacity(text.len());
-    // The removed entry was last without a trailing comma: drop the previous comma.
     let is_last = doc
         .entries
         .last()
@@ -501,8 +474,6 @@ pub fn remove(text: &str, doc: &Document, key: &str) -> String {
     }
     out.push_str(&text[..start]);
     if let Some(comma) = comma.filter(|&comma| comma >= end) {
-        // Comments between the value and separator remain outside the
-        // deleted property; remove only the separator from that suffix.
         out.push_str(&text[end..comma]);
         out.push_str(&text[comma + 1..]);
     } else {
@@ -589,7 +560,6 @@ mod tests {
         let out = set(strict, &doc, "b", &json!("x"), &[]);
         assert_eq!(out, "{\n    \"a\": 1,\n    \"b\": \"x\"\n}");
         serde_json::from_str::<serde_json::Value>(&out).unwrap();
-        // A comment between the last value and the brace keeps its place.
         let commented = "{\n  \"a\": 1 // one\n  // trailing\n}\n";
         let doc = parse(commented).unwrap();
         let out = set(commented, &doc, "b", &json!(2), &[]);

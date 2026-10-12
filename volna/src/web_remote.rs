@@ -1,4 +1,5 @@
-//! Browser transport hosting. Raw decode/admission live in volna-trace; viewer demand lives in core.
+//! Browser transport hosting.
+
 use crate::Workspace;
 use gpui_kit::Context;
 use std::cell::Cell;
@@ -12,8 +13,6 @@ thread_local! { static NEXT: Cell<u64> = const { Cell::new(0) }; }
 
 pub(crate) struct Bridge {
     connection: String,
-    /// Document epoch for connection lifetime, independent of the trace slot's
-    /// generation carried by RemoteClient's load requests and results.
     epoch: u64,
     client: RemoteClient,
 }
@@ -50,11 +49,6 @@ impl Drop for Bridge {
 }
 
 impl Workspace {
-    /// The bridge belongs to the open recording. A new open or a close
-    /// changes the document generation and the session, so the connection
-    /// is dropped; a workspace restore also changes the generation (to
-    /// invalidate earlier history results) but keeps the same remote
-    /// session, so the connection is kept and its restored loads run.
     pub(crate) fn sync_remote(&mut self) {
         if let Some(bridge) = &mut self.remote
             && bridge.epoch != self.app.doc.generation()
@@ -169,10 +163,6 @@ impl Workspace {
         let Some(bridge) = self.remote.as_mut().filter(|r| r.connection == connection) else {
             return;
         };
-        // A host dispatch can cost a frame. Amortize that delay over a short
-        // slice of bounded decoder steps rather than yielding after every
-        // small parser checkpoint batch. Keep input/paint opportunities even
-        // while a complete transaction track is being indexed.
         let start = volna_core::Instant::now();
         let result = loop {
             let result = bridge.client.step();
@@ -210,8 +200,6 @@ impl Workspace {
                 ClientStep::Complete { ack, result } => {
                     self.app.deliver(result);
                     bridge.epoch = self.app.doc.generation();
-                    // End already validated the complete object. Preserve it
-                    // for offline use even if sending the final ACK fails.
                     bridge.send(&ack)?;
                     self.after(None, cx);
                     self.remote_command()

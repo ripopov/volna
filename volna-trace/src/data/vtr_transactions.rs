@@ -1,4 +1,5 @@
 //! Resolve VTR's interned names at the adapter boundary.
+
 use super::loaded_tracks::{LoadedGenerator, LoadedRelation, LoadedTrack, TransactionLocation};
 use super::transactions::*;
 use super::vtr_source::LocalSession;
@@ -6,9 +7,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use vtr::{NodeData, Reader, Value};
 
-/// Load a whole raw track in one transaction scan and one relation scan.
-/// Ordinals come directly from the reader's documented file-order traversal;
-/// equal parallel edges therefore never collapse during loading.
 pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Result<LoadedTrack> {
     let selected = session
         .tracks
@@ -48,8 +46,6 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
             .push(transaction(&session.reader, tx));
         true
     })?;
-    // Gather incident references first. Resolve external owners together;
-    // asking the reader once per relation repeatedly scans the same blocks.
     let mut external = HashSet::new();
     for tx in records.values().flatten() {
         if let Some(parent) = tx.parent

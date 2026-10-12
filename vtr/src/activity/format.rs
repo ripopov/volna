@@ -15,16 +15,11 @@ const HEADER_LEN: usize = 40;
 pub(super) const BLOCK_HEAD_LEN: usize = 40;
 pub(super) const TAIL_HEAD_LEN: usize = 8;
 
-/// Columns of a BLOCK section body: signal-id deltas, row headers
-/// (`closed << 1 | has_first`), first changes, then per closed stretch its
-/// length, the silence after it and its largest gap.
 pub(super) const BLOCK_COLUMNS: usize = 6;
-/// Columns of the TAIL body: signal-id deltas, final stretch lengths, gaps.
 pub(super) const TAIL_COLUMNS: usize = 3;
 
 pub(super) const COMPRESSION: Compression = Compression::ZSTD_DEFAULT;
 
-/// The HEADER section: the trace's identity, the budget and the time origin.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Header {
     pub identity: Identity,
@@ -67,7 +62,6 @@ impl Header {
     }
 }
 
-/// The fixed head of a BLOCK section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct BlockHead {
     pub start: u64,
@@ -75,7 +69,6 @@ pub(super) struct BlockHead {
     pub bytes: u64,
     pub rows: u32,
     pub closed: u32,
-    /// Δ = 2^exponent.
     pub exponent: u8,
 }
 
@@ -125,8 +118,6 @@ pub(super) fn tail_rows(p: &[u8]) -> Result<u32> {
     Ok(le32(p, 0))
 }
 
-/// Packs varint columns (each prefixed by its byte length) into one
-/// compressed blob.
 pub(super) fn pack(
     cols: &[Vec<u8>],
     raw: &mut Vec<u8>,
@@ -144,8 +135,6 @@ pub(super) fn pack(
     c.compress_into(COMPRESSION, raw, out)
 }
 
-/// Decompresses a blob written by [`pack`] into `raw` and returns the byte
-/// ranges of its `N` columns.
 pub(super) fn unpack<const N: usize>(
     blob: &[u8],
     d: &mut Decompressor,
@@ -171,8 +160,6 @@ pub(super) fn unpack<const N: usize>(
     Ok(out)
 }
 
-/// Writes the sidecar container: file header, sections with CRCs, then the
-/// directory and trailer.
 pub(super) struct FileWriter<W: Write> {
     w: W,
     pos: u64,
@@ -217,7 +204,6 @@ impl<W: Write> FileWriter<W> {
         Ok(())
     }
 
-    /// Writes the directory and trailer; returns the file length.
     pub fn finish(mut self) -> Result<u64> {
         let dir = container::encode_directory(&self.dir);
         let at = self.pos;

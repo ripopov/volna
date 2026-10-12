@@ -1,5 +1,4 @@
-//! Incremental decoder for PackedHistory's fixed bincode layout. Both input
-//! and validation steps are bounded; finishing never rescans the whole history.
+//! Incremental decoder for PackedHistory's fixed bincode layout.
 
 use super::{PackedHistory, stride};
 use crate::data::SignalShape;
@@ -59,9 +58,6 @@ impl HistoryDecoder {
         })
     }
 
-    /// Admit the complete decoded arrays before allocating them. The fixed
-    /// struct allowance includes vector descriptors and the reservation itself;
-    /// transport/host scratch must be reserved separately by the executor.
     pub fn with_budget(
         declared_bytes: u64,
         max_bytes: u64,
@@ -77,8 +73,6 @@ impl HistoryDecoder {
         Ok(decoder)
     }
 
-    /// Consume at most one transport data chunk. Errors permanently invalidate
-    /// the builder; the caller must discard it and retry the complete object.
     pub fn feed(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
         let result = self.feed_inner(bytes);
         if result.is_err() {
@@ -179,9 +173,6 @@ impl HistoryDecoder {
                 );
                 let count = usize::try_from(value)?;
                 if self.stage == Stage::TimesLen {
-                    // Check all mandatory storage before reserving any array.
-                    // Text needs two offset sentinels and at least one tag per
-                    // value; fixed values include their padding in the stride.
                     let values = value.checked_add(1);
                     let minimum = value.checked_mul(8).and_then(|times| {
                         let storage = if let Some(stride) = stride(self.history.shape) {
@@ -285,8 +276,6 @@ impl HistoryDecoder {
         Ok(())
     }
 
-    /// Validate at most DATA_BYTES of stored values. Call again after yielding
-    /// when false is returned. This also handles a single very large text/bus.
     pub fn step(&mut self) -> anyhow::Result<bool> {
         let result = self.step_inner();
         if result.is_err() {
@@ -512,7 +501,6 @@ mod tests {
 
         let mut decoder = HistoryDecoder::new(bytes.len() as u64, bytes.len() as u64).unwrap();
         decoder.feed(&bytes).unwrap();
-        // Even a complete payload stays private until validation finishes.
         assert!(decoder.finish().is_err());
     }
 }

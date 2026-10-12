@@ -1,13 +1,4 @@
 //! Signal groups: the rows of a wave panel as a tree stored in pre-order.
-//!
-//! Each [`Entry`] carries its depth; an entry's subtree is the entry plus
-//! every following entry that is deeper than it. Selection, clipboard ranges,
-//! moves and row heights stay operations on one vector, and the functions
-//! here are the only code that knows how depths nest.
-//!
-//! Every change of the vector is a list of [`Splice`]s: the planners here
-//! return them, and [`apply`] performs them and returns their inverse, which
-//! is what the undo journal keeps (`volna/README.md`, "Undo and redo").
 
 use std::collections::BTreeSet;
 use std::ops::{Deref, DerefMut, Range, RangeInclusive};
@@ -16,10 +7,8 @@ use std::sync::Arc;
 use super::model::WaveRow;
 pub use crate::history::Splice;
 
-/// Groups nest at most this deep: every entry's depth is below it.
 pub const MAX_DEPTH: u8 = 8;
 
-/// One row of a wave panel at its depth in the group tree.
 #[derive(Clone)]
 pub struct Entry {
     pub depth: u8,
@@ -35,8 +24,6 @@ impl Entry {
         matches!(self.row, WaveRow::Group(_))
     }
 
-    /// A copy that holds no trace data: what the clipboard and the undo
-    /// journal keep (see [`WaveRow::detached`]).
     pub fn detached(&self) -> Self {
         Self {
             depth: self.depth,
@@ -44,8 +31,6 @@ impl Entry {
         }
     }
 
-    /// Whether two rows describe the same cockpit content: everything a
-    /// workspace stores except the fold state.
     pub fn same(&self, other: &Self) -> bool {
         self.depth == other.depth && self.row.same(&other.row)
     }
@@ -64,9 +49,6 @@ impl DerefMut for Entry {
     }
 }
 
-/// Check the tree invariant: the first entry is a root, an entry is at most
-/// one level deeper than the one before it and only below a group, and no
-/// entry is [`MAX_DEPTH`] deep.
 pub fn validate(items: &[Entry]) -> Result<(), String> {
     validate_shape(items.iter().map(|e| (e.depth, e.is_group())))
 }
@@ -85,12 +67,7 @@ fn validate_shape(shape: impl Iterator<Item = (u8, bool)>) -> Result<(), String>
     Ok(())
 }
 
-/// Perform `splices` in order and return the splices that undo them, in the
-/// order to perform, holding the replaced rows detached. Fails without
-/// changing anything when a splice is out of bounds or the result would
-/// break the tree invariant.
 pub fn apply(items: &mut Vec<Entry>, splices: Vec<Splice>) -> Result<Vec<Splice>, String> {
-    // Check the result on depths alone before touching the rows.
     let mut shape: Vec<(u8, bool)> = items.iter().map(|e| (e.depth, e.is_group())).collect();
     for s in &splices {
         if s.at + s.remove > shape.len() {
@@ -124,7 +101,6 @@ pub fn apply(items: &mut Vec<Entry>, splices: Vec<Splice>) -> Result<Vec<Splice>
     Ok(inverse)
 }
 
-/// One past the last entry of `i`'s subtree.
 pub fn subtree_end(items: &[Entry], i: usize) -> usize {
     let depth = items[i].depth;
     i + 1
@@ -134,23 +110,19 @@ pub fn subtree_end(items: &[Entry], i: usize) -> usize {
             .count()
 }
 
-/// Entry `i` and every entry below it.
 pub fn subtree(items: &[Entry], i: usize) -> Range<usize> {
     i..subtree_end(items, i)
 }
 
-/// The group that holds entry `i`.
 pub fn parent(items: &[Entry], i: usize) -> Option<usize> {
     let depth = items.get(i)?.depth;
     (0..i).rev().find(|&j| items[j].depth < depth)
 }
 
-/// Whether `i` is `ancestor` or lies inside its subtree.
 pub fn is_within(items: &[Entry], i: usize, ancestor: usize) -> bool {
     subtree(items, ancestor).contains(&i)
 }
 
-/// The entries that are painted: every entry outside a folded group.
 pub fn visible(items: &[Entry]) -> Arc<[u32]> {
     let mut out = Vec::with_capacity(items.len());
     let mut hide_below: Option<u8> = None;
@@ -169,7 +141,6 @@ pub fn visible(items: &[Entry]) -> Arc<[u32]> {
     out.into()
 }
 
-/// Selected entries without a selected ancestor, in order.
 pub fn roots(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
     let mut out = Vec::new();
     let mut end = 0;
@@ -183,7 +154,6 @@ pub fn roots(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
     out
 }
 
-/// The subtrees of [`roots`] as entry ranges.
 pub fn blocks(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Range<usize>> {
     roots(items, sel)
         .into_iter()
@@ -191,12 +161,10 @@ pub fn blocks(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Range<usize>> {
         .collect()
 }
 
-/// Signal, lane and clock entries of `i`'s subtree (itself when it is one).
 pub fn leaves(items: &[Entry], i: usize) -> impl Iterator<Item = usize> + '_ {
     subtree(items, i).filter(|&j| !items[j].is_group())
 }
 
-/// Every leaf under the entries of `sel`, each once, in order.
 pub fn selected_leaves(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
     blocks(items, sel)
         .into_iter()
@@ -205,9 +173,6 @@ pub fn selected_leaves(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
         .collect()
 }
 
-/// The depths at which rows can be inserted into visible gap `gap` (before
-/// visible position `gap`): from the level of the row below up to one level
-/// inside the open group above.
 pub fn gap_depths(items: &[Entry], visible: &[u32], gap: usize) -> RangeInclusive<u8> {
     let above = gap.checked_sub(1).and_then(|g| visible.get(g));
     let below = visible.get(gap);
@@ -220,8 +185,6 @@ pub fn gap_depths(items: &[Entry], visible: &[u32], gap: usize) -> RangeInclusiv
     min..=max.min(MAX_DEPTH - 1).max(min)
 }
 
-/// Where moved or inserted rows land: before entry `at` (counted before the
-/// move), with their roots at `depth`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Place {
     pub at: usize,
@@ -229,7 +192,6 @@ pub struct Place {
 }
 
 impl Place {
-    /// Visible gap `gap` at `depth`.
     pub fn gap(items: &[Entry], visible: &[u32], gap: usize, depth: u8) -> Self {
         Self {
             at: visible.get(gap).map_or(items.len(), |&i| i as usize),
@@ -237,7 +199,6 @@ impl Place {
         }
     }
 
-    /// Appended as the last child of group `group`.
     pub fn into(items: &[Entry], group: usize) -> Self {
         Self {
             at: subtree_end(items, group),
@@ -246,19 +207,13 @@ impl Place {
     }
 }
 
-/// A planned move: the splices that perform it, and where the moved roots
-/// end up.
 #[derive(Clone)]
 pub struct Moved {
     pub splices: Vec<Splice>,
     pub roots: BTreeSet<usize>,
-    /// Where the first moved row lands.
     pub first: usize,
 }
 
-/// Plan moving the selected subtrees, in order, to `to`. `None` when the
-/// move would put a group inside itself, nest too deep, or change nothing
-/// (a row moved past an identical copy of itself changes nothing either).
 pub fn plan_move(items: &[Entry], sel: &BTreeSet<usize>, to: Place) -> Option<Moved> {
     let blocks = blocks(items, sel);
     if blocks.is_empty() || to.at > items.len() {
@@ -300,7 +255,6 @@ pub fn plan_move(items: &[Entry], sel: &BTreeSet<usize>, to: Place) -> Option<Mo
     {
         return None;
     }
-    // The rows after the drop must still hang from a group.
     let mut limit = 0u8;
     for &(i, d) in &order {
         if d > limit {
@@ -333,8 +287,6 @@ pub fn plan_move(items: &[Entry], sel: &BTreeSet<usize>, to: Place) -> Option<Mo
     })
 }
 
-/// Splices removing `blocks` (ascending, disjoint), last first; adjacent
-/// blocks go in one splice.
 fn removal_of(blocks: &[Range<usize>]) -> Vec<Splice> {
     let mut runs: Vec<Range<usize>> = Vec::new();
     for b in blocks {
@@ -353,10 +305,6 @@ fn removal_of(blocks: &[Range<usize>]) -> Vec<Splice> {
         .collect()
 }
 
-/// Plan putting the selected subtrees, in order, under a new group `group`
-/// at the place and level of the first one. Returns the splices and the
-/// group's index after them, or `None` when nothing is selected or the rows
-/// would nest too deep.
 pub fn group(
     items: &[Entry],
     sel: &BTreeSet<usize>,
@@ -390,10 +338,6 @@ pub fn group(
     Some((splices, first))
 }
 
-/// Plan dissolving the groups among `groups`: their children take their
-/// place one level up, and a child without a colour of its own takes the
-/// one it inherited from them, so nothing changes colour. Returns the
-/// splices and the dissolved groups' former children, indexed as after them.
 pub fn ungroup(items: &[Entry], groups: &BTreeSet<usize>) -> (Vec<Splice>, BTreeSet<usize>) {
     let groups: BTreeSet<usize> = groups
         .iter()
@@ -403,7 +347,6 @@ pub fn ungroup(items: &[Entry], groups: &BTreeSet<usize>) -> (Vec<Splice>, BTree
     let mut splices = Vec::new();
     let mut children = BTreeSet::new();
     let mut shift = 0;
-    // Each outermost dissolved group's subtree is rewritten by one splice.
     for span in blocks(items, &groups) {
         let spans: Vec<(usize, u8, Range<usize>)> = groups
             .range(span.clone())
@@ -423,8 +366,6 @@ pub fn ungroup(items: &[Entry], groups: &BTreeSet<usize>) -> (Vec<Splice>, BTree
                 }
             }
             let mut row = items[i].row.clone();
-            // A former child of a dissolved group keeps its colour: the
-            // nearest dissolved ancestor above it that had one.
             if row.tint().is_none()
                 && let Some(p) = parent(items, i).filter(|p| groups.contains(p))
             {
@@ -452,8 +393,6 @@ pub fn ungroup(items: &[Entry], groups: &BTreeSet<usize>) -> (Vec<Splice>, BTree
     (splices, children)
 }
 
-/// What closing `trace` removes: its rows, and every group whose rows all
-/// come from it. Groups that were empty already stay.
 pub fn of_trace(items: &[Entry], trace: crate::trace::TraceId) -> BTreeSet<usize> {
     let of = |j: usize| items[j].row.trace() == Some(trace);
     (0..items.len())
@@ -467,12 +406,10 @@ pub fn of_trace(items: &[Entry], trace: crate::trace::TraceId) -> BTreeSet<usize
         .collect()
 }
 
-/// Plan removing the selected subtrees.
 pub fn removal(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Splice> {
     removal_of(&blocks(items, sel))
 }
 
-/// Copies of the selected subtrees with their roots at depth zero.
 pub fn extract(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Entry> {
     blocks(items, sel)
         .into_iter()
@@ -486,8 +423,6 @@ pub fn extract(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Entry> {
         .collect()
 }
 
-/// Plan inserting `rows` (roots at depth zero) at `to`. Returns the splice
-/// and the inserted roots, or `None` when they would nest too deep.
 pub fn insertion(to: Place, rows: Vec<Entry>) -> Option<(Splice, BTreeSet<usize>)> {
     if rows.iter().any(|e| e.depth + to.depth >= MAX_DEPTH) {
         return None;
@@ -515,9 +450,6 @@ pub fn insertion(to: Place, rows: Vec<Entry>) -> Option<(Splice, BTreeSet<usize>
     ))
 }
 
-/// Fold or unfold group `i`, and with `deep` every group inside it.
-/// Returns whether anything changed. Folds are navigation: they change
-/// entries in place and are not journaled.
 pub fn set_collapsed(items: &mut [Entry], i: usize, collapsed: bool, deep: bool) -> bool {
     let end = if deep { subtree_end(items, i) } else { i + 1 };
     let mut changed = false;
@@ -553,7 +485,6 @@ mod tests {
         Entry::new(depth, WaveRow::Group(g))
     }
 
-    /// clk, [AXI: [Write: aw, w], [Read (folded): ar, r]], irq
     fn soc() -> Vec<Entry> {
         vec![
             leaf(0, "clk"),
@@ -576,8 +507,6 @@ mod tests {
         items.iter().map(|e| (e.depth, e.name())).collect()
     }
 
-    /// Apply `splices`, check the tree, undo them and check the rows are
-    /// back exactly; returns the rows as the splices left them.
     fn round_trip(items: &[Entry], splices: Vec<Splice>) -> Vec<Entry> {
         let mut edited = items.to_vec();
         let inverse = apply(&mut edited, splices).expect("valid splices");
@@ -625,7 +554,6 @@ mod tests {
         assert_eq!(parent(&items, 1), None);
         assert_eq!(leaves(&items, 1).collect::<Vec<_>>(), [3, 4, 6, 7]);
         assert_eq!(&*visible(&items), &[0, 1, 2, 3, 4, 5, 8]);
-        // A selected group and its own row count once.
         assert_eq!(roots(&items, &set(&[2, 3, 8])), [2, 8]);
         assert_eq!(selected_leaves(&items, &set(&[2, 3, 8])), [3, 4, 8]);
     }
@@ -635,11 +563,8 @@ mod tests {
         let items = soc();
         let v = visible(&items);
         assert_eq!(gap_depths(&items, &v, 0), 0..=0);
-        // Below open AXI: only inside it.
         assert_eq!(gap_depths(&items, &v, 2), 1..=1);
-        // Below w, above Read: Write's level or inside Write.
         assert_eq!(gap_depths(&items, &v, 5), 1..=2);
-        // Below folded Read, above irq: Read is closed, so AXI's level or the top.
         assert_eq!(gap_depths(&items, &v, 6), 0..=1);
         assert_eq!(gap_depths(&items, &v, 7), 0..=0);
     }
@@ -648,11 +573,8 @@ mod tests {
     fn moves_refuse_cycles_depth_and_no_ops() {
         let items = soc();
         let v = visible(&items);
-        // AXI into its own Write group.
         assert!(plan_move(&items, &set(&[1]), Place { at: 3, depth: 2 }).is_none());
-        // clk where it is.
         assert!(plan_move(&items, &set(&[0]), Place { at: 0, depth: 0 }).is_none());
-        // irq into folded Read, as its last row.
         let to = Place::into(&items, 5);
         assert_eq!(to, Place { at: 8, depth: 2 });
         let moved = plan_move(&items, &set(&[8]), to).unwrap();
@@ -661,14 +583,12 @@ mod tests {
         assert_eq!(m[8].name(), "irq");
         assert_eq!(m[8].depth, 2);
         assert_eq!(parent(&m, 8), Some(5));
-        // clk to the end of AXI, one level in.
         let to = Place::gap(&items, &v, 6, 1);
         let moved = plan_move(&items, &set(&[0]), to).unwrap();
         let m = round_trip(&items, moved.splices);
         assert_eq!(m[7].name(), "clk");
         assert_eq!(parent(&m, 7), Some(0));
         assert_eq!(moved_roots(&m), ["AXI", "irq"]);
-        // Two blocks at once keep their order.
         let moved = plan_move(&items, &set(&[0, 8]), Place { at: 3, depth: 2 }).unwrap();
         let m = round_trip(&items, moved.splices);
         assert_eq!(
@@ -676,7 +596,6 @@ mod tests {
             [(0, "AXI"), (1, "Write"), (2, "clk"), (2, "irq"), (2, "aw")]
         );
         assert_eq!(moved.roots, set(&[2, 3]));
-        // Too deep.
         let deep: Vec<Entry> = (0..MAX_DEPTH)
             .map(|d| group(d, "g", false))
             .chain([leaf(0, "x")])
@@ -710,7 +629,6 @@ mod tests {
         assert_eq!(items[5].name(), "irq");
         assert_eq!(items[5].depth, 2);
 
-        // Nested groups dissolve together; their rows lift by both.
         let items = soc();
         let (splices, children) = ungroup(&items, &set(&[1, 5]));
         let flat = round_trip(&items, splices);
@@ -760,7 +678,6 @@ mod tests {
             insert: Vec::new(),
         };
         assert!(apply(&mut items, vec![outside]).is_err());
-        // Removing a group's row orphans its children.
         let orphan = Splice {
             at: 1,
             remove: 1,

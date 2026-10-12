@@ -1,12 +1,7 @@
 //! LEB128 variable-length integers and zig-zag mapping.
-//!
-//! Every variable-length integer in a VTR file is an unsigned LEB128 value
-//! (7 payload bits per byte, little-endian order, high bit = continuation).
-//! Signed quantities are zig-zag mapped first so small negatives stay short.
 
 use crate::error::{Error, Result};
 
-/// Appends `v` as unsigned LEB128.
 #[inline]
 pub fn put_u64(out: &mut Vec<u8>, mut v: u64) {
     while v >= 0x80 {
@@ -16,7 +11,6 @@ pub fn put_u64(out: &mut Vec<u8>, mut v: u64) {
     out.push(v as u8);
 }
 
-/// Appends `v` zig-zag mapped as unsigned LEB128.
 #[inline]
 pub fn put_i64(out: &mut Vec<u8>, v: i64) {
     put_u64(out, zigzag(v));
@@ -32,7 +26,6 @@ pub fn unzigzag(v: u64) -> i64 {
     ((v >> 1) as i64) ^ -((v & 1) as i64)
 }
 
-/// Number of bytes `put_u64` would emit.
 #[inline]
 pub fn len_u64(v: u64) -> usize {
     if v == 0 {
@@ -42,7 +35,6 @@ pub fn len_u64(v: u64) -> usize {
     }
 }
 
-/// Cursor over a byte slice for decoding.
 #[derive(Clone, Copy, Debug)]
 pub struct Reader<'a> {
     pub buf: &'a [u8],
@@ -69,7 +61,6 @@ impl<'a> Reader<'a> {
     pub fn u64(&mut self) -> Result<u64> {
         let buf = self.buf;
         let mut pos = self.pos;
-        // Fast path: single byte.
         if pos < buf.len() {
             let b = buf[pos];
             if b < 0x80 {
@@ -137,7 +128,6 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Length-prefixed byte string.
     #[inline]
     pub fn blob(&mut self) -> Result<&'a [u8]> {
         let n = self.usize()?;
@@ -163,7 +153,6 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Appends a length-prefixed byte string.
 #[inline]
 pub fn put_blob(out: &mut Vec<u8>, b: &[u8]) {
     put_u64(out, b.len() as u64);

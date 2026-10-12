@@ -1,7 +1,4 @@
-//! `TransactionModel`: the state of a Transaction panel. It holds which
-//! record it shows, whether it is pinned to it, the records it has shown
-//! before, the reader's per-panel preferences, and on-demand ancestry. Data is
-//! the document's loaded track; the model never copies records.
+//! `TransactionModel`: the state of a Transaction panel.
 
 use std::collections::BTreeMap;
 
@@ -18,14 +15,9 @@ use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{TrackRef, TransactionRef};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
-/// Bytes reserved for one prepared view. Parent graph vertices admit their
-/// storage separately, so this reservation does not bound the chain length.
 pub const PANEL_BYTES: u64 = VIEW_BYTES as u64;
-/// Records Back and Forward step through.
 pub const MAX_HISTORY: usize = 64;
 
-/// A record the panel has shown: the durable track reference a workspace
-/// saves, plus the identity inside it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShownRecord {
     pub track: TrackSource,
@@ -42,22 +34,17 @@ impl ShownRecord {
     }
 }
 
-/// What the panel draws.
 pub enum TxPanelState {
-    /// Nothing has been selected yet.
     Empty,
     Refused(String),
-    /// The record's generator is being loaded (a jump to another track).
     Loading,
     Failed(String),
-    /// The saved track is not part of this trace, or holds no such record.
     Missing,
     Ready(Box<TxView>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransactionCommand {
-    /// Show another record, loading its generator when needed.
     Jump {
         track: Traced<TrackRef>,
         id: TransactionRef,
@@ -65,35 +52,22 @@ pub enum TransactionCommand {
     Back,
     Forward,
     Pin(bool),
-    /// Move the shared cursor to a time inside the record.
     Cursor(u64),
-    /// Fit the shared viewport to the record's lifetime.
     FitLifetime,
-    /// Cycle the radix of one attribute key, remembered for the session.
     Radix(String),
     Collapse(SectionKey, bool),
     Filter(String),
-    /// Resolve the full structural parent chain, loading generators on demand.
     TraceParents,
-    /// Hide the graph or cancel its traversal and release its track holds.
     ClearParents,
 }
 
 pub struct TransactionModel {
-    /// Records shown, oldest first; `cursor` is the one on screen.
     history: Vec<ShownRecord>,
     cursor: usize,
-    /// A pinned panel ignores the document selection, so two panels
-    /// compare. Journaled with the radixes (`volna/README.md`, "Undo and redo").
     pinned: bool,
-    /// The reader's choices; the radixes are journaled and change only
-    /// through [`TransactionCommand::Radix`]. Read with [`TransactionModel::prefs`].
     prefs: ViewPrefs,
-    /// The pin (and the record it froze) and the radixes before their first
-    /// change since the app last collected edits.
     pin_before: Before<(bool, Option<ShownRecord>)>,
     radix_before: Before<BTreeMap<String, Radix>>,
-    /// The track retained for the shown record, released when it changes.
     retained: Option<Traced<TrackRef>>,
     attached: bool,
     refused: Option<String>,
@@ -103,7 +77,6 @@ pub struct TransactionModel {
 }
 
 impl TransactionModel {
-    /// Describe a detached panel. Admission and track retention happen in [`Self::attach`].
     pub fn new(budget: MemoryBudget, detail_items: usize) -> Self {
         Self {
             history: Vec::new(),
@@ -124,8 +97,6 @@ impl TransactionModel {
         }
     }
 
-    /// Copy the record and the reader's choices for a split; the copy is not
-    /// attached, so it retains its track when it is installed.
     pub fn clone_view(&self) -> Self {
         let mut clone = Self::new(self.budget.clone(), self.prefs.detail_items);
         clone.prefs = self.prefs.clone();
@@ -148,8 +119,6 @@ impl TransactionModel {
         self.parents.refresh(doc, &self.budget);
     }
 
-    /// Resolve an interaction's recorded attribute index without retaining a
-    /// potentially unbounded full key in every prepared view.
     pub fn attribute_key(
         &self,
         doc: &Document,
@@ -165,8 +134,6 @@ impl TransactionModel {
         Some(tx.attributes.get(index)?.key.clone())
     }
 
-    /// A trace is closing: forget its records, and release its track if
-    /// the shown record was one of them.
     pub(crate) fn forget_trace(&mut self, doc: &mut Document, trace: crate::trace::TraceId) {
         if self
             .shown()
@@ -187,13 +154,10 @@ impl TransactionModel {
         }
     }
 
-    /// Whether the panel ignores the document selection.
     pub fn pinned(&self) -> bool {
         self.pinned
     }
 
-    /// Install a pin while undoing or redoing: frozen on `record`, or
-    /// following the selection again. Returns the replaced pin.
     pub(crate) fn swap_pin(
         &mut self,
         doc: &mut Document,
@@ -210,20 +174,15 @@ impl TransactionModel {
         old
     }
 
-    /// Install radixes while undoing or redoing; returns the replaced ones.
     pub(crate) fn swap_radix(&mut self, radix: BTreeMap<String, Radix>) -> BTreeMap<String, Radix> {
         debug_assert!(!self.radix_before.is_held(), "edits were not collected");
         std::mem::replace(&mut self.prefs.radix, radix)
     }
 
-    /// The reader's choices: radixes, collapsed sections, filter, item limit.
     pub fn prefs(&self) -> &ViewPrefs {
         &self.prefs
     }
 
-    /// Hand the pin and radixes before the edits since the last call to the
-    /// undo journal, unless they cancelled out. A radix change merges with
-    /// the next one of the same attribute within the merge window.
     pub(crate) fn take_edits(&mut self, panel: crate::panels::PanelId, history: &mut History) {
         if let Some((pinned, record)) = self.pin_before.take()
             && pinned != self.pinned
@@ -274,8 +233,6 @@ impl TransactionModel {
         self.prefs.detail_items = value.clamp(1, 1000);
     }
 
-    /// Install the saved view without a document; a displayed record's track
-    /// is retained when the panel attaches.
     pub(crate) fn restore(&mut self, record: Option<ShownRecord>, pinned: bool, prefs: ViewPrefs) {
         self.history = record.into_iter().collect();
         self.cursor = 0;
@@ -283,7 +240,6 @@ impl TransactionModel {
         self.restore_prefs(prefs);
     }
 
-    /// The reader's saved choices, keeping the resolved item limit.
     fn restore_prefs(&mut self, prefs: ViewPrefs) {
         let detail_items = self.prefs.detail_items;
         self.prefs = ViewPrefs {
@@ -296,13 +252,11 @@ impl TransactionModel {
         self.attached
     }
 
-    /// Retain the shown record's track. Pair with [`TransactionModel::detach`].
     pub fn attach(&mut self, doc: &mut Document) -> anyhow::Result<()> {
         if self.attached {
             return Ok(());
         }
         self.attached = true;
-        // A panel reopened by undo reserves its memory again.
         if self._reservation.is_none() {
             match self.budget.reserve(PANEL_BYTES) {
                 Ok(reservation) => {
@@ -337,15 +291,11 @@ impl TransactionModel {
         self.attached = false;
     }
 
-    /// Detach and return the panel's memory: it is closed and kept by the
-    /// undo journal. [`TransactionModel::attach`] reserves it again.
     pub(crate) fn park(&mut self, doc: &mut Document) {
         self.detach(doc);
         self._reservation = None;
     }
 
-    /// Retain `track` in place of the one held, once attached. Returns false
-    /// when the document refuses it; the previous hold is then kept.
     fn hold(&mut self, doc: &mut Document, track: Option<Traced<TrackRef>>) -> bool {
         if !self.attached || self.retained == track {
             return true;
@@ -361,8 +311,6 @@ impl TransactionModel {
         true
     }
 
-    /// Show `record`, retaining its track and remembering the previous one.
-    /// A repeat of the shown record changes nothing.
     fn show(&mut self, doc: &mut Document, record: ShownRecord) -> bool {
         if self.shown() == Some(&record) || !self.hold(doc, record.track.track()) {
             return false;
@@ -378,8 +326,6 @@ impl TransactionModel {
         true
     }
 
-    /// Step to `cursor` in the history and publish that record as the
-    /// document selection, so the panels that show it highlight it again.
     fn step(&mut self, doc: &mut Document, panel: crate::panels::PanelId, cursor: usize) -> bool {
         let Some(track) = self.history.get(cursor).map(|r| r.track.track()) else {
             return false;
@@ -395,13 +341,10 @@ impl TransactionModel {
         true
     }
 
-    /// Adopt the document selection unless this panel is pinned. Returns
-    /// whether the shown record changed.
     pub fn follow_selection(&mut self, doc: &mut Document) -> bool {
         if self.pinned {
             return false;
         }
-        // Clearing a highlight elsewhere must not blank the page being read.
         let Some(selection) = doc.selection() else {
             return false;
         };
@@ -420,7 +363,6 @@ impl TransactionModel {
         )
     }
 
-    /// Everything the panel draws for the record it shows.
     pub fn state(&self, doc: &Document) -> TxPanelState {
         if let Some(refusal) = &self.refused {
             return TxPanelState::Refused(refusal.clone());
@@ -443,7 +385,6 @@ impl TransactionModel {
         }
     }
 
-    /// The complete record as TSV, refused rather than cut.
     pub fn copy_tsv(&self, doc: &Document) -> anyhow::Result<String> {
         let shown = self
             .shown()
@@ -455,7 +396,6 @@ impl TransactionModel {
         super::view::copy_tsv(doc, track, shown.id, COPY_BYTES)
     }
 
-    /// The record's lifetime, when it is resident.
     pub fn lifetime(&self, doc: &Document) -> Option<(u64, u64)> {
         let shown = self.shown()?;
         let generator = doc.resident_generator(shown.track.track()?)?;
@@ -463,8 +403,6 @@ impl TransactionModel {
         Some((tx.begin, tx.end))
     }
 
-    /// Handle a panel command. `panel` owns the selection this panel writes
-    /// when it jumps. Returns true when something visible changed.
     pub fn command(
         &mut self,
         doc: &mut Document,
@@ -511,8 +449,6 @@ impl TransactionModel {
                         id,
                     },
                 );
-                // A jump is a selection: every panel showing that generator
-                // highlights the record, pinned panels excepted.
                 doc.select(Some(TxSelection {
                     track,
                     id,
@@ -584,7 +520,6 @@ impl TransactionModel {
     }
 }
 
-/// The catalog path of a track of an open trace.
 fn track_path(doc: &Document, track: Traced<TrackRef>) -> Option<Vec<String>> {
     doc.session(track.trace)?
         .tracks()
@@ -593,7 +528,6 @@ fn track_path(doc: &Document, track: Traced<TrackRef>) -> Option<Vec<String>> {
         .map(|t| t.path.clone())
 }
 
-/// A transaction panel's edits carry only its own saved property values.
 pub(crate) enum Prop {
     Pin(bool, Option<ShownRecord>),
     Radix(BTreeMap<String, Radix>),

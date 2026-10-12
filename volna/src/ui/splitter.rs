@@ -7,16 +7,10 @@ use crate::theme::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SplitterAxis {
-    /// A vertical line separating left/right panes.
     Vertical,
-    /// A horizontal line separating top/bottom panes.
     Horizontal,
 }
 
-/// A 1px divider with a wider grab zone that floats above its neighbours
-/// (like VS Code's sash). It highlights on hover, shows a resize cursor, and
-/// reports the start of a drag; the owner tracks the pointer afterwards with a
-/// window-wide drag surface (see `Workspace`).
 #[derive(IntoElement)]
 pub struct Splitter {
     id: ElementId,
@@ -59,10 +53,6 @@ impl RenderOnce for Splitter {
             SplitterAxis::Vertical => CursorStyle::ResizeLeftRight,
             SplitterAxis::Horizontal => CursorStyle::ResizeUpDown,
         };
-        // The neutral 1px line occupies the layout slot. The grab zone is an
-        // absolutely positioned, deferred child centred on it, so its hitbox
-        // floats above both neighbouring panes (like VS Code's sash). Its own
-        // centred 1px child recolours the line on hover and while dragging.
         let highlight = div().group_hover("splitter", move |s| s.bg(active_color));
         let highlight = if self.dragging {
             highlight.bg(active_color)

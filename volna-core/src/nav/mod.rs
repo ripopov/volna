@@ -1,7 +1,5 @@
-//! Navigation shared by every timed panel: the two link flags, the local
-//! viewport and cursor a panel keeps while unlinked, and the commands that
-//! move the time axis. A panel embeds a [`NavState`] and reads the shared
-//! document values through it while linked.
+//! Navigation shared by every timed panel: the two link flags, the local viewport and
+//! cursor a panel keeps while unlinked, and the commands that move the time axis.
 
 pub mod tween;
 pub use tween::{Lerp, Tween};
@@ -34,39 +32,26 @@ pub enum LinkDim {
     Cursor,
 }
 
-/// Which values a panel follows and what it keeps while it does not.
 #[derive(Clone)]
 pub struct NavState {
     pub link: Link,
     pub local_viewport: Tween<Viewport>,
     pub local_cursor: Option<u64>,
-    /// Clock rulers, snapping clock and cycle origin. The rulers and the
-    /// origin are journaled cockpit state: they change only through the
-    /// methods below, which keep their value before the first change.
     clocks: crate::clock::ClockView,
     clocks_before: crate::history::Before<ClockChoice>,
-    /// Where the last jump started, or where the last return left: the one
-    /// place [`NavState::back`] swaps with the present.
     back: Option<Spot>,
 }
 
-/// A place on the time axis to come back to: the effective cursor and where
-/// the effective viewport is headed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spot {
     pub cursor: Option<u64>,
     pub viewport: Viewport,
 }
 
-/// [`NavState::reveal`] treats this fraction of the viewport at each edge as
-/// off screen, so a revealed time never lands flush against an edge.
 const REVEAL_EDGE: f64 = 0.05;
 
-/// A timed panel's ruler rows and cycle origin, as the undo journal swaps them.
 pub(crate) type ClockChoice = (Option<Vec<ClockKey>>, Option<u64>);
 
-/// Every time the panel holds: its own view and cursor, the cycle origin,
-/// and the place a jump returns to.
 impl Retime for NavState {
     fn retime(&mut self, by: Rescale) {
         self.local_viewport.retime(by);
@@ -97,7 +82,6 @@ impl NavState {
         }
     }
 
-    /// Copy the persistent navigation without the running animation.
     pub fn clone_view(&self) -> Self {
         Self {
             link: self.link,
@@ -109,8 +93,6 @@ impl NavState {
         }
     }
 
-    /// Forget the local cursor and stop any local animation; called when the
-    /// document's session changes.
     pub fn reset(&mut self, limits: Option<(u64, u64)>) {
         self.local_cursor = None;
         self.back = None;
@@ -146,7 +128,6 @@ impl NavState {
         }
     }
 
-    /// Returns whether the effective cursor changed.
     pub fn set_cursor(&mut self, doc: &mut Document, cursor: Option<u64>) -> bool {
         let current = if self.link.cursor {
             &mut doc.shared.cursor
@@ -158,8 +139,6 @@ impl NavState {
         changed
     }
 
-    /// Unlink snapshots the displayed shared value; relink adopts the shared
-    /// value, discarding the local one. Either edge drops a local animation.
     pub fn toggle_link(&mut self, doc: &Document, dim: LinkDim) {
         match dim {
             LinkDim::Viewport => {
@@ -173,7 +152,6 @@ impl NavState {
         }
     }
 
-    /// The local animation only; the shared one is ticked by the document owner.
     pub fn tick(&mut self, now: Instant) -> bool {
         !self.link.viewport && self.local_viewport.tick(now)
     }
@@ -182,31 +160,23 @@ impl NavState {
         !self.link.viewport && self.local_viewport.is_animating()
     }
 
-    // -- time-axis commands ------------------------------------------------------
-
-    /// Animate the effective viewport to `target`, clamped to the trace.
     pub fn animate_to(&mut self, doc: &mut Document, mut target: Viewport, now: Instant) {
         target.clamp(doc.limits());
         let mode = doc.navigation.animation;
         self.viewport_state_mut(doc).animate_to(target, now, mode);
     }
 
-    /// Jump the effective viewport to `target`, clamped to the trace.
     pub fn jump_to(&mut self, doc: &mut Document, mut target: Viewport) {
         target.clamp(doc.limits());
         self.viewport_state_mut(doc).set(target);
     }
 
-    /// Immediate zoom (wheel, pinch) about a pixel position in a time area
-    /// `width_px` wide.
     pub fn zoom_at(&mut self, doc: &mut Document, x_px: f64, width_px: f64, factor: f64) {
         let mut target = self.viewport(doc);
         target.zoom_about(x_px, width_px, factor, doc.limits());
         self.viewport_state_mut(doc).set(target);
     }
 
-    /// Animated zoom about a pixel position, applied to the animation target
-    /// so repeated events accumulate.
     pub fn zoom_target_at(
         &mut self,
         doc: &mut Document,
@@ -220,7 +190,6 @@ impl NavState {
         self.animate_to(doc, target, now);
     }
 
-    /// Keyboard zoom: about the cursor when it is visible, else the centre.
     pub fn zoom_center(&mut self, doc: &mut Document, width_px: f64, factor: f64, now: Instant) {
         let target = self.viewport_state(doc).target();
         let anchor_x = match self.cursor(doc) {
@@ -237,7 +206,6 @@ impl NavState {
         self.zoom_target_at(doc, anchor_x, width_px, factor, now);
     }
 
-    /// The whole trace with a `margin_px` margin in a `width_px` wide area.
     pub fn zoom_fit(&mut self, doc: &mut Document, width_px: f64, margin_px: f64, now: Instant) {
         let target = Viewport::fit_px(doc.limits(), width_px, margin_px);
         self.animate_to(doc, target, now);
@@ -274,7 +242,6 @@ impl NavState {
         self.animate_to(doc, target, now);
     }
 
-    /// Animated pan by a fraction of the window width.
     pub fn pan_fraction(&mut self, doc: &mut Document, frac: f64, now: Instant) {
         let mut target = self.viewport_state(doc).target();
         let w = target.width();
@@ -283,16 +250,12 @@ impl NavState {
         self.animate_to(doc, target, now);
     }
 
-    /// Immediate pan by pixels (drag, trackpad scroll).
     pub fn pan_px(&mut self, doc: &mut Document, dx_px: f64, width_px: f64) {
         let mut target = self.viewport(doc);
         target.pan_px(dx_px, width_px, doc.limits());
         self.viewport_state_mut(doc).set(target);
     }
 
-    // -- clocks ------------------------------------------------------------------
-
-    /// The timeline of the clock clicks snap to and cycle steps follow.
     pub fn selected_clock(
         &self,
         doc: &Document,
@@ -300,8 +263,6 @@ impl NavState {
         self.clocks.selected(&doc.clocks)?.timeline().cloned()
     }
 
-    /// Step the cursor to the next (or previous) rising edge of the selected
-    /// clock, from the cursor or the window's edge. Returns whether it moved.
     pub fn step_cycle(&mut self, doc: &mut Document, forward: bool, now: Instant) -> bool {
         let Some(timeline) = self.selected_clock(doc) else {
             return false;
@@ -319,8 +280,6 @@ impl NavState {
         true
     }
 
-    /// Put the cursor on the edge of displayed cycle `shown` of the selected
-    /// clock and centre it.
     pub fn go_to_cycle(
         &mut self,
         doc: &mut Document,
@@ -346,8 +305,6 @@ impl NavState {
         Ok(())
     }
 
-    /// Number cycles from the cursor's cycle, or back from the first edge
-    /// when the origin is already there.
     pub fn toggle_cycle_origin(&mut self, doc: &Document) {
         let cursor = self.cursor(doc);
         self.note_clocks();
@@ -358,36 +315,29 @@ impl NavState {
         };
     }
 
-    /// Select the clock clicks snap to and cycle steps follow (navigation).
     pub fn select_clock(&mut self, key: ClockKey) {
         self.clocks.selected = Some(key);
     }
 
-    /// The panel's clock rulers, snapping clock and cycle origin.
     pub fn clocks(&self) -> &crate::clock::ClockView {
         &self.clocks
     }
 
-    /// Show a ruler row (see [`crate::clock::ClockView::show_ruler`]).
     pub fn show_ruler(&mut self, clocks: &crate::clock::Clocks, key: &ClockKey) {
         self.note_clocks();
         self.clocks.show_ruler(clocks, key);
     }
 
-    /// Hide a ruler row if it is shown.
     pub fn hide_ruler(&mut self, clocks: &crate::clock::Clocks, key: &ClockKey) {
         self.note_clocks();
         self.clocks.hide_ruler(clocks, key);
     }
 
-    /// Show or hide a ruler row.
     pub fn toggle_ruler(&mut self, clocks: &crate::clock::Clocks, key: &ClockKey) {
         self.note_clocks();
         self.clocks.toggle_ruler(clocks, key);
     }
 
-    /// Hide a closed trace's rulers as an edit, and stop snapping to its
-    /// clock.
     pub(crate) fn forget_trace(&mut self, trace: crate::trace::TraceId) {
         let mut clocks = self.clocks.clone();
         if clocks.forget_trace(trace) {
@@ -402,21 +352,17 @@ impl NavState {
             .note(|| (clocks.rulers.clone(), clocks.origin));
     }
 
-    /// Install clock choices that are not an edit (a restored workspace).
     pub(crate) fn restore_clocks(&mut self, view: crate::clock::ClockView) {
         self.clocks = view;
         self.clocks_before.take();
     }
 
-    /// Install rulers and origin while undoing or redoing; returns the
-    /// replaced ones.
     pub(crate) fn swap_clocks(&mut self, (rulers, origin): ClockChoice) -> ClockChoice {
         debug_assert!(!self.clocks_before.is_held(), "edits were not collected");
         let old = (
             std::mem::replace(&mut self.clocks.rulers, rulers),
             std::mem::replace(&mut self.clocks.origin, origin),
         );
-        // A hidden ruler cannot stay the selected clock.
         if let Some(selected) = &self.clocks.selected
             && self
                 .clocks
@@ -429,8 +375,6 @@ impl NavState {
         old
     }
 
-    /// Hand the rulers and origin before the edits since the last call to
-    /// the undo journal, unless they cancelled out.
     pub(crate) fn take_edits(
         &mut self,
         panel: crate::panels::PanelId,
@@ -453,7 +397,6 @@ impl NavState {
         );
     }
 
-    /// The effective cursor and the viewport's destination.
     pub fn spot(&self, doc: &Document) -> Spot {
         Spot {
             cursor: self.cursor(doc),
@@ -461,15 +404,10 @@ impl NavState {
         }
     }
 
-    /// The place [`NavState::back`] would return to.
     pub fn back_spot(&self) -> Option<Spot> {
         self.back
     }
 
-    /// Move the cursor to `t` as a jump: the place before it becomes the one
-    /// [`NavState::back`] returns to, and the view pans only as far as
-    /// [`NavState::reveal`] needs. Returns whether the cursor moved; a jump
-    /// to where the cursor already is keeps the earlier return place.
     pub fn jump_cursor(&mut self, doc: &mut Document, t: u64, now: Instant) -> bool {
         if self.cursor(doc) == Some(t) {
             self.reveal(doc, t, now);
@@ -481,9 +419,6 @@ impl NavState {
         true
     }
 
-    /// Return to the cursor and view from before the last jump; the place
-    /// left becomes the return place, so doing it twice goes forward again.
-    /// Returns false when no jump happened yet.
     pub fn back(&mut self, doc: &mut Document, now: Instant) -> bool {
         let Some(spot) = self.back.take() else {
             return false;
@@ -494,8 +429,6 @@ impl NavState {
         true
     }
 
-    /// Centre the view on `t`, keeping its width, when `t` lies outside the
-    /// middle 90% of where the view is headed. Returns whether it panned.
     pub fn reveal(&mut self, doc: &mut Document, t: u64, now: Instant) -> bool {
         let mut target = self.viewport_state(doc).target();
         let edge = target.width() * REVEAL_EDGE;
@@ -508,8 +441,6 @@ impl NavState {
         true
     }
 
-    /// Scroll the window so the cursor is visible, if it is not. Builds on
-    /// the animation's target, so an in-flight zoom or pan is kept.
     pub fn reveal_cursor(&mut self, doc: &mut Document, now: Instant) {
         let Some(c) = self.cursor(doc) else { return };
         let c = c as f64;
@@ -521,7 +452,6 @@ impl NavState {
     }
 }
 
-/// "Show ruler core_clk", "Hide ruler bus_clk", "Set cycle origin".
 fn clocks_label(
     clocks: &crate::clock::Clocks,
     rulers: &Option<Vec<ClockKey>>,

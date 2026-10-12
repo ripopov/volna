@@ -1,7 +1,4 @@
-//! A toolkit-neutral colour. Stored as HSLA (components in `0..=1`, straight
-//! alpha) because the theme resolves contrast by moving lightness alone.
-//! Conversions follow the same formulas as GPUI's `Hsla`/`Rgba`, so a frontend
-//! that copies the four fields into its own type reproduces the theme exactly.
+//! A toolkit-neutral colour.
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Color {
@@ -19,12 +16,10 @@ impl Color {
         a: 0.0,
     };
 
-    /// Opaque colour from `0xRRGGBB`.
     pub fn rgb(hex: u32) -> Color {
         Color::rgba_u32((hex << 8) | 0xff)
     }
 
-    /// Colour from `0xRRGGBBAA`.
     pub fn rgba_u32(hex: u32) -> Color {
         let r = ((hex >> 24) & 0xff) as f32 / 255.0;
         let g = ((hex >> 16) & 0xff) as f32 / 255.0;
@@ -33,7 +28,6 @@ impl Color {
         Color::from_rgba(r, g, b, a)
     }
 
-    /// Colour from sRGB components in `0..=1`.
     pub fn from_rgba(r: f32, g: f32, b: f32, a: f32) -> Color {
         let max = r.max(g.max(b));
         let min = r.min(g.min(b));
@@ -58,7 +52,6 @@ impl Color {
         Color { h, s, l, a }
     }
 
-    /// sRGB components in `0..=1` plus straight alpha.
     pub fn to_rgba(self) -> [f32; 4] {
         let c = (1.0 - (2.0 * self.l - 1.0).abs()) * self.s;
         let x = c * (1.0 - ((self.h * 6.0) % 2.0 - 1.0).abs());
@@ -76,7 +69,6 @@ impl Color {
         [r, g, b, self.a]
     }
 
-    /// sRGB bytes plus straight alpha byte.
     pub fn to_rgba8(self) -> [u8; 4] {
         self.to_rgba()
             .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
@@ -87,9 +79,6 @@ impl Color {
         self
     }
 
-    /// The sRGB colour for OKLCH lightness `l` (`0..=1`), chroma `c` and hue
-    /// `h` in degrees. Out-of-gamut colours lose chroma until they fit,
-    /// keeping lightness and hue, as CSS Color 4 maps them.
     pub fn oklch(l: f32, c: f32, h: f32) -> Color {
         let (sin, cos) = h.to_radians().sin_cos();
         let at = |c: f32| oklab_to_linear([l, c * cos, c * sin]);
@@ -111,7 +100,6 @@ impl Color {
         Color::from_rgba(r, g, b, 1.0)
     }
 
-    /// OKLab `[L, a, b]` of the opaque colour.
     pub fn to_oklab(self) -> [f32; 3] {
         let [r, g, b, _] = self.to_rgba();
         let [r, g, b] = [r, g, b].map(linear);
@@ -126,7 +114,6 @@ impl Color {
     }
 }
 
-/// An sRGB channel in linear light.
 pub(crate) fn linear(v: f32) -> f32 {
     if v <= 0.04045 {
         v / 12.92
@@ -135,7 +122,6 @@ pub(crate) fn linear(v: f32) -> f32 {
     }
 }
 
-/// A linear-light channel in sRGB.
 pub(crate) fn gamma(v: f32) -> f32 {
     if v <= 0.003_130_8 {
         12.92 * v
@@ -180,8 +166,6 @@ mod tests {
 
     #[test]
     fn oklch_matches_the_design_sheet_and_round_trips() {
-        // docs/design-system/tokens/viewer.css stores oklch(.80 .12 155) as #7ad59c
-        // and oklch(.45 .19 25) as #a30018.
         assert_eq!(
             Color::oklch(0.80, 0.12, 155.0).to_rgba8(),
             [0x7a, 0xd5, 0x9c, 0xff]

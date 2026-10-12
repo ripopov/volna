@@ -1,8 +1,4 @@
-//! Headless tests of analog rows in the waveform panel: numeric readings of
-//! the translators, turning plots on and off with their heights, the format
-//! and signal menus, ranges and their easing, resizing rows by their edges,
-//! workspaces, and the painted plot (exact and min/max columns, undefined
-//! spans, the cursor dot and the hover readout).
+//! Headless analog waveform tests for translation, interaction, persistence, and painting.
 
 use std::sync::Arc;
 use volna_core::testing::a_all;
@@ -32,9 +28,6 @@ const BUS: usize = 0;
 const REAL: usize = 1;
 const BIT: usize = 2;
 
-/// A 100 µs trace sampled every 10 ns: a 16-bit signed sine (X until
-/// 100 ns) and a real sine, each with a one-sample glitch at 42.01 µs,
-/// plus a slow bit.
 fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     trace_until(END)
 }
@@ -171,7 +164,6 @@ fn set_format(app: &mut App, id: PanelId, row: usize, format: &str) {
     assert_eq!(w.items()[row].signal().unwrap().translator.id(), format);
 }
 
-/// The waves-column rectangle of `row` at the last layout.
 fn row_rect(app: &App, id: PanelId, row: usize) -> Rect {
     let l = app.panels.waves(id).unwrap().last_layout();
     Rect::from_xywh(
@@ -182,7 +174,6 @@ fn row_rect(app: &App, id: PanelId, row: usize) -> Rect {
     )
 }
 
-/// Endpoints of the plot strokes inside `area`.
 fn stroke_points(scene: &Scene, area: Rect) -> Vec<Point> {
     let color = Theme::one_dark().wave_signal;
     scene
@@ -234,7 +225,6 @@ fn translators_read_numbers_like_their_values() {
     );
     assert_eq!(t.get("hex").unwrap().limits(v16), Some((0.0, 65535.0)));
     assert_eq!(real.limits(SignalShape::Real), None);
-    // Labels go through the translator: the value that reads back as -2.
     let kind = t.get("sdec").unwrap().numeric_kind().unwrap();
     let value = kind
         .value_of(-2.0, SignalShape::Vector { width: 8 })
@@ -249,7 +239,6 @@ fn reals_open_as_plots_and_a_toggles_the_selection_with_its_height() {
     assert_eq!(draws(&app, id), [None, Some(AnalogDraw::Linear), None]);
     assert_eq!(heights(&app, id), [1, 3, 1]);
 
-    // A on the bus and the bit: the bus becomes a 3× step plot, the bit stays.
     select(&mut app, id, &[BUS, BIT]);
     app.handle(Command::Action(Action::ToggleAnalog));
     assert_eq!(
@@ -257,19 +246,16 @@ fn reals_open_as_plots_and_a_toggles_the_selection_with_its_height() {
         [Some(AnalogDraw::Step), Some(AnalogDraw::Linear), None]
     );
     assert_eq!(heights(&app, id), [3, 3, 1]);
-    // Again: back to digital and 1×.
     app.handle(Command::Action(Action::ToggleAnalog));
     assert_eq!(draws(&app, id)[BUS], None);
     assert_eq!(heights(&app, id), [1, 3, 1]);
 
-    // A resize in between is an explicit choice that turning analog off keeps.
     select(&mut app, id, &[BUS]);
     app.handle(Command::Action(Action::ToggleAnalog));
     app.handle(Command::Action(Action::IncreaseRowHeight));
     app.handle(Command::Action(Action::ToggleAnalog));
     assert_eq!(heights(&app, id)[BUS], 4);
 
-    // A text format cannot plot: the row keeps digital drawing.
     select(&mut app, id, &[REAL]);
     app.handle(Command::Action(Action::ToggleAnalog));
     assert_eq!(draws(&app, id)[REAL], None);
@@ -358,7 +344,6 @@ fn the_format_menu_draws_and_ranges_and_the_signal_menu_toggles() {
     assert_eq!(a.range, AnalogRange::Type);
     assert_eq!(a.target, Some((0.0, 65535.0)), "hex reads unsigned");
 
-    // Reals have no type limits; bits have no Draw section.
     open_format(&mut app, REAL);
     let items: Vec<_> = app
         .panels
@@ -375,7 +360,6 @@ fn the_format_menu_draws_and_ranges_and_the_signal_menu_toggles() {
     assert!(labels(&app).is_empty());
     app.handle(Command::MenuDismiss(id));
 
-    // The signal menu toggles every plottable row of the selection.
     select(&mut app, id, &[BUS, REAL, BIT]);
     app.handle(Command::OpenSignalMenu(id));
     let toggle = app
@@ -430,7 +414,6 @@ fn ranges_fit_trace_window_and_type_and_the_window_range_eases() {
     );
     assert_eq!(shown(&app), target(&app), "the first range shows at once");
 
-    // A quiet window: the window range fits it and eases there.
     app.panels
         .waves_mut(id)
         .unwrap()
@@ -482,14 +465,12 @@ fn zoomed_out_columns_keep_the_glitch_and_x_breaks_the_line() {
         (peak - top).abs() <= 1.0,
         "the glitch reaches the top ({peak} vs {top})"
     );
-    // Its neighbours stay near the sine's amplitude, well below the top.
     let near = stroke_points(scene, area)
         .into_iter()
         .filter(|p| (p.x - (gx + 40.0)).abs() <= 0.5)
         .map(|p| p.y)
         .fold(f32::INFINITY, f32::min);
     assert!(near > top + 10.0, "{near}");
-    // X before reset is an undefined span in the undefined colour.
     let undef = Theme::one_dark().wave_undef;
     assert!(scene.prims.iter().any(|p| matches!(p,
         Prim::Quad { rect, fill, .. } if *fill == undef && area.contains(rect.origin) && rect.left() <= area.left() + 1.0)));
@@ -526,7 +507,6 @@ fn zoomed_in_plots_draw_every_sample_with_dots_and_the_cursor_dot() {
         })
         .collect();
     assert!(dots.len() >= 20, "one dot per sample: {}", dots.len());
-    // The cursor dot sits on the glitch sample at the top of the plot.
     let cursor_dot = scene
         .iter()
         .find_map(|p| match p {
@@ -543,7 +523,6 @@ fn zoomed_in_plots_draw_every_sample_with_dots_and_the_cursor_dot() {
         .expect("cursor dot");
     let cy = cursor_dot.top() + cursor_dot.height() / 2.0;
     assert!((cy - (area.top() + 5.0)).abs() < 1.0, "{cy}");
-    // The value column reads the glitch.
     let s = Scene {
         prims: scene,
         ..Default::default()
@@ -631,7 +610,6 @@ fn dragging_a_row_edge_resizes_to_presets_without_selecting() {
     assert_eq!(heights(&app, id)[BUS], 8);
     app.handle(Command::Pointer(id, PointerEvent::Up));
     assert!(app.panels.waves(id).unwrap().drag.is_none());
-    // A drag inside the selection resizes the whole selection.
     select(&mut app, id, &[BUS, BIT]);
     frame(&mut app, id);
     let l = app.panels.waves(id).unwrap().last_layout().clone();
@@ -700,7 +678,6 @@ fn analog_rows_round_trip_through_workspaces() {
     )
     .unwrap();
     assert_eq!(again["panels"], saved["panels"]);
-    // Older wave panels are reported, not guessed at.
     let mut old = saved.clone();
     old["panels"][0]["version"] = 2.into();
     let mut other = App::new();
@@ -723,7 +700,6 @@ fn analog_rows_round_trip_through_workspaces() {
 fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     use volna_core::document::SummaryLoad;
     use volna_core::session::LoadRequest;
-    // 40 000 changes per signal: above the summary threshold.
     let (_file, session) = trace_until(400_000);
     let mut app = App::new();
     app.set_session(session);
@@ -746,10 +722,8 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
         Some(SummaryLoad::Building { .. })
     ));
 
-    // Zoomed out, the plot waits for the summary instead of scanning.
     view(&mut app, id, 0.0, 400_000.0);
     assert!(frame(&mut app, id).texts().any(|t| t == "Summarizing…"));
-    // Zoomed in, it draws at once.
     view(&mut app, id, 1000.0, 1200.0);
     assert!(!frame(&mut app, id).texts().any(|t| t == "Summarizing…"));
 
@@ -768,7 +742,6 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     let scene = frame(&mut app, id);
     assert!(stroke_points(scene, area).len() > 100, "columns are drawn");
 
-    // Another reading needs its own summary; the old one is released.
     set_format(&mut app, id, BUS, "sdec");
     app.handle(Command::Action(Action::ClearSelection));
     let signed = volna_core::data::NumericKind::Signed;
@@ -778,7 +751,6 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
         Some(SummaryLoad::Building { .. })
     ));
     pump(&mut app);
-    // Back to digital: released with its memory.
     select(&mut app, id, &[BUS]);
     app.handle(Command::Action(Action::ToggleAnalog));
     assert!(app.doc.analog_summary(signal, signed).is_none());

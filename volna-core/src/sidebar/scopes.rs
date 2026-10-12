@@ -1,6 +1,5 @@
-//! The scope tree: which scopes are expanded, which row is selected, and the
-//! flattened list of visible rows a frontend paints. With several traces
-//! open, each trace heads its own root row and its scopes sit below it.
+//! The scope tree: which scopes are expanded, which row is selected, and the flattened list
+//! of visible rows a frontend paints.
 
 use std::collections::HashSet;
 
@@ -8,8 +7,6 @@ use super::Key;
 use crate::trace::{TraceId, TraceSet, Traced};
 use volna_trace::data::{Hierarchy, Member, ScopeId, ScopeRole, ScopeSize};
 
-/// A row of the tree: a trace's own row (`scope` is `None`, shown only
-/// while several traces are open) or one of its scopes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TreeNode {
     pub trace: TraceId,
@@ -28,7 +25,6 @@ impl TreeNode {
         }
     }
 
-    /// The scope, when this row is one.
     pub fn traced_scope(self) -> Option<Traced<ScopeId>> {
         Some(Traced::new(self.trace, self.scope?))
     }
@@ -36,32 +32,22 @@ impl TreeNode {
 
 #[derive(Default)]
 pub struct ScopeTreeModel {
-    /// Only scopes with children can be expanded. Leaves never need state or
-    /// saved paths, even when the entire hierarchy is open.
     expanded: HashSet<Traced<ScopeId>>,
-    /// Trace rows whose scopes are hidden.
     folded_traces: HashSet<TraceId>,
-    /// Unresolved saved paths remain owned by the scope tree until explicitly replaced.
     pub(crate) unresolved_selected: Option<Traced<Vec<String>>>,
     pub(crate) unresolved_expanded: Vec<Traced<Vec<String>>>,
     pub selected: Option<TreeNode>,
-    /// Flattened visible rows: (row, depth).
     pub visible: Vec<(TreeNode, usize)>,
 }
 
-/// What a key press did, so the frontend can scroll and refocus.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ScopeKeyOutcome {
     pub changed: bool,
-    /// Row to scroll into view.
     pub reveal: Option<usize>,
     pub activate: Option<Traced<Member>>,
 }
 
 impl ScopeTreeModel {
-    /// Start over for a new set of traces: expand the first two levels of
-    /// each so the tree is not a bare list of roots, and select the first
-    /// root.
     pub fn reset(&mut self, traces: &TraceSet) {
         self.expanded.clear();
         self.folded_traces.clear();
@@ -75,7 +61,6 @@ impl ScopeTreeModel {
         self.rebuild(traces);
     }
 
-    /// A trace joined: open its first two levels, keeping everything else.
     pub fn add_trace(&mut self, traces: &TraceSet, trace: TraceId) {
         if let Some(session) = traces.session(trace) {
             self.expand_top(trace, session.hierarchy());
@@ -86,7 +71,6 @@ impl ScopeTreeModel {
         self.rebuild(traces);
     }
 
-    /// A trace left: forget its rows.
     pub fn remove_trace(&mut self, traces: &TraceSet, trace: TraceId) {
         self.expanded.retain(|s| s.trace != trace);
         self.folded_traces.remove(&trace);
@@ -126,8 +110,6 @@ impl ScopeTreeModel {
         })
     }
 
-    /// Expanded branches, including those currently hidden by a folded ancestor.
-    /// Leaves never have expansion state.
     pub fn expanded(&self) -> impl Iterator<Item = Traced<ScopeId>> + '_ {
         self.expanded.iter().copied()
     }
@@ -151,7 +133,6 @@ impl ScopeTreeModel {
         }
     }
 
-    /// Whether a row has rows below it to show.
     pub fn has_children(traces: &TraceSet, node: TreeNode) -> bool {
         let Some(h) = traces.session(node.trace).map(|s| s.hierarchy()) else {
             return false;
@@ -162,8 +143,6 @@ impl ScopeTreeModel {
         }
     }
 
-    /// A scope row's size, once its trace's count has finished; trace rows
-    /// have none.
     pub fn size(traces: &TraceSet, node: TreeNode) -> Option<ScopeSize> {
         traces.get(node.trace)?.sizes()?.get(node.scope?)
     }
@@ -212,7 +191,6 @@ impl ScopeTreeModel {
         self.rebuild(traces);
     }
 
-    /// Returns true when the selection changed.
     pub fn select(&mut self, node: TreeNode) -> bool {
         self.unresolved_selected = None;
         if self.selected != Some(node) {
@@ -223,13 +201,10 @@ impl ScopeTreeModel {
         }
     }
 
-    /// The selected scope, when a scope row is selected.
     pub fn selected_scope(&self) -> Option<Traced<ScopeId>> {
         self.selected?.traced_scope()
     }
 
-    /// Open or close every branch. Leaves remain stateless, so expanding a
-    /// gate-level hierarchy does not save a path for every cell.
     pub fn set_all(&mut self, traces: &TraceSet, expand: bool) {
         self.unresolved_expanded.clear();
         self.expanded.clear();
@@ -249,7 +224,6 @@ impl ScopeTreeModel {
         self.rebuild(traces);
     }
 
-    /// The row above `node`: its scope's parent, or its trace's row.
     fn parent(traces: &TraceSet, node: TreeNode) -> Option<TreeNode> {
         let scope = node.scope?;
         let h = traces.session(node.trace)?.hierarchy();
@@ -259,16 +233,11 @@ impl ScopeTreeModel {
         }
     }
 
-    /// Keyboard navigation: up/down move, right expands, left collapses or
-    /// goes to the parent, enter/space toggle. Returns whether the selection
-    /// changed (the variable list follows it) and the row to reveal.
     pub fn key(&mut self, traces: &TraceSet, key: &Key) -> ScopeKeyOutcome {
         let Some(sel) = self.selected else {
             return ScopeKeyOutcome::default();
         };
         let Some(pos) = self.visible.iter().position(|(node, _)| *node == sel) else {
-            // A collapsed ancestor hides the selection: the first key moves
-            // it to the nearest visible ancestor, where navigation resumes.
             let mut up = Self::parent(traces, sel);
             while let Some(node) = up {
                 if let Some(pos) = self.visible.iter().position(|(n, _)| *n == node) {

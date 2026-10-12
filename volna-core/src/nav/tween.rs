@@ -1,20 +1,13 @@
-//! An eased animation over any interpolable value, driven by an explicit
-//! clock so tests are deterministic and frontends only request frames while
-//! something moves. The time axis (`Viewport`) and the pipeline row axis
-//! (`RowView`) both animate through it.
+//! An eased animation over any interpolable value, driven by an explicit clock so tests are
+//! deterministic and frontends only request frames while something moves.
 
 use web_time::Instant;
 
-/// A value the animation can interpolate.
 pub trait Lerp: Clone {
     fn lerp(&self, to: &Self, t: f64) -> Self;
-    /// Close enough that no animation is worth starting.
     fn approx_eq(&self, other: &Self) -> bool;
 }
 
-/// The displayed value plus, while moving, where it is going. The animation
-/// belongs to the value being animated: linked panels advance the
-/// document's one animation, independent panels advance their own.
 #[derive(Clone)]
 pub struct Tween<T: Lerp> {
     pub value: T,
@@ -41,17 +34,12 @@ impl<T: Lerp> Tween<T> {
         self.animation.is_some()
     }
 
-    /// Where the value will be once the animation ends (the value itself
-    /// when nothing moves). Navigation commands build on this so successive
-    /// wheel events accumulate instead of fighting the animation.
     pub fn target(&self) -> T {
         self.animation
             .as_ref()
             .map_or_else(|| self.value.clone(), |a| a.to.clone())
     }
 
-    /// Apply `f` to the value and to both ends of a running animation, as
-    /// a change of time unit does.
     pub(crate) fn map(&mut self, f: impl Fn(&T) -> T) {
         self.value = f(&self.value);
         if let Some(a) = &mut self.animation {
@@ -60,13 +48,11 @@ impl<T: Lerp> Tween<T> {
         }
     }
 
-    /// Jump, discarding any animation.
     pub fn set(&mut self, value: T) {
         self.value = value;
         self.animation = None;
     }
 
-    /// Move to `target` with the user's animation mode; `Off` jumps.
     pub fn animate_to(&mut self, target: T, now: Instant, mode: crate::settings::Animation) {
         self.tick(now);
         let Some(duration) = mode.duration() else {
@@ -85,7 +71,6 @@ impl<T: Lerp> Tween<T> {
         };
     }
 
-    /// Advance to `now`. Returns true while another frame is needed.
     pub fn tick(&mut self, now: Instant) -> bool {
         let Some(a) = &self.animation else {
             return false;

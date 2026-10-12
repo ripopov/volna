@@ -1,4 +1,5 @@
 //! Provision a deterministic multi-page recording for headless hierarchy transfer checks.
+
 use vtr::*;
 
 fn main() -> anyhow::Result<()> {

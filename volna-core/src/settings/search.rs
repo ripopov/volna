@@ -1,18 +1,9 @@
-//! Ranked fuzzy search over the registry. Deterministic and allocation-light;
-//! the frontend shows the ranked hits and highlights the matched ranges.
-//!
-//! Filters first: `@modified`, `@page:<id or title prefix>`, `@id:<prefix>`.
-//! Every remaining term must match (AND); per term the best field wins with
-//! the ladder title 1.0 > id 0.8 > keywords 0.7 > description 0.4. Word
-//! matches score 100/80/60 (whole word, word prefix, substring); the fzf-like
-//! subsequence match scores up to 50, needs three characters and is discarded
-//! under 15 so a short term cannot collect stray letters.
+//! Ranked fuzzy search over the registry.
 
 use std::ops::Range;
 
 use super::registry::{Host, REGISTRY, Spec};
 
-/// Why an entry matched, for the secondary line under the title.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Matched {
     Title,
@@ -25,12 +16,10 @@ pub enum Matched {
 pub struct Hit {
     pub spec: &'static Spec,
     pub score: f64,
-    /// Byte ranges in the title to highlight.
     pub title_ranges: Vec<Range<usize>>,
     pub matched: Matched,
 }
 
-/// The parsed query.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Query {
     pub modified: bool,
@@ -51,7 +40,6 @@ impl Query {
             } else if let Some(id) = lower.strip_prefix("@id:") {
                 out.id_prefix = Some(id.to_owned());
             } else if lower.starts_with('@') {
-                // Unknown filters are ignored.
             } else {
                 out.terms.push(lower);
             }
@@ -59,7 +47,6 @@ impl Query {
         out
     }
 
-    /// Whether the query narrows the list at all.
     pub fn is_active(&self) -> bool {
         self.modified || self.page.is_some() || self.id_prefix.is_some() || !self.terms.is_empty()
     }
@@ -91,13 +78,11 @@ struct Match {
     ranges: Vec<Range<usize>>,
 }
 
-/// fzf-like in-order character match. `hay` is matched case-insensitively.
 fn fuzzy(hay: &str, term: &str) -> Option<Match> {
     if term.chars().count() < 3 {
         return None;
     }
     let lower = hay.to_lowercase();
-    // Only ASCII is boundary-aware; positions stay byte offsets.
     if lower.len() != hay.len() {
         return None;
     }
@@ -176,8 +161,6 @@ fn best(hay: &str, term: &str, weight: f64, allow_fuzzy: bool) -> Option<Match> 
         })
 }
 
-/// Rank the registry entries available on `host` for `query`. `modified`
-/// reports whether an id is present in the user's document.
 pub fn search(query: &str, host: Host, modified: &dyn Fn(&str) -> bool) -> Vec<Hit> {
     let query = Query::parse(query);
     let mut hits: Vec<(Hit, usize)> = Vec::new();
@@ -224,7 +207,6 @@ pub fn search(query: &str, host: Host, modified: &dyn Fn(&str) -> bool) -> Vec<H
             }
             let joined = spec.keywords.join(" ");
             if let Some(f) = fuzzy(&joined, term) {
-                // Name the keywords the match spans.
                 let mut at = 0;
                 let mut names = Vec::new();
                 for kw in spec.keywords {

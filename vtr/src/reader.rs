@@ -1,33 +1,4 @@
 //! Random-access reader over a memory-mapped VTR file.
-//!
-//! Opening a file reads only the directory, metadata, string table,
-//! hierarchy, block headers and blackout markers. Value changes and
-//! transactions are decoded on demand, one compressed column run (at most
-//! `run_bytes` of a group in one block) at a time.
-//!
-//! [`Reader`] is `Send + Sync`: share it (for example in an `Arc`) between
-//! query threads. Decompressed pieces live in an LRU cache and decoded time
-//! tables and transaction blocks in per-block `OnceLock`s until
-//! [`Reader::clear_cache`]. Results are owned and immutable: point queries
-//! return [`OwnedSignalValue`]; [`SignalData`], [`ClockTimeline`] and block
-//! time tables share storage and outlive the reader.
-//!
-//! Choosing a signal query:
-//! * [`Reader::value_at`]: one value, decompressing at most one run.
-//! * [`Reader::changes`]: a time window of one signal.
-//! * [`Reader::load_signals`]: complete histories of many signals, each run
-//!   decompressed once.
-//! * [`Reader::for_each_change`]: every change of every signal in time order
-//!   (export, statistics), not random access.
-//!
-//! Bit vectors from point queries and `for_each_change` keep the stored
-//! packing, which is 2-state for compact values; use
-//! [`SignalValue::to_ascii`] or [`SignalValue::as_u64`] to be
-//! packing-agnostic. [`SignalData`] widens to the declared packing.
-//!
-//! Errors: [`Error::Invalid`] for an unknown signal id, [`Error::Corrupt`],
-//! [`Error::Codec`] or [`Error::Checksum`] for damaged data,
-//! [`Error::UnsupportedVersion`] for a newer major format version.
 
 use crate::block::{self, BlockHeader, ColumnIter, GroupView, NO_BLOCK};
 use crate::clock::{self, ClockId, ClockInfo, ClockTimeline};
@@ -50,16 +21,9 @@ use crate::xform::Xform;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Reader configuration.
 #[derive(Clone, Debug, Default)]
 pub struct ReadOptions {
-    /// Verify the CRC32 of every section at open, which makes opening read
-    /// the whole file; transaction and log blocks are verified again when
-    /// decoded. For validation tools, not viewers. Default `false`.
     pub verify_crc: bool,
-    /// Number of decompressed group pieces (frames or column runs) kept in
-    /// the shared LRU cache; `None` = 256, `Some(0)` disables caching. Raise
-    /// it for viewers with many visible signals.
     pub group_cache: Option<usize>,
 }
 
@@ -95,23 +59,16 @@ struct LogBlock {
     data: OnceLock<Arc<LogBlockData>>,
 }
 
-/// A decompressed group piece (frames or one column run) with per-signal ranges,
-/// lazily untransformed columns and lazily built skip indexes for point queries.
 pub(crate) struct Piece {
     data: Vec<u8>,
     ranges: Vec<(u32, u32)>,
-    /// Value transform of the run; columns are undone on first access.
     xform: Xform,
     plain: Vec<OnceLock<Box<[u8]>>>,
     index: Mutex<Vec<Option<Arc<Vec<block::Checkpoint>>>>>,
 }
 
-/// Entries between skip-index checkpoints.
 const INDEX_STRIDE: usize = 256;
 
-/// Runs with at most this many columns are untransformed as a whole when decoded;
-/// larger runs undo the transform per column on first access (a random load of a few
-/// signals then pays only for the columns it touches).
 const EAGER_UNTRANSFORM_COLUMNS: usize = 1;
 
 impl Piece {
@@ -140,7 +97,6 @@ impl Piece {
         })
     }
 
-    /// Column `local` in plain (untransformed) form.
     fn col(&self, local: usize, kind: SignalKind) -> Result<&[u8]> {
         let (a, b) = self.ranges[local];
         if self.xform == Xform::None {
@@ -172,7 +128,6 @@ impl Piece {
     }
 }
 
-/// (block, group, piece) -> (last use tick, decompressed piece)
 type CacheEntry = ((u32, u32, u32), u64, Arc<Piece>);
 
 struct GroupCache {
@@ -210,8 +165,6 @@ impl GroupCache {
     }
 }
 
-/// Random-access VTR reader. Safe to share between threads; see the
-/// [module documentation](crate::reader).
 pub struct Reader {
     data: Data,
     container: Container,
@@ -221,18 +174,13 @@ pub struct Reader {
     sig_blocks: Vec<SigBlock>,
     tx_blocks: Vec<TxBlock>,
     log_blocks: Vec<LogBlock>,
-    /// Log block indexes sorted by first time (then file order): the order `visit_log` uses.
     log_order: Vec<u32>,
-    /// Transaction and log blocks in file order: (is_log, index into the respective list).
     tx_order: Vec<(bool, u32)>,
     log_sites: Vec<LogSite>,
-    /// Format string of each site parsed once.
     log_fmts: Vec<ParsedFmt>,
-    /// Node id -> index into `log_sites` (`u32::MAX` = not a log site).
     site_index: Vec<u32>,
     blackout: Vec<Blackout>,
     clocks: Vec<ClockInfo>,
-    /// String ids of `vtr.period` and `vtr.clock`, when present.
     clock_keys: [Option<StrId>; 2],
     clock_timelines: Vec<OnceLock<Arc<ClockTimeline>>>,
     verify_crc: bool,
@@ -240,8 +188,6 @@ pub struct Reader {
     global_times: OnceLock<Vec<u64>>,
 }
 
-/// CLOCK streams with their `edges` generator, in node order, and the ids of
-/// the keys `vtr.period` and `vtr.clock`. Resolves the names in one pass over the strings.
 fn find_clocks(hier: &Hierarchy, strings: &StringTable) -> (Vec<ClockInfo>, [Option<StrId>; 2]) {
     const NAMES: [&str; 4] = [
         clock::KEY_PERIOD,
@@ -285,10 +231,6 @@ fn find_clocks(hier: &Hierarchy, strings: &StringTable) -> (Vec<ClockInfo>, [Opt
     (clocks, keys)
 }
 
-/// Immutable change history of one signal, in time order.
-///
-/// Cloning shares all storage without copying waveform buffers. The data remains
-/// valid after the reader and other handles are dropped; it is not a reader cache.
 #[derive(Clone, Debug)]
 pub struct SignalData {
     inner: Arc<SignalDataInner>,
@@ -304,12 +246,10 @@ struct SignalDataInner {
 }
 
 impl SignalData {
-    /// Declared signal kind; loaded values use its packing.
     pub fn kind(&self) -> SignalKind {
         self.inner.kind
     }
 
-    /// Change times, in non-decreasing order. Equal times preserve emission order.
     pub fn times(&self) -> &[u64] {
         &self.inner.times
     }
@@ -318,7 +258,6 @@ impl SignalData {
         self.inner.kind.packed_len().unwrap_or(0)
     }
 
-    /// Number of changes.
     pub fn len(&self) -> usize {
         self.inner.times.len()
     }
@@ -327,7 +266,6 @@ impl SignalData {
         self.inner.times.is_empty()
     }
 
-    /// Value of change `i`, widened to the declared packing. Panics when `i >= len()`.
     pub fn get(&self, i: usize) -> SignalValue<'_> {
         match self.inner.kind {
             SignalKind::VarLen => SignalValue::VarLen(
@@ -341,12 +279,10 @@ impl SignalData {
         }
     }
 
-    /// Value before the first change.
     pub fn initial(&self) -> SignalValue<'_> {
         block::frame_value(self.inner.kind, &self.inner.initial)
     }
 
-    /// Index of the last change at or before `t`, if any.
     pub fn index_at(&self, t: u64) -> Option<usize> {
         let n = self.inner.times.partition_point(|&x| x <= t);
         if n == 0 {
@@ -356,7 +292,6 @@ impl SignalData {
         }
     }
 
-    /// Value at time `t` (initial value before the first change).
     pub fn value_at(&self, t: u64) -> SignalValue<'_> {
         match self.index_at(t) {
             Some(i) => self.get(i),
@@ -365,7 +300,6 @@ impl SignalData {
     }
 }
 
-/// Mutable storage used only while loading one unique signal.
 struct SignalDataBuilder {
     kind: SignalKind,
     initial: Vec<u8>,
@@ -388,8 +322,6 @@ impl SignalDataBuilder {
     }
 
     fn finish(self) -> SignalData {
-        // Keep the allocations: shrinking into boxed slices may copy entire
-        // histories. Private buffers behind Arc expose no mutation to callers.
         SignalData {
             inner: Arc::new(SignalDataInner {
                 kind: self.kind,
@@ -401,7 +333,6 @@ impl SignalDataBuilder {
         }
     }
 
-    /// Appends every entry of one (plain) column, `times` being its block's time table.
     fn append_column(&mut self, col: &[u8], times: &[u64]) -> Result<()> {
         let mut it = ColumnIter::new(col, self.kind);
         match self.kind {
@@ -441,27 +372,18 @@ impl SignalDataBuilder {
     }
 }
 
-/// Transaction query filter.
 #[derive(Clone, Debug, Default)]
 pub struct TxQuery {
-    /// Only transactions of this generator.
     pub generator: Option<NodeId>,
-    /// Only transactions of generators belonging to this stream.
     pub stream: Option<NodeId>,
-    /// Only transactions overlapping `[t0, t1]`.
     pub window: Option<(u64, u64)>,
 }
 
-/// Log record query filter.
 #[derive(Clone, Debug)]
 pub struct LogQuery {
-    /// Only records of sites belonging to this stream.
     pub stream: Option<NodeId>,
-    /// Only records of this site (generator node).
     pub generator: Option<NodeId>,
-    /// Only records whose site severity is at least this.
     pub min_severity: Severity,
-    /// Only records with `t0 <= time <= t1`.
     pub window: Option<(u64, u64)>,
 }
 
@@ -477,12 +399,6 @@ impl Default for LogQuery {
 }
 
 impl Reader {
-    /// Release decoded data cached by this reader, retaining the mapped file
-    /// and its metadata. Subsequent queries decode their data again.
-    ///
-    /// Previously returned owned results, including shared signal histories
-    /// and block time tables, remain valid. Exclusive access ensures that no
-    /// query or borrowed time table can be in use while caches are released.
     pub fn clear_cache(&mut self) {
         let cache = self.cache.get_mut().unwrap();
         cache.entries = Vec::new();
@@ -502,34 +418,18 @@ impl Reader {
         self.global_times.take();
     }
 
-    /// Opens a file with default options.
-    ///
-    /// The file is memory-mapped and must not be modified while the reader
-    /// exists. A file without a valid trailer (the writer crashed) is
-    /// recovered by scanning its sections: every section up to the first one
-    /// that is cut short or fails its CRC is readable, and
-    /// [`recovered`](Self::recovered) returns the bytes dropped. Unknown
-    /// section kinds are skipped when marked optional, otherwise
-    /// [`Error::Corrupt`].
     pub fn open(path: impl AsRef<Path>) -> Result<Reader> {
         Self::open_with(path, ReadOptions::default())
     }
 
-    /// Opens a file with explicit options.
-    ///
-    /// As with [`open`](Self::open), the mapped file must remain unmodified
-    /// for the lifetime of the reader.
     pub fn open_with(path: impl AsRef<Path>, opts: ReadOptions) -> Result<Reader> {
         let file = std::fs::File::open(path)?;
-        // Safety: the file is only read; concurrent modification is a documented caller error.
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
         #[cfg(unix)]
         let _ = mmap.advise(memmap2::Advice::Random);
         Self::from_data(Data::Mmap(mmap), opts)
     }
 
-    /// Opens an in-memory image with default options (for example a file on
-    /// slow network storage read in one go).
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Reader> {
         Self::from_data(Data::Vec(bytes), ReadOptions::default())
     }
@@ -607,8 +507,6 @@ impl Reader {
             }
         }
         hier.build_index();
-        // Log sites: generators carrying `log.args`. Resolve the key ids with one pass over the
-        // strings; a key may have several ids (SPEC 4: readers must not assume uniqueness).
         const KEYS: [&str; 6] = [
             logblock::KEY_SEVERITY,
             logblock::KEY_ARGS,
@@ -728,33 +626,19 @@ impl Reader {
         })
     }
 
-    // ----- metadata -----
-
-    /// File metadata; [`Meta::default`] when the writer crashed before its first flush.
     pub fn meta(&self) -> &Meta {
         &self.meta
     }
 
-    /// Format version of the file, `(major, minor)`.
     pub fn version(&self) -> (u16, u16) {
         self.container.version
     }
 
-    /// `Some(dropped)` when the file had no directory (its writer did not
-    /// close it) and was recovered by scanning; `dropped` is the number of
-    /// bytes after the last complete, verified section. `None` for a
-    /// complete file.
     pub fn recovered(&self) -> Option<u64> {
         self.container.recovered
     }
 
-    /// How the run ended (SPEC section 8.5), with the time of the ending
-    /// record: the last record of the reserved stream [`ending::STREAM`], or
-    /// without a record [`Ending::Closed`] for a complete file and
-    /// [`Ending::Recovered`] for a recovered one. Decodes at most the log
-    /// blocks after the record.
     pub fn ending(&self) -> Result<(Ending, Option<u64>)> {
-        // A file recovered by `vtr recover` after an ending was written holds two such streams.
         let mut streams: Vec<NodeId> = self
             .log_sites
             .iter()
@@ -796,47 +680,38 @@ impl Reader {
         ))
     }
 
-    /// The string table (all strings validated UTF-8 at open).
     pub fn strings(&self) -> &StringTable {
         &self.strings
     }
 
-    /// Resolves a string id; `""` for an out-of-range id.
     pub fn str(&self, id: StrId) -> &str {
         self.strings.get(id)
     }
 
-    /// The indexed design hierarchy.
     pub fn hierarchy(&self) -> &Hierarchy {
         &self.hier
     }
 
-    /// Dump on/off markers in the order recorded.
     pub fn blackout(&self) -> &[Blackout] {
         &self.blackout
     }
 
-    /// Number of signals.
     pub fn signal_count(&self) -> u32 {
         self.hier.signals.len() as u32
     }
 
-    /// Declared kind of a signal ([`Error::Invalid`] for an unknown id).
     pub fn signal_kind(&self, s: SignalId) -> Result<SignalKind> {
         self.hier
             .signal_kind(s)
             .ok_or_else(|| Error::invalid(format!("unknown signal {}", s.0)))
     }
 
-    /// Variable type of the signal's original declaration, independent of aliases.
     pub fn signal_var_type(&self, s: SignalId) -> Result<crate::hierarchy::VarType> {
         self.hier
             .signal_var_type(s)
             .ok_or_else(|| Error::invalid(format!("unknown signal {}", s.0)))
     }
 
-    /// Time span covered by signal and transaction data, from the block
-    /// headers; `None` for a file with neither.
     pub fn time_range(&self) -> Option<(u64, u64)> {
         let mut r: Option<(u64, u64)> = None;
         let mut add = |a: u64, b: u64| {
@@ -858,12 +733,10 @@ impl Reader {
         r
     }
 
-    /// Name of a node. Panics for an out-of-range id.
     pub fn name(&self, n: NodeId) -> &str {
         self.str(self.hier.name(n))
     }
 
-    /// Full hierarchical path of a node, names from the root joined with `sep`.
     pub fn full_path(&self, n: NodeId, sep: &str) -> String {
         let mut parts = Vec::new();
         let mut cur = Some(n);
@@ -875,9 +748,6 @@ impl Reader {
         parts.join(sep)
     }
 
-    /// Finds a node of any kind by path components from the roots; the first
-    /// match wins. A linear scan per level: for repeated lookups build a map
-    /// from [`full_path`](Self::full_path).
     pub fn find_node(&self, path: &[&str]) -> Option<NodeId> {
         let mut level: Vec<NodeId> = self.hier.roots().collect();
         let mut found = None;
@@ -888,31 +758,24 @@ impl Reader {
         found
     }
 
-    /// Finds a variable (declaration or alias) by a `sep`-joined path and
-    /// returns its signal.
     pub fn find_signal(&self, path: &str, sep: char) -> Option<SignalId> {
         let parts: Vec<&str> = path.split(sep).collect();
         let n = self.find_node(&parts)?;
         self.hier.signal_of(n)
     }
 
-    /// Stream nodes in declaration order.
     pub fn streams(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.hier.nodes_of_kind(NodeKind::Stream)
     }
 
-    /// Generator nodes in declaration order.
     pub fn generators(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.hier.nodes_of_kind(NodeKind::Generator)
     }
-
-    // ----- blocks and time -----
 
     pub(crate) fn bytes(&self) -> &[u8] {
         self.data.bytes()
     }
 
-    /// The largest transaction or log record id in the file (0 when none).
     pub(crate) fn last_record_id(&self) -> u64 {
         let tx = self
             .tx_blocks
@@ -929,7 +792,6 @@ impl Reader {
         .unwrap_or(0)
     }
 
-    /// The last time of the last signal block.
     pub(crate) fn last_signal_time(&self) -> Option<u64> {
         self.sig_blocks
             .iter()
@@ -938,12 +800,10 @@ impl Reader {
             .map(|b| b.header.end_time)
     }
 
-    /// Number of signal blocks.
     pub fn block_count(&self) -> usize {
         self.sig_blocks.len()
     }
 
-    /// `(start_time, end_time)` of signal block `i`. Panics when out of range.
     pub fn block_range(&self, i: usize) -> (u64, u64) {
         let h = &self.sig_blocks[i].header;
         (h.start_time, h.end_time)
@@ -953,20 +813,15 @@ impl Reader {
         Container::payload(self.bytes(), &b.entry, false)
     }
 
-    /// Payload, header and the kinds of the signals known to signal block `i`,
-    /// for callers that walk a block's columns themselves (the activity index).
     pub(crate) fn signal_block(&self, i: usize) -> Result<(&[u8], BlockHeader, &[SignalKind])> {
         let b = &self.sig_blocks[i];
         Ok((self.block_payload(b)?, b.header, self.block_kinds(b)))
     }
 
-    /// Compressed payload bytes of signal block `i`.
     pub(crate) fn signal_block_bytes(&self, i: usize) -> u64 {
         self.sig_blocks[i].entry.len
     }
 
-    /// Time table of block `i`, decoded once and cached. Consecutive blocks
-    /// may share their boundary time step.
     pub fn block_times(&self, i: usize) -> Result<Arc<Vec<u64>>> {
         let b = &self.sig_blocks[i];
         if let Some(t) = b.times.get() {
@@ -982,7 +837,6 @@ impl Reader {
         Ok(b.times.get().unwrap().clone())
     }
 
-    /// All distinct time steps in ascending order (block tables merged), cached.
     pub fn time_table(&self) -> Result<&[u64]> {
         if let Some(t) = self.global_times.get() {
             return Ok(t);
@@ -1002,7 +856,6 @@ impl Reader {
         Ok(self.global_times.get().unwrap())
     }
 
-    /// Index of the last block whose start time is <= `t` (None if `t` precedes all data).
     fn block_at(&self, t: u64) -> Option<usize> {
         let n = self
             .sig_blocks
@@ -1022,15 +875,11 @@ impl Reader {
         g * self.meta.group_size.max(1)
     }
 
-    /// Kinds of the signals known when block `b` was written. Later signals
-    /// have no data in the block; bounding containers by this table makes
-    /// them fail validation instead of reading past a container.
     fn block_kinds(&self, b: &SigBlock) -> &[SignalKind] {
         let kinds = &self.hier.signals;
         &kinds[..(b.header.n_signals as usize).min(kinds.len())]
     }
 
-    /// Parses the container of group `g` in block `bi` (no decompression).
     fn group_view(&self, bi: usize, g: u32) -> Result<Option<GroupView<'_>>> {
         let b = &self.sig_blocks[bi];
         let p = self.block_payload(b)?;
@@ -1046,7 +895,6 @@ impl Reader {
         )?))
     }
 
-    /// Decompressed piece of a group: piece 0 = frames, piece k+1 = run k.
     fn piece(&self, bi: usize, g: u32, view: &GroupView<'_>, piece: u32) -> Result<Arc<Piece>> {
         if let Some(p) = self.cache.lock().unwrap().get(bi as u32, g, piece) {
             return Ok(p);
@@ -1081,8 +929,6 @@ impl Reader {
         Ok(p)
     }
 
-    /// Run piece holding `sig`'s column in block `bi` and the column's index within it,
-    /// following a dynamic alias when present.
     fn column(
         &self,
         bi: usize,
@@ -1134,7 +980,6 @@ impl Reader {
         Ok((p, range))
     }
 
-    /// Finds the latest block index <= `bi` where group `g` is dirty.
     fn dirty_block_at_or_before(&self, bi: usize, g: u32) -> Result<Option<usize>> {
         let b = &self.sig_blocks[bi];
         let p = self.block_payload(b)?;
@@ -1149,15 +994,6 @@ impl Reader {
         }
     }
 
-    // ----- signal queries -----
-
-    /// Value of `sig` at time `t`: the last change at or before `t`, or the
-    /// initial value if the signal has not changed yet (all X for 4/9-state
-    /// vectors, zeros for 2-state, `0.0`, empty bytes).
-    ///
-    /// Costs binary searches over block headers and one block's dirty index,
-    /// then at most one run decompression (cached) and a walk of at most 256
-    /// entries from a skip-index checkpoint.
     pub fn value_at(&self, sig: SignalId, t: u64) -> Result<OwnedSignalValue> {
         let kind = self.signal_kind(sig)?;
         let g = self.group_of(sig);
@@ -1176,7 +1012,6 @@ impl Reader {
         };
         let view = self.group_view(dbi, g)?.unwrap();
         if !view.holds(sig.0) {
-            // Declared after that block: no changes up to it.
             return Ok(default());
         }
         let max_tidx = if dbi == bi {
@@ -1208,15 +1043,10 @@ impl Reader {
         }
     }
 
-    /// All changes of `sig` with `t0 <= time <= t1`, in time order and, at
-    /// equal times, emission order. Visits only the blocks overlapping the
-    /// window and only the run holding `sig` in each.
     pub fn changes(&self, sig: SignalId, t0: u64, t1: u64) -> Result<Vec<(u64, OwnedSignalValue)>> {
         let kind = self.signal_kind(sig)?;
         let g = self.group_of(sig);
         let mut out = Vec::new();
-        // Several blocks can contain the same timestamp; include every
-        // block overlapping the inclusive lower bound.
         let start = self.sig_blocks.partition_point(|b| b.header.end_time < t0);
         for bi in start..self.sig_blocks.len() {
             let h = &self.sig_blocks[bi].header;
@@ -1251,11 +1081,6 @@ impl Reader {
         Ok(out)
     }
 
-    /// For each of `sigs` (ascending, distinct), whether it has an entry
-    /// with `t0 <= time <= t1`. Visits only the blocks overlapping the window
-    /// and, in them, the runs holding these signals (cached like any piece);
-    /// each column is entered through its skip index and left at its first
-    /// entry at or after `t0`. The query behind [`crate::activity::resolve`].
     pub(crate) fn changing(&self, sigs: &[SignalId], t0: u64, t1: u64) -> Result<Vec<bool>> {
         let mut hit = vec![false; sigs.len()];
         let mut left = sigs.len();
@@ -1307,9 +1132,6 @@ impl Reader {
         Ok(hit)
     }
 
-    /// Column runs per value transform: `(runs, compressed bytes)` indexed by the
-    /// transform code (0 none, 1 shuffle, 2 delta, 3 delta+shuffle, 4 dictionary).
-    /// Reads only the group headers, not the runs.
     pub fn run_stats(&self) -> Result<[(u64, u64); 5]> {
         let mut out = [(0u64, 0u64); 5];
         for b in &self.sig_blocks {
@@ -1327,25 +1149,14 @@ impl Reader {
         Ok(out)
     }
 
-    /// Loads all changes of one signal (see [`load_signals`](Self::load_signals)).
     pub fn load_signal(&self, sig: SignalId) -> Result<SignalData> {
         Ok(self.load_signals(&[sig])?.pop().unwrap())
     }
 
-    /// Loads histories in request order, decoding each distinct signal only once.
-    /// Repeated IDs share immutable storage, as do clones of the returned handles.
-    /// Sharing is local to this call; separate calls do not retain loaded histories.
-    ///
-    /// Per block, each column run holding a requested signal is decompressed
-    /// once, so loading a whole group costs about one decompression of it.
-    /// Any invalid id or decoding error fails the whole call.
     pub fn load_signals(&self, sigs: &[SignalId]) -> Result<Vec<SignalData>> {
         if sigs.is_empty() {
             return Ok(Vec::new());
         }
-        // Signal IDs are contiguous within groups, so numeric order groups both
-        // duplicate requests and the runs they touch. Restore request order only
-        // after each unique history is complete.
         let mut order: Vec<usize> = (0..sigs.len()).collect();
         order.sort_unstable_by_key(|&i| sigs[i].0);
         let mut unique = Vec::new();
@@ -1376,7 +1187,6 @@ impl Reader {
                     for oi in i..j {
                         let s = sigs[oi];
                         if !view.holds(s.0) {
-                            // Declared after this block; its initial value stays the default.
                             continue;
                         }
                         if !first_seen[oi] {
@@ -1424,20 +1234,6 @@ impl Reader {
             .collect())
     }
 
-    /// Streams every change of every signal in time order within `[t0, t1]`
-    /// (VCD-style dump). The callback receives `(time, signal, value)`.
-    /// Within one time step the order of signals is deterministic but unspecified;
-    /// changes of one signal keep emission order. Values borrow a per-block
-    /// buffer (`to_owned` keeps one). Bypasses the group cache.
-    ///
-    /// Per block every run is decompressed once and a cursor is opened on every
-    /// non-empty column. Blocks with few active columns are merged through a
-    /// linked list per time step (GTKWave's block iterator scheme: no sorting,
-    /// no per-change memory). Blocks with many active columns are walked in
-    /// windows of time steps instead, so that every column visit yields many
-    /// entries: each window's entries are counting-sorted by time index and
-    /// delivered. Memory is proportional to the number of columns plus one
-    /// window of entries, never to the length of the trace.
     pub fn for_each_change(
         &self,
         t0: u64,
@@ -1445,30 +1241,23 @@ impl Reader {
         mut f: impl FnMut(u64, SignalId, SignalValue<'_>),
     ) -> Result<()> {
         const NONE: u32 = u32::MAX;
-        /// Up to this many active columns the cursors stay cache resident and the
-        /// linked-list merge wins; beyond it, windows amortise the cost of visiting a column.
         const MERGE_MAX_COLUMNS: usize = 1 << 15;
-        /// Window sort buffer: at least this many entries (12 bytes each) ...
         const MIN_WINDOW_ENTRIES: usize = 1 << 18;
-        /// ... and at least this many per column, so that a visit to a column pays off.
         const ENTRIES_PER_COLUMN: usize = 16;
         const MAX_WINDOW_ENTRIES: usize = 1 << 23;
         const MAX_WINDOW_STEPS: usize = 1 << 12;
-        // Window entry tags (top two bits of `a`).
         const TAG_SHIFT: u32 = 30;
         const MASK: u32 = (1 << TAG_SHIFT) - 1;
-        const TAG_COMPACT: u32 = 0; // bits, 2-state packing; `a` = value offset in the piece
-        const TAG_FULL: u32 = 1; // bits, declared packing, or varlen (`a` = offset of its length)
-        const TAG_CODE: u32 = 2; // 1-bit logic code in `a`
-        const TAG_REAL: u32 = 3; // `a` indexes `reals`
+        const TAG_COMPACT: u32 = 0;
+        const TAG_FULL: u32 = 1;
+        const TAG_CODE: u32 = 2;
+        const TAG_REAL: u32 = 3;
         #[derive(Clone, Copy, Default)]
         struct E {
             tidx: u32,
             sig: u32,
             a: u32,
         }
-        /// A column being walked: its iterator, the entry not yet delivered and, for the
-        /// linked-list merge, the next cursor due at the same time step.
         struct Cursor<'a> {
             sig: u32,
             base: u32,
@@ -1476,8 +1265,6 @@ impl Reader {
             pending: block::RawChange,
             next: u32,
         }
-        /// Appends the cursor's entries with time index below `w1`; `next` receives the
-        /// time index of the first entry left (or `NONE`).
         fn drain(
             cur: &mut Cursor<'_>,
             w1: u32,
@@ -1506,12 +1293,9 @@ impl Reader {
             *next = r;
             Ok(())
         }
-        // Several blocks can contain the same timestamp; include every
-        // block overlapping the inclusive lower bound.
         let start = self.sig_blocks.partition_point(|b| b.header.end_time < t0);
         let kinds = &self.hier.signals;
         let mut d = Decompressor::new();
-        // (first signal of the run, decompressed run, per-signal column ranges)
         type RunPiece = (u32, Vec<u8>, Vec<(u32, u32)>);
         let mut pieces: Vec<RunPiece> = Vec::new();
         let mut sig_piece: Vec<u32> = Vec::new();
@@ -1564,8 +1348,6 @@ impl Reader {
                     pieces.push((first, data, ranges));
                 }
             }
-            // One cursor per non-empty column, in signal order; aliased signals (whose own
-            // column is empty) walk their target's column and then share its piece.
             fn column<'p>(
                 pieces: &'p [RunPiece],
                 sig_piece: &[u32],
@@ -1607,7 +1389,6 @@ impl Reader {
             }
             let n_times = h.n_times as usize;
             if cursors.len() <= MERGE_MAX_COLUMNS {
-                // Linked-list merge: `heads[t]` chains the cursors whose pending entry is at step `t`.
                 heads.clear();
                 heads.resize(n_times, NONE);
                 for (ci, cur) in cursors.iter_mut().enumerate() {
@@ -1628,7 +1409,6 @@ impl Reader {
                                 f(t, SignalId(cur.sig), cur.it.value(&cur.pending));
                             }
                             match cur.it.next_raw()? {
-                                // Further changes of this signal at the same step follow right away.
                                 Some(pending) if pending.tidx as usize == ti => {
                                     cur.pending = pending
                                 }
@@ -1652,11 +1432,10 @@ impl Reader {
                 }
                 continue;
             }
-            // Windows of time steps, sized from the observed change density.
             let mut next_tidx: Vec<u32> = cursors.iter().map(|c| c.pending.tidx).collect();
             let window_entries =
                 (ENTRIES_PER_COLUMN * cursors.len()).clamp(MIN_WINDOW_ENTRIES, MAX_WINDOW_ENTRIES);
-            let mut density = (raw_bytes / 2 / n_times.max(1)).max(1); // entries per step, initial guess
+            let mut density = (raw_bytes / 2 / n_times.max(1)).max(1);
             let mut w0 = 0usize;
             while w0 < n_times && times[w0] <= t1 {
                 let steps = (window_entries / density)
@@ -1697,7 +1476,6 @@ impl Reader {
                     }
                 }
                 density = (entries.len() / steps).max(1);
-                // Stable counting sort of the window by time index, then delivery.
                 counts.clear();
                 counts.resize(steps + 1, 0);
                 for e in &entries {
@@ -1763,9 +1541,6 @@ impl Reader {
         Ok(())
     }
 
-    // ----- transactions -----
-
-    /// Number of transaction blocks (log blocks not included).
     pub fn tx_block_count(&self) -> usize {
         self.tx_blocks.len()
     }
@@ -1781,18 +1556,10 @@ impl Reader {
         Ok(b.data.get().unwrap().clone())
     }
 
-    /// Parent stream of a generator node.
     pub fn generator_stream(&self, gen: NodeId) -> Option<NodeId> {
         self.hier.parent(gen)
     }
 
-    /// Visits transactions matching `q` in file order (within a block,
-    /// `end_tx` order); stop by returning `false`. Log records are visited
-    /// too, viewed as zero-duration transactions, and clock stretches.
-    ///
-    /// Blocks are skipped from their headers when their time range misses
-    /// `window` or their generator list lacks `generator`; the `stream`
-    /// filter decodes every candidate block. Decoded blocks stay cached.
     pub fn visit_transactions(
         &self,
         q: &TxQuery,
@@ -1846,7 +1613,6 @@ impl Reader {
         Ok(())
     }
 
-    /// Collects transactions matching `q`.
     pub fn transactions(&self, q: &TxQuery) -> Result<Vec<Transaction>> {
         let mut v = Vec::new();
         self.visit_transactions(q, |t| {
@@ -1856,8 +1622,6 @@ impl Reader {
         Ok(v)
     }
 
-    /// Looks up one transaction (or log record) by id, decoding only the
-    /// block whose id range covers it.
     pub fn transaction(&self, id: TxId) -> Result<Option<Transaction>> {
         for i in 0..self.tx_blocks.len() {
             let h = &self.tx_blocks[i].header;
@@ -1887,8 +1651,6 @@ impl Reader {
         Ok(None)
     }
 
-    /// Owning generator of a transaction or log record, without cloning its
-    /// attributes, events or stages. Missing identities return `None`.
     pub fn transaction_generator(&self, id: TxId) -> Result<Option<NodeId>> {
         for i in 0..self.tx_blocks.len() {
             let h = &self.tx_blocks[i].header;
@@ -1913,10 +1675,6 @@ impl Reader {
         Ok(None)
     }
 
-    /// Resolves many transaction/log owners in one pass over relevant blocks
-    /// (cheaper than repeated [`transaction_generator`](Self::transaction_generator)).
-    /// Results follow input order, including duplicates; missing IDs are `None`.
-    /// No transaction attributes, events or stages are cloned.
     pub fn transaction_generators(&self, ids: &[TxId]) -> Result<Vec<Option<NodeId>>> {
         let mut requested: Vec<_> = ids.to_vec();
         requested.sort_unstable();
@@ -1962,19 +1720,14 @@ impl Reader {
         Ok(ids.iter().map(|id| owners[id]).collect())
     }
 
-    // ----- clocks -----
-
-    /// Every declared clock (a `CLOCK` stream with its `edges` generator), in declaration order.
     pub fn clocks(&self) -> &[ClockInfo] {
         &self.clocks
     }
 
-    /// The clock whose stream path (joined with '.') is `path`.
     pub fn find_clock(&self, path: &str) -> Option<ClockId> {
         self.clocks.iter().find(|c| c.path == path).map(|c| c.id)
     }
 
-    /// The clock named by a stream's `vtr.clock` attribute, if it names a declared clock.
     pub fn stream_clock(&self, stream: NodeId) -> Option<ClockId> {
         let key = self.clock_keys[1]?;
         self.hier.attrs(stream).iter().find_map(|(k, v)| match v {
@@ -1984,9 +1737,6 @@ impl Reader {
         })
     }
 
-    /// The stretches of a clock, loaded once and shared. Decodes only the
-    /// transaction blocks that hold the clock's generator. The timeline stays
-    /// valid after the reader is dropped.
     pub fn clock(&self, id: ClockId) -> Result<Arc<ClockTimeline>> {
         let info = self
             .clocks
@@ -2029,14 +1779,10 @@ impl Reader {
         Ok(slot.get_or_init(|| timeline).clone())
     }
 
-    // ----- logs -----
-
-    /// All log sites (generators of `LOG` streams carrying `log.args`).
     pub fn log_sites(&self) -> &[LogSite] {
         &self.log_sites
     }
 
-    /// The log site described by generator `gen`, if it is one.
     pub fn log_site(&self, gen: NodeId) -> Option<&LogSite> {
         match self.site_index.get(gen.0 as usize) {
             Some(&i) if i != u32::MAX => Some(&self.log_sites[i as usize]),
@@ -2044,12 +1790,10 @@ impl Reader {
         }
     }
 
-    /// Number of log blocks.
     pub fn log_block_count(&self) -> usize {
         self.log_blocks.len()
     }
 
-    /// Total number of log records (from block headers).
     pub fn log_count(&self) -> u64 {
         self.log_blocks.iter().map(|b| b.header.n_rec).sum()
     }
@@ -2069,8 +1813,6 @@ impl Reader {
         Ok(b.data.get().unwrap().clone())
     }
 
-    /// True when block `i` may hold a record matching the site filters of `q`
-    /// (decided from the block's generator list, without decoding).
     fn log_block_may_match(
         &self,
         i: usize,
@@ -2094,11 +1836,6 @@ impl Reader {
         Ok(false)
     }
 
-    /// Visits log records matching `q`, blocks in order of their first time
-    /// (production order for a producer with monotonic time), records in
-    /// production order within a block; stop by returning `false`. Blocks are
-    /// skipped without decoding when their time range or generator list cannot
-    /// match.
     pub fn visit_log(&self, q: &LogQuery, mut f: impl FnMut(&LogRecord) -> bool) -> Result<()> {
         for &bi in &self.log_order {
             let i = bi as usize;
@@ -2144,7 +1881,6 @@ impl Reader {
         Ok(())
     }
 
-    /// Log block `i` visited as transactions (helper of `visit_transactions`).
     fn visit_log_block_as_tx(
         &self,
         i: usize,
@@ -2190,8 +1926,6 @@ impl Reader {
         Ok(true)
     }
 
-    /// Relations whose source is `id`. Blocks are pruned by their source id
-    /// range, so relations between distant ids prune poorly.
     pub fn relations_from(&self, id: TxId) -> Result<Vec<Relation>> {
         let mut v = Vec::new();
         for i in 0..self.tx_blocks.len() {
@@ -2205,7 +1939,6 @@ impl Reader {
         Ok(v)
     }
 
-    /// Relations whose target is `id`.
     pub fn relations_to(&self, id: TxId) -> Result<Vec<Relation>> {
         let mut v = Vec::new();
         for i in 0..self.tx_blocks.len() {
@@ -2219,7 +1952,6 @@ impl Reader {
         Ok(v)
     }
 
-    /// Visits every relation in file order.
     pub fn visit_relations(&self, mut f: impl FnMut(&Relation) -> bool) -> Result<()> {
         for i in 0..self.tx_blocks.len() {
             if self.tx_blocks[i].header.n_rel == 0 {
@@ -2235,7 +1967,6 @@ impl Reader {
         Ok(())
     }
 
-    /// Total number of transactions (log records included) and relations in the file (from block headers).
     pub fn tx_counts(&self) -> (u64, u64) {
         let (a, b) = self
             .tx_blocks
@@ -2244,14 +1975,10 @@ impl Reader {
         (a + self.log_count(), b)
     }
 
-    /// Directory entries as read or rebuilt (for inspection tools; see
-    /// [`crate::container`]).
     pub fn sections(&self) -> &[DirEntry] {
         &self.container.entries
     }
 
-    /// Bytes per value in declared packing (8 for reals); `None` for
-    /// variable-length or unknown signals.
     pub fn packed_len(&self, s: SignalId) -> Option<usize> {
         self.hier.signal_kind(s).and_then(|k| match k {
             SignalKind::Bits { width, states } => Some(packed_len(width, states)),

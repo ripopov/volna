@@ -1,5 +1,4 @@
-//! GPUI's dock is a mirror of the core layout. Only explicit core commands
-//! remove content; widget detachment during a rebuild is not a close.
+//! GPUI's dock is a mirror of the core layout.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
@@ -28,10 +27,6 @@ use crate::settings_panel::SettingsPanelView;
 use crate::start_panel::StartPanelView;
 use crate::transaction_panel::TransactionPanelView;
 
-/// The GPUI view of one core panel, by kind: a core-painted canvas (waves,
-/// pipeline, or an unsupported placeholder), the start panel or the
-/// settings tab. A core panel never changes kind: content replaces the
-/// start panel under a new ID.
 pub(crate) enum PanelView {
     Canvas(Entity<CanvasPanelView>),
     Transaction(Entity<TransactionPanelView>),
@@ -66,13 +61,6 @@ impl PanelView {
     }
 }
 
-/// A tab's label as Zed draws it: the core title followed by a close button,
-/// with a middle click closing the tab too. Panels return this from
-/// `Panel::title` and no `tab_name`, since the stock tab bar prefers a plain
-/// `tab_name` over the title element.
-///
-/// `generation` pins a trace-bound panel to its trace; the settings tab,
-/// which outlives traces, passes `None`.
 pub(crate) fn tab_title(
     ws: &WeakEntity<Workspace>,
     id: PanelId,
@@ -89,7 +77,6 @@ pub(crate) fn tab_title(
     let Some(panel) = panels.get(id) else {
         return Empty.into_any_element();
     };
-    // While several traces are open, a panel over one trace names it.
     let letter = panel
         .kind
         .trace()
@@ -139,7 +126,6 @@ pub(crate) fn tab_title(
                 .tooltip("Close tab")
                 .debug_selector(|| format!("tab-close-{}", id.0))
                 .on_click(move |_, window, cx| {
-                    // The tab under the button would select itself.
                     cx.stop_propagation();
                     close(window, cx);
                 }),
@@ -184,8 +170,6 @@ impl DockHost {
                 Ok(layout) if host.echo.as_ref() == Some(&layout) => {}
                 Ok(layout) => {
                     let revision = host.revision.unwrap_or(0);
-                    // The user already installed this tree in the dock. Do
-                    // not detach/rebuild all its widgets when core accepts it.
                     host.installed = Some(layout.clone());
                     host.echo = Some(layout.clone());
                     ws.dispatch(
@@ -220,7 +204,6 @@ impl DockHost {
         cx: &mut App,
     ) {
         if self.generation != app.doc.generation() {
-            // The settings tab keeps its id and its view across traces.
             self.views
                 .retain(|_, view| matches!(view, PanelView::Settings(_)));
             self.installed = None;
@@ -274,13 +257,9 @@ impl DockHost {
         let layout = app.panels.layout();
         if self.installed.as_ref() != Some(layout) {
             let bounds = self.area.read(cx).bounds();
-            // The first single-panel installation needs no dimensions. For
-            // a restored split, wait until the area has measured its slot.
             if app.panels.len() > 1
                 && (bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0))
             {
-                // A frame request alone may reuse the cached Workspace and
-                // never call sync again. Retry after the area measures its slot.
                 window.on_next_frame(move |_, cx| {
                     _ = ws.update(cx, |_, cx| cx.notify());
                 });
@@ -309,8 +288,6 @@ impl DockHost {
         self.views.get(&panel).map(|view| view.focus(cx))
     }
 
-    /// The settings tab's view, created on demand so it can also be shown
-    /// without a trace (when the dock itself is not rendered).
     pub fn settings_view(
         &mut self,
         id: PanelId,
@@ -328,12 +305,8 @@ impl DockHost {
     }
 
     pub fn invalidate_panels(&self, cx: &mut App) {
-        // Tab titles follow panel content (a transaction panel names its
-        // record), so the tab bars redraw with the panels.
         cx.notify(self.area.entity_id());
         for view in self.views.values() {
-            // Focus/menu callbacks may already hold the panel entity. Mark
-            // it dirty without borrowing it again.
             cx.notify(view.entity_id());
         }
     }
@@ -378,7 +351,6 @@ fn to_dock(
     }
 }
 
-/// Decode the widget snapshot; only the core validates workspace membership.
 fn from_dock(state: &base::PanelState) -> Result<Layout> {
     match &state.info {
         base::PanelInfo::Stack { sizes, axis } => {
@@ -444,9 +416,6 @@ pub(crate) struct CanvasPanelView {
     pub(crate) ws: WeakEntity<Workspace>,
     pub(crate) id: PanelId,
     pub(crate) generation: u64,
-    /// The dock widget name records the core kind, for diagnostics only. A
-    /// panel never changes kind, so it is fixed at creation: the dock dumps
-    /// its state while the workspace is being rendered and cannot be read.
     name: &'static str,
     pub(crate) focus: FocusHandle,
 }
@@ -551,8 +520,6 @@ impl base::Panel for CanvasPanelView {
     fn panel_name(&self) -> &'static str {
         self.name
     }
-    // Core close commands preserve the last waveform panel. Never let the
-    // dock delete content behind the core's back.
     fn closable(&self, _: &App) -> bool {
         false
     }
@@ -688,7 +655,6 @@ impl Panel for CanvasPanelView {
                 );
             }
         }
-        // Timed panels open the marker navigator from here too.
         let timed = self.ws.upgrade().is_some_and(|owner| {
             let ws = owner.read(cx);
             ws.app
@@ -725,7 +691,6 @@ impl Panel for CanvasPanelView {
                     }),
             );
         }
-        // A pipeline row that is selected can be read in a Transaction panel.
         let selected_here = self
             .ws
             .upgrade()
@@ -894,7 +859,6 @@ impl Render for CanvasPanelView {
     }
 }
 
-/// Compose the stock skin, changing only the single-panel header geometry.
 struct DockRenderer {
     skin: Rc<DockSkin>,
     single: Rc<Cell<bool>>,

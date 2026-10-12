@@ -1,5 +1,5 @@
-//! Sealing a writer from another thread:
-//! the file keeps exactly what reached the encoder and ends complete.
+//! Sealing a writer from another thread: the file keeps exactly what reached the encoder
+//! and ends complete.
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::path::{Path, PathBuf};
@@ -19,8 +19,6 @@ const CRASH: Ending = Ending::Crashed {
     sealed: true,
 };
 
-/// A random run: every kind of signal, transactions with events and stages,
-/// log records, a gated clock, and signals declared while it runs.
 struct Run {
     w: Writer,
     rng: StdRng,
@@ -29,7 +27,6 @@ struct Run {
     gen: NodeId,
     site: LogSiteId,
     clk: ClockId,
-    /// First edge of the running stretch.
     clk_running: Option<u64>,
     open: Vec<TxId>,
     key: StrId,
@@ -193,7 +190,6 @@ impl Run {
                 }
             },
             97 => {
-                // A signal declared mid-run, into a group that may already have changes.
                 self.late += 1;
                 let (_, s) = w
                     .add_var(
@@ -227,7 +223,6 @@ fn signal_paths(r: &Reader) -> Vec<(String, SignalId)> {
         .collect()
 }
 
-/// Everything in `sealed` is an unchanged prefix or subset of `full`.
 fn assert_sealed_prefix(sealed: &Reader, full: &Reader, what: &str) {
     for (path, s) in signal_paths(sealed) {
         let a = sealed.load_signal(s).unwrap();
@@ -297,7 +292,6 @@ fn assert_sealed_prefix(sealed: &Reader, full: &Reader, what: &str) {
             true
         })
         .unwrap();
-    // Every record is readable: the ending record's strings must not hide the program's log sites.
     assert_eq!(
         n as u64 + 1,
         sealed.log_count(),
@@ -332,7 +326,6 @@ fn seal_after_random_numbers_of_calls() {
         (0..calls).for_each(|_| run.step());
         let sealer = run.w.sealer();
         assert!(!sealer.state().busy());
-        // The owner stops; another thread finishes the file.
         std::thread::spawn(move || sealer.seal(CRASH))
             .join()
             .unwrap()
@@ -348,8 +341,6 @@ fn seal_after_random_numbers_of_calls() {
 
 #[test]
 fn seal_keeps_every_chunk_handed_over() {
-    // Narrow signals only: a chunk is handed over every 64 changes, so the
-    // sealed file holds exactly the first 64 * floor(n / 64) of them.
     for n in [0u64, 1, 63, 64, 65, 255, 256, 257, 1000, 5000] {
         let path = tmp(&format!("exact{n}.vtr"));
         let opts = WriterOptions {
@@ -484,7 +475,6 @@ fn a_panic_poisons_and_close_seals() {
         w.emit_u64(a, t).unwrap();
     }
     assert!(!w.is_poisoned() && !w.state().busy());
-    // A batch the owner marked is busy while it runs.
     w.guarded(|w| assert!(w.state().busy()));
     assert!(!w.state().busy());
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -495,8 +485,6 @@ fn a_panic_poisons_and_close_seals() {
     w.close().unwrap();
     let r = Reader::open(&path).unwrap();
     assert_eq!(r.ending().unwrap().0, Ending::Poisoned);
-    // Blocks of 100 changes are handed over in chunks of 16 (16 per declared signal):
-    // two blocks and three chunks of the third reached the encoder.
     assert_eq!(
         r.load_signal(a).unwrap().len(),
         248,

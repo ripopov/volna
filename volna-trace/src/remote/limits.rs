@@ -1,8 +1,5 @@
 //! Total and per-object admission limits for local and remote traces.
 
-/// Total and per-object limits in MiB (defaults 512 and 256, each within
-/// `1..=MAX_MEMORY_MIB`). Hosts take them from their settings.
-/// A remote trace keeps the object limit it sent with its Open command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(default)]
 pub struct Limits {
@@ -12,7 +9,6 @@ pub struct Limits {
     pub object_mib: u64,
 }
 
-/// Maximum admitted total or object limit, in MiB.
 pub const MAX_MEMORY_MIB: u64 = 256 * 1024;
 
 impl Default for Limits {
@@ -25,8 +21,6 @@ impl Default for Limits {
 }
 
 impl Limits {
-    /// These bound admitted data, not total process RSS. A host
-    /// can still run out of address space below a user-selected large limit.
     pub fn bytes(self) -> anyhow::Result<(u64, u64)> {
         let max = MAX_MEMORY_MIB;
         anyhow::ensure!(

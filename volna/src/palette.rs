@@ -1,10 +1,5 @@
-//! The ⌘K command palette: every registered action with its key hint, and
-//! the settings the core matcher ranks for the query. Choosing a boolean
-//! setting toggles it in place; any other setting opens the Settings tab
-//! filtered to it. A query starting with `@` (or `'` in a timed panel)
-//! switches to the marker navigator: the core's
-//! [`volna_core::marker::navigator_rows`], where `↵` goes to a marker, `⇧↵`
-//! measures from it, `F2` renames it and `Del` removes it.
+//! The ⌘K command palette: every registered action with its key hint, and the settings the
+//! core matcher ranks for the query.
 
 use gpui_kit::component::{
     WindowExt,
@@ -23,49 +18,25 @@ use crate::app::{self, Workspace};
 use crate::settings_panel::ToggleSettingsJson;
 use crate::theme::ThemePx;
 
-/// The palette can only read this entity while the dialog renders, never
-/// the workspace (which is mid-render then), so everything it shows is here.
 pub(crate) struct PaletteModel {
     commands: Vec<(String, Box<dyn Action>)>,
     settings: Vec<(&'static settings::Spec, bool)>,
-    /// The marker navigator's rows while the query starts with `@`.
     markers: Option<Vec<NavigatorRow>>,
-    /// Outside `@` mode, whether *Find Marker…* is offered, and the first
-    /// markers when a query word starts *markers* ([`PREVIEW`] at most).
     find_marker: bool,
     preview: Vec<NavigatorRow>,
 }
 
 impl PaletteModel {
-    /// The Markers group comes first while it previews markers, so a query
-    /// such as `mar` shows them above the many marker commands; otherwise
-    /// the commands lead, and `remove all markers` runs with `↵`.
     fn markers_section(&self) -> usize {
         if self.preview.is_empty() { 1 } else { 0 }
     }
 }
 
-/// Markers an ordinary query shows before `@` lists them all.
 const PREVIEW: usize = 8;
-/// What *Find Marker…* is found by.
 const FIND_MARKER: &str = "Find Marker… (@)";
 
-gpui_kit::actions!(
-    palette,
-    [
-        /// `⇧↵` in the marker navigator: measure from the marker.
-        MeasureFromMarker,
-        /// `F2` in the marker navigator: rename the marker.
-        RenameMarker,
-        /// `Del` in the marker navigator: remove the marker. Elsewhere the
-        /// key falls through to the query field.
-        RemoveMarker,
-    ]
-);
+gpui_kit::actions!(palette, [MeasureFromMarker, RenameMarker, RemoveMarker,]);
 
-/// Keys of the marker navigator. `Del` is bound where the query field binds
-/// it, and later, so it comes first; outside marker mode its handler
-/// propagates and the field deletes a character.
 pub(crate) fn key_bindings() -> Vec<gpui_kit::KeyBinding> {
     use gpui_kit::KeyBinding;
     vec![
@@ -75,10 +46,6 @@ pub(crate) fn key_bindings() -> Vec<gpui_kit::KeyBinding> {
     ]
 }
 
-/// Every palette command: label and the action it dispatches. The open
-/// trace's PIPELINE streams, the focused panel's clock choices and the
-/// recent traces and workspaces follow the fixed commands; a number in the
-/// query offers to go to that cycle.
 pub(crate) fn commands(app: &CoreApp, query: &str) -> Vec<(String, Box<dyn Action>)> {
     let mut all: Vec<(String, Box<dyn Action>)> = vec![
         (
@@ -148,7 +115,6 @@ pub(crate) fn commands(app: &CoreApp, query: &str) -> Vec<(String, Box<dyn Actio
     if app::recent_labels(app).is_some_and(|labels| !labels.is_empty()) {
         all.push(("Clear Recent".into(), Box::new(app::ClearRecent)));
     }
-    // Each trace of several: reveal, rename, close.
     let chips = app.trace_chips();
     for chip in chips.iter().filter(|_| chips.len() > 1) {
         let what = format!("{} {}", chip.trace, chip.name);
@@ -288,7 +254,6 @@ impl PaletteModel {
             .into_iter()
             .filter(|(label, _)| {
                 let lower = label.to_lowercase();
-                // "go to 1500" and "1500" both find "Go to Cycle 1500".
                 words.iter().all(|w| lower.contains(w))
             })
             .collect();
@@ -309,7 +274,6 @@ impl PaletteModel {
                 })
                 .collect()
         };
-        // Typing "mar…" shows markers here and offers the navigator.
         let asked = volna_core::marker::palette_preview(query);
         let loaded = app.doc.is_loaded();
         let find = FIND_MARKER.to_lowercase();
@@ -331,8 +295,6 @@ impl PaletteModel {
     }
 }
 
-/// One navigator row: number, name, time, the step from the previous marker
-/// and the distance from the reference, in fixed columns.
 fn marker_row(row: &NavigatorRow, cx: &gpui_kit::App) -> gpui_kit::Div {
     let t = *crate::theme::theme(cx);
     let colors = t.editor;
@@ -396,7 +358,6 @@ impl Workspace {
         self.open_palette_with("", window, cx);
     }
 
-    /// Open the palette with `query` typed, such as `@` for the markers.
     pub(crate) fn open_palette_with(
         &mut self,
         query: &str,
@@ -454,8 +415,6 @@ impl Workspace {
                             let state = state.clone();
                             let command_target = command_target.clone();
                             move |path, window, cx| {
-                                // Sections: commands, markers, settings; or
-                                // only markers in `@` mode.
                                 let (find, marker) = {
                                     let read = model.read(cx);
                                     match &read.markers {
@@ -476,7 +435,6 @@ impl Workspace {
                                     }
                                 };
                                 if find {
-                                    // Stay open, listing every marker.
                                     state.update(cx, |state, cx| state.set_query("@", window, cx));
                                     return;
                                 }
@@ -494,7 +452,6 @@ impl Workspace {
                                 let (action, chosen) = {
                                     let read = model.read(cx);
                                     if path.section == 2 {
-                                        // Settings come last either way.
                                         (None, read.settings.get(path.row).copied())
                                     } else if path.section != read.markers_section() {
                                         (
@@ -509,12 +466,8 @@ impl Workspace {
                                 };
                                 window.close_dialog(cx);
                                 if let Some(action) = action {
-                                    // Root hosts the dialog beside the workspace, so
-                                    // dispatch explicitly on the workspace's element.
                                     command_target.dispatch_action(action.as_ref(), window, cx);
                                 }
-                                // Closing gave the keys back to the panel; a
-                                // name field the command opened takes them.
                                 _ = ws.update(cx, |ws, cx| ws.focus_rename(window, cx));
                                 let Some((spec, on)) = chosen else { return };
                                 _ = ws.update(cx, |ws, cx| {
@@ -634,9 +587,6 @@ impl Workspace {
     }
 }
 
-/// The navigator's own keys around `palette`: each acts on the highlighted
-/// marker and closes the palette, except `Del`, which removes it and keeps
-/// the list open. Outside marker mode they propagate.
 fn navigator_keys(
     palette: Palette,
     state: &gpui_kit::Entity<CommandState>,

@@ -2,8 +2,6 @@ use gpui_kit::{App, Div, ParentElement, SharedString, Styled, div, px};
 
 use crate::theme::theme;
 
-/// A panel header: fixed height, uppercase small label, 1px bottom border.
-/// Callers append trailing controls with `.child(...)`.
 pub fn panel_header(title: impl Into<SharedString>, cx: &App) -> Div {
     let t = *theme(cx);
     let colors = t.panel;

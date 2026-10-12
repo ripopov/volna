@@ -1,7 +1,6 @@
-//! The Settings tab: a dock panel that renders the registry through gpui-kit's
-//! `Settings` pages, Volna's own search bar and ranked results view, modified
-//! markers and per-item actions, and the JSON view. Every decision (values,
-//! ranking, edits, diagnostics) comes from the core; this file only draws.
+//! The Settings tab: a dock panel that renders the registry through gpui-kit's `Settings`
+//! pages, Volna's own search bar and ranked results view, modified markers and per-item
+//! actions, and the JSON view.
 
 use gpui_kit::base::dock as base;
 use gpui_kit::component::{
@@ -43,7 +42,6 @@ pub(crate) struct SettingsPanelView {
     id: PanelId,
     focus: FocusHandle,
     search: Entity<InputState>,
-    /// Mirrors the core query; set when the core changed it (palette reveal).
     synced_query: String,
     pub(crate) json: Option<crate::settings_json::JsonView>,
     _subscriptions: Vec<Subscription>,
@@ -92,7 +90,6 @@ impl SettingsPanelView {
         dispatch(&self.ws, command, window, cx);
     }
 
-    /// Keep the search box in step with the core's query.
     fn sync_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ws) = self.ws.upgrade() else { return };
         let query = ws.read(cx).app.settings_view.query.clone();
@@ -270,7 +267,6 @@ impl SettingsPanelView {
             }
             pages.push(setting_page);
         }
-        // Volna's own search bar replaces the component's input.
         let hidden = StyleRefinement {
             display: Some(Display::None),
             ..Default::default()
@@ -326,7 +322,6 @@ impl SettingsPanelView {
     }
 }
 
-/// Ranked hits for the current query on this host.
 fn hits(app: &CoreApp) -> Vec<Hit> {
     let store = &app.settings;
     settings::search(&app.settings_view.query, store.host(), &|id| {
@@ -334,8 +329,6 @@ fn hits(app: &CoreApp) -> Vec<Hit> {
     })
 }
 
-/// One setting row: modified bar, title with highlights, description, the
-/// reason a search matched, the apply badge, the control and the actions menu.
 fn render_row(
     ws: &WeakEntity<Workspace>,
     spec: &'static Spec,
@@ -463,7 +456,6 @@ fn render_row(
         .into_any_element()
 }
 
-/// The text of the highlighted ranges, for `Label::highlights`.
 fn highlight_text(text: &str, ranges: &[std::ops::Range<usize>]) -> String {
     ranges
         .iter()
@@ -472,7 +464,6 @@ fn highlight_text(text: &str, ranges: &[std::ops::Range<usize>]) -> String {
         .join(" ")
 }
 
-/// Inline code marks are dropped; the row renders plain text.
 fn strip_markdown(text: &str) -> String {
     text.replace('`', "")
 }
@@ -512,13 +503,11 @@ struct NumberState {
     _subscriptions: Vec<Subscription>,
 }
 
-/// Range, step and text form of an integer or number setting.
 #[derive(Clone, Copy)]
 struct NumberBounds {
     min: f64,
     max: f64,
     step: f64,
-    /// Decimals shown, derived from the step (`0.1` → one).
     decimals: usize,
     integer: bool,
 }
@@ -552,7 +541,6 @@ impl NumberBounds {
         }
     }
 
-    /// Clamp to the range and round to the shown decimals.
     fn clamp(&self, v: f64) -> f64 {
         let scale = 10f64.powi(self.decimals as i32);
         (v.clamp(self.min, self.max) * scale).round() / scale
@@ -571,7 +559,6 @@ impl NumberBounds {
     }
 }
 
-/// A `NumberInput` with stepper buttons; typed text applies on Enter or blur.
 fn render_number(
     ws: &WeakEntity<Workspace>,
     id: &'static str,
@@ -587,9 +574,6 @@ fn render_number(
         cx,
         |window, cx| {
             let input = cx.new(|cx| {
-                // Leave the toolkit's numeric bounds unset so button clicks emit
-                // Step events. NumberBounds applies the registry range and step;
-                // toolkit stepping only edits the input text and emits Change.
                 let mut input = InputState::new(window, cx).default_value(bounds.text(current));
                 input.set_step(None, window, cx);
                 input

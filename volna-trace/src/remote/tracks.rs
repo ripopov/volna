@@ -1,5 +1,4 @@
-//! Cooperative decoding of complete transaction payloads. Records and their
-//! typed details use the same fixed bincode schema as the headless service.
+//! Cooperative decoding of complete transaction payloads.
 
 use super::decode::{Decoder, Reader, Step};
 use super::memory::MemoryBudget;
@@ -11,15 +10,11 @@ use crate::data::transactions::*;
 use crate::session::Session;
 use std::sync::Arc;
 
-/// Reconstructs and validates a complete track (records, typed details,
-/// incident relations and interval indexes) in cooperative steps.
 pub struct TrackDecoder(Decoder<LoadedTrack>);
 
 pub enum TrackStep {
     NeedInput,
     Yield,
-    /// Validated/indexed, but still private until the protocol End. Each
-    /// generator owns the reservation for its decoded storage and indexes.
     Decoded(LoadedTrack),
 }
 
@@ -109,9 +104,6 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
                         })
                         .await?,
                 };
-                // Conservative storage for ID/parent maps, relation identity
-                // checks, and a power-of-two interval tree. Reserve before any
-                // index construction, alongside the already charged raw fields.
                 let index_bytes = generator
                     .transactions
                     .len()
@@ -300,7 +292,6 @@ mod tests {
                 attributes: vec![],
             })
             .collect();
-        // The external generator must not be included in this stream load.
         let mut catalog = catalog;
         catalog[3].kind = TrackKind::Generator {
             stream: TrackRef(4),

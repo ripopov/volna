@@ -1,13 +1,10 @@
-//! Queries over a track's concatenated immutable generators. Optional indexes
-//! accelerate queries without changing their results or their callers.
+//! Queries over a track's concatenated immutable generators.
 
 use super::{activity::Activity, occupancy::raster_source, raster::PixelMap};
 use crate::{data::loaded_tracks::LoadedGenerator, scene::PresenceMask, wave::viewport::Viewport};
 use std::{ops::Range, sync::Arc};
 use volna_trace::data::transactions::{TrackRef, Transaction, TransactionRef, TxStatus};
 
-/// The concatenated transaction slices of a loaded track, generator by
-/// generator in catalog order, each in the resident (begin, end, id) order.
 pub struct RowSet<'a> {
     generators: &'a [Arc<LoadedGenerator>],
     starts: Vec<usize>,
@@ -41,7 +38,6 @@ impl<'a> RowSet<'a> {
         self.generators
     }
 
-    /// The row of one record, when this track holds its generator.
     pub fn row_of(&self, generator: TrackRef, id: TransactionRef) -> Option<usize> {
         let g = self
             .generators
@@ -50,7 +46,6 @@ impl<'a> RowSet<'a> {
         Some(self.starts[g] + self.generators[g].transaction_ordinal(id)?)
     }
 
-    /// Row `row` as its generator index and record.
     pub fn get(&self, row: usize) -> Option<(usize, &'a Transaction)> {
         if row >= self.len {
             return None;
@@ -61,7 +56,6 @@ impl<'a> RowSet<'a> {
 }
 
 impl RowSet<'_> {
-    /// Exact presence across all generators, independent of index admission.
     pub(super) fn presence(&self, map: &PixelMap) -> PresenceMask {
         let mut mask = map.mask();
         for (&offset, generator) in self.starts.iter().zip(self.generators) {
@@ -74,7 +68,6 @@ impl RowSet<'_> {
         mask
     }
 
-    /// Row coverage for aborted records, including records outside the time window.
     pub(super) fn aborted_presence(&self, map: &PixelMap) -> PresenceMask {
         let mut mask = map.aborted_mask();
         for (&offset, generator) in self.starts.iter().zip(self.generators) {
@@ -91,7 +84,6 @@ impl RowSet<'_> {
         mask
     }
 
-    /// Lifetime counts and nearest record in concatenated row coordinates.
     pub(super) fn activity(&self, view: Viewport, visible: Range<f64>, anchor: f64) -> Activity {
         let mut result = Activity::default();
         let center = (visible.start + visible.end) * 0.5;
@@ -131,7 +123,6 @@ impl RowSet<'_> {
                 }
                 continue;
             }
-            // The inclusive owner query preserves long overlaps and point events.
             generator
                 .visit_window_ordinals(
                     view.start.max(0.0).floor() as u64,

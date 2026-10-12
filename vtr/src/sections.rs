@@ -1,5 +1,5 @@
-//! Small sections: file metadata and blackout (dump on/off) intervals, plus
-//! the aux recovery hook used when the directory is missing.
+//! Small sections: file metadata and blackout (dump on/off) intervals, plus the aux
+//! recovery hook used when the directory is missing.
 
 use crate::container::SectionKind;
 use crate::error::Result;
@@ -7,10 +7,6 @@ use crate::strings::StrId;
 use crate::value::{self, Value};
 use crate::varint::{self, Reader};
 
-/// Duration of one timestamp tick, expressed as a power of ten seconds.
-///
-/// `Exponent(-8)` represents 10 ns; `Exponent(-7)` represents 100 ns.
-/// This changes timestamp interpretation, not the integer timestamps themselves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Timescale {
     Seconds,
@@ -20,12 +16,10 @@ pub enum Timescale {
     #[default]
     Picoseconds,
     Femtoseconds,
-    /// One tick is `10^exponent` seconds.
     Exponent(i8),
 }
 
 impl Timescale {
-    /// Decimal exponent stored in file metadata.
     pub const fn exponent(self) -> i8 {
         match self {
             Self::Seconds => 0,
@@ -39,7 +33,6 @@ impl Timescale {
     }
 }
 
-/// Source language / producer class of the trace (FST file types 0..2 kept).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum FileType {
@@ -48,9 +41,7 @@ pub enum FileType {
     Vhdl = 1,
     VerilogVhdl = 2,
     SystemC = 3,
-    /// Pipeline / architectural simulator.
     Architectural = 4,
-    /// Software tracing (OpenTelemetry etc.).
     Software = 5,
     Other = 255,
 }
@@ -69,22 +60,15 @@ impl FileType {
     }
 }
 
-/// File-level metadata.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Meta {
-    /// Time unit as a power of ten seconds (`-9` = ns, `-12` = ps).
     pub timescale: i8,
-    /// Offset added to every timestamp when displaying absolute time (FST "timezero").
     pub time_zero: i64,
     pub file_type: FileType,
-    /// Producing tool and version.
     pub writer: String,
-    /// Creation date, free form.
     pub date: String,
     pub comment: String,
-    /// Signals per value-change group (constant for the whole file).
     pub group_size: u32,
-    /// File attributes in the order set.
     pub attrs: Vec<(StrId, Value)>,
 }
 
@@ -105,7 +89,7 @@ impl Default for Meta {
 
 impl Meta {
     pub fn encode(&self, out: &mut Vec<u8>) {
-        varint::put_u64(out, 1); // layout version
+        varint::put_u64(out, 1);
         varint::put_i64(out, self.timescale as i64);
         varint::put_i64(out, self.time_zero);
         out.push(self.file_type as u8);
@@ -140,12 +124,9 @@ impl Meta {
     }
 }
 
-/// One dump-on/off transition (VCD `$dumpoff`/`$dumpon`), returned in the
-/// order recorded. Values are still recorded during a blackout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Blackout {
     pub time: u64,
-    /// `true` = dumping resumed at `time`, `false` = dumping stopped.
     pub active: bool,
 }
 
@@ -172,8 +153,6 @@ pub fn decode_blackout(p: &[u8]) -> Result<Vec<Blackout>> {
     Ok(out)
 }
 
-/// Recomputes directory aux fields from a section payload (used only when the
-/// directory is missing, i.e. the writer crashed).
 pub fn recover_aux(kind: u32, payload: &[u8]) -> (u64, u64) {
     match SectionKind::from_u32(kind) {
         Some(SectionKind::Strings) | Some(SectionKind::Hierarchy) => {

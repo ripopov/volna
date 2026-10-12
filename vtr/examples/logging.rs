@@ -1,8 +1,5 @@
-//! Logging demo: a toy simulator writes timestamped log messages next to a
-//! transaction stream, then the file is read back three ways.
-//!
-//!     cargo run --release --example logging -- /tmp/demo_log.vtr
-//! The example also reads back warnings, parent-linked records, and typed arguments.
+//! Logging demo: a toy simulator writes timestamped log messages next to a transaction
+//! stream, then the file is read back three ways.
 
 use vtr::{
     LogArgType, LogQuery, LogSiteSpec, Reader, ScopeType, Severity, Timescale, TxQuery, TxStatus,
@@ -17,7 +14,6 @@ fn main() -> vtr::Result<()> {
         .timescale(Timescale::Nanoseconds)
         .create(&path)?;
 
-    // Hierarchy: a SoC with a CPU and a DMA engine; each component owns a LOG stream.
     let soc = w.add_scope(None, "soc", ScopeType::Generic, "")?;
     let cpu = w.add_scope(Some(soc), "cpu0", ScopeType::Core, "")?;
     let cpu_log = w.add_stream(Some(cpu), "log", vtr::LOG_STREAM_KIND)?;
@@ -27,7 +23,6 @@ fn main() -> vtr::Result<()> {
     let gen_xfer = w.add_generator(dma_tx, "transfer")?;
     let _ = soc;
 
-    // Call sites: one generator each, registered once. Arguments are typed.
     let s_fetch = w.add_log_site(
         &LogSiteSpec::new(
             cpu_log,
@@ -154,7 +149,6 @@ fn main() -> vtr::Result<()> {
             )?;
         }
         pc += 4;
-        // A DMA transfer every 500 cycles: its messages are linked to the transaction.
         if cycle % 500 == 0 {
             let tx = w.begin_tx(gen_xfer, t)?;
             let ch = cycle / 500 % 4;
@@ -218,7 +212,6 @@ fn main() -> vtr::Result<()> {
         std::fs::metadata(&path)?.len()
     );
 
-    // 1. Warnings and errors from the whole SoC, formatted.
     let r = Reader::open(&path)?;
     for tx in r.transactions(&TxQuery::default())? {
         assert!(tx.attrs.iter().any(|attr| {
@@ -248,7 +241,6 @@ fn main() -> vtr::Result<()> {
     )?;
     println!("({n} records)");
 
-    // 2. The messages that belong to one DMA transaction (parent link).
     println!("\n-- log of the first DMA transfer --");
     let first = r
         .transactions(&TxQuery {
@@ -277,7 +269,6 @@ fn main() -> vtr::Result<()> {
         },
     )?;
 
-    // 3. Structured access: the arguments of one site without formatting.
     println!("\n-- longest stalls (structured query on site arguments) --");
     let stall_site = r
         .log_sites()

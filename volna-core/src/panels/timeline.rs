@@ -1,6 +1,4 @@
 //! Shared metadata dividers for linked timelines in the same dock column.
-//! Membership comes from the dock tree, including inactive tabs, so tab
-//! selection and canvas layout order cannot change the time-to-pixel mapping.
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -10,10 +8,8 @@ use crate::geometry::{Point, Rect};
 use crate::pipeline::model::Drag as PipelineDrag;
 use crate::wave::{layout::MIN_COLUMN, model::Drag as WaveDrag};
 
-/// Keep time visible when a metadata divider is dragged or the window narrows.
 const MIN_TIMELINE_WIDTH: f32 = 160.0;
 
-/// One authoritative divider width in design pixels (interface zoom 1).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TimelineDivider {
@@ -21,9 +17,6 @@ pub struct TimelineDivider {
     pub width: f32,
 }
 
-/// Full-width tab groups can align across vertical splits. A horizontal
-/// split starts separate columns; its descendants cannot align with panels
-/// spanning the whole parent column.
 fn columns(layout: &Layout, out: &mut Vec<Vec<Vec<PanelId>>>) -> Vec<Vec<PanelId>> {
     match layout {
         Layout::Tabs { tabs, .. } => vec![tabs.clone()],
@@ -46,8 +39,6 @@ fn columns(layout: &Layout, out: &mut Vec<Vec<Vec<PanelId>>>) -> Vec<Vec<PanelId
 }
 
 impl Panels {
-    /// Reconcile membership while preserving resized widths of surviving
-    /// groups. Newly joined panels contribute their preferred metadata width.
     pub(crate) fn timeline_dividers(&self, layout: &Layout) -> Vec<TimelineDivider> {
         let mut all = Vec::new();
         let root = columns(layout, &mut all);
@@ -96,16 +87,12 @@ impl Panels {
     }
 
     pub(crate) fn sync_timeline_dividers(&mut self) {
-        // Layout and link commands advance the panel revision. Hover, pan,
-        // animation and divider drags reuse membership without walking the tree.
         if self.timeline_revision != Some(self.revision) {
             self.timeline = self.timeline_dividers(&self.layout);
             self.timeline_revision = Some(self.revision);
         }
     }
 
-    /// Clamp once using the group's shared horizontal extent. Panels must use
-    /// this pixel width verbatim, rather than applying their own column limits.
     pub(crate) fn timeline_metadata(&self, id: PanelId, bounds: Rect, zoom: f32) -> Option<f32> {
         let divider = self.timeline.iter().find(|d| d.panels.contains(&id))?;
         Some(self.clamp_timeline_width(divider, divider.width, bounds, zoom) * zoom)
@@ -131,8 +118,6 @@ impl Panels {
         }
     }
 
-    /// Consume an outer-divider resize before the panel's local drag handler.
-    /// The Waveform Names divider remains local inside the shared metadata area.
     pub(crate) fn resize_timeline(&mut self, id: PanelId, position: Point) -> bool {
         let Some(index) = self.timeline.iter().position(|d| d.panels.contains(&id)) else {
             return false;
@@ -150,8 +135,6 @@ impl Panels {
             _ => return false,
         };
         let width = (position.x - bounds.left()) / zoom;
-        // The rendered width may collapse to zero in a very narrow window,
-        // but the persistent preference must remain usable when it expands.
         let min = self.timeline_minimum(&self.timeline[index]);
         self.timeline[index].width = self
             .clamp_timeline_width(&self.timeline[index], width, bounds, zoom)

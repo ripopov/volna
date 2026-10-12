@@ -1,15 +1,5 @@
-//! Scope activity meters : how many of each
-//! scope's signals change in the wave viewport, for every trace with an
-//! activity index.
-//!
-//! `ActivityModel::sync` turns the viewport into each trace's window and
-//! asks for at most one classification and one read per trace at a time, so
-//! a pan or zoom costs one pass per frame, coalesced, off the UI thread. A
-//! classification installs at once; while it leaves signals undecided the
-//! rows show a range, and the read that follows replaces it with the exact
-//! counts unless the view has moved on, in which case the read is dropped.
-//! Meters are derived view state: nothing here enters the undo journal or
-//! the workspace.
+//! Scope activity meters : how many of each scope's signals change in the wave viewport,
+//! for every trace with an activity index.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,13 +22,9 @@ pub struct ActivityModel {
 struct TraceActivity {
     generation: u64,
     counter: Counter,
-    /// The latest counts, for the window they name.
     shown: Option<Arc<ActivityCounts>>,
-    /// The window of the classification in flight.
     classifying: Option<(u64, u64)>,
-    /// The window of the read in flight.
     resolving: Option<(u64, u64)>,
-    /// A window whose classification or read failed: not asked again.
     failed: Option<(u64, u64)>,
     build: Build,
 }
@@ -62,7 +48,6 @@ impl Drop for TraceActivity {
     }
 }
 
-/// The build banner's toolkit-independent state for one trace.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActivityBuildState {
     Offer {
@@ -132,8 +117,6 @@ enum Counter {
     Failed,
 }
 
-/// The trace times a session-time viewport shows: the changes at trace
-/// time `t` are drawn at `t × scale`.
 pub fn trace_window(viewport: Viewport, placement: Placement) -> (u64, u64) {
     let scale = placement.scale() as f64;
     let t0 = (viewport.start.max(0.0) / scale).ceil();
@@ -145,8 +128,6 @@ pub fn trace_window(viewport: Viewport, placement: Placement) -> (u64, u64) {
 }
 
 impl ActivityModel {
-    /// The requests that bring every indexed trace's counts to `viewport`;
-    /// forgets traces that closed or were replaced.
     pub(crate) fn sync(
         &mut self,
         traces: &TraceSet,
@@ -258,7 +239,6 @@ impl ActivityModel {
         requests
     }
 
-    /// Takes an activity result; true when what the rows show changed.
     pub(crate) fn deliver(
         &mut self,
         result: LoadResult,
@@ -372,7 +352,6 @@ impl ActivityModel {
                 if a.resolving == Some(window) {
                     a.resolving = None;
                 }
-                // A read for a window the view has left is dropped.
                 if window != want || a.shown.as_ref().is_none_or(|c| c.window != window) {
                     return Ok(false);
                 }
@@ -398,7 +377,6 @@ impl ActivityModel {
             .filter(|a| a.generation == generation)
     }
 
-    /// Queue an explicit build. A running build cannot be queued again.
     pub(crate) fn start_build(&mut self, trace: TraceId) {
         if let Some(a) = self.traces.get_mut(&trace)
             && !matches!(a.build, Build::Running { .. })
@@ -431,7 +409,6 @@ impl ActivityModel {
         }
     }
 
-    /// Cancels builds and releases derived state of closed/replaced traces.
     pub(crate) fn prune(&mut self, traces: &TraceSet) {
         self.traces.retain(|&t, a| {
             traces
@@ -440,7 +417,6 @@ impl ActivityModel {
         });
     }
 
-    /// Build offers and progress for unindexed traces with a local or remote reader.
     pub fn builds(&self, traces: &TraceSet, policy: ActivityIndexPolicy) -> Vec<ActivityBuildView> {
         traces
             .iter()
@@ -489,13 +465,10 @@ impl ActivityModel {
             .collect()
     }
 
-    /// The counts a trace shows, for the window they name.
     pub fn counts(&self, trace: TraceId) -> Option<&Arc<ActivityCounts>> {
         self.traces.get(&trace)?.shown.as_ref()
     }
 
-    /// `(changing, upper)` below a scope, only when the trace generation
-    /// and requested window still match the shown counts.
     pub fn get(
         &self,
         trace: TraceId,

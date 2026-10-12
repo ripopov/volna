@@ -1,9 +1,5 @@
-//! Transaction blocks: transactions, their attributes, events, stages and
-//! relations, stored column-wise per block.
-//!
-//! The writer appends one row per finished transaction (and per relation)
-//! to a row buffer; at flush time the rows are split into columns and the
-//! column set is compressed as a single blob.
+//! Transaction blocks: transactions, their attributes, events, stages and relations, stored
+//! column-wise per block.
 
 use crate::codec::{Compression, Compressor, Decompressor};
 use crate::error::{Error, Result};
@@ -12,23 +8,16 @@ use crate::strings::StrId;
 use crate::value::{Value, ValueTag};
 use crate::varint::{self, Reader};
 
-/// Transaction id (assigned by the writer, unique in the file, starts at 1).
 pub type TxId = u64;
 
-/// Terminal status of a transaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum TxStatus {
-    /// Ended normally without a status (FTR, Konata retire).
     #[default]
     Unset = 0,
-    /// Explicit success (OpenTelemetry `Ok`).
     Ok = 1,
-    /// Explicit failure (OpenTelemetry `Error`).
     Error = 2,
-    /// Aborted / squashed / flushed (Konata flush).
     Aborted = 3,
-    /// Never ended before the file was closed.
     Open = 4,
 }
 
@@ -53,7 +42,6 @@ impl TxStatus {
     }
 }
 
-/// Transaction kind (OpenTelemetry span kinds; 0 = unspecified).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum TxKind {
@@ -79,14 +67,12 @@ impl TxKind {
     }
 }
 
-/// A transaction attribute; keys are unique per transaction.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TxAttr {
     pub key: StrId,
     pub value: Value,
 }
 
-/// A timestamped point event on a transaction (OpenTelemetry span event).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TxEvent {
     pub time: u64,
@@ -94,41 +80,29 @@ pub struct TxEvent {
     pub attrs: Vec<(StrId, Value)>,
 }
 
-/// A named sub-interval of a transaction on a lane (Konata pipeline stage).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TxStage {
     pub name: StrId,
     pub lane: StrId,
     pub begin: u64,
-    /// `None` = still open when the transaction ended; never produced by
-    /// [`Writer`](crate::Writer), which closes stages at `end_tx`.
     pub end: Option<u64>,
     pub attrs: Vec<(StrId, Value)>,
 }
 
-/// A timed interval of a generator. Log records read as transactions have
-/// `begin == end` and their arguments as attributes; clock stretches span
-/// their first to last edge.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Transaction {
     pub id: TxId,
-    /// Generator node (the transaction type).
     pub generator: NodeId,
     pub begin: u64,
-    /// `>= begin`.
     pub end: u64,
     pub status: TxStatus,
     pub kind: TxKind,
-    /// Structural parent (nesting), not necessarily in the same stream.
     pub parent: Option<TxId>,
-    /// Attributes, events and stages in the order they were recorded.
     pub attrs: Vec<TxAttr>,
     pub events: Vec<TxEvent>,
     pub stages: Vec<TxStage>,
 }
 
-/// A directed, typed edge between two transactions (`kind` is interned, for
-/// example `"wakeup"` or `"follows_from"`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Relation {
     pub kind: StrId,
@@ -137,11 +111,6 @@ pub struct Relation {
     pub attrs: Vec<(StrId, Value)>,
 }
 
-// ---------------------------------------------------------------------------
-// Row format (writer scratch and block input)
-// ---------------------------------------------------------------------------
-
-/// Writes an attribute list (`count`, then key/value pairs) in row form.
 pub fn row_attrs(out: &mut Vec<u8>, attrs: &[(StrId, Value)]) {
     varint::put_u64(out, attrs.len() as u64);
     for (k, v) in attrs {
@@ -150,7 +119,6 @@ pub fn row_attrs(out: &mut Vec<u8>, attrs: &[(StrId, Value)]) {
     }
 }
 
-/// Encodes a whole transaction as a row.
 pub fn encode_tx_row(tx: &Transaction, out: &mut Vec<u8>) {
     varint::put_u64(out, tx.id);
     varint::put_u64(out, tx.generator.0 as u64);
@@ -280,13 +248,8 @@ pub fn decode_rel_row(r: &mut Reader) -> Result<Relation> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Block encoding (columnar)
-// ---------------------------------------------------------------------------
-
 pub const TX_HEADER_LEN: usize = 88;
 
-/// Fixed header of a transaction block.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TxBlockHeader {
     pub n_tx: u64,
@@ -355,14 +318,12 @@ impl TxBlockHeader {
     }
 }
 
-/// Generator ids present in a block (sorted).
 pub fn block_generators<'a>(p: &'a [u8], h: &TxBlockHeader) -> impl Iterator<Item = u32> + 'a {
     let base = h.gens_off();
     (0..h.n_gens as usize)
         .map(move |i| u32::from_le_bytes(p[base + i * 4..base + i * 4 + 4].try_into().unwrap()))
 }
 
-/// Column ids.
 const C_ID: usize = 0;
 const C_GEN: usize = 1;
 const C_BEGIN: usize = 2;
@@ -448,7 +409,6 @@ impl Columns {
         }
     }
 
-    /// Reads one attribute list in row form and appends it to the attribute columns.
     fn put_row_attrs(&mut self, r: &mut Reader) -> Result<()> {
         let n = r.usize()?;
         varint::put_u64(&mut self.c[C_ACOUNT], n as u64);
@@ -492,7 +452,6 @@ impl Columns {
                     varint::put_i64(&mut self.c[C_ANUM], b);
                 }
                 other => {
-                    // Nested / byte payloads: copy verbatim by re-decoding once.
                     let v = Value::decode_payload(other, r)?;
                     v.encode_payload(&mut self.c[C_AMISC]);
                 }
@@ -501,8 +460,6 @@ impl Columns {
         Ok(())
     }
 
-    /// Transcodes one transaction row (see `encode_tx_row`) into the columns.
-    /// Returns (id, generator, begin, end).
     fn put_tx_row(&mut self, r: &mut Reader) -> Result<(u64, u32, u64, u64)> {
         let id = r.u64()?;
         let gen = r.u32()?;
@@ -545,7 +502,7 @@ impl Columns {
             let name = r.u64()?;
             let lane = r.u64()?;
             let sbegin = r.u64()?;
-            let send = r.u64()?; // 0 = open, else duration + 1
+            let send = r.u64()?;
             varint::put_u64(&mut self.c[C_SNAME], name);
             varint::put_u64(&mut self.c[C_SLANE], lane);
             varint::put_i64(&mut self.c[C_SBEGIN], sbegin.wrapping_sub(begin) as i64);
@@ -555,7 +512,6 @@ impl Columns {
         Ok((id, gen, begin, end))
     }
 
-    /// Transcodes one relation row. Returns (from, to).
     fn put_rel_row(&mut self, r: &mut Reader) -> Result<(u64, u64)> {
         let kind = r.u64()?;
         let from = r.u64()?;
@@ -633,7 +589,6 @@ impl Columns {
     }
 }
 
-/// Input for one transaction block: rows in the writer's row format.
 pub struct TxBlockInput {
     pub tx_rows: Vec<u8>,
     pub n_tx: u64,
@@ -641,7 +596,6 @@ pub struct TxBlockInput {
     pub n_rel: u64,
 }
 
-/// Encodes a transaction block payload.
 pub fn encode_tx_block(
     input: &TxBlockInput,
     comp: Compression,
@@ -710,7 +664,6 @@ pub fn encode_tx_block(
     Ok(())
 }
 
-/// Decoded contents of one transaction block.
 #[derive(Debug, Default)]
 pub struct TxBlockData {
     pub transactions: Vec<Transaction>,
@@ -777,7 +730,6 @@ impl<'a> ColReaders<'a> {
     }
 }
 
-/// Decodes a transaction block payload.
 pub fn decode_tx_block(p: &[u8], d: &mut Decompressor) -> Result<TxBlockData> {
     let h = TxBlockHeader::parse(p)?;
     let raw = d.decompress(&p[h.blob_off()..h.blob_off() + h.blob_len as usize])?;

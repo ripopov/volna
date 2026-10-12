@@ -1,11 +1,5 @@
-//! Scope activity meters: a trace
-//! opened beside its activity index counts, for every scope row, the
-//! signals that change in the viewport, the same as a brute force over its
-//! histories, VTR and FST; a window narrower than the index's thresholds
-//! shows a range until the read replaces it; a read for a window the view
-//! has left is dropped; an index built for another trace is ignored.
+//! Scope activity meter tests covering exact counts, deferred reads, and stale results.
 
-// Exercise the executable handler directly over bounded test sockets; no server library is needed.
 #[cfg(unix)]
 #[path = "../../volna-server/src/server.rs"]
 mod server;
@@ -24,9 +18,6 @@ use volna_trace::data::SignalRef;
 use volna_trace::session::{OpenSpec, Session};
 use vtr::{Direction, ScopeType, SignalKind, VarType, Writer, WriterOptions};
 
-/// A small design over several blocks: a clock, bursty units under nested
-/// scopes, a port aliasing its parent's net. Everything pauses from 14,990
-/// to 65,000, and unit2 sleeps after that.
 fn write_trace(path: &Path, seed: u64) {
     let opts = WriterOptions {
         block_records: 400,
@@ -82,7 +73,6 @@ fn write_trace(path: &Path, seed: u64) {
         w.emit_bit(clk, vtr::Logic::from(((step & 1) as u8) != 0))
             .unwrap();
         for (u, sigs) in units.iter().enumerate() {
-            // unit2 sleeps through the second half.
             if u == 2 && step >= 1500 {
                 continue;
             }
@@ -104,7 +94,6 @@ fn index_beside(trace: &Path) {
         .unwrap();
 }
 
-/// Performs every request, as a frontend's executor does, until none are left.
 fn settle(app: &mut App) {
     for _ in 0..20 {
         let requests = app.take_requests();
@@ -126,8 +115,6 @@ fn open(path: &Path) -> (App, Arc<dyn Session>) {
     (app, session)
 }
 
-/// For every scope, the distinct signals below it with a change after the
-/// first time step in `[t0, t1]`, from the session's histories.
 fn brute(session: &Arc<dyn Session>, t_min: u64, t0: u64, t1: u64) -> Vec<u32> {
     let h = session.hierarchy();
     let signals: HashSet<SignalRef> = (0..h.var_count()).map(|v| h.var(v).signal).collect();
@@ -172,7 +159,6 @@ fn view(app: &mut App, t0: u64, t1: u64) {
     });
 }
 
-/// Every scope's meter over the brute force, once exact.
 fn check_exact(app: &App, session: &Arc<dyn Session>, t0: u64, t1: u64) {
     let t_min = session.activity().unwrap().t_min();
     let want = brute(session, t_min, t0, t1);
@@ -204,7 +190,6 @@ fn meters_count_the_viewport_exactly() {
         settle(&mut app);
         check_exact(&app, &session, t0, t1);
     }
-    // While unit2 sleeps its rows are quiet and faint; the rest are not.
     view(&mut app, 70_000, 70_200);
     settle(&mut app);
     let h = session.hierarchy();
@@ -214,12 +199,9 @@ fn meters_count_the_viewport_exactly() {
         .collect();
     assert!(quiet.contains(&"top.unit2.core".to_string()), "{quiet:?}");
     assert!(!app.scope_activity(top).unwrap().quiet());
-    // Trace rows have no meter.
     assert_eq!(app.scope_activity(TreeNode::trace(TraceId::A)), None);
 }
 
-/// A narrow window first shows what the index decides, a range, then the
-/// exact count once the undecided signals are read.
 #[test]
 fn a_narrow_view_shows_a_range_until_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -229,7 +211,6 @@ fn a_narrow_view_shows_a_range_until_read() {
     let (mut app, session) = open(&path);
     let top = node(session.hierarchy().roots().first().unwrap());
     let index = session.activity().unwrap();
-    // A window between two clock edges, narrower than every threshold.
     let (t0, t1) = (5_003, 5_004);
     assert!(index.exact_width(t0, t1) > t1 - t0 + 1);
     view(&mut app, t0, t1);
@@ -281,7 +262,6 @@ fn a_read_for_a_window_the_view_left_is_dropped() {
         .map(LoadRequest::perform)
         .collect();
     assert_eq!(read.len(), 1);
-    // The view moves on before the read returns.
     view(&mut app, 100, 1_000);
     for r in app.take_requests() {
         app.deliver(r.perform());
@@ -395,7 +375,6 @@ fn restoring_a_workspace_before_scope_sizes_arrive_keeps_activity_meters() {
     write_trace(&path, 3);
     index_beside(&path);
     let session = OpenSpec::Path(path).open().unwrap();
-    // Counts may still be queued, in flight, or already retained.
     for initial in 0..3 {
         let mut app = App::new();
         app.set_session(session.clone());
@@ -499,8 +478,6 @@ fn meters_use_each_traces_timescale_and_round_inwards() {
             .scale(),
         1000
     );
-    // At 70,000 ns the clock changes; at 70,001 ns no signal changes.
-    // Neither change is inside [70,000.1, 70,001.9] ns.
     view(&mut app, 70_000_100, 70_001_900);
     settle(&mut app);
     check_exact(&app, &session, 70_001, 70_001);
@@ -508,7 +485,6 @@ fn meters_use_each_traces_timescale_and_round_inwards() {
         app.activity.counts(TraceId::A).unwrap().window,
         (70_001, 70_001)
     );
-    // A view between two adjacent trace ticks contains no trace time.
     view(&mut app, 70_000_100, 70_000_900);
     settle(&mut app);
     check_exact(&app, &session, 70_001, 70_000);
@@ -552,7 +528,6 @@ fn an_index_of_another_trace_is_ignored() {
     let path = dir.path().join("run.vtr");
     write_trace(&path, 4);
     index_beside(&path);
-    // Simulated again: the sidecar beside it describes the old run.
     write_trace(&path, 5);
     let (app, session) = open(&path);
     assert!(session.activity().is_none());
@@ -565,7 +540,6 @@ fn an_index_of_another_trace_is_ignored() {
     assert!(volna_core::sidebar::ScopeTreeModel::size(app.doc.traces(), top).is_some());
 }
 
-/// The same meters from an FST, through the FST front end.
 #[test]
 fn fst_traces_count_alike() {
     let dir = tempfile::tempdir().unwrap();
@@ -666,7 +640,6 @@ fn build_offer_obeys_policy_and_not_now() {
     settle(&mut app);
     assert!(session.activity().is_some());
     assert!(build_views(&app).is_empty());
-    // Byte images have no destination and no build offer.
     let session = OpenSpec::Bytes {
         name: "bytes.vtr".into(),
         bytes: std::fs::read(&path).unwrap(),
@@ -749,7 +722,6 @@ fn cancelled_and_closed_builds_leave_no_sidecar_or_temporary_file() {
     let path = dir.path().join("run.vtr");
     write_trace(&path, 6);
     let (mut app, session) = open(&path);
-    // Cancellation before the request is taken also works.
     app.handle(Command::BuildActivity(TraceId::A));
     app.handle(Command::CancelActivity(TraceId::A));
     assert!(app.take_requests().is_empty());
@@ -1001,8 +973,6 @@ fn server_streams_a_cached_sidecar_and_keeps_it_after_disconnect() {
         index.classify(500, 1100),
         session.activity().unwrap().classify(500, 1100)
     );
-    // Simulate losing the client before the first response ACK. Publication
-    // belongs to the reader, so its completed sidecar is retained.
     write_packet(
         &mut client,
         &Packet {
@@ -1090,7 +1060,6 @@ impl RemoteRig {
             let mut completed = 0;
             loop {
                 let packet = read_packet(&mut self.wire).unwrap().unwrap();
-                // Open uses many End frames; it completes at its last page.
                 let object_end = matches!(packet.body, Body::End | Body::Error { .. });
                 let opening = command.session == 0;
                 let mut step = self.client.accept(packet).unwrap();

@@ -4,7 +4,6 @@ function initializeTimeUnits() {
     const scale = widget.querySelector<HTMLSelectElement>('[data-scale]')!;
     const output = widget.querySelector<HTMLOutputElement>('output')!;
     const update = () => {
-      // Parse as BigInt: trace timestamps can exceed JavaScript's exact Number range.
       if (!/^\d+$/.test(ticks.value) || BigInt(ticks.value) > 18446744073709551615n) {
         output.textContent = 'Enter an integer from 0 to 18446744073709551615.';
         ticks.setAttribute('aria-invalid', 'true');

@@ -6,13 +6,12 @@ const base = import.meta.env.BASE_URL;
 ---
 
 <script is:inline>
-  // Restore before the panels are parsed to avoid flashing the expanded layout.
   for (const panel of ['left', 'right']) {
     try {
       if (localStorage.getItem(`volna-panel-${panel}`) === 'hidden') {
         document.documentElement.setAttribute(`data-panel-${panel}-hidden`, '');
       }
-    } catch { /* Storage can be unavailable; the controls still work for this page. */ }
+    } catch {}
   }
 </script>
 
@@ -68,7 +67,7 @@ const base = import.meta.env.BASE_URL;
           const hidden = root.toggleAttribute(attribute);
           try {
             localStorage.setItem(`volna-panel-${panel}`, hidden ? 'hidden' : 'visible');
-          } catch { /* Page-local toggling does not depend on persistent storage. */ }
+          } catch {}
           update();
         });
       }

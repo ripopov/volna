@@ -1,20 +1,14 @@
-//! Scope sizes: the distinct signals, variables and scopes at or below each
-//! scope. Counted once per trace on a worker executor with [`vtr::Census`], whatever the trace's format.
+//! Scope sizes: the distinct signals, variables and scopes at or below each scope.
 
 use super::source::{Hierarchy, ScopeId};
 
-/// Totals of one scope, subscopes included.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ScopeSize {
-    /// Distinct signals: an aliased signal counts once.
     pub signals: u32,
-    /// Variables: every alias counts.
     pub variables: u32,
-    /// Scopes, itself included.
     pub scopes: u32,
 }
 
-/// Every scope's [`ScopeSize`], indexed by [`ScopeId`].
 #[derive(Debug, Default)]
 pub struct ScopeSizes {
     pub(crate) sizes: Vec<ScopeSize>,
@@ -22,10 +16,8 @@ pub struct ScopeSizes {
 }
 
 impl ScopeSizes {
-    /// One preorder pass over the hierarchy (linear in scopes and variables).
     pub fn count(h: &Hierarchy) -> Self {
         let mut census = vtr::Census::new();
-        // Census index → scope, and explicit leave markers (`None`).
         let mut order = Vec::with_capacity(h.scope_count());
         let mut stack: Vec<Option<ScopeId>> = h.roots().iter().rev().map(Some).collect();
         while let Some(entry) = stack.pop() {

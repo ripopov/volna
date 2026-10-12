@@ -1,11 +1,6 @@
-//! Declared clocks: the catalog of a trace's `CLOCK`
-//! streams, their timelines built from loaded stretches, each panel's clock
-//! choices, and the ruler and readout arithmetic every timed panel
-//! shares.
-//!
-//! A clock is an ordinary transaction stream, so its stretches load through
-//! the same track requests as any other stream, locally and remotely. The
-//! file stores only stretches; cycle numbers come from [`ClockTimeline`].
+//! Declared clocks: the catalog of a trace's `CLOCK` streams, their timelines built from
+//! loaded stretches, each panel's clock choices, and the ruler and readout arithmetic every
+//! timed panel shares.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,14 +14,10 @@ use crate::wave::timeline::TimeBase;
 use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{AttributeValue, Track, TrackKind, TrackRef, TxStatus};
 
-/// Stream kind of a clock.
 pub const STREAM_KIND: &str = vtr::CLOCK_STREAM_KIND;
-/// Stream attribute naming, by path, the clock its stages are counted in.
 pub const LINK_ATTRIBUTE: &str = vtr::clock::KEY_CLOCK;
-/// Stretch attribute: the spacing of its edges.
 pub const PERIOD_ATTRIBUTE: &str = vtr::clock::KEY_PERIOD;
 
-/// Whether a clock's stretches are resident.
 #[derive(Clone, Debug)]
 pub enum ClockState {
     Loading,
@@ -34,17 +25,12 @@ pub enum ClockState {
     Failed(String),
 }
 
-/// A clock's identity in panels and workspaces: its trace and its path.
 pub type ClockKey = Traced<String>;
 
-/// One declared clock of an open trace.
 #[derive(Clone, Debug)]
 pub struct Clock {
     pub trace: TraceId,
-    /// Its stream, retained by the document for as long as the trace is open.
     pub track: TrackRef,
-    /// The stream's path joined with '.': the clock's identity in `vtr.clock`
-    /// links and, with its trace, in workspaces.
     pub path: String,
     pub name: String,
     pub state: ClockState,
@@ -66,25 +52,19 @@ impl Clock {
         self.trace == key.trace && self.path == key.item
     }
 
-    /// Its stream, as the document retains it.
     pub fn stream(&self) -> Traced<TrackRef> {
         Traced::new(self.trace, self.track)
     }
 }
 
-/// Every clock of the open traces and which stream counts in which clock.
 #[derive(Clone, Debug, Default)]
 pub struct Clocks {
     clocks: Vec<Clock>,
-    /// Stream or generator track -> the clock stream its stream names.
     links: HashMap<Traced<TrackRef>, TrackRef>,
-    /// The clocks the workspace's pipelines count in: the rulers a panel
-    /// shows until it chooses its own. The app refreshes it each frame.
     pub defaults: Vec<ClockKey>,
 }
 
 impl Clocks {
-    /// Add the clocks declared in a trace's track catalog, in catalog order.
     pub(crate) fn add_trace(&mut self, trace: TraceId, tracks: &[Track]) {
         let first = self.clocks.len();
         self.clocks.extend(
@@ -122,7 +102,6 @@ impl Clocks {
         }
     }
 
-    /// Forget a closed trace's clocks.
     pub(crate) fn remove_trace(&mut self, trace: TraceId) {
         self.clocks.retain(|c| c.trace != trace);
         self.links.retain(|track, _| track.trace != trace);
@@ -141,7 +120,6 @@ impl Clocks {
         self.clocks.get(ix)
     }
 
-    /// The clock with this trace and path.
     pub fn find(&self, key: &ClockKey) -> Option<&Clock> {
         self.clocks.iter().find(|c| c.is(key))
     }
@@ -150,8 +128,6 @@ impl Clocks {
         self.clocks.iter().find(|c| c.stream() == stream)
     }
 
-    /// The clock of a clock stream or of its generator; `tracks` is that
-    /// trace's catalog.
     pub fn of_track(&self, track: Traced<TrackRef>, tracks: &[Track]) -> Option<&Clock> {
         let stream = match tracks.iter().find(|t| t.id == track.item)?.kind {
             TrackKind::Generator { stream } => stream,
@@ -160,7 +136,6 @@ impl Clocks {
         self.of_stream(track.with(stream))
     }
 
-    /// The clock a stream (or generator of a stream) counts in, by its `vtr.clock`.
     pub fn linked(&self, track: Traced<TrackRef>) -> Option<&Clock> {
         self.of_stream(track.with(*self.links.get(&track)?))
     }
@@ -169,7 +144,6 @@ impl Clocks {
         self.of_stream(track).is_some()
     }
 
-    /// Stretches of `track` arrived or failed.
     pub(crate) fn deliver(
         &mut self,
         track: Traced<TrackRef>,
@@ -187,7 +161,6 @@ impl Clocks {
         };
     }
 
-    /// The trace's stretches load again (its placement changed).
     pub(crate) fn reload(&mut self, trace: TraceId) {
         for clock in self.clocks.iter_mut().filter(|c| c.trace == trace) {
             clock.state = ClockState::Loading;
@@ -195,7 +168,6 @@ impl Clocks {
     }
 }
 
-/// The timeline of a clock stream's loaded stretches.
 pub fn timeline_of(generators: &[Arc<LoadedGenerator>]) -> anyhow::Result<ClockTimeline> {
     let mut raw = Vec::new();
     let mut open = false;
@@ -214,23 +186,12 @@ pub fn timeline_of(generators: &[Arc<LoadedGenerator>]) -> anyhow::Result<ClockT
     Ok(ClockTimeline::new(raw, open)?)
 }
 
-// -- a panel's clock choices ------------------------------------------------------
-
-/// What a timed panel shows of the clocks. Saved in the workspace, never in
-/// the trace; clocks are named by trace letter and path so a workspace
-/// survives a new run.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockView {
-    /// Ruler rows under the time ruler, top to bottom. `None` shows the
-    /// clocks the workspace's pipelines count in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rulers: Option<Vec<ClockKey>>,
-    /// The clock clicks snap to, `[` / `]` step through and go-to counts in;
-    /// defaults to the first ruler.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<ClockKey>,
-    /// Time whose cycle every clock of the panel numbers 0; `None` numbers
-    /// from each clock's first recorded edge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<u64>,
 }
@@ -240,12 +201,10 @@ impl ClockView {
         *self == Self::default()
     }
 
-    /// The ruler rows, whether or not their clocks are open.
     pub fn ruler_keys<'a>(&'a self, clocks: &'a Clocks) -> &'a [ClockKey] {
         self.rulers.as_deref().unwrap_or(&clocks.defaults)
     }
 
-    /// The ruler rows of open clocks, top to bottom.
     pub fn rulers<'a>(&self, clocks: &'a Clocks) -> Vec<&'a Clock> {
         self.ruler_keys(clocks)
             .iter()
@@ -253,7 +212,6 @@ impl ClockView {
             .collect()
     }
 
-    /// The clock clicks snap to and cycle steps follow.
     pub fn selected<'a>(&self, clocks: &'a Clocks) -> Option<&'a Clock> {
         self.selected
             .as_ref()
@@ -261,7 +219,6 @@ impl ClockView {
             .or_else(|| self.rulers(clocks).into_iter().next())
     }
 
-    /// Show a ruler row (starting from the default set) unless it is shown.
     pub fn show_ruler(&mut self, clocks: &Clocks, key: &ClockKey) {
         let mut rulers = self.ruler_keys(clocks).to_vec();
         if !rulers.contains(key) {
@@ -270,14 +227,12 @@ impl ClockView {
         self.rulers = Some(rulers);
     }
 
-    /// Hide a ruler row (starting from the default set) if it is shown.
     pub fn hide_ruler(&mut self, clocks: &Clocks, key: &ClockKey) {
         if self.ruler_keys(clocks).contains(key) {
             self.toggle_ruler(clocks, key);
         }
     }
 
-    /// Show or hide a ruler row, starting from the default set.
     pub fn toggle_ruler(&mut self, clocks: &Clocks, key: &ClockKey) {
         let mut rulers = self.ruler_keys(clocks).to_vec();
         match rulers.iter().position(|k| k == key) {
@@ -292,7 +247,6 @@ impl ClockView {
         self.rulers = Some(rulers);
     }
 
-    /// Drop a closed trace's clocks. Returns whether the rulers changed.
     pub(crate) fn forget_trace(&mut self, trace: TraceId) -> bool {
         if self.selected.as_ref().is_some_and(|k| k.trace == trace) {
             self.selected = None;
@@ -305,25 +259,21 @@ impl ClockView {
         rulers.len() != before
     }
 
-    /// The cycle a clock numbers 0 in this panel.
     pub fn origin_cycle(&self, timeline: &ClockTimeline) -> u64 {
         self.origin
             .and_then(|t| timeline.cycle_at(t))
             .map_or(0, |c| c.cycle)
     }
 
-    /// A clock's cycle as this panel numbers it.
     pub fn display_cycle(&self, timeline: &ClockTimeline, cycle: u64) -> i64 {
         cycle as i64 - self.origin_cycle(timeline) as i64
     }
 
-    /// The absolute cycle of a displayed cycle number.
     pub fn absolute_cycle(&self, timeline: &ClockTimeline, shown: i64) -> Option<u64> {
         u64::try_from(shown + self.origin_cycle(timeline) as i64).ok()
     }
 }
 
-/// The edge of `timeline` nearest to `t` within `tolerance` time units.
 pub fn nearest_edge(timeline: &ClockTimeline, t: f64, tolerance: f64) -> Option<u64> {
     let at = t.max(0.0).floor() as u64;
     let before = timeline.cycle_at(at).map(|c| c.edge);
@@ -337,12 +287,6 @@ pub fn nearest_edge(timeline: &ClockTimeline, t: f64, tolerance: f64) -> Option<
         .map(|(_, e)| e)
 }
 
-// -- a clock drawn as a waveform --------------------------------------------------
-
-/// A clock's stretches as a one-bit waveform, computed on demand: it rises
-/// at every recorded edge and falls half a period later (the file records no
-/// falling edges, so the drawn duty cycle is 50%). Nothing is materialized,
-/// so a clock of a billion edges costs its stretches only.
 pub struct ClockHistory {
     timeline: Arc<ClockTimeline>,
 }
@@ -352,7 +296,6 @@ impl ClockHistory {
         Self { timeline }
     }
 
-    /// Period of the stretch holding cycle `cycle`.
     fn period(&self, cycle: u64) -> u64 {
         let s = self.timeline.stretches();
         let i = s
@@ -405,10 +348,6 @@ impl volna_trace::data::SignalHistory for ClockHistory {
     }
 }
 
-// -- readouts ----------------------------------------------------------------------
-
-/// `150231 + 0.42`: a cycle number and the position in it, as the cursor
-/// chip and the status bar show it. A stopped cycle says so.
 pub fn format_position(view: &ClockView, timeline: &ClockTimeline, at: &CycleAt) -> String {
     let cycle = view.display_cycle(timeline, at.cycle);
     if at.stopped {
@@ -420,7 +359,6 @@ pub fn format_position(view: &ClockView, timeline: &ClockTimeline, at: &CycleAt)
     }
 }
 
-/// The cursor's position in `clock`, or a dash before its first edge.
 pub fn position_at(view: &ClockView, clock: &Clock, time: u64) -> String {
     match clock.timeline().and_then(|t| Some((t, t.cycle_at(time)?))) {
         Some((t, at)) => format!("{} {}", clock.name, format_position(view, t, &at)),
@@ -428,8 +366,6 @@ pub fn position_at(view: &ClockView, clock: &Clock, time: u64) -> String {
     }
 }
 
-/// `→ 2.00 GHz` for a stretch of `period` file units; a trace with a named
-/// time unit (Kanata cycles) states the period instead.
 pub fn speed_label(period: u64, base: TimeBase<'_>) -> String {
     match frequency(period as f64, base) {
         Some(f) => format!("→ {f}"),
@@ -437,8 +373,6 @@ pub fn speed_label(period: u64, base: TimeBase<'_>) -> String {
     }
 }
 
-/// `2.00 GHz`: the frequency of an event every `period` file units. `None`
-/// for a trace with a named time unit, whose units are not seconds.
 pub fn frequency(period: f64, base: TimeBase<'_>) -> Option<String> {
     if base.unit.is_some() || period <= 0.0 {
         return None;
@@ -451,33 +385,23 @@ pub fn frequency(period: f64, base: TimeBase<'_>) -> Option<String> {
     Some(format!("{value:.2} {suffix}"))
 }
 
-// -- ruler marks -------------------------------------------------------------------
-
-/// One rising edge on a ruler; labelled edges carry their displayed cycle.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RulerTick {
     pub time: u64,
     pub label: Option<String>,
 }
 
-/// What one clock ruler draws in the visible window.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RulerMarks {
     pub ticks: Vec<RulerTick>,
-    /// Stretch starts after a change of speed, with their new speed.
     pub flags: Vec<(u64, String)>,
-    /// Intervals in which the clock is stopped, including after its end.
     pub stopped: Vec<(f64, f64)>,
 }
 
-/// Edges closer than this many pixels are drawn only where labelled.
 pub const MIN_TICK_PX: f64 = 4.0;
-/// Most ticks one ruler draws in a frame.
 const MAX_TICKS: usize = 4000;
 const NICE: [u64; 3] = [1, 2, 5];
 
-/// The smallest step of the 1-2-5 series whose `cycle_px` multiple is at
-/// least `min_px` wide.
 fn label_step(cycle_px: f64, min_px: f64) -> u64 {
     let mut magnitude = 1u64;
     loop {
@@ -491,10 +415,6 @@ fn label_step(cycle_px: f64, min_px: f64) -> u64 {
     }
 }
 
-/// Ticks, flags and stopped intervals of a clock in `viewport`, labelling
-/// every `step`th displayed cycle, where each stretch picks its own step so
-/// labels stay at least `min_label_px` apart. Edges closer than
-/// [`MIN_TICK_PX`] are ticked only where labelled.
 pub fn ruler_marks(
     view: &ClockView,
     timeline: &ClockTimeline,
@@ -511,15 +431,12 @@ pub fn ruler_marks(
     let ppu = viewport.px_per_unit(width_px);
     let origin = view.origin_cycle(timeline) as i64;
     let (lo, hi) = (viewport.start.max(0.0), viewport.end.max(0.0));
-    // Stretches are sorted and disjoint: start at the last one ending before
-    // the view (its stopped gap may reach into it) and stop past the view.
     let first = stretches
         .partition_point(|s| (s.end as f64) < lo)
         .saturating_sub(1);
     let last = first + stretches[first..].partition_point(|s| (s.begin as f64) <= hi);
     for (i, s) in stretches.iter().enumerate().take(last).skip(first) {
         let next_begin = stretches.get(i + 1).map(|n| n.begin);
-        // Stopped: a long gap to the next stretch, or the end of a clock that stopped for good.
         let gap_end = match next_begin {
             Some(b) => {
                 let at = timeline.cycle_at(s.end);
@@ -550,7 +467,6 @@ pub fn ruler_marks(
             s.period as f64 * ppu
         };
         let step = label_step(cycle_px, min_label_px);
-        // Edge indices of this stretch inside the window.
         let k0 = if s.period == 0 || lo <= s.begin as f64 {
             0
         } else {
@@ -574,7 +490,6 @@ pub fn ruler_marks(
                 });
             }
         } else {
-            // Only the labelled edges: the first multiple of `step` at or after k0.
             let first = shown(k0);
             let mut k = k0
                 + (first.rem_euclid(step as i64) != 0) as u64
@@ -596,7 +511,6 @@ mod tests {
     use super::*;
 
     fn demo() -> ClockTimeline {
-        // The page's core_clk: three stretches, 334, 500 and 1000 ps.
         ClockTimeline::new(
             vec![(400, 19772, 334), (20272, 49772, 500), (50772, 99772, 1000)],
             true,
@@ -621,26 +535,22 @@ mod tests {
             end: 5000.0,
         };
         let m = ruler_marks(&view, &t, &vp, 1000.0, 64.0, TimeBase::si(-12));
-        // 334 ps is 66.8 px: every edge is ticked and labelled.
         let times: Vec<u64> = m.ticks.iter().map(|t| t.time).collect();
         assert_eq!(times, (0..14).map(|k| 400 + k * 334).collect::<Vec<_>>());
         assert!(m.ticks.iter().all(|t| t.label.is_some()));
         assert_eq!(m.ticks[3].label.as_deref(), Some("3"));
         assert!(m.flags.is_empty() && m.stopped.is_empty());
-        // Zoomed out, only labelled edges remain, at multiples of the step.
         let vp = Viewport {
             start: 0.0,
             end: 100_000.0,
         };
         let m = ruler_marks(&view, &t, &vp, 1000.0, 64.0, TimeBase::si(-12));
-        // 3.34 px per cycle in the first stretch: only every 20th edge, labelled.
         let first: Vec<_> = m.ticks.iter().filter(|t| t.time < 20000).collect();
         assert!(first.iter().all(|t| {
             t.label
                 .as_deref()
                 .is_some_and(|l| l.parse::<i64>().unwrap() % 20 == 0)
         }));
-        // 10 px per cycle in the last: every edge, every 10th labelled.
         let last: Vec<_> = m.ticks.iter().filter(|t| t.time >= 50772).collect();
         assert_eq!(last.len(), 50);
         assert!(last.iter().all(|t| {
@@ -672,7 +582,6 @@ mod tests {
         };
         let m = ruler_marks(&view, &t, &vp, 2000.0, 20.0, TimeBase::si(-9));
         assert_eq!(m.stopped, vec![(100.0, 1000.0), (1100.0, 2000.0)]);
-        // 10 px per cycle: every second displayed cycle is labelled.
         assert_eq!(m.ticks[0].label, None);
         assert_eq!(m.ticks[1].label.as_deref(), Some("-4"));
     }
@@ -686,7 +595,6 @@ mod tests {
             unit: Some("cycle"),
         };
         assert_eq!(speed_label(2, cycles), "→ 2 cycle");
-        // The first stretch holds 59 edges, so 20272 is cycle 59.
         assert_eq!(
             crate::measure::cycles(&demo(), 400, 20272 + 500),
             crate::measure::Cycles::Whole(60)

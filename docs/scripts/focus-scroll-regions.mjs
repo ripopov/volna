@@ -1,4 +1,5 @@
-// Static tab stops keep wide code and tables keyboard-scrollable even without JavaScript.
+// Keep wide code and tables keyboard-scrollable through static tab stops.
+
 export function focusScrollRegions(node) {
   if (node.type === 'element' && ['pre', 'table'].includes(node.tagName)) {
     node.properties ||= {};

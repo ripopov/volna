@@ -17,10 +17,8 @@ struct Cli {
 }
 #[derive(Args)]
 struct Window {
-    /// First included tick
     #[arg(long, default_value_t = 0)]
     from: u64,
-    /// Last included tick
     #[arg(long, default_value_t = u64::MAX)]
     to: u64,
 }
@@ -38,27 +36,23 @@ enum Format {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Show VTR metadata, counts, and sections
-    Info { file: PathBuf },
-    /// Show the VTR hierarchy
+    Info {
+        file: PathBuf,
+    },
     Hierarchy {
         file: PathBuf,
         #[arg(long, default_value_t = usize::MAX)]
         depth: usize,
-        /// Include variable declarations
         #[arg(long)]
         vars: bool,
-        /// Show scope, variable, and distinct signal counts
         #[arg(long)]
         sizes: bool,
     },
-    /// Read one VTR signal at a tick
     Value {
         file: PathBuf,
         signal: String,
         time: u64,
     },
-    /// List changes of a VTR signal in an inclusive window
     Changes {
         file: PathBuf,
         signal: String,
@@ -67,21 +61,17 @@ enum Command {
         #[arg(long, default_value_t = 100)]
         max: usize,
     },
-    /// Show VTR transactions, attributes, stages, and events
     Transactions {
         file: PathBuf,
-        /// Full stream path
         #[arg(long, conflicts_with = "id")]
         stream: Option<String>,
         #[command(flatten)]
         window: Window,
         #[arg(long, default_value_t = 100)]
         max: usize,
-        /// Select transaction IDs and include their incident relations
         #[arg(long, value_delimiter = ',', conflicts_with_all = ["from", "to", "max"])]
         id: Vec<u64>,
     },
-    /// Show formatted VTR log messages or their call sites
     Logs {
         file: PathBuf,
         #[arg(long)]
@@ -95,38 +85,36 @@ enum Command {
         #[arg(long, conflicts_with_all = ["stream", "from", "to", "max", "severity"])]
         sites: bool,
     },
-    /// Show VTR declared clocks and edge stretches
-    Clocks { file: PathBuf },
-    /// Convert Kanata, VCD, or FST to a new VTR file
+    Clocks {
+        file: PathBuf,
+    },
     Convert {
         input: PathBuf,
         output: PathBuf,
-        /// Override format inferred from .kanata/.log[.gz], .vcd, or .fst
         #[arg(long, value_enum)]
         format: Option<Format>,
     },
-    /// Export VTR waveforms as a new VCD file
-    ToVcd { input: PathBuf, output: PathBuf },
-    /// Recover complete VTR sections into a new file
-    Recover { input: PathBuf, output: PathBuf },
-    /// Build or check a VTR/FST activity sidecar
+    ToVcd {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    Recover {
+        input: PathBuf,
+        output: PathBuf,
+    },
     Index {
         file: PathBuf,
         #[arg(long, conflicts_with_all = ["threads", "memory"])]
         check: bool,
-        /// Worker count (0 uses the library default)
         #[arg(long, default_value_t = 0)]
         threads: usize,
-        /// Builder scratch limit in MiB
         #[arg(long, default_value_t = 256)]
         memory: u64,
     },
-    /// List distinct VTR/FST signals changing in an inclusive tick window
     Active {
         file: PathBuf,
         #[command(flatten)]
         window: Window,
-        /// Build the sidecar if missing
         #[arg(long)]
         build: bool,
     },
@@ -136,7 +124,6 @@ fn parse_severity(s: &str) -> Result<vtr::Severity, String> {
         .ok_or_else(|| "expected trace, debug, info, warn, error, or fatal".into())
 }
 
-/// Publish only finished output; existing destinations (including symlinks) are refused.
 fn output_file<T>(output: &Path, write: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
     ensure!(
         !output.try_exists()? && std::fs::symlink_metadata(output).is_err(),

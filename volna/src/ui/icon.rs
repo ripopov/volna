@@ -42,8 +42,6 @@ impl RenderOnce for Icon {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = theme(cx);
         let size = self.size.unwrap_or(gpui_kit::px(t.icon_size));
-        // GPUI SVGs require an explicit colour; an unset SVG colour does not
-        // inherit and suppresses painting entirely.
         let color = self.color.unwrap_or_else(|| {
             if self.inherit {
                 window.text_style().color
@@ -55,7 +53,6 @@ impl RenderOnce for Icon {
     }
 }
 
-/// Bare `svg()` for callers that need further styling (animations).
 pub fn icon_svg(name: IconName, size: Pixels, color: Hsla) -> Svg {
     svg()
         .path(name.path())

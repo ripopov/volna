@@ -1,5 +1,6 @@
-#![cfg(target_os = "linux")]
 //! Builds and runs the C smoke test against the static library.
+
+#![cfg(target_os = "linux")]
 
 use std::path::PathBuf;
 use std::process::Command;

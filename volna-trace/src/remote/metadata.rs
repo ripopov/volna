@@ -1,5 +1,4 @@
-//! Cooperative decoding and validation of raw metadata. Publication still
-//! requires the protocol's explicit End.
+//! Cooperative decoding and validation of raw metadata.
 
 use super::decode::{Decoder, Reader, Step};
 use super::memory::{MemoryBudget, Reservation};
@@ -10,9 +9,6 @@ use crate::session::Capabilities;
 use std::future::Future;
 use std::pin::Pin;
 
-/// Decodes one metadata object from bounded chunks, reserving decoded storage
-/// (and validation workspace) from the budget before allocation. Nested
-/// attributes are limited to 128 levels. Dropping it releases everything.
 pub struct MetadataDecoder(Decoder<super::hierarchy::Header>);
 
 pub struct ValidatedMetadata {
@@ -21,11 +17,8 @@ pub struct ValidatedMetadata {
 }
 
 pub enum MetadataStep {
-    /// Feed another chunk.
     NeedInput,
-    /// Yield to input and painting, then step again.
     Yield,
-    /// Validated, but private until the protocol End.
     Decoded(Box<ValidatedMetadata>),
 }
 
@@ -281,7 +274,6 @@ mod tests {
             let budget = MemoryBudget::new(1024 * 1024);
             let declared = if length == u64::MAX { 8 } else { 8200 };
             let mut decoder = MetadataDecoder::new(declared, declared, &budget).unwrap();
-            // Hold the rest of the budget so the first name cannot allocate.
             let held = budget.reserve(1024 * 1024 - budget.used()).unwrap();
             decoder.feed(length.to_le_bytes().to_vec()).unwrap();
             assert!(decoder.step().is_err());

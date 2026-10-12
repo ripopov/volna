@@ -1,5 +1,4 @@
-//! Borrowed signal values for bounded projection. Reading a preview never
-//! formats or clones the complete resident value.
+//! Borrowed signal values for bounded projection.
 
 use std::borrow::Cow;
 
@@ -38,8 +37,6 @@ impl<'a> LogicView<'a> {
             storage: LogicStorage::NibblesMsb(data),
         }
     }
-    /// The bits as an unsigned integer, when every bit is 0 or 1 and the
-    /// vector fits in 64 bits. Packed two-state storage reads whole bytes.
     pub fn to_u64(&self) -> Option<u64> {
         let w = self.width;
         if w == 0 || w > 64 {
@@ -81,14 +78,10 @@ impl<'a> LogicView<'a> {
         }
     }
 
-    /// The value's kind, with the priority of [`super::value::kind_of_bits`].
-    /// Two-state storage is always normal.
     pub fn kind(&self) -> super::ValueKind {
         match &self.storage {
             LogicStorage::Ascii(data) => super::value::kind_of_bits(data),
             LogicStorage::PackedLsb { states: 2, .. } => super::ValueKind::Normal,
-            // Codes 0 and 1 are the only normal ones: a packed value whose
-            // slots never exceed 1 is normal without decoding a bit.
             LogicStorage::PackedLsb { states, data } => {
                 let (per_byte, mask) = if *states == 4 { (4, 0xaa) } else { (2, 0xee) };
                 let (full, rest) = (self.width / per_byte, self.width % per_byte);
@@ -107,9 +100,6 @@ impl<'a> LogicView<'a> {
         }
     }
 
-    /// Append the value as logic codes of [`vtr::signal::CODE_ASCII`] in
-    /// nibbles, most significant bit first and in the low nibble of each
-    /// byte: the remote wire layout. Fails on a character outside the table.
     pub(crate) fn write_nibbles_msb(&self, out: &mut Vec<u8>) -> Option<()> {
         let w = self.width;
         out.reserve(w.div_ceil(2));
@@ -146,7 +136,6 @@ impl<'a> LogicView<'a> {
         Some(())
     }
 
-    /// MSB-first ASCII logic code. Storage was validated by its owner.
     pub fn bit(&self, index: usize) -> u8 {
         assert!(index < self.width);
         match &self.storage {
@@ -186,7 +175,6 @@ impl<'a> ValueView<'a> {
             WaveValue::Bytes(value) => Self::Bytes(Cow::Borrowed(value)),
         }
     }
-    /// The kind of the value, as [`WaveValue::kind`] classifies it.
     pub fn kind(&self) -> super::ValueKind {
         match self {
             Self::Unavailable => super::ValueKind::Undef,

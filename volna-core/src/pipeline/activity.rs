@@ -1,4 +1,5 @@
 //! Local time-to-row navigation over the resident interval index.
+
 use super::{PipelineModel, Rows};
 use crate::document::Document;
 
@@ -79,9 +80,6 @@ impl PipelineModel {
         }
     }
 
-    /// Keep the most relevant row in the middle band while following.
-    /// Returns the activity it measured when the rows stayed where they
-    /// were, so the layout need not measure it again.
     pub(super) fn follow_activity(&mut self, doc: &Document) -> Option<Activity> {
         if self.follow != FollowActivity::Following || self.last_layout().cells.height() <= 0.0 {
             return None;

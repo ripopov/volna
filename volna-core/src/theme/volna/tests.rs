@@ -2,7 +2,6 @@ use super::*;
 use crate::color::{gamma, linear};
 use crate::theme::contrast;
 
-/// Machado, Oliveira and Fernandes 2009 at full severity, in linear sRGB.
 const CVD: [(&str, [[f32; 3]; 3]); 3] = [
     (
         "deutan",
@@ -38,7 +37,6 @@ fn simulate(c: Color, m: &[[f32; 3]; 3]) -> Color {
     Color::from_rgba(r, g, b, 1.0)
 }
 
-/// ΔE in OKLab, times 100.
 fn delta_e(a: Color, b: Color) -> f32 {
     let (x, y) = (a.to_oklab(), b.to_oklab());
     100.0 * ((x[0] - y[0]).powi(2) + (x[1] - y[1]).powi(2) + (x[2] - y[2]).powi(2)).sqrt()
@@ -127,10 +125,8 @@ fn every_value_stroke_reaches_the_text_floor_on_the_canvas() {
             let ratio = contrast(color, canvas);
             assert!(ratio >= 4.5, "{name}: {what} is {ratio:.2}:1 on the canvas");
         }
-        // Quiet grid, loud signals: the grid is scaffolding at 1.3–1.4:1.
         let grid = contrast(over(t.wave_tick, canvas), canvas);
         assert!((1.25..1.5).contains(&grid), "{name}: grid {grid:.2}:1");
-        // Marker chips carry readable labels.
         for m in &t.markers {
             assert!(
                 contrast(m.text, m.background) >= 4.5,
@@ -146,7 +142,6 @@ fn stage_names_read_on_every_fill_and_neighbours_survive_colour_blindness() {
     for (name, t) in both() {
         let mut weakest_text = f32::MAX;
         let mut closest = f32::MAX;
-        // Every ladder length, not a few: an early try passed n = 8 and failed n = 3.
         for n in 2..=16 {
             let ladder: Vec<StageStyle> = (0..n).map(|k| t.stage_style(k, n)).collect();
             for style in &ladder {
@@ -159,7 +154,6 @@ fn stage_names_read_on_every_fill_and_neighbours_survive_colour_blindness() {
                         simulate(pair[1].fill, m),
                     ));
                 }
-                // Lightness alternates, so a hue shift one reader cannot see still shows.
                 let (a, b) = (pair[0].fill.to_oklab()[0], pair[1].fill.to_oklab()[0]);
                 assert!(
                     (a - b).abs() > 0.1,
@@ -198,7 +192,6 @@ fn value_tints_are_stable_faint_and_clear_of_x_and_z() {
         let hues: std::collections::HashSet<_> =
             states.iter().map(|s| t.value_tint(s).to_rgba8()).collect();
         assert!(hues.len() >= 4, "{name}: states spread over the hues");
-        // A tint's hue stays at least 40° from the X red and the Z amber.
         let hue = |c: Color| {
             let [_, a, b] = c.to_oklab();
             b.atan2(a).to_degrees().rem_euclid(360.0)

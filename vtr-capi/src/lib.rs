@@ -1,23 +1,11 @@
-#![allow(non_camel_case_types)]
 //! Stable C ABI over the VTR Rust implementation.
-//!
-//! Conventions:
-//! * Every function that can fail returns `int`: 0 = `VTR_OK`, otherwise a
-//!   `VTR_ERR_*` code. `vtr_last_error()` returns a thread-local message.
-//! * Handles (`vtr_writer*`, `vtr_reader*`, ...) are opaque and owned by the
-//!   caller until the matching `*_close`/`*_free` call. No global state.
-//! * Strings passed in are NUL-terminated UTF-8 unless a length is given.
-//! * Pointers returned by reader accessors are valid as long as the reader
-//!   (or the buffer object they were read into) is alive.
-//! * The header `include/vtr.h` documents every function.
 
+#![allow(non_camel_case_types)]
 #![allow(clippy::missing_safety_doc)]
 
 #[cfg(feature = "private-heap")]
 mod heap;
 
-/// With the `private-heap` feature libvtr allocates from a heap of its own
-/// ([`heap`]); zstd follows through `vtr::codec`'s custom allocation functions.
 #[cfg(feature = "private-heap")]
 #[global_allocator]
 static HEAP: heap::VtrHeap = heap::VtrHeap;
@@ -73,7 +61,6 @@ fn status(r: vtr::Result<()>) -> c_int {
     }
 }
 
-/// The value a C function returns when its body panicked.
 trait PanicDefault {
     fn panic_default() -> Self;
 }
@@ -111,9 +98,6 @@ impl<T> PanicDefault for *const T {
     }
 }
 
-/// Runs the body of a C function: a panic never unwinds into C. It becomes
-/// the return type's error value (`VTR_ERR_STATE`, `VTR_NONE`, NULL, 0) with
-/// the panic message in `vtr_last_error()`.
 #[inline(always)]
 fn ffi<R: PanicDefault>(f: impl FnOnce() -> R) -> R {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
@@ -130,10 +114,6 @@ fn ffi<R: PanicDefault>(f: impl FnOnce() -> R) -> R {
     }
 }
 
-/// [`ffi`] for a writer function. A panic poisons the writer, whose later
-/// calls fail fast. When a crash guard watches the writer, the call is also
-/// marked in its `CrashState`, so the guard knows the owner is inside the
-/// writer. Only `vtr_writer_close*` (which seal a poisoned writer) skip this.
 #[inline(always)]
 unsafe fn ffi_w<R: PanicDefault>(w: *const vtr_writer, f: impl FnOnce() -> R) -> R {
     let Some(state) = w.as_ref().map(|w| w.0.state() as *const vtr::CrashState) else {
@@ -145,7 +125,6 @@ unsafe fn ffi_w<R: PanicDefault>(w: *const vtr_writer, f: impl FnOnce() -> R) ->
         return R::panic_default();
     }
     if !state.watched() {
-        // No crash guard: nothing needs the busy mark, but a panic still poisons.
         return match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
             Ok(r) => r,
             Err(p) => {
@@ -222,27 +201,19 @@ macro_rules! need_str {
     };
 }
 
-/// Returns the last error message of this thread (never NULL).
 #[no_mangle]
 pub extern "C" fn vtr_last_error() -> *const c_char {
     LAST_ERROR.with(|e| e.borrow().as_ptr())
 }
 
-/// Library version string.
 #[no_mangle]
 pub extern "C" fn vtr_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
 }
 
-// ---------------------------------------------------------------------------
-// Values
-// ---------------------------------------------------------------------------
-
-/// Tagged attribute value (mirrors `vtr::Value`; lists/maps are not exposed).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct vtr_value {
-    /// One of the `VTR_VAL_*` tags.
     pub tag: u8,
     pub b: u8,
     pub width: u32,
@@ -251,7 +222,6 @@ pub struct vtr_value {
     pub f: f64,
     pub str_id: u32,
     pub scale: i32,
-    /// Bytes / packed bits (valid while the owning object is alive).
     pub data: *const u8,
     pub len: usize,
 }
@@ -342,7 +312,6 @@ unsafe fn to_value(v: &vtr_value) -> Result<Value, Error> {
     })
 }
 
-/// Borrowing conversion for log arguments (no allocation).
 unsafe fn to_log_arg<'a>(v: &'a vtr_value) -> Result<LogArg<'a>, Error> {
     let slice = |v: &'a vtr_value| -> &'a [u8] {
         if v.data.is_null() || v.len == 0 {
@@ -427,15 +396,10 @@ unsafe fn kv_list(
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// Writer
-// ---------------------------------------------------------------------------
-
 pub struct vtr_writer(Writer);
 
 #[repr(C)]
 pub struct vtr_writer_options {
-    /// 0 = none, 1 = lz4, 2 = zstd
     pub codec: u8,
     pub level: c_int,
     pub group_size: u32,
@@ -445,9 +409,7 @@ pub struct vtr_writer_options {
     pub background: c_int,
     pub dedup: c_int,
     pub checksums: c_int,
-    /// Helper threads encoding log blocks (background mode); 0 = on the sink thread.
     pub log_encoders: u32,
-    /// Longest wait before buffered data is written, in ms (0 = off).
     pub commit_interval_ms: u32,
 }
 
@@ -473,7 +435,6 @@ pub unsafe extern "C" fn vtr_writer_options_default(o: *mut vtr_writer_options) 
     })
 }
 
-/// Creates a writer. `opts` may be NULL for defaults. Returns NULL on error.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_create(
     path: *const c_char,
@@ -517,7 +478,6 @@ pub unsafe extern "C" fn vtr_writer_create(
     })
 }
 
-/// Finishes the file and frees the writer. Returns the close status.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_close(w: *mut vtr_writer) -> c_int {
     ffi(|| vtr_writer_close_ending(w, ptr::null()))
@@ -530,7 +490,6 @@ pub const VTR_ENDING_CRASHED: u8 = 3;
 pub const VTR_ENDING_RECOVERED: u8 = 4;
 pub const VTR_ENDING_POISONED: u8 = 5;
 
-/// Mirrors `vtr::Ending` plus the record's time (see `vtr.h`).
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct vtr_ending {
@@ -596,7 +555,6 @@ fn to_ending(e: Ending, time: Option<u64>) -> vtr_ending {
     o
 }
 
-/// Rewrites a recovered file as a complete one (`vtr::recover`).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_recover(
     in_path: *const c_char,
@@ -618,7 +576,6 @@ pub unsafe extern "C" fn vtr_recover(
     })
 }
 
-/// Marks the owner as inside the writer until `vtr_writer_leave` (see `vtr.h`).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_enter(w: *mut vtr_writer) -> u32 {
     w.as_ref().map_or(0, |w| w.0.state().enter())
@@ -631,7 +588,6 @@ pub unsafe extern "C" fn vtr_writer_leave(w: *mut vtr_writer, prev: u32) {
     }
 }
 
-/// Finishes the file recording how the run ended, and frees the writer.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_close_ending(
     w: *mut vtr_writer,
@@ -642,7 +598,6 @@ pub unsafe extern "C" fn vtr_writer_close_ending(
             return VTR_ERR_NULL;
         }
         let mut b = Box::from_raw(w);
-        // Closing is inside the writer too: a crash guard must not close it again meanwhile.
         let sealer = b.0.sealer();
         let prev = sealer.state().enter();
         let r = match end.as_ref().map(from_ending).transpose() {
@@ -747,7 +702,6 @@ pub unsafe extern "C" fn vtr_writer_set_file_attr(
     })
 }
 
-/// Interns a string and returns its id (0 for the empty string).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_intern(w: *mut vtr_writer, s: *const c_char) -> u32 {
     ffi_w(w, || match (w.as_mut(), cstr(s)) {
@@ -756,7 +710,6 @@ pub unsafe extern "C" fn vtr_writer_intern(w: *mut vtr_writer, s: *const c_char)
     })
 }
 
-/// Node id of a declaration, or VTR_NONE with the last error set.
 fn node_or_none(r: vtr::Result<NodeId>) -> u32 {
     match r {
         Ok(n) => n.0,
@@ -767,7 +720,6 @@ fn node_or_none(r: vtr::Result<NodeId>) -> u32 {
     }
 }
 
-/// Writer and name of an id-returning declaration, or VTR_NONE with the last error set.
 macro_rules! decl_args {
     ($w:expr, $name:expr) => {
         match (unsafe { $w.as_mut() }, unsafe { cstr($name) }) {
@@ -788,7 +740,6 @@ fn parent_id(parent: u32) -> Option<NodeId> {
     (parent != VTR_NONE).then_some(NodeId(parent))
 }
 
-/// Declares a scope under `parent` (VTR_NONE = a root).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_add_scope(
     w: *mut vtr_writer,
@@ -808,7 +759,6 @@ pub unsafe extern "C" fn vtr_writer_add_scope(
     })
 }
 
-/// Declares a variable under `parent`. `kind`: 0 = bits (width, states), 1 = real, 2 = variable-length.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_add_var(
     w: *mut vtr_writer,
@@ -863,7 +813,6 @@ pub unsafe extern "C" fn vtr_writer_add_var(
     })
 }
 
-/// Declares a variable under `parent` that aliases `signal`.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_add_alias(
     w: *mut vtr_writer,
@@ -1005,7 +954,6 @@ pub unsafe extern "C" fn vtr_writer_emit_words(
         status(need!(w).0.emit_words(SignalId(sig), ws))
     })
 }
-/// `len` may be SIZE_MAX for a NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_emit_logic_str(
     w: *mut vtr_writer,
@@ -1068,7 +1016,6 @@ pub unsafe extern "C" fn vtr_writer_flush(w: *mut vtr_writer) -> c_int {
     ffi_w(w, || status(need!(w).0.flush()))
 }
 
-// transactions
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_begin_tx(
     w: *mut vtr_writer,
@@ -1206,7 +1153,6 @@ pub unsafe extern "C" fn vtr_writer_tx_stage_attr(
         status(need!(w).0.tx_stage_attr(tx, StrId(key), &val))
     })
 }
-/// `status_code`: 0 unset, 1 ok, 2 error, 3 aborted.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_end_tx(
     w: *mut vtr_writer,
@@ -1237,11 +1183,6 @@ pub unsafe extern "C" fn vtr_writer_relate(
     })
 }
 
-// ----- logs -----
-
-/// Registers a log call site. `arg_types` are VTR_VAL_* tags (n_args of them;
-/// allowed: BOOL I64 U64 F64 STR BYTES TIME POINTER TEXT); `file`, `func` and
-/// `names` (n_args argument names) may be NULL. Returns the site id or VTR_NONE.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_add_log_site(
     w: *mut vtr_writer,
@@ -1308,7 +1249,6 @@ pub unsafe extern "C" fn vtr_writer_add_log_site(
     })
 }
 
-/// Generator node of a log site (VTR_NONE if unknown).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_log_site_node(w: *const vtr_writer, site: u32) -> u32 {
     ffi_w(w, || match w.as_ref() {
@@ -1321,9 +1261,6 @@ pub unsafe extern "C" fn vtr_writer_log_site_node(w: *const vtr_writer, site: u3
     })
 }
 
-/// Records a log message: `n` argument values matching the site's declared
-/// types; `parent` is a transaction id or 0. `id_out` (nullable) receives the
-/// record's transaction id.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_log(
     w: *mut vtr_writer,
@@ -1373,8 +1310,6 @@ pub unsafe extern "C" fn vtr_writer_log(
     })
 }
 
-/// Records a log message from pre-encoded argument values (row encoding, see
-/// `Writer::log_raw`); the caller guarantees they match the site's types.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_log_raw(
     w: *mut vtr_writer,
@@ -1408,12 +1343,6 @@ pub unsafe extern "C" fn vtr_writer_log_raw(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Clocks (writer)
-// ---------------------------------------------------------------------------
-
-/// Declares a clock: a CLOCK stream `name` under `scope` (VTR_NONE = a root).
-/// Returns the clock id or VTR_NONE.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_add_clock(
     w: *mut vtr_writer,
@@ -1432,7 +1361,6 @@ pub unsafe extern "C" fn vtr_writer_add_clock(
     })
 }
 
-/// Stream node of a declared clock (VTR_NONE if unknown).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_writer_clock_stream(w: *const vtr_writer, clock: u32) -> u32 {
     ffi_w(w, || match w.as_ref() {
@@ -1461,10 +1389,6 @@ pub unsafe extern "C" fn vtr_writer_clock_run(
 pub unsafe extern "C" fn vtr_writer_clock_stop(w: *mut vtr_writer, clock: u32, t: u64) -> c_int {
     ffi_w(w, || status(need!(w).0.clock_stop(ClockId(clock), t)))
 }
-
-// ---------------------------------------------------------------------------
-// Reader
-// ---------------------------------------------------------------------------
 
 pub struct vtr_reader(Reader);
 
@@ -1497,7 +1421,6 @@ pub unsafe extern "C" fn vtr_reader_close(r: *mut vtr_reader) {
     })
 }
 
-/// Requires exclusive access to the reader. Invalidates borrowed time tables.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_clear_cache(r: *mut vtr_reader) {
     ffi(|| {
@@ -1519,7 +1442,6 @@ pub struct vtr_meta {
     pub version_major: u16,
     pub version_minor: u16,
     pub recovered: c_int,
-    /// Bytes after the last verified section of a recovered file.
     pub recovered_dropped: u64,
     pub signal_count: u32,
     pub node_count: u32,
@@ -1531,7 +1453,6 @@ pub struct vtr_meta {
     pub blackout_count: u32,
     pub file_attr_count: u32,
     pub log_block_count: u32,
-    /// Log records (also counted in `tx_count`).
     pub log_count: u64,
     pub log_site_count: u32,
 }
@@ -1573,7 +1494,6 @@ pub unsafe extern "C" fn vtr_reader_meta(r: *const vtr_reader, out: *mut vtr_met
     })
 }
 
-/// `which`: 0 writer, 1 date, 2 comment. Valid while the reader is alive.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_meta_string(
     r: *const vtr_reader,
@@ -1622,7 +1542,6 @@ pub unsafe extern "C" fn vtr_reader_file_attr(
     })
 }
 
-/// Interned string by id: pointer + length (not NUL-terminated). Valid while the reader is alive.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_str(
     r: *const vtr_reader,
@@ -1644,20 +1563,15 @@ pub unsafe extern "C" fn vtr_reader_str(
 
 #[repr(C)]
 pub struct vtr_node_info {
-    /// 1 scope, 2 var, 3 stream, 4 generator, 5 enum table
     pub kind: u8,
     pub parent: u32,
     pub name: u32,
-    /// Scope type or var type code.
     pub type_code: u16,
     pub direction: u8,
-    /// Var: signal id. Others: VTR_NONE.
     pub signal: u32,
     pub is_alias: c_int,
-    /// Scope: component string id. Stream: kind string id.
     pub aux_str: u32,
     pub attr_count: u32,
-    /// Enum table: number of entries.
     pub entry_count: u32,
     pub child_count: u32,
 }
@@ -1787,7 +1701,6 @@ pub unsafe extern "C" fn vtr_reader_enum_entry(
     })
 }
 
-/// Copies up to `cap` child ids of `id` (or roots when `id == VTR_NONE`) and returns the total count.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_children(
     r: *const vtr_reader,
@@ -1826,7 +1739,6 @@ pub unsafe extern "C" fn vtr_reader_signal_count(r: *const vtr_reader) -> u32 {
     ffi(|| r.as_ref().map(|r| r.0.signal_count()).unwrap_or(0))
 }
 
-/// `kind_out`: 0 bits, 1 real, 2 varlen.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_signal_kind(
     r: *const vtr_reader,
@@ -1860,7 +1772,6 @@ pub unsafe extern "C" fn vtr_reader_signal_kind(
     })
 }
 
-/// Variable type code of the signal's original declaration.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_signal_var_type(
     r: *const vtr_reader,
@@ -1880,7 +1791,6 @@ pub unsafe extern "C" fn vtr_reader_signal_var_type(
     })
 }
 
-/// Node that first declared `sig`.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_signal_var(r: *const vtr_reader, sig: u32) -> u32 {
     ffi(|| {
@@ -1935,13 +1845,10 @@ pub unsafe extern "C" fn vtr_reader_find_node(
     })
 }
 
-/// Signal value view. `data` points into the owning object.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct vtr_signal_value {
-    /// 0 bits, 1 real, 2 varlen
     pub kind: u8,
-    /// Packing of `data` (2, 4 or 9) for bits.
     pub states: u8,
     pub width: u32,
     pub real: f64,
@@ -1982,7 +1889,6 @@ fn sv_from(v: vtr::SignalValue<'_>) -> vtr_signal_value {
     }
 }
 
-/// Owned value buffer used by point queries.
 pub struct vtr_value_buf {
     v: vtr::OwnedSignalValue,
     ascii: Vec<u8>,
@@ -2020,8 +1926,6 @@ pub unsafe extern "C" fn vtr_value_buf_get(
     })
 }
 
-/// ASCII rendering (bit string MSB first / decimal real / raw bytes), NUL-terminated,
-/// valid until the next call on the same buffer.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_value_buf_ascii(b: *mut vtr_value_buf) -> *const c_char {
     ffi(|| {
@@ -2036,7 +1940,6 @@ pub unsafe extern "C" fn vtr_value_buf_ascii(b: *mut vtr_value_buf) -> *const c_
     })
 }
 
-/// Value of `sig` at `time` into `buf`.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_value_at(
     r: *const vtr_reader,
@@ -2066,7 +1969,6 @@ pub type vtr_change_cb = Option<
     ) -> c_int,
 >;
 
-/// Calls `cb` for every change of `sig` in `[t0, t1]`; a non-zero return stops iteration.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_changes(
     r: *const vtr_reader,
@@ -2097,7 +1999,6 @@ pub unsafe extern "C" fn vtr_reader_changes(
     })
 }
 
-/// Calls `cb` for every change of every signal in `[t0, t1]` in time order.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_for_each_change(
     r: *const vtr_reader,
@@ -2128,7 +2029,6 @@ pub unsafe extern "C" fn vtr_reader_for_each_change(
 
 pub struct vtr_signal_data(vtr::SignalData);
 
-/// Loads all changes of a signal. Free with `vtr_signal_data_free`.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_load_signal(
     r: *const vtr_reader,
@@ -2149,9 +2049,6 @@ pub unsafe extern "C" fn vtr_reader_load_signal(
     })
 }
 
-/// Loads `n` histories in request order into a caller-allocated array of handles.
-/// Repeated signal IDs share immutable storage. On error, `out` is unchanged.
-/// For `n == 0`, `sigs` and `out` may be NULL. Free each handle separately.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_load_signals(
     r: *const vtr_reader,
@@ -2184,7 +2081,6 @@ pub unsafe extern "C" fn vtr_reader_load_signals(
     })
 }
 
-/// Clones a handle without copying its immutable waveform storage. NULL in, NULL out.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_signal_data_clone(d: *const vtr_signal_data) -> *mut vtr_signal_data {
     ffi(|| {
@@ -2208,7 +2104,6 @@ pub unsafe extern "C" fn vtr_signal_data_len(d: *const vtr_signal_data) -> usize
     ffi(|| d.as_ref().map(|d| d.0.len()).unwrap_or(0))
 }
 
-/// Pointer to the change-time array (`len` entries).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_signal_data_times(d: *const vtr_signal_data) -> *const u64 {
     ffi(|| {
@@ -2248,7 +2143,6 @@ pub unsafe extern "C" fn vtr_signal_data_initial(
     })
 }
 
-/// Index of the last change at or before `time`, or SIZE_MAX.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_signal_data_index_at(d: *const vtr_signal_data, time: u64) -> usize {
     ffi(|| {
@@ -2258,7 +2152,6 @@ pub unsafe extern "C" fn vtr_signal_data_index_at(d: *const vtr_signal_data, tim
     })
 }
 
-/// Global sorted time table; pointer valid while the reader is alive.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_time_table(
     r: *const vtr_reader,
@@ -2307,8 +2200,6 @@ pub unsafe extern "C" fn vtr_reader_blackout(
         }
     })
 }
-
-// transactions
 
 pub struct vtr_tx(Transaction);
 
@@ -2513,8 +2404,6 @@ pub unsafe extern "C" fn vtr_tx_stage_attr(
 pub type vtr_tx_cb =
     Option<unsafe extern "C" fn(user: *mut std::ffi::c_void, tx: *const vtr_tx) -> c_int>;
 
-/// Visits transactions. `generator`/`stream` may be VTR_NONE; `t1 == 0` disables the window.
-/// A non-zero callback return stops iteration.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_visit_transactions(
     r: *const vtr_reader,
@@ -2552,7 +2441,6 @@ pub unsafe extern "C" fn vtr_reader_visit_transactions(
     })
 }
 
-/// Looks up one transaction; the callback is invoked once if found.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_transaction(
     r: *const vtr_reader,
@@ -2590,7 +2478,6 @@ pub type vtr_relation_cb = Option<
     ) -> c_int,
 >;
 
-/// Owning generator without copying transaction details.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_transaction_generator(
     r: *const vtr_reader,
@@ -2613,7 +2500,6 @@ pub unsafe extern "C" fn vtr_reader_transaction_generator(
     })
 }
 
-/// Resolve owners in input order; missing IDs produce VTR_NONE.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_transaction_generators(
     r: *const vtr_reader,
@@ -2675,7 +2561,6 @@ unsafe fn emit_relations(
     }
 }
 
-/// `direction`: 0 = relations from `id`, 1 = relations to `id`.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_relations(
     r: *const vtr_reader,
@@ -2705,19 +2590,12 @@ pub unsafe extern "C" fn vtr_reader_relations(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Reader: logs
-// ---------------------------------------------------------------------------
-
-/// Static description of a log site.
 #[repr(C)]
 pub struct vtr_log_site_info {
     pub node: u32,
     pub stream: u32,
     pub severity: u8,
-    /// String id of the format string.
     pub fmt: u32,
-    /// String ids (VTR_NONE when absent).
     pub file: u32,
     pub func: u32,
     pub line: u32,
@@ -2768,7 +2646,6 @@ pub unsafe extern "C" fn vtr_reader_log_site(
     })
 }
 
-/// Type (VTR_VAL_*) and name (string id) of argument `j` of site `i`.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_log_site_arg(
     r: *const vtr_reader,
@@ -2794,7 +2671,6 @@ pub unsafe extern "C" fn vtr_reader_log_site_arg(
     })
 }
 
-/// Site index of generator `gen`, or VTR_NONE when it is not a log site.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_log_site_of(r: *const vtr_reader, gen: u32) -> u32 {
     ffi(|| match r.as_ref() {
@@ -2807,14 +2683,11 @@ pub unsafe extern "C" fn vtr_reader_log_site_of(r: *const vtr_reader, gen: u32) 
     })
 }
 
-/// One log record, valid only inside the visit callback.
 #[repr(C)]
 pub struct vtr_log_rec {
     pub id: u64,
     pub time: u64,
-    /// Parent transaction id, 0 = none.
     pub parent: u64,
-    /// Site index (see `vtr_reader_log_site`).
     pub site: u32,
     pub generator: u32,
     pub stream: u32,
@@ -2826,8 +2699,6 @@ pub struct vtr_log_rec {
 pub type vtr_log_cb =
     Option<unsafe extern "C" fn(user: *mut std::ffi::c_void, rec: *const vtr_log_rec) -> c_int>;
 
-/// Visits log records: `stream` / `generator` may be VTR_NONE, `min_severity`
-/// 0 = all, `t1 == 0` = no time window. The callback returns non-zero to stop.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_visit_log(
     r: *const vtr_reader,
@@ -2877,8 +2748,6 @@ pub unsafe extern "C" fn vtr_reader_visit_log(
     })
 }
 
-/// Argument `i` of a record. Text arguments come back as VTR_VAL_TEXT with
-/// `data`/`len` pointing into the reader (valid while the reader is alive).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_log_rec_arg(
     rec: *const vtr_log_rec,
@@ -2922,9 +2791,6 @@ thread_local! {
     static FMT_BUF: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-/// Renders the message of `rec` into `buf` (NUL-terminated when `cap > 0`,
-/// truncated if it does not fit). Returns the full message length, like
-/// `snprintf`. `buf` may be NULL with `cap == 0` to query the length.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_log_rec_format(
     r: *const vtr_reader,
@@ -2952,10 +2818,6 @@ pub unsafe extern "C" fn vtr_log_rec_format(
         })
     })
 }
-
-// ---------------------------------------------------------------------------
-// Clocks (reader)
-// ---------------------------------------------------------------------------
 
 #[repr(C)]
 pub struct vtr_clock_info {
@@ -2993,7 +2855,6 @@ pub unsafe extern "C" fn vtr_reader_clock(
     })
 }
 
-/// Clock named by the `vtr.clock` attribute of `stream`, or VTR_NONE.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_stream_clock(r: *const vtr_reader, stream: u32) -> u32 {
     ffi(|| match r.as_ref() {
@@ -3006,22 +2867,17 @@ pub unsafe extern "C" fn vtr_reader_stream_clock(r: *const vtr_reader, stream: u
     })
 }
 
-/// Streaming scope-size counter (`vtr::Census`).
 pub struct vtr_census(vtr::Census);
 
-/// Scope sizes and, when counted from a reader, each index's scope node.
 pub struct vtr_scope_sizes {
     nodes: Vec<u32>,
     sizes: vtr::ScopeSizes,
 }
 
-/// One scope's totals, subscopes included.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct vtr_scope_size {
-    /// Scope node, or `VTR_NONE` when counted by a `vtr_census`.
     pub node: u32,
-    /// Index of the enclosing scope, `VTR_NONE` for a root.
     pub parent: u32,
     pub signals: u32,
     pub variables: u32,
@@ -3033,17 +2889,13 @@ pub extern "C" fn vtr_census_new() -> *mut vtr_census {
     ffi(|| Box::into_raw(Box::new(vtr_census(vtr::Census::new()))))
 }
 
-/// A counter that also records every signal's weights (`Census::recording`).
 #[no_mangle]
 pub extern "C" fn vtr_census_new_recording() -> *mut vtr_census {
     ffi(|| Box::into_raw(Box::new(vtr_census(vtr::Census::recording()))))
 }
 
-/// Every signal's census weights (`vtr::Contributions`).
 pub struct vtr_contributions(vtr::Contributions);
 
-/// Consumes a recording counter: its sizes, and its weights in `*out`.
-/// NULL in, NULL out.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_census_finish_recorded(
     c: *mut vtr_census,
@@ -3064,9 +2916,6 @@ pub unsafe extern "C" fn vtr_census_finish_recorded(
     })
 }
 
-/// Distinct signals of `signals` (`n`, no repeats) at or below every scope,
-/// written to `out` (room for `cap`) in the order scopes were entered;
-/// returns the number of scopes.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_contributions_count(
     x: *const vtr_contributions,
@@ -3101,7 +2950,6 @@ pub unsafe extern "C" fn vtr_contributions_free(x: *mut vtr_contributions) {
     })
 }
 
-/// Opens a scope and returns its index, `VTR_NONE` for a null handle.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_census_enter(c: *mut vtr_census) -> u32 {
     ffi(|| match c.as_mut() {
@@ -3139,7 +2987,6 @@ pub unsafe extern "C" fn vtr_census_leave(c: *mut vtr_census) -> c_int {
     })
 }
 
-/// Consumes the counter (open scopes are closed). NULL in, NULL out.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_census_finish(c: *mut vtr_census) -> *mut vtr_scope_sizes {
     ffi(|| {
@@ -3163,7 +3010,6 @@ pub unsafe extern "C" fn vtr_census_free(c: *mut vtr_census) {
     })
 }
 
-/// Scope sizes of the reader's hierarchy, scopes in preorder.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_reader_scope_sizes(r: *const vtr_reader) -> *mut vtr_scope_sizes {
     ffi(|| {
@@ -3217,9 +3063,7 @@ pub unsafe extern "C" fn vtr_scope_sizes_free(s: *mut vtr_scope_sizes) {
     })
 }
 
-/// A loaded activity index (`vtr::activity::Index`).
 pub struct vtr_activity_index(vtr::activity::Index);
-/// The active and undecided signals of a window.
 pub struct vtr_activity_classes {
     active: Vec<u32>,
     undecided: Vec<u32>,
@@ -3237,7 +3081,6 @@ pub struct vtr_activity_summary {
     pub source_bytes: u64,
 }
 
-/// `cache_dir`, or the user's cache directory for NULL.
 unsafe fn activity_cache(cache_dir: *const c_char) -> Option<std::path::PathBuf> {
     match cstr(cache_dir) {
         Some(d) => Some(d.into()),
@@ -3245,8 +3088,6 @@ unsafe fn activity_cache(cache_dir: *const c_char) -> Option<std::path::PathBuf>
     }
 }
 
-/// Builds the activity index of an open VTR file and writes it beside
-/// `trace_path` or, when that directory refuses it, in `cache_dir`.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_write(
     r: *const vtr_reader,
@@ -3259,7 +3100,6 @@ pub unsafe extern "C" fn vtr_activity_write(
     vtr_activity_write_controlled(r, trace_path, cache_dir, threads, memory, ptr::null(), out)
 }
 
-/// A shared progress/cancellation handle for one index build.
 pub struct vtr_activity_control(std::sync::Arc<vtr::activity::BuildControl>);
 
 #[no_mangle]
@@ -3280,7 +3120,6 @@ pub unsafe extern "C" fn vtr_activity_control_free(c: *mut vtr_activity_control)
     })
 }
 
-/// Returns 1 when cancellation was accepted, 0 after publication or for NULL.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_control_cancel(c: *const vtr_activity_control) -> c_int {
     ffi(|| c.as_ref().is_some_and(|c| c.0.cancel()) as c_int)
@@ -3293,7 +3132,6 @@ pub unsafe extern "C" fn vtr_activity_control_is_cancelled(
     ffi(|| c.as_ref().is_some_and(|c| c.0.is_cancelled()) as c_int)
 }
 
-/// Snapshot of stitched blocks; NULL control reports zeros.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_control_progress(
     c: *const vtr_activity_control,
@@ -3311,7 +3149,6 @@ pub unsafe extern "C" fn vtr_activity_control_progress(
     })
 }
 
-/// `vtr_activity_write` with shared control; NULL control builds normally.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_write_controlled(
     r: *const vtr_reader,
@@ -3364,8 +3201,6 @@ pub unsafe extern "C" fn vtr_activity_write_controlled(
     })
 }
 
-/// The activity index valid for the trace, beside it or in the cache; NULL
-/// when there is none (missing, stale or damaged).
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_load(
     r: *const vtr_reader,
@@ -3395,7 +3230,6 @@ pub unsafe extern "C" fn vtr_activity_load(
     })
 }
 
-/// Atomically complete a non-file activity result against cancellation.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_control_complete(c: *const vtr_activity_control) -> c_int {
     ffi(|| match c.as_ref() {
@@ -3413,8 +3247,6 @@ pub unsafe extern "C" fn vtr_activity_control_complete(c: *const vtr_activity_co
     })
 }
 
-/// Decode a raw sidecar image for this reader with allocation admission and
-/// optional cancellation. Bytes are borrowed only for this blocking call.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_decode(
     r: *const vtr_reader,
@@ -3482,7 +3314,6 @@ pub unsafe extern "C" fn vtr_activity_free(x: *mut vtr_activity_index) {
     })
 }
 
-/// `Index::exact_width`; 0 for a null handle.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_exact_width(
     x: *const vtr_activity_index,
@@ -3492,7 +3323,6 @@ pub unsafe extern "C" fn vtr_activity_exact_width(
     ffi(|| x.as_ref().map_or(0, |x| x.0.exact_width(t0, t1)))
 }
 
-/// `Index::classify`; NULL for a null handle.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_classify(
     x: *const vtr_activity_index,
@@ -3515,7 +3345,6 @@ pub unsafe extern "C" fn vtr_activity_classify(
     })
 }
 
-/// The active signals, ascending; `len` receives their number.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_classes_active(
     c: *const vtr_activity_classes,
@@ -3530,7 +3359,6 @@ pub unsafe extern "C" fn vtr_activity_classes_active(
     })
 }
 
-/// The undecided signals, ascending; `len` receives their number.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_classes_undecided(
     c: *const vtr_activity_classes,
@@ -3554,8 +3382,6 @@ pub unsafe extern "C" fn vtr_activity_classes_free(c: *mut vtr_activity_classes)
     })
 }
 
-/// `vtr::activity::resolve`: writes the signals among `signals` that change
-/// in `[t0, t1]` to `out` (room for `n`), ascending, and their number to `out_len`.
 #[no_mangle]
 pub unsafe extern "C" fn vtr_activity_resolve(
     r: *const vtr_reader,
@@ -3749,10 +3575,6 @@ pub unsafe extern "C" fn vtr_clock_timeline_prev_edge(
     ffi(|| time_out(need_ref!(t).0.prev_edge(time), out))
 }
 
-// ---------------------------------------------------------------------------
-// Crash guard (process-wide; see vtr.h)
-// ---------------------------------------------------------------------------
-
 #[repr(C)]
 pub struct vtr_guard_options {
     pub deadline_ms: u32,
@@ -3838,7 +3660,6 @@ pub extern "C" fn vtr_guard_thread_init() {
     ffi(vtr_guard::thread_init)
 }
 
-/// A C stop callback and its argument, sent to the rescue thread.
 struct StopCallback(unsafe extern "C" fn(*mut std::ffi::c_void, c_int), usize);
 
 #[no_mangle]
@@ -3905,18 +3726,15 @@ mod tests {
                 &mut sig,
             );
             assert_eq!(vtr_writer_emit_u64(w, sig, 1), VTR_OK);
-            // A C call whose Rust body panics inside the writer.
             let rc = ffi_w(w, || -> c_int { panic!("injected panic") });
             assert_eq!(rc, VTR_ERR_STATE);
             assert!(last_error().contains("injected panic"), "{}", last_error());
-            // Later calls fail fast; ids come back as VTR_NONE.
             assert_eq!(vtr_writer_emit_u64(w, sig, 2), VTR_ERR_STATE);
             assert!(last_error().contains("poisoned"), "{}", last_error());
             assert_eq!(
                 vtr_writer_add_scope(w, VTR_NONE, name.as_ptr(), 0, ptr::null()),
                 VTR_NONE
             );
-            // Close seals it.
             assert_eq!(vtr_writer_close(w), VTR_OK);
             let r = vtr_reader_open(path.as_ptr());
             assert!(!r.is_null());

@@ -1,4 +1,5 @@
 /* C smoke test for the VTR C API: writes a file, reads it back, checks values. */
+
 #include "vtr.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +27,6 @@ static int tx_cb(void *user, const vtr_tx *tx) {
     return 0;
 }
 
-/* How the run ended: written by close_ending and read back. */
 static int ending_smoke(const char *path) {
     vtr_writer *w = vtr_writer_create(path, NULL);
     ASSERT(w != NULL);
@@ -44,7 +44,6 @@ static int ending_smoke(const char *path) {
     ASSERT(vtr_ending_format(&got, text, sizeof text) == strlen("crashed by SIGSEGV (address 0x0, thread 41137)"));
     ASSERT(strcmp(text, "crashed by SIGSEGV (address 0x0, thread 41137)") == 0);
     vtr_reader_close(r);
-    /* A plain close records nothing. */
     w = vtr_writer_create(path, NULL);
     CHECK(vtr_writer_close(w));
     r = vtr_reader_open(path);
@@ -56,7 +55,6 @@ static int ending_smoke(const char *path) {
     return 0;
 }
 
-/* Activity index: a clock that stops for a while and a rare counter. */
 static int activity_smoke(const char *path) {
     vtr_writer *w = vtr_writer_create(path, NULL);
     ASSERT(w != NULL);
@@ -65,7 +63,7 @@ static int activity_smoke(const char *path) {
     CHECK(vtr_writer_add_var(w, top, "clk", VTR_VAR_WIRE, VTR_DIR_INPUT, VTR_SIGNAL_BITS, 1, 2, &node, &clk));
     CHECK(vtr_writer_add_var(w, top, "cnt", VTR_VAR_REG, VTR_DIR_OUTPUT, VTR_SIGNAL_BITS, 8, 2, &node, &cnt));
     for (uint64_t t = 0; t < 4000; t++) {
-        if (t >= 1000 && t < 3000) continue;          /* the clock stops */
+        if (t >= 1000 && t < 3000) continue;
         CHECK(vtr_writer_set_time(w, t));
         CHECK(vtr_writer_emit_bit(w, clk, (uint8_t)(t & 1)));
         if (t % 500 == 0) CHECK(vtr_writer_emit_u64(w, cnt, t / 500));
@@ -73,7 +71,7 @@ static int activity_smoke(const char *path) {
     CHECK(vtr_writer_close(w));
     vtr_reader *rd = vtr_reader_open(path);
     ASSERT(rd != NULL);
-    ASSERT(vtr_activity_load(rd, path, NULL) == NULL);  /* not built yet */
+    ASSERT(vtr_activity_load(rd, path, NULL) == NULL);
     vtr_activity_summary sum;
     CHECK(vtr_activity_write(rd, path, NULL, 2, 0, &sum));
     ASSERT(sum.signals == 2 && sum.blocks >= 1 && sum.bytes > 0 && sum.delta_min >= 1);
@@ -117,7 +115,6 @@ static int activity_smoke(const char *path) {
     vtr_activity_control_free(control);
     vtr_activity_index *x = vtr_activity_load(rd, path, NULL);
     ASSERT(x != NULL);
-    /* While the clock is stopped nothing changes; around t=500 only the clock and the counter do. */
     size_t na = 9, nu = 9;
     vtr_activity_classes *c = vtr_activity_classify(x, 1500, 2500);
     vtr_activity_classes_active(c, &na);
@@ -140,7 +137,7 @@ static int activity_smoke(const char *path) {
     return 0;
 }
 
-/* A clock that changes speed, written and read back through the C API. *//* A clock that changes speed, written and read back through the C API. */
+
 static int clock_smoke(const char *path) {
     vtr_writer *w = vtr_writer_create(path, NULL);
     ASSERT(w != NULL);
@@ -154,8 +151,8 @@ static int clock_smoke(const char *path) {
     ASSERT(vtr_writer_clock_run(w, clk, 0, 0) == VTR_ERR_INVALID);
     CHECK(vtr_writer_clock_run(w, clk, 10, 4));
     ASSERT(vtr_writer_clock_run(w, clk, 20, 4) == VTR_ERR_STATE);
-    CHECK(vtr_writer_clock_stop(w, clk, 29));      /* edges 10..26 */
-    CHECK(vtr_writer_clock_run(w, clk, 30, 10));   /* edges 30..90, running at close */
+    CHECK(vtr_writer_clock_stop(w, clk, 29));
+    CHECK(vtr_writer_clock_run(w, clk, 30, 10));
     CHECK(vtr_writer_set_time(w, 95));
     CHECK(vtr_writer_close(w));
 
@@ -170,7 +167,7 @@ static int clock_smoke(const char *path) {
     ASSERT(vtr_reader_stream_clock(rd, top) == VTR_NONE);
     vtr_clock_timeline *tl = vtr_reader_load_clock(rd, 0);
     ASSERT(tl != NULL);
-    vtr_reader_close(rd);   /* the timeline outlives the reader */
+    vtr_reader_close(rd);
     ASSERT(vtr_clock_timeline_stretch_count(tl) == 2);
     ASSERT(vtr_clock_timeline_edge_count(tl) == 5 + 7);
     ASSERT(vtr_clock_timeline_is_open(tl));
@@ -215,7 +212,6 @@ int main(int argc, char **argv) {
     uint32_t stream = vtr_writer_add_stream(w, VTR_NONE, "pipe", "PIPELINE");
     uint32_t gen = vtr_writer_add_generator(w, stream, "instruction");
     ASSERT(stream != VTR_NONE && gen != VTR_NONE);
-    /* Bad parents are rejected and add nothing. */
     uint32_t bad_n = 0, bad_s = 0;
     ASSERT(vtr_writer_add_scope(w, 12345, "bad", VTR_SCOPE_MODULE, NULL) == VTR_NONE);
     ASSERT(strlen(vtr_last_error()) > 0);
@@ -243,7 +239,6 @@ int main(int argc, char **argv) {
         if (i % 7 == 0) { uint32_t words[3] = { (uint32_t)i, 0xdeadbeef, 0xff }; CHECK(vtr_writer_emit_words(w, wide, words, 3)); }
         if (i == 500) CHECK(vtr_writer_emit_logic_str(w, bus, "xxxx000011110000", SIZE_MAX));
         if (i == 500) {
-            /* Hierarchy added after values were written. */
             late = vtr_writer_add_scope(w, top, "late", VTR_SCOPE_MODULE, "late_m");
             ASSERT(late != VTR_NONE);
             CHECK(vtr_writer_add_var(w, late, "v", VTR_VAR_BIT, VTR_DIR_IMPLICIT, VTR_SIGNAL_BITS, 8, 2, &late_v_n, &late_v));
@@ -301,7 +296,6 @@ int main(int argc, char **argv) {
     ASSERT(sig == clk);
     CHECK(vtr_reader_node(rd, late_v_n, &ni));
     ASSERT(ni.parent == late);
-    /* Scope sizes: late's clk aliases top's, so top holds 7 signals named by 8 variables. */
     vtr_scope_sizes *sz = vtr_reader_scope_sizes(rd);
     ASSERT(sz != NULL && vtr_scope_sizes_len(sz) == 2);
     vtr_scope_size one;
@@ -322,7 +316,6 @@ int main(int argc, char **argv) {
     CHECK(vtr_scope_sizes_get(sz, 0, &one));
     ASSERT(one.node == VTR_NONE && one.signals == 1 && one.variables == 2 && one.scopes == 2);
     vtr_scope_sizes_free(sz);
-    /* A recording census counts any set of signals per scope. */
     cen = vtr_census_new_recording();
     vtr_census_enter(cen);
     CHECK(vtr_census_var(cen, 5));
@@ -342,20 +335,20 @@ int main(int argc, char **argv) {
     vtr_value_buf *b = vtr_value_buf_new();
     int n;
     CHECK(vtr_reader_value_at(rd, bus, 45, b));
-    ASSERT(strcmp(vtr_value_buf_ascii(b), "0000000000001100") == 0); /* i=4 -> 12 */
+    ASSERT(strcmp(vtr_value_buf_ascii(b), "0000000000001100") == 0);
     CHECK(vtr_reader_value_at(rd, bus, 5000, b));
     ASSERT(strcmp(vtr_value_buf_ascii(b), "xxxx000011110000") == 0);
     CHECK(vtr_reader_value_at(rd, bus, 5040, b));
-    ASSERT(strcmp(vtr_value_buf_ascii(b), "0000010111101000") == 0); /* i=504 -> 1512 */
+    ASSERT(strcmp(vtr_value_buf_ascii(b), "0000010111101000") == 0);
     CHECK(vtr_reader_value_at(rd, r, 100, b));
     vtr_signal_value sv; CHECK(vtr_value_buf_get(b, &sv));
     ASSERT(sv.kind == 1 && sv.real == 2.5);
     CHECK(vtr_reader_value_at(rd, s, 999, b));
     ASSERT(strcmp(vtr_value_buf_ascii(b), "s50") == 0);
     CHECK(vtr_reader_value_at(rd, late_v, 4990, b));
-    ASSERT(strcmp(vtr_value_buf_ascii(b), "00000000") == 0); /* before its declaration */
+    ASSERT(strcmp(vtr_value_buf_ascii(b), "00000000") == 0);
     CHECK(vtr_reader_value_at(rd, late_v, 5010, b));
-    ASSERT(strcmp(vtr_value_buf_ascii(b), "11110101") == 0); /* i=501 -> 0xf5 */
+    ASSERT(strcmp(vtr_value_buf_ascii(b), "11110101") == 0);
     n = 0;
     CHECK(vtr_reader_changes(rd, late_v, 0, 9990, count_changes, &n));
     ASSERT(n == 500);
@@ -386,7 +379,7 @@ int main(int argc, char **argv) {
     uint32_t requests[] = {s, bus, clk, bus, s};
     vtr_signal_data *loaded[5] = {NULL};
     CHECK(vtr_reader_load_signals(rd, requests, 5, loaded));
-    ASSERT(loaded[1] != loaded[3]); /* independent handles, shared storage */
+    ASSERT(loaded[1] != loaded[3]);
     ASSERT(vtr_signal_data_times(loaded[1]) == vtr_signal_data_times(loaded[3]));
     ASSERT(vtr_signal_data_times(loaded[0]) == vtr_signal_data_times(loaded[4]));
     vtr_signal_value va, vb;
@@ -451,7 +444,6 @@ int main(int argc, char **argv) {
     if (ending_smoke(clock_path)) return 1;
     snprintf(clock_path, sizeof clock_path, "%s.activity.vtr", path);
     if (activity_smoke(clock_path)) return 1;
-    /* error paths */
     ASSERT(vtr_reader_open("/nonexistent/file.vtr") == NULL);
     ASSERT(strlen(vtr_last_error()) > 0);
     printf("c_smoke: ok\n");

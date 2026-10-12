@@ -1,22 +1,4 @@
 //! Versioned binary frames and the receive-side object lifecycle.
-//!
-//! This is the raw query transport between a Volna client and
-//! `volna-server`. It is versioned by [`VERSION`], separately from the VTR
-//! file format, and a peer with another version is rejected; there is no
-//! negotiation or old-version support.
-//!
-//! A frame is the magic `VLNA`, the `u32` little-endian [`VERSION`], the `u32`
-//! little-endian body length (at most [`MAX_FRAME_BYTES`]) and the body: one
-//! LZ4 frame with a content checksum holding a fixed-int little-endian
-//! bincode [`Packet`]. Every packet is independently checksummed, which bounds
-//! decode work and lets a web receiver yield and acknowledge between packets.
-//! Objects span a `Begin`, any number of `Data` chunks of at most
-//! [`DATA_BYTES`] and an explicit `End`; only the End makes them complete.
-//!
-//! [`ResponseWriter`] sends a response in bounded chunks and waits for each
-//! acknowledgement; [`Receiver`] validates one request's object identities,
-//! sequence numbers, declared sizes and completion. Neither installs objects
-//! or performs viewer navigation. Native local loading does not use this codec.
 
 use std::io::{Read, Write};
 
@@ -24,13 +6,9 @@ use bincode::Options;
 use lz4_flex::frame::{BlockSize, FrameDecoder, FrameEncoder, FrameInfo};
 use serde::{Deserialize, Serialize};
 
-/// Protocol version carried in every frame header.
 pub const VERSION: u32 = 6;
-/// Largest encoded frame body.
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
-/// Largest `Data` chunk payload.
 pub const DATA_BYTES: usize = 256 * 1024;
-/// Most signals in one `Signals` command.
 pub const MAX_BATCH: usize = 64;
 const MAGIC: &[u8; 4] = b"VLNA";
 const HEADER_BYTES: usize = 12;
@@ -47,18 +25,11 @@ pub enum ObjectId {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
-    Open {
-        max_object_bytes: u64,
-    },
+    Open { max_object_bytes: u64 },
     Signals(Vec<u32>),
     Track(u32),
-    /// Fetch the raw sidecar; build it if missing only when explicitly allowed.
-    Activity {
-        build: bool,
-    },
-    Ack {
-        sequence: u64,
-    },
+    Activity { build: bool },
+    Ack { sequence: u64 },
     Close,
 }
 
@@ -83,10 +54,8 @@ pub enum Body {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Packet {
-    /// Zero is reserved for an Open command before the server assigns a session.
     pub session: u64,
     pub request: u64,
-    /// Response sequence, starting at zero for each request, including Begin/End.
     pub sequence: u64,
     pub body: Body,
 }
@@ -119,7 +88,6 @@ fn validate(packet: &Packet) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Encode one bounded packet.
 pub fn encode(packet: &Packet) -> anyhow::Result<Vec<u8>> {
     validate(packet)?;
     let size = options().serialized_size(packet)?;
@@ -154,8 +122,6 @@ fn body_len(header: &[u8]) -> anyhow::Result<usize> {
     Ok(length)
 }
 
-// lz4_flex accepts EOF between blocks, including a missing end/checksum.
-// Require exactly our encoder's frame layout before asking it to decompress.
 fn validate_lz4(body: &[u8]) -> anyhow::Result<()> {
     anyhow::ensure!(
         body.len() >= 23 && body[..6] == [4, 34, 77, 24, 0x6c, 0x40],
@@ -208,8 +174,6 @@ pub fn decode(frame: &[u8]) -> anyhow::Result<Packet> {
     Ok(packet)
 }
 
-/// Read exactly one frame from a pipe. EOF is normal only between frames;
-/// short headers and short bodies are errors, never complete objects.
 pub fn read_packet(mut input: impl Read) -> anyhow::Result<Option<Packet>> {
     let mut header = [0; HEADER_BYTES];
     loop {
@@ -235,8 +199,6 @@ pub fn write_packet(mut output: impl Write, packet: &Packet) -> anyhow::Result<(
     Ok(())
 }
 
-/// Blocking server-side response stream. The client acknowledges each packet
-/// only after consuming it. This writer cannot queue a second frame meanwhile.
 pub struct ResponseWriter<R, W> {
     input: R,
     output: W,
@@ -263,7 +225,6 @@ impl<R: Read, W: Write> ResponseWriter<R, W> {
 
     pub fn send(&mut self, body: Body) -> anyhow::Result<()> {
         anyhow::ensure!(!self.failed, "response stream failed");
-        // Poison first; restore only after a matching acknowledgement.
         self.failed = true;
         let packet = Packet {
             session: self.session,
@@ -286,9 +247,6 @@ impl<R: Read, W: Write> ResponseWriter<R, W> {
         Ok(())
     }
 
-    /// Serialize directly into bounded transport chunks without making a
-    /// second full serialized copy on the server. A caller enforces its own
-    /// admitted object size before calling this method.
     pub fn object<T: Serialize>(
         &mut self,
         object: ObjectId,
@@ -384,7 +342,6 @@ pub enum Receive {
         object: ObjectId,
         decoded_bytes: u64,
     },
-    /// Install into a private builder, then acknowledge; never paint this yet.
     Data(Vec<u8>),
     Complete(ObjectId),
     Failed {
@@ -393,10 +350,6 @@ pub enum Receive {
     },
 }
 
-/// One active request, and at most one assembling object in its response.
-/// The caller reserves client storage at Begin, consumes each Data chunk and
-/// publishes only on Complete. Any error poisons this receiver: discard its
-/// private builder and retry using a fresh request identity.
 pub struct Receiver {
     session: u64,
     request: u64,
@@ -433,7 +386,6 @@ impl Receiver {
         })
     }
 
-    /// Extend an Open response after its bounded header announces page counts.
     pub(super) fn expect_pages(&mut self, scopes: u32, vars: u32) -> anyhow::Result<()> {
         self.expected
             .try_reserve_exact(scopes as usize + vars as usize)?;
@@ -529,8 +481,6 @@ impl Receiver {
         !self.failed && self.expected.is_empty() && self.active.is_none()
     }
 
-    /// EOF before this point fails all still pending objects. Completed objects
-    /// may remain resident; no partially received object survives disconnect.
     pub fn finish(self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.is_complete(),

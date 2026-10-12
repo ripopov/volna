@@ -1,4 +1,5 @@
 //! Dense identities retain declaration order and borrow reader membership.
+
 use vtr::{hierarchy_index::NodeIndex, *};
 
 #[test]

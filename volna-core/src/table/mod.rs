@@ -1,7 +1,5 @@
-//! Reduced immutable table panel over one transaction generator or a fixed
-//! set of signal histories. The source remains the row store: only a bounded
-//! visible window (and, for multiple signals, one admitted timestamp axis) is
-//! owned by the panel.
+//! Reduced immutable table panel over one transaction generator or a fixed set of signal
+//! histories.
 
 pub mod columns;
 pub mod layout;

@@ -1,6 +1,4 @@
 //! `Workspace`: the GPUI root view, a thin adapter over [`volna_core::App`].
-//! It hosts the chrome with GPUI widgets, forwards input as commands, drains
-//! the core's events and runs the loads it asks for on the background executor.
 
 #[cfg(all(test, not(target_family = "wasm")))]
 #[path = "app_tests.rs"]
@@ -134,35 +132,30 @@ actions!(
     ]
 );
 
-/// `1`–`9`: move the effective panel or shared cursor onto marker `n`.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
 pub struct GoToMarker {
     pub n: u32,
 }
 
-/// `Ctrl+1`–`Ctrl+6`: place or move marker `n` at the effective cursor.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
 pub struct SetMarker {
     pub n: u32,
 }
 
-/// Colour the focused panel's selected rows (the palette's `Color: …`).
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
 pub struct SetTint {
     pub tint: Option<volna_core::wave::Tint>,
 }
 
-/// Open entry `ix` of the recent list (File ▸ Open Recent, the palette).
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = workspace, no_json)]
 pub struct OpenRecent {
     pub ix: usize,
 }
 
-/// The wall clock in Unix seconds, for recent-list times.
 pub(crate) fn unix_now() -> u64 {
     #[cfg(not(target_family = "wasm"))]
     return std::time::SystemTime::now()
@@ -172,7 +165,6 @@ pub(crate) fn unix_now() -> u64 {
     0
 }
 
-/// The home directory the recent list shows as `~`.
 pub(crate) fn home_dir() -> Option<String> {
     #[cfg(not(target_family = "wasm"))]
     return std::env::var("HOME")
@@ -183,7 +175,6 @@ pub(crate) fn home_dir() -> Option<String> {
     None
 }
 
-/// Menu and palette label of a recent entry: `top.vtr — ~/work/sim`.
 pub(crate) fn recent_labels(app: &CoreApp) -> Option<Vec<String>> {
     app.workspace.recent.enabled.then(|| {
         app.recent_rows(unix_now(), home_dir().as_deref())
@@ -193,16 +184,12 @@ pub(crate) fn recent_labels(app: &CoreApp) -> Option<Vec<String>> {
     })
 }
 
-/// A clock choice of the focused panel (a ruler, the selected clock, go to
-/// cycle), from the command palette.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
 pub struct ClockAction {
     pub command: volna_core::app::ClockCommand,
 }
 
-/// One trace's verbs from the command palette: reveal it in the scope tree,
-/// rename it, or close it.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = workspace, no_json)]
 pub struct TraceAction {
@@ -217,26 +204,20 @@ pub enum TraceVerb {
     Close,
 }
 
-/// Show the selected record in a Transaction panel (⏎, or a double-click on
-/// a pipeline row). The core chooses which panel, or opens one.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
 pub struct ShowTransaction;
 
-/// Open (or focus) the pipeline panel of a stream or generator, by its
-/// catalog identity. Listed in View ▸ Pipeline and the command palette.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
 pub struct OpenPipelineTrack {
     pub track: Traced<TrackRef>,
 }
 
-/// The recognized PIPELINE streams of the open traces: (label, track).
 pub(crate) fn pipeline_streams(app: &CoreApp) -> Vec<(String, Traced<TrackRef>)> {
     app.pipeline_streams()
 }
 
-/// Style half of the shaped-text cache's key: font, size and colour bits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct TextStyleKey {
     pub font: FontRole,
@@ -244,9 +225,6 @@ pub(crate) struct TextStyleKey {
     pub color: [u32; 4],
 }
 
-/// Shaped lines of the wave painter by style, then by text, so a hit looks
-/// up the borrowed text without allocating a key. Bounded: cleared when it
-/// reaches `limit` lines.
 #[derive(Default)]
 pub(crate) struct ShapedCache {
     lines: HashMap<TextStyleKey, HashMap<String, ShapedLine>>,
@@ -280,8 +258,6 @@ impl ShapedCache {
     }
 }
 
-/// The document generation, undo history revision, recent-list revision and
-/// trace set revision an application menu was built for.
 type MenuKey = (u64, u64, u64, u64);
 
 pub(crate) type OnWavesKey = (u64, u64);
@@ -289,7 +265,6 @@ pub(crate) type OnWaves = std::collections::HashSet<Traced<volna_trace::data::Me
 
 pub struct Workspace {
     pub app: CoreApp,
-    /// The window's light or dark appearance, which `volna` follows.
     system_dark: bool,
     #[cfg(target_family = "wasm")]
     pub(crate) remote: Option<crate::web_remote::Bridge>,
@@ -305,35 +280,21 @@ pub struct Workspace {
     pub(crate) scopes_scroll: UniformListScrollHandle,
     pub(crate) variables_scroll: UniformListScrollHandle,
     pub(crate) status_menu: Option<(gpui_kit::Point<Pixels>, Entity<PopupMenu>)>,
-    /// The name field of a trace being renamed, in its chip.
     pub(crate) trace_rename: Option<crate::traces::TraceRename>,
-    /// The members on the waves as of a rows revision (the member list's
-    /// marks), rebuilt only when rows change.
     pub(crate) on_waves: Option<(OnWavesKey, std::rc::Rc<OnWaves>)>,
     pub(crate) frame_view: crate::frame_stats::FrameView,
-    /// Mirrors the focused wave panel's menu.
     wave_menu: Option<HostedWaveMenu>,
-    /// The text field over what the core edits (`App::text_edit`): a group
-    /// or marker name.
     pub(crate) rename: Option<HostedRename>,
-    /// Display list buffer and shaped-text cache, reused across frames.
     pub(crate) scene: Scene,
     pub(crate) shaped: ShapedCache,
     pub(crate) presence_images: crate::canvas::PresenceImages,
-    /// Hide the native-style title bar (used inside the VS Code webview).
     pub embedded: bool,
-    /// The command line chose the workspace policy; `workspace.autosave` is ignored.
     pub(crate) cli_policy: bool,
-    /// What the application menu was last built for.
     menu_generation: Option<MenuKey>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) config_watcher: Option<notify::RecommendedWatcher>,
-    /// A workspace being opened by path: once its trace opens, the recent
-    /// list records the workspace instead of the trace.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) opening_workspace: Option<String>,
-    /// The document generation and recent-list revision the start page last
-    /// checked the recent files for.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) recent_checked: Option<(u64, u64)>,
 }
@@ -358,11 +319,7 @@ impl Focusable for Workspace {
     }
 }
 
-/// Register key bindings and the application menu.
 pub fn init(cx: &mut App) {
-    // Cockpit undo (`volna/README.md`, "Undo and redo"): ⌘Z / Ctrl+Z, and ⇧⌘Z, Ctrl+Y or
-    // Ctrl+Shift+Z to redo. Text fields bind the same keys in their own
-    // context, which wins while they have focus. VS Code forwards them.
     cx.bind_keys([
         KeyBinding::new("cmd-z", Undo, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-z", Undo, Some("Workspace && !Embedded")),
@@ -371,11 +328,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-y", Redo, Some("Workspace && !Embedded")),
     ]);
     crate::ui::text_input::bind_keys(cx);
-    // The marker navigator's keys, after gpui-kit's own so `Del` comes first.
     cx.bind_keys(crate::palette::key_bindings());
-    // gpui-kit inputs (settings search and JSON) bind their text undo for
-    // the platform only; bind the rest so no undo key falls through to the
-    // cockpit while one has focus.
     {
         use gpui_kit::component::input::{Redo as InputRedo, Undo as InputUndo};
         cx.bind_keys([
@@ -386,8 +339,6 @@ pub fn init(cx: &mut App) {
             KeyBinding::new("ctrl-y", InputRedo, Some("Input")),
         ]);
     }
-    // Editors, dialogs, and start-page recent-file shortcuts keep digits
-    // even though marker keys are available throughout the workspace.
     for n in 1..=9 {
         for key in [n.to_string(), format!("ctrl-{n}")] {
             cx.bind_keys([KeyBinding::new(
@@ -462,8 +413,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-,", OpenSettings, None),
         KeyBinding::new("cmd-k", CommandPalette, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-k", CommandPalette, Some("Workspace && !Embedded")),
-        // Interface zoom, as in VS Code: ⌘= / ⌘+ in, ⌘- out, ⌘0 reset.
-        // Embedded in VS Code the host's own zoom applies.
         KeyBinding::new("cmd-=", UiZoomIn, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-=", UiZoomIn, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-shift-=", UiZoomIn, Some("Workspace && !Embedded")),
@@ -528,8 +477,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-r", ClearReference, Some("Waves && !Table")),
         KeyBinding::new("z", ZoomToMeasurement, Some("Waves && !Table")),
         KeyBinding::new("'", MarkerNavigator, Some("Waves && !Table")),
-        // Bare keys: the table's row field lives in its panel, so not there.
-        // Other text fields are hosted outside the panels' key context.
         KeyBinding::new(".", NextMarker, Some("Waves && !Table")),
         KeyBinding::new(",", PrevMarker, Some("Waves && !Table")),
         KeyBinding::new("`", JumpBack, Some("Waves && !Table")),
@@ -589,16 +536,10 @@ pub fn init(cx: &mut App) {
     cx.set_menus(menus(&[], None, None, None));
 }
 
-/// "Undo Remove 2 rows". Labels keep sentence case: they name signals,
-/// groups and panels, which title case would change.
 pub(crate) fn edit_menu_title(verb: &str, label: Option<&str>) -> String {
     label.map_or_else(|| verb.to_owned(), |label| format!("{verb} {label}"))
 }
 
-/// The application menu. Edit names the steps undo and redo would take;
-/// View ▸ Pipeline lists the recognized PIPELINE streams of the open trace
-/// as shortcuts (any stream or generator can still be opened from the
-/// sidebar).
 pub(crate) fn menus(
     pipelines: &[(String, Traced<TrackRef>)],
     undo: Option<&str>,
@@ -711,7 +652,6 @@ pub(crate) fn menus(
     ]
 }
 
-/// Wire the ⌘1–⌘9 actions to panel focus by index on an element.
 macro_rules! focus_panel_actions {
     ($el:expr, $cx:expr, [$(($name:ident, $index:expr)),* $(,)?]) => {
         $el $(.on_action($cx.listener(|this: &mut Workspace, _: &$name, window, cx| {
@@ -724,7 +664,6 @@ macro_rules! focus_panel_actions {
     };
 }
 
-/// Wire every wave action to its core action on an element.
 macro_rules! wave_actions {
     ($el:expr, $cx:expr, [$($name:ident),* $(,)?]) => {
         $el $(.on_action($cx.listener(|this: &mut Workspace, _: &$name, window, cx| {
@@ -733,13 +672,8 @@ macro_rules! wave_actions {
     };
 }
 
-/// Width of the status bar's memory pill at zoom 1.0; fixed so the fill is
-/// a true proportion and the bar does not jitter as the numbers change.
 pub(crate) const MEMORY_PILL_W: f32 = 112.0;
 
-/// The status bar's memory budget meter: a pill whose tinted fill grows from
-/// the left behind the centred `used / limit` label. Near the limit the fill,
-/// border and label take the error colour.
 fn memory_meter(
     memory: volna_core::app::MemoryStatus,
     t: &crate::theme::Theme,
@@ -754,7 +688,6 @@ fn memory_meter(
     } else {
         (t.bar.icon_accent.alpha(0.24), t.border, t.bar.text)
     };
-    // A sliver stays visible once anything is loaded.
     let filled = if memory.used == 0 {
         0.0
     } else {
@@ -830,7 +763,6 @@ impl Workspace {
             TextInputEvent::Cancel => {}
         })
         .detach();
-        // `volna` follows the system's light or dark setting.
         cx.observe_window_appearance(window, |this, window, cx| {
             this.set_system_dark(crate::theme::is_dark(window.appearance()), cx)
         })
@@ -876,9 +808,6 @@ impl Workspace {
         workspace
     }
 
-    // -- the core loop ----------------------------------------------------------------
-
-    /// Send a command to the core and act on what it asks for.
     pub fn dispatch(
         &mut self,
         command: Command,
@@ -906,8 +835,6 @@ impl Workspace {
     pub(crate) fn after(&mut self, mut window: Option<&mut Window>, cx: &mut Context<Self>) {
         #[cfg(not(target_family = "wasm"))]
         self.check_recent();
-        // Focus moved to another panel: keep the name typed so far. Before
-        // the event loop, so the commit's events are handled with the rest.
         let panel = self.app.panels.focused_id();
         if let Some(h) = self.rename.as_ref().filter(|h| h.target.panel() != panel) {
             let text = h.input.read(cx).text().to_owned();
@@ -1038,9 +965,6 @@ impl Workspace {
         }
     }
 
-    /// Rebuild the application menu when the trace or the undo history
-    /// changes, so View ▸ Pipeline lists the streams of the open trace and
-    /// Edit names the steps undo and redo would take.
     fn sync_menus(&mut self, cx: &mut Context<Self>) {
         let key = (
             self.app.doc.generation(),
@@ -1060,7 +984,6 @@ impl Workspace {
         ));
     }
 
-    /// Perform queued loads on the background executor and deliver the results.
     fn run_requests(&mut self, cx: &mut Context<Self>) {
         #[cfg(target_family = "wasm")]
         self.sync_remote();
@@ -1073,7 +996,6 @@ impl Workspace {
         }
     }
 
-    /// Perform one load on the background executor and deliver its result.
     pub(crate) fn spawn_request(
         &mut self,
         request: volna_core::session::LoadRequest,
@@ -1090,7 +1012,6 @@ impl Workspace {
         .detach();
     }
 
-    /// Keep the GPUI popup in step with the core's panel context menu.
     fn sync_wave_menu(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         let panel = self.app.panels.focused_id();
         let Some(m) = self.app.menu() else {
@@ -1117,7 +1038,6 @@ impl Workspace {
                 None => item.label.clone(),
             };
             let entry = match &item.action {
-                // A colour choice leads with a swatch of the colour itself.
                 volna_core::wave::model::MenuAction::Tint(tint) => {
                     let tint = *tint;
                     PopupMenuItem::element(move |_, cx| {
@@ -1178,9 +1098,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Keep the text field in step with the core's text edit (a group or
-    /// marker name): open it with its text and focus it, and when the core
-    /// finishes or cancels, close it and give the keys back to the panel.
     fn sync_rename(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         let panel = self.app.panels.focused_id();
         let want = self.app.text_edit();
@@ -1188,8 +1105,6 @@ impl Workspace {
             return;
         }
         let Some(window) = window else {
-            // Close a finished field now, so its text is never committed
-            // twice; the panel takes the keys back at the next render.
             if self.rename.take().is_some() {
                 self.panel_focus_pending = true;
                 cx.notify();
@@ -1206,7 +1121,6 @@ impl Workspace {
             cx.notify();
         }
         let Some(edit) = want else { return };
-        // A marker's field is outlined in the marker's chip colour.
         let accent = match edit.target {
             volna_core::app::EditTarget::Marker { id, .. } => Some(crate::theme::hsla(
                 crate::theme::canvas_theme(cx)
@@ -1223,7 +1137,6 @@ impl Workspace {
                 None => input,
             };
             input.set_text(edit.text.clone(), cx);
-            // Typing replaces the text; Enter keeps it.
             if edit.select_all {
                 input.select_all(cx);
             }
@@ -1257,14 +1170,12 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Give the keys to the hosted name field, if one is open.
     pub(crate) fn focus_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(h) = &self.rename {
             window.focus(&h.input.read(cx).focus_handle(cx), cx);
         }
     }
 
-    /// A press elsewhere ends an edit by keeping the typed text.
     pub(crate) fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(h) = &self.rename {
             let command = Command::CommitText(h.target, Some(h.input.read(cx).text().to_owned()));
@@ -1272,7 +1183,6 @@ impl Workspace {
         }
     }
 
-    /// The core owns the filter text; the text box shows it.
     fn sync_filter(&mut self, cx: &mut Context<Self>) {
         let text = self.app.variables.filter.clone();
         if self.filter.read(cx).text() != text {
@@ -1280,9 +1190,6 @@ impl Workspace {
         }
     }
 
-    // -- trace loading ------------------------------------------------------------
-
-    /// Open a VTR or FST file from disk (native).
     #[cfg(not(target_family = "wasm"))]
     pub fn open_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
         if path.to_string_lossy().ends_with(".volna.json") {
@@ -1290,8 +1197,6 @@ impl Workspace {
             return;
         }
         self.opening_workspace = None;
-        // A workspace opened earlier chose its own file; a trace opened by
-        // itself goes back to the configured policy.
         if !self.cli_policy
             && !self.embedded
             && matches!(
@@ -1302,9 +1207,6 @@ impl Workspace {
             let policy = self.autosave_policy();
             self.app.configure_persistence(policy);
         }
-        // A canonical identity lets the workspace and the recent list find
-        // the trace again; a path that cannot be resolved still goes to the
-        // loader, which reports the error on the start page.
         match path
             .canonicalize()
             .map_err(anyhow::Error::from)
@@ -1318,13 +1220,11 @@ impl Workspace {
         self.after(None, cx);
     }
 
-    /// Open a trace image held in memory (used by the web bridge and drag-drop).
     pub fn open_bytes(&mut self, name: String, bytes: Vec<u8>, cx: &mut Context<Self>) {
         self.app.open_bytes(name, bytes);
         self.after(None, cx);
     }
 
-    /// Replace the session immediately (tests and hosts that already hold one).
     pub fn set_session(&mut self, session: std::sync::Arc<dyn Session>, cx: &mut Context<Self>) {
         self.app.set_session(session);
         self.after(None, cx);
@@ -1373,7 +1273,6 @@ impl Workspace {
 
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         if self.embedded {
-            // VS Code owns the settings UI; open it filtered to this extension.
             #[cfg(target_family = "wasm")]
             crate::web::open_host_settings();
             return;
@@ -1385,7 +1284,6 @@ impl Workspace {
         self.open_palette(window, cx);
     }
 
-    /// The settings tab's view (created when needed).
     pub(crate) fn settings_view(
         &mut self,
         id: volna_core::panels::PanelId,
@@ -1401,8 +1299,6 @@ impl Workspace {
         view
     }
 
-    /// React to resolved settings: re-project the theme, follow the
-    /// workspace policy unless the command line fixed it.
     fn settings_changed(&mut self, keys: &[&'static str], cx: &mut Context<Self>) {
         if keys.contains(&"appearance.theme") {
             self.apply_theme_setting(cx);
@@ -1419,7 +1315,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The workspace policy `workspace.autosave` asks for on this host.
     fn autosave_policy(&self) -> volna_core::workspace::persistence::Persistence {
         use volna_core::settings::Autosave;
         use volna_core::workspace::persistence::Persistence;
@@ -1429,7 +1324,6 @@ impl Workspace {
         }
     }
 
-    /// The system turned light or dark: re-resolve the theme that follows it.
     pub(crate) fn set_system_dark(&mut self, dark: bool, cx: &mut Context<Self>) {
         if self.system_dark != dark {
             self.system_dark = dark;
@@ -1437,8 +1331,6 @@ impl Workspace {
         }
     }
 
-    /// Install the theme `appearance.theme` names, in the system's current
-    /// appearance. Embedded hosts supply their own palette snapshot instead.
     pub(crate) fn apply_theme_setting(&mut self, cx: &mut Context<Self>) {
         if self.embedded {
             return;
@@ -1468,8 +1360,6 @@ impl Workspace {
         }
     }
 
-    /// The memory meter's menu: both limits as preset submenus, then the
-    /// Memory settings page. Choices edit settings through the core.
     pub(crate) fn open_memory_menu(
         &mut self,
         position: gpui_kit::Point<Pixels>,
@@ -1547,16 +1437,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// One-line summary of the viewer state, for diagnostics.
     pub fn debug_state(&self) -> String {
         self.app.debug_state()
     }
 
-    // -- rendering ----------------------------------------------------------------
-
-    /// While a splitter is being dragged, a transparent surface covers the
-    /// whole window so the pointer is tracked and released no matter which
-    /// element is under it (the way VS Code's sash overlay works).
     fn render_drag_surface(&self, drag: ChromeDrag, cx: &mut Context<Self>) -> impl IntoElement {
         let cursor = match drag {
             ChromeDrag::Sidebar => CursorStyle::ResizeLeftRight,
@@ -1571,7 +1455,6 @@ impl Workspace {
                 .cursor(cursor)
                 .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, window, cx| {
                     let command = match drag {
-                        // The width is kept at zoom 1.0 and scaled when laid out.
                         ChromeDrag::Sidebar => {
                             Command::SetSidebarWidth(f32::from(ev.position.x) / theme(cx).zoom)
                         }
@@ -1607,15 +1490,9 @@ impl Workspace {
         .with_priority(100)
     }
 
-    /// The title bar Volna draws on every desktop platform, after Zed's: the
-    /// window controls are native on macOS (traffic lights over the transparent
-    /// bar), drawn by Volna on Linux client-side decorations and on Windows
-    /// (see `ui::window_controls`), and the window manager's under Linux
-    /// server-side decorations.
     fn render_titlebar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
         let colors = t.bar;
-        // Several traces show as chips; one is named plainly.
         let chips = self.render_trace_chips(cx);
         let file: Option<SharedString> = chips
             .is_none()
@@ -1628,16 +1505,11 @@ impl Workspace {
         let is_macos = cfg!(target_os = "macos");
         let is_windows = cfg!(target_os = "windows");
         let supported = window.window_controls();
-        // Linux client-side decorations offer the compositor's window menu.
         let window_menu = app_draws_controls(window) && !is_windows && supported.window_menu;
-        // Double-click zooms: through AppKit's rules on macOS, and by
-        // maximizing where the window manager supports that on Linux. On
-        // Windows the platform handles the drag area itself.
         let zoom_on_double_click = is_macos || (supported.maximize && window.is_resizable());
         let left_pad = if fullscreen || left_controls.is_some() {
             t.px(8.0)
         } else if is_macos {
-            // Room for the traffic lights.
             t.px(80.0)
         } else {
             t.px(12.0)
@@ -1659,7 +1531,6 @@ impl Workspace {
             .text_size(px(t.ui_size))
             .when_some(left_controls, |el, controls| el.child(controls))
             .child(
-                // Everything left of the buttons drags the window; double-click zooms it.
                 div()
                     .id("titlebar-drag")
                     .flex()
@@ -1829,11 +1700,7 @@ impl Workspace {
         }
     }
 
-    /// The dock of canvas panels: the focusable, action-handling host of the
-    /// `PanelCanvas` elements.
     fn render_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // No key context here: each canvas sets its own, so the wave keys
-        // never reach the Settings, Transaction or Table text fields.
         let el = div().id("wave-view").size_full().relative();
         let mut dock = self
             .dock
@@ -1852,9 +1719,6 @@ impl Workspace {
         el.child(area)
     }
 
-    /// The start page: open a file, or reopen a recent one
-    /// (`volna/README.md`, "Workspace persistence"). It holds the center's focus so its keys
-    /// work as soon as it appears.
     fn render_empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
         let colors = t.editor;
@@ -2170,11 +2034,6 @@ impl Workspace {
             })
     }
 
-    /// The status bar: context on the left, a message slot, and fixed meters
-    /// on the right. The right group never shrinks and its changing numbers
-    /// keep a minimum width, so hover text and notices cannot move the meters;
-    /// when space runs out the message slot empties first, then the left
-    /// group is clipped.
     fn render_statusbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
         let colors = t.bar;
@@ -2187,7 +2046,6 @@ impl Workspace {
                 .text_color(color)
                 .child(SharedString::from(text))
         };
-        // Width of `chars` monospace characters at the status text size.
         let mono_w = |chars: f32| px(t.ui_size_small * 0.62 * chars);
         let sep = || div().flex_none().w(px(1.0)).h(t.px(12.0)).bg(t.border);
         let group = || div().flex().flex_none().items_center().gap_3();
@@ -2243,8 +2101,6 @@ impl Workspace {
             left = left.child(sep()).child(position);
         }
 
-        // Transient text: cropped with an ellipsis, never wider than the
-        // space the other groups leave.
         let crop = |text: String, color: gpui_kit::Hsla, mono_text: bool| {
             div()
                 .min_w_0()
@@ -2384,7 +2240,6 @@ impl Workspace {
 }
 
 impl Workspace {
-    /// The text field, laid over the renamed group's name or marker's chip.
     fn render_rename(&self) -> Option<impl IntoElement> {
         let hosted = self.rename.as_ref()?;
         let rect = self
@@ -2590,9 +2445,6 @@ impl Render for Workspace {
                 ToggleCursorLink
             ]
         );
-        // The panels' actions live here rather than on the dock, so the
-        // command palette, whose dialog is a child of this element and not of
-        // the dock, reaches them too. They act on the focused panel.
         root = root.on_action(cx.listener(|this, _: &OpenSignalMenu, window, cx| {
             let panel = this.app.panels.focused_id();
             this.dispatch(Command::OpenSignalMenu(panel), Some(window), cx);

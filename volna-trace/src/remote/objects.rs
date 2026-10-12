@@ -10,8 +10,6 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Resident raw metadata of one recording, validated (tree membership and
-/// track references) before installation.
 #[derive(Clone, Debug)]
 pub struct Metadata {
     pub info: TraceInfo,
@@ -34,8 +32,6 @@ impl Metadata {
         }
     }
 
-    /// Validate all references before installing resident metadata. A tree
-    /// traversal proves acyclicity as well as unique membership.
     pub fn validate(&self) -> anyhow::Result<()> {
         let mut validation = std::pin::pin!(self.validate_with(|| std::future::ready(())));
         match std::future::Future::poll(
@@ -59,8 +55,6 @@ impl Metadata {
             "reversed trace time range"
         );
         let h = &self.hierarchy;
-        // Parents precede children. This proves acyclicity without a traversal
-        // hash table proportional to the entire hierarchy.
         for (id, scope) in h.scopes().enumerate() {
             checkpoint().await;
             anyhow::ensure!(scope.parent.is_none_or(|p| p < id), "invalid scope parent");
@@ -154,8 +148,6 @@ pub struct GeneratorPayload {
     pub relations: Vec<LoadedRelation>,
 }
 
-/// Serializable form of a [`LoadedTrack`]. Transactions travel in
-/// `(begin, end, id)` order within each generator.
 #[derive(Debug, Serialize)]
 pub struct TrackPayload {
     pub track: TrackRef,
@@ -163,9 +155,6 @@ pub struct TrackPayload {
 }
 
 impl TrackPayload {
-    /// Borrow the backend's complete records for serialization. Only the
-    /// parent-location list is projected; records, attributes and relations
-    /// stay in their original immutable storage throughout the response.
     pub fn from_loaded(track: &LoadedTrack) -> impl Serialize + '_ {
         #[derive(Serialize)]
         struct Generator<'a> {
@@ -286,8 +275,6 @@ impl TrackPayload {
                 endpoint(edge.relation.from, edge.from_generator)?;
                 endpoint(edge.relation.to, edge.to_generator)?;
                 if let Some(previous) = relations.insert(edge.id, edge) {
-                    // Bitwise wire equality preserves NaNs and signed zero in
-                    // typed attributes; derived float equality does not.
                     anyhow::ensure!(
                         super::equality::relation(previous, edge, &mut checkpoint).await,
                         "inconsistent relation identity"

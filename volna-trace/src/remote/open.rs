@@ -1,5 +1,5 @@
-//! One asynchronous protocol-v6 Open. The catalog, pages and indexes stay
-//! private until every page's End and cooperative validation have completed.
+//! One asynchronous protocol-v6 Open.
+
 use super::ClientStep;
 use super::decode::{Decoder, Step};
 use super::hierarchy::{Assembly, Finished, PAGE_ENTRIES, Page, PageDecoder, PageSpec};
@@ -24,7 +24,6 @@ enum Decoded {
     },
 }
 
-/// Drives a bounded Open response and acknowledges only consumed chunks.
 pub struct OpenTransfer<Tag = u64> {
     request: u64,
     tag: Tag,

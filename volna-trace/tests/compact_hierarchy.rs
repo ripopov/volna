@@ -1,4 +1,5 @@
 //! Compact hierarchy parity and protocol-v5 admission/lifecycle tests.
+
 use std::sync::Arc;
 use volna_trace::data::{Hierarchy, ScopeSizes};
 use volna_trace::remote::ClientStep;
@@ -246,8 +247,6 @@ fn insufficient_page_budget_fails_at_begin_before_any_page_input() {
     );
     let before = budget.used();
     let (id, page) = objects.next().unwrap();
-    // Scratch and the wire payload fit, but resident column headers do not.
-    // Admission must still fail at Begin; no page bytes are fed.
     budget.set_limit(before + (DATA_BYTES + 8192) as u64 + page.len() as u64);
     let error = accept(
         &mut transfer,
@@ -283,7 +282,7 @@ fn malformed_ids_offsets_shapes_and_page_order_release_all_private_storage() {
             };
             let mut page: Page = bincode::deserialize(&objects[index].1).unwrap();
             match case {
-                0 => page.columns[3][0] = 0, // root cannot parent itself
+                0 => page.columns[3][0] = 0,
                 1 => page.columns[0][0] = u32::MAX,
                 2 => page.offsets[1] = u32::MAX,
                 3 => page.sizes[0].scopes = 0,
@@ -293,7 +292,7 @@ fn malformed_ids_offsets_shapes_and_page_order_release_all_private_storage() {
                 7 => {
                     page.columns[2][1] = 1;
                     page.columns[3][1] = 1;
-                } // incompatible alias
+                }
                 9 => page.ids[0] = u32::MAX,
                 10 | 11 => page.ids[1] = page.ids[0],
                 12 => page.names[0] = 0xff,
@@ -310,11 +309,11 @@ fn malformed_ids_offsets_shapes_and_page_order_release_all_private_storage() {
                         page.sizes.swap(0, 1);
                     }
                 }
-                17 => page.columns[5][0] = 8, // unknown direction/enum flag
+                17 => page.columns[5][0] = 8,
                 18 => {
                     page.columns[5][0] &= !4;
                     page.columns[7][0] = 1;
-                } // enum identity without presence flag
+                }
                 _ => unreachable!(),
             }
             objects[index].1 = bincode::serialize(&page).unwrap();

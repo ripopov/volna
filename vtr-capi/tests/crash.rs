@@ -1,15 +1,6 @@
+//! Crash guard integration tests across simulation termination modes.
+
 #![cfg(target_os = "linux")]
-//! The crash matrix exercises ways a simulation can
-//! end, run in a child process against the static library without and with
-//! the crash guard, with the file it leaves read back by the Rust reader.
-//!
-//! `tests/crash_harness.cpp` writes value changes and log records and then
-//! ends as asked. Each case states what the file must hold afterwards:
-//! `Full` is a complete file with every accepted change and log record and
-//! the ending the guard recorded; `Blocks` is a file recovered by scanning
-//! that keeps only completed signal blocks and no log records; `Written` is
-//! `Blocks` with every completed block present, which the inline encoder
-//! makes exact.
 
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -28,14 +19,9 @@ const SIGKILL: i32 = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Keeps {
-    /// A complete file with everything the writer accepted, ended as given.
     Full(Ending),
-    /// Recovered by scanning: completed signal blocks only, no log records.
     Blocks,
-    /// `Blocks`, and every block completed before the end is in the file.
     Written,
-    /// Recovered by scanning, with everything emitted more than the commit
-    /// interval (ms, plus slack) before SIGKILL: a slow run loses at most the interval.
     Committed(u64),
 }
 
@@ -51,7 +37,6 @@ struct Case {
     args: &'static [&'static str],
     env: &'static [(&'static str, &'static str)],
     ends: Ends,
-    /// Without the guard (`None`: guard-only case), and with it.
     keeps: Option<Keeps>,
     guarded: Keeps,
 }
@@ -98,9 +83,6 @@ const SLOW_OFF: &[&str] = &[
     "1200",
 ];
 
-/// Without a guard only a normal close keeps everything; with it, every
-/// ending a process can observe does, and SIGKILL, a rescue past its
-/// deadline and a fault inside the rescue keep what was written.
 const CASES: &[Case] = &[
     Case {
         name: "none",
@@ -174,7 +156,6 @@ const CASES: &[Case] = &[
         keeps: Some(Keeps::Blocks),
         guarded: Keeps::Full(Ending::Stopped { signal: SIGTERM }),
     },
-    // A program that never polls for the stop: the guard closes the writer after the grace period.
     Case {
         name: "deaf",
         mode: "deaf",
@@ -202,7 +183,6 @@ const CASES: &[Case] = &[
         keeps: Some(Keeps::Blocks),
         guarded: Keeps::Blocks,
     },
-    // Small blocks on the simulation thread: each finished section is in the file at once.
     Case {
         name: "kill-inline",
         mode: "kill",
@@ -221,7 +201,6 @@ const CASES: &[Case] = &[
         keeps: Some(Keeps::Blocks),
         guarded: crashed(SIGSEGV),
     },
-    // SIGKILL at two points of a slow run: it loses at most the commit interval; without one, everything.
     Case {
         name: "slowkill-1200",
         mode: "slowkill",
@@ -249,7 +228,6 @@ const CASES: &[Case] = &[
         keeps: Some(Keeps::Blocks),
         guarded: Keeps::Blocks,
     },
-    // The crashed thread gives up at a 1 s deadline, not when the 5 s rescue would end.
     Case {
         name: "stall",
         mode: "segv",
@@ -262,7 +240,6 @@ const CASES: &[Case] = &[
         keeps: None,
         guarded: Keeps::Blocks,
     },
-    // A rescue that faults: its signals are blocked, so the kernel ends the process with that fault.
     Case {
         name: "rescue-fault",
         mode: "abort",
@@ -274,7 +251,6 @@ const CASES: &[Case] = &[
     },
 ];
 
-/// What the harness reported before it died.
 #[derive(Debug, Default)]
 struct Emitted {
     changes: u64,
@@ -282,7 +258,6 @@ struct Emitted {
     dying_ms: Option<u64>,
 }
 
-/// What the file holds.
 #[derive(Debug)]
 struct Kept {
     recovered: bool,
@@ -307,7 +282,6 @@ fn build_harness(dir: &Path, name: &str, extra: &[&str]) -> PathBuf {
         .arg("-I")
         .arg(root.join("include"))
         .arg(root.join("tests/crash_harness.cpp"))
-        // The whole of crash safety: the guard (installed by the harness) and VTR's own heap.
         .arg(support::static_library_with(&["private-heap"]))
         .args(["-lpthread", "-ldl", "-lm"])
         .arg("-o")
@@ -323,13 +297,10 @@ fn monotonic_ms() -> u64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    // Safety: writes `ts`.
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     ts.tv_sec as u64 * 1000 + ts.tv_nsec as u64 / 1_000_000
 }
 
-/// Runs one ending with a hard timeout; returns how it ended, its stderr, and
-/// the monotonic time each stderr line arrived.
 fn run(exe: &Path, case: &Case, out: &Path, guard: bool) -> (Ends, String, Vec<(u64, String)>) {
     let mut cmd = Command::new(exe);
     cmd.arg(case.mode)
@@ -421,7 +392,6 @@ fn kept(path: &Path) -> Kept {
     }
 }
 
-/// Same kind of ending with the same signal, status and sealing (code, address and thread vary).
 fn same_ending(got: Ending, want: Ending) -> bool {
     match (got, want) {
         (
@@ -445,7 +415,6 @@ fn check(case: &Case, keeps: Keeps, ends: Ends, e: &Emitted, k: &Kept) -> Vec<St
     if ends != case.ends {
         problems.push(format!("ended {ends:?}, expected {:?}", case.ends));
     }
-    // The thread case keeps writing after it reports, so what it emitted is a lower bound.
     let grows = matches!(case.mode, "thread" | "deaf");
     match keeps {
         Keeps::Full(want) => {
@@ -503,7 +472,6 @@ fn crash_matrix() {
             eprintln!("{label:18} {ends:?} emitted {e:?} kept {k:?}");
             let mut problems = check(case, keeps, ends, &e, &k);
             if let Keeps::Committed(interval) = keeps {
-                // The last progress report old enough to be committed when the process was killed.
                 let field = |l: &str, name: &str| -> u64 {
                     l.split_whitespace()
                         .find_map(|w| w.strip_prefix(name))
@@ -558,7 +526,6 @@ fn crash_matrix() {
     );
 }
 
-/// AddressSanitizer's own handler still reports the fault after the guard's rescue.
 #[test]
 fn guard_chains_to_address_sanitizer() {
     let dir = tempfile::tempdir().unwrap();

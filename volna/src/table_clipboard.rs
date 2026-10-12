@@ -1,5 +1,4 @@
-//! Browser clipboard recovery. The complete, already bounded TSV is passed
-//! synchronously from the input handler so the host can preserve the gesture.
+//! Browser clipboard recovery.
 
 use wasm_bindgen::prelude::*;
 

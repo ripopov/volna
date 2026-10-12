@@ -217,7 +217,6 @@ pub fn hierarchy(path: &Path, depth: usize, vars: bool, sizes: bool) -> Result<(
     Ok(())
 }
 
-/// Groups digits in threes: 16261 -> "16,261".
 fn thousands(n: u32) -> String {
     let d = n.to_string();
     let mut out = String::new();
@@ -230,7 +229,6 @@ fn thousands(n: u32) -> String {
     out
 }
 
-/// Scopes to `max_depth` with their totals: an aliased signal counts once per scope.
 fn print_sizes(r: &Reader, max_depth: usize) {
     let (nodes, sizes) = r.hierarchy().scope_sizes();
     let mut depth = vec![0usize; nodes.len()];

@@ -1,44 +1,28 @@
-//! GPUI's view of the core theme: the resolved palette mapped to `Hsla` once
-//! when a theme is installed. All resolution (Volna, One Dark, host palettes,
-//! VS Code snapshots) lives in `volna_core::theme`; this module only converts.
-//!
-//! A window paints with two themes ([`Themes`]): the chrome, which every
-//! GPUI element and gpui-kit component reads, and the canvas theme the core
-//! paints the wave and pipeline panels with. Only Volna Mixed tells them apart.
+//! GPUI's view of the core theme: the resolved palette mapped to `Hsla` once when a theme
+//! is installed.
 
 use gpui_kit::component::{Theme as ComponentTheme, ThemeMode};
 use gpui_kit::{App, Global, Hsla, Pixels, px};
 
 pub use volna_core::theme::{Appearance, HostPalette, vscode};
 
-/// The chrome and canvas themes of one window, in core colours.
 pub type Themes = volna_core::theme::Themes;
 
-/// A resolved surface with GPUI colours.
 pub type Surface = volna_core::theme::Surface<Hsla>;
 
-/// The core theme with GPUI colours. Field names match the core theme.
 pub type Theme = volna_core::theme::Theme<Hsla>;
-/// The toolkit-neutral theme the painter uses.
 pub type CoreTheme = volna_core::theme::Theme;
 
 struct ThemeGlobal {
-    /// The installed themes at their design sizes (zoom 1.0).
     base: Themes,
-    /// `appearance.zoom`; `core`, `gpui` and `canvas` are `base` at this zoom.
     zoom: f32,
-    /// The chrome.
     core: CoreTheme,
     gpui: Theme,
-    /// The wave and pipeline panels.
     canvas: CoreTheme,
 }
 
 impl Global for ThemeGlobal {}
 
-/// Design-time pixel sizes at the current interface zoom, for the chrome
-/// Volna lays out itself (`t.px(12.0)` instead of `px(12.0)`). The theme's
-/// own metrics (`row_height`, `ui_size`, …) are already zoomed.
 pub trait ThemePx {
     fn px(&self, design_px: f32) -> Pixels;
 }
@@ -58,27 +42,15 @@ pub fn hsla(c: volna_core::Color) -> Hsla {
     }
 }
 
-/// Make `core` the whole window's theme without repainting (start-up). The
-/// interface zoom already installed is kept.
 pub fn set(core: CoreTheme, cx: &mut App) {
     set_themes(Themes::uniform(core), cx);
 }
 
-/// Make `themes` current without repainting, keeping the interface zoom.
 pub fn set_themes(themes: Themes, cx: &mut App) {
     let zoom = cx.try_global::<ThemeGlobal>().map_or(1.0, |g| g.zoom);
     set_zoomed(themes, zoom, cx);
 }
 
-/// Install `base` scaled by `zoom`. gpui-kit's defaults are a light palette;
-/// first adopt its own dark or light base for the appearance, then project
-/// every token the chrome reads (buttons, tabs, sidebar, group boxes, inputs,
-/// switches, lists, menus) from the core surfaces, so components Volna does
-/// not restyle still match. gpui-kit's `Root` sets the window's rem size from
-/// the component theme's `font_size`, so every rem-based size in its chrome
-/// (the settings editor, inputs, menus, dialogs, the palette) follows the
-/// zoomed UI font size; Volna's own chrome reads the zoomed metrics and
-/// [`ThemePx`].
 fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
     let core = base.chrome.zoomed(zoom);
     let canvas = base.canvas.zoomed(zoom);
@@ -98,7 +70,6 @@ fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
     kit.mono_font_size = px(t.ui_size);
     kit.radius = px(4.0);
     kit.focus_ring = false;
-    // Surfaces
     kit.background = t.panel.bg;
     kit.foreground = t.panel.text;
     kit.muted = t.hover.bg;
@@ -130,7 +101,6 @@ fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
     kit.scrollbar = gpui_kit::transparent_black();
     kit.scrollbar_thumb = t.scrollbar_thumb;
     kit.scrollbar_thumb_hover = t.scrollbar_thumb_hover;
-    // Buttons
     kit.button = t.badge.bg;
     kit.button_foreground = t.panel.text;
     kit.button_hover = t.hover.bg;
@@ -143,7 +113,6 @@ fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
     kit.button_secondary_foreground = t.panel.text;
     kit.button_secondary_hover = t.hover.bg;
     kit.button_secondary_active = t.selection.bg;
-    // Bars and tabs
     kit.title_bar = t.bar.bg;
     kit.title_bar_border = t.border;
     kit.status_bar = t.bar.bg;
@@ -154,7 +123,6 @@ fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
     kit.tab_active_foreground = t.editor.text;
     kit.tab_bar = t.bar.bg;
     kit.tab_bar_segmented = t.bar.bg;
-    // Sidebar, group boxes, lists and tables (the settings editor)
     kit.sidebar = t.panel.bg;
     kit.sidebar_foreground = t.panel.text;
     kit.sidebar_border = t.border;
@@ -183,7 +151,6 @@ fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
     kit.table_active = t.selection.bg;
     kit.table_active_border = t.border_focused;
     kit.table_row_border = t.border_variant;
-    // Controls
     kit.input = t.input_border;
     kit.switch = t.border;
     kit.switch_thumb = t.panel.text;
@@ -201,19 +168,15 @@ fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
     });
 }
 
-/// Presentation only; invalidate cached children without rebuilding viewer state.
 pub fn install(core: CoreTheme, cx: &mut App) {
     install_themes(Themes::uniform(core), cx);
 }
 
-/// Like [`install`] with separate chrome and canvas themes.
 pub fn install_themes(themes: Themes, cx: &mut App) {
     set_themes(themes, cx);
     cx.refresh_windows();
 }
 
-/// Apply `appearance.zoom`: re-project the installed palette at `zoom` and
-/// repaint. Like a theme change, viewer state is untouched.
 pub fn set_zoom(zoom: f32, cx: &mut App) {
     let base = cx.global::<ThemeGlobal>().base;
     set_zoomed(base, zoom, cx);
@@ -224,17 +187,14 @@ pub fn theme(cx: &App) -> &Theme {
     &cx.global::<ThemeGlobal>().gpui
 }
 
-/// The chrome theme in core colours.
 pub fn core_theme(cx: &App) -> &CoreTheme {
     &cx.global::<ThemeGlobal>().core
 }
 
-/// The theme the wave and pipeline panels paint with.
 pub fn canvas_theme(cx: &App) -> &CoreTheme {
     &cx.global::<ThemeGlobal>().canvas
 }
 
-/// Whether a window appearance is dark; `volna` follows it.
 pub fn is_dark(appearance: gpui_kit::WindowAppearance) -> bool {
     use gpui_kit::WindowAppearance::*;
     matches!(appearance, Dark | VibrantDark)

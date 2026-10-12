@@ -1,5 +1,4 @@
-//! Cooperative reader for the fixed bincode schema. Async field readers retain
-//! their position between bounded polls; no whole serialized object is buffered.
+//! Cooperative reader for the fixed bincode schema.
 
 use super::memory::{MemoryBudget, Reservation};
 use super::transport::DATA_BYTES;
@@ -40,10 +39,7 @@ impl<T> Decoder<T> {
         budget: &MemoryBudget,
         parse: impl FnOnce(Reader) -> Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send>>,
     ) -> anyhow::Result<Self> {
-        // Remote traces negotiate this limit with the server when they open.
         super::memory::check_object("the object", declared, limit, "reopen the trace")?;
-        // One incoming chunk and bounded string/scalar scratch. Decoded vector
-        // allocations are charged separately, before reserving their storage.
         let reader = Reader(Arc::new(Mutex::new(Input {
             chunk: Vec::new(),
             offset: 0,
@@ -155,7 +151,6 @@ impl Reader {
         .await
     }
 
-    /// End the current cooperative step, including bulk buffer initialization.
     pub async fn yield_now(&self) {
         let mut yielded = false;
         poll_fn(|_| {
@@ -250,7 +245,6 @@ impl Reader {
         self.elements(count, parse).await
     }
 
-    /// Check schema bounds before reserving or allocating collection storage.
     pub async fn bounded_vector<T, F, Fut>(
         &self,
         minimum: usize,

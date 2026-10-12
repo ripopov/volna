@@ -1,54 +1,34 @@
 //! The change history of one signal.
-//!
-//! Queries locate the last change at or before a time using binary or
-//! exponential search, then read values by index. Consumers can inspect a
-//! window without iterating every transition in the recording.
 
 use super::value::{Bit, SignalShape, WaveValue};
 
-/// Shared immutable access to a complete signal history. Indices range from
-/// zero to `len() - 1`; `None` denotes the value before the first entry.
 pub trait SignalHistory: Send + Sync {
-    /// Bytes owned by this completed history, excluding the `Arc` header.
-    /// Local-session admission uses this before publishing the owner.
     fn resident_bytes(&self) -> u64 {
         0
     }
 
     fn shape(&self) -> SignalShape;
 
-    /// Number of value changes.
     fn len(&self) -> usize;
 
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Time of change `i` (`i < len()`). Non-decreasing in `i`.
     fn time(&self, i: usize) -> u64;
 
-    /// Value after change `i`; `None` is the value before the first change.
     fn value(&self, i: Option<usize>) -> WaveValue;
 
-    /// Borrowed projection for bounded consumers. Procedural histories may use
-    /// the owned default when their generated values are intrinsically small.
     fn value_view(&self, i: Option<usize>) -> super::value_view::ValueView<'_> {
         super::value_view::ValueView::owned(self.value(i))
     }
 
-    /// True when no value can be unknown, floating, don't-care or weak
-    /// (two-state logic, reals, byte strings), so a painter need not read
-    /// values to learn their kinds. `false` when unknown.
     fn always_normal(&self) -> bool {
         false
     }
 
-    /// Fast path for 1-bit signals: the bit after change `i`.
-    /// Vectors and reals return [`Bit::Other`].
     fn bit(&self, i: Option<usize>) -> Bit;
 
-    /// Index of the last change with `time <= t`, `None` when `t` precedes the
-    /// first change. O(log n).
     fn index_at(&self, t: u64) -> Option<usize> {
         let n = self.len();
         if n == 0 || self.time(0) > t {
@@ -57,8 +37,6 @@ pub trait SignalHistory: Send + Sync {
         Some(bisect(self, 0, n, t))
     }
 
-    /// Like [`index_at`](Self::index_at) but starts an exponential search from
-    /// `hint`, so a sweep across pixel columns costs O(log gap) per column.
     fn index_at_hint(&self, t: u64, hint: usize) -> Option<usize> {
         let n = self.len();
         if n == 0 {
@@ -66,7 +44,6 @@ pub trait SignalHistory: Send + Sync {
         }
         let hint = hint.min(n - 1);
         if self.time(hint) <= t {
-            // Gallop forward: find hi with time(hi) > t or hi == n.
             let mut lo = hint;
             let mut step = 1usize;
             let mut hi = hint + 1;
@@ -80,11 +57,10 @@ pub trait SignalHistory: Send + Sync {
             }
             Some(bisect(self, lo, hi.min(n), t))
         } else {
-            // Gallop backward: find lo with time(lo) <= t, or conclude None.
             if self.time(0) > t {
                 return None;
             }
-            let mut hi = hint; // time(hi) > t
+            let mut hi = hint;
             let mut step = 1usize;
             let mut lo = hint.saturating_sub(step);
             while lo > 0 && self.time(lo) > t {
@@ -96,7 +72,6 @@ pub trait SignalHistory: Send + Sync {
         }
     }
 
-    /// Time of the first change strictly after `t`, if any.
     fn next_change_after(&self, t: u64) -> Option<u64> {
         let n = self.len();
         let start = match self.index_at(t) {
@@ -106,17 +81,12 @@ pub trait SignalHistory: Send + Sync {
         (start..n).map(|i| self.time(i)).find(|&ti| ti > t)
     }
 
-    /// Time of the last change strictly before `t`, if any.
     fn prev_change_before(&self, t: u64) -> Option<u64> {
-        // The last change at or before `t - 1`: one search, however many
-        // changes share a time.
         let i = self.index_at(t.checked_sub(1)?)?;
         Some(self.time(i))
     }
 }
 
-/// Narrow `[lo, hi)` to the last index with `time <= t`.
-/// Invariant: `time(lo) <= t`, and either `hi == len` or `time(hi) > t`.
 fn bisect<H: SignalHistory + ?Sized>(h: &H, mut lo: usize, mut hi: usize, t: u64) -> usize {
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
@@ -129,8 +99,6 @@ fn bisect<H: SignalHistory + ?Sized>(h: &H, mut lo: usize, mut hi: usize, t: u64
     lo
 }
 
-/// A history held entirely in memory as parallel `times`/`values` arrays,
-/// used by the FST loader, remote sessions and tests.
 pub struct VecHistory {
     pub shape: SignalShape,
     pub times: Vec<u64>,

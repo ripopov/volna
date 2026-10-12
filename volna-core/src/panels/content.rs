@@ -1,5 +1,4 @@
-//! Content lifecycle and journal dispatch. Layout callers describe the panel
-//! delta; each kind owns loading, retirement, saved state and property swaps.
+//! Content lifecycle and journal dispatch.
 
 use anyhow::{Context, Result};
 
@@ -7,7 +6,6 @@ use super::{Panel, PanelKind};
 use crate::document::Document;
 use crate::wave::model::Resident;
 
-/// Panel properties carry the owning kind's edit, rather than its fields.
 pub(crate) enum Prop {
     Title(Option<String>),
     Clocks {
@@ -47,7 +45,6 @@ impl crate::trace::Retime for Prop {
 }
 
 impl PanelKind {
-    /// A kind enters the live layout. Repeated adoption does not retain twice.
     pub(crate) fn adopt(&mut self, doc: &mut Document, resident: &Resident) -> Result<()> {
         match self {
             Self::Waves(w) => {
@@ -69,8 +66,6 @@ impl PanelKind {
         }
     }
 
-    /// A kind leaves the live layout. The journal keeps its description,
-    /// without loaded trace objects, builders, gestures or panel reservations.
     pub(crate) fn retire(&mut self, doc: &mut Document) {
         match self {
             Self::Waves(w) => w.detach_rows(),
@@ -81,9 +76,6 @@ impl PanelKind {
         }
     }
 
-    /// With a label, collect a trace's cockpit removals before closing its
-    /// dedicated panels. Without one, forget transient records after those
-    /// edits, or when a workspace replaces the whole view without journaling.
     pub(crate) fn forget_trace(
         &mut self,
         doc: &mut Document,

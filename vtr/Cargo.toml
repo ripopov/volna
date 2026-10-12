@@ -12,7 +12,6 @@ categories = ["encoding", "science"]
 
 [dependencies]
 zstd.workspace = true
-# For ZSTD_createCCtx_advanced: compression contexts allocate from the Rust global allocator.
 zstd-sys.workspace = true
 lz4_flex.workspace = true
 memmap2.workspace = true

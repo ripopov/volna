@@ -1,7 +1,4 @@
-//! A bounded row hierarchy over immutable records. Summaries are exact time
-//! unions, never bounding rectangles: a node with too many fragments descends
-//! to children or source stages. Bounds alone prove presence only when the
-//! entire nonempty node fits inside one physical pixel and the exact clip.
+//! A bounded row hierarchy over immutable records.
 
 use super::{activity::Activity, raster::PixelMap};
 use crate::{scene::PresenceMask, wave::viewport::Viewport};
@@ -22,7 +19,6 @@ struct Span {
     end: u64,
 }
 
-/// Heap topology and row ranges are implicit; no pointers or source copies.
 #[derive(Clone, Copy, Debug)]
 struct Node {
     begin: u64,
@@ -57,9 +53,6 @@ pub(crate) struct RowIndex {
 }
 
 impl RowIndex {
-    /// Refused summaries are optional. Source refinement remains exact and
-    /// requires no extra retained record storage. Checkpoints also cover stages
-    /// in a single unusually large transaction and every internal merge.
     pub(crate) async fn build<F: std::future::Future<Output = ()>>(
         records: &[Transaction],
         budget: Option<&MemoryBudget>,
@@ -220,7 +213,6 @@ impl RowIndex {
             return;
         }
         let node = self.nodes[i];
-        // An empty union is still allowed to carry lifetime/activity metadata.
         if node.begin > node.end {
             return;
         }
@@ -506,7 +498,6 @@ fn insert(union: &mut Vec<Span>, span: Span) {
     let mut len = 0;
     for i in 0..union.len() {
         let span = union[i];
-        // A point at the right edge of a half-open interval must survive.
         if len > 0
             && (span.begin < union[len - 1].end
                 || span.begin == union[len - 1].end && span.end > span.begin

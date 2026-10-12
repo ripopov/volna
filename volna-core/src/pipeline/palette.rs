@@ -1,13 +1,4 @@
-//! Stage colours. Each stage name on the primary lane gets a step of the
-//! theme's stage ladder in pipeline order: names are ranked by their mean
-//! position within a transaction's primary-lane stages (ties by first
-//! appearance), so hues run from fetch to retire whatever order the trace
-//! first shows them in. The theme turns a rank into colours
-//! ([`Theme::stage_style`]), so one palette serves a dark pipeline and a light
-//! transaction panel. The counts come from each generator's `StageCensus`,
-//! taken once at load, so building a palette indexes lanes and sorts distinct names rather than
-//! a scan of every record. A future stage table can fill the same struct with
-//! authored colours; the painter only ever asks for `style(name, theme)`.
+//! Stage colours.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,22 +14,16 @@ pub struct StageStyle {
     pub text: Color,
 }
 
-/// Where a stage sits on the theme's ladder, resolved to colours by
-/// [`Theme::swatch`] with whichever theme paints it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StageSwatch {
-    /// Step `rank` of a ladder of `of` stages.
     Step { rank: usize, of: usize },
-    /// Grey: a name outside the ladder, or a transaction without stages.
     Fallback,
 }
 
-/// Konata's default lane, used as the primary lane whenever it occurs.
 pub const DEFAULT_LANE: &str = "0";
 
 #[derive(Clone, Debug)]
 pub struct StagePalette {
-    /// Rank in pipeline order.
     by_name: HashMap<String, usize>,
     names: Vec<String>,
     primary_lane: String,
@@ -55,12 +40,7 @@ impl Default for StagePalette {
 }
 
 impl StagePalette {
-    /// The ladder over every stage name on the primary lane of `generators`.
-    /// The primary lane is `0` when any stage uses it, otherwise the lane
-    /// with the most stages (ties go to the first seen).
     pub fn build(generators: &[Arc<LoadedGenerator>]) -> Self {
-        // Merging the census of each generator in order keeps first
-        // appearance across generators, so no record is scanned here.
         Self::from_censuses(generators.iter().map(|g| g.stage_census()))
     }
 
@@ -86,7 +66,6 @@ impl StagePalette {
                 .map(|(lane, _)| (*lane).to_owned())
                 .unwrap_or_else(|| DEFAULT_LANE.to_owned())
         };
-        // Per name in first-appearance order: the sum and count of its positions.
         let mut seen: Vec<(&str, u64, u64)> = Vec::new();
         let mut name_index = HashMap::new();
         for census in lanes()
@@ -101,7 +80,6 @@ impl StagePalette {
             seen[index].2 += census.count;
         }
         let mut order: Vec<usize> = (0..seen.len()).collect();
-        // A stable sort keeps first appearance among equal positions.
         order.sort_by(|&a, &b| {
             let mean = |i: usize| seen[i].1 as f64 / seen[i].2 as f64;
             mean(a).total_cmp(&mean(b))
@@ -127,7 +105,6 @@ impl StagePalette {
             + self.by_name.keys().map(String::capacity).sum::<usize>()) as u64
     }
 
-    /// Where stage `name` sits on the ladder.
     pub fn swatch(&self, name: &str) -> StageSwatch {
         match self.by_name.get(name) {
             Some(&rank) => StageSwatch::Step {
@@ -138,19 +115,14 @@ impl StagePalette {
         }
     }
 
-    /// The colours of stage `name` in `theme`; names outside the ladder are grey.
     pub fn style(&self, name: &str, theme: &Theme) -> StageStyle {
         theme.swatch(self.swatch(name))
     }
 
-    /// Stage names in ladder order.
     pub fn names(&self) -> &[String] {
         &self.names
     }
 
-    /// Stages on this lane are cells; every other lane is an overlay band.
-    /// The empty name is a lane like any other: the vtr_trace package writes
-    /// its default lane as `""`.
     pub fn primary_lane(&self) -> &str {
         &self.primary_lane
     }
@@ -198,7 +170,6 @@ mod tests {
 
     #[test]
     fn ladder_follows_pipeline_position_on_the_primary_lane() {
-        // X first appears before D, but sits later in the pipeline on average.
         let g = generator(&[
             &[("F", "0"), ("stl", "1"), ("X", "0")],
             &[("F", "0"), ("D", "0"), ("X", "0")],
@@ -217,7 +188,6 @@ mod tests {
         assert_eq!(p.primary_lane(), "main");
         assert_eq!(p.names(), ["F", "W"]);
         assert_eq!(StagePalette::default().primary_lane(), "0");
-        // The vtr_trace package's default lane is the empty name.
         let unnamed = generator(&[&[("F", ""), ("S", "stall"), ("X", "")]]);
         let p = StagePalette::build(&[unnamed]);
         assert_eq!(p.primary_lane(), "");
@@ -226,9 +196,6 @@ mod tests {
 
     #[test]
     fn a_dozen_stages_keep_pipeline_order_and_neighbours_apart() {
-        // The C910 tracer's stages: alternatives (EX, BJ, AG) at the same position,
-        // an LSU path that makes CM and RT later on average, and first appearance
-        // out of pipeline order.
         let alu: &[(&str, &str)] = &[
             ("ID", ""),
             ("IR", ""),
@@ -277,7 +244,6 @@ mod tests {
             assert!((a.l - b.l).abs() > 0.1, "{pair:?} differ in lightness");
             assert!(a.h != b.h);
         }
-        // Few stages keep one lightness.
         let few = StagePalette::build(&[generator(&[alu])]);
         assert!(
             few.names()
@@ -288,8 +254,6 @@ mod tests {
 
     #[test]
     fn generators_merge_as_one_record_list() {
-        // X is seen before D, but D sits earlier once both generators count;
-        // lane "p" is primary only by the combined stage count.
         let first: &[&[(&str, &str)]] = &[&[("F", "p"), ("X", "p")], &[("s", "q"), ("s", "q")]];
         let second: &[&[(&str, &str)]] = &[
             &[("F", "p"), ("D", "p"), ("X", "p")],

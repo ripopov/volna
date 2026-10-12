@@ -1,7 +1,5 @@
-//! The prepared view of one recorded transaction: a pure function of the
-//! resident record, the document's time base and the reader's preferences.
-//! Nothing here touches a reader, a transport or a panel; the frontends only
-//! render what this produces, and the headless tests assert on it directly.
+//! The prepared view of one recorded transaction: a pure function of the resident record,
+//! the document's time base and the reader's preferences.
 
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
@@ -21,10 +19,7 @@ use volna_trace::data::transactions::{
     AttributeValue, Attributes, TrackKind, TrackRef, Transaction, TransactionRef, TxKind, TxStatus,
 };
 
-/// Bytes one prepared view may materialize. A record whose attributes exceed
-/// it is cut with the total still stated, as the table cuts a row.
 pub const VIEW_BYTES: usize = 128 * 1024;
-/// Attributes above this count get a filter box in the frontends.
 pub const FILTER_THRESHOLD: usize = 8;
 
 fn clock_time(clock: Option<&Clock>, time: u64) -> Option<String> {
@@ -88,10 +83,8 @@ mod clock_readout_tests {
     }
 }
 
-/// Attribute keys carrying a folded FTR phase.
 const PHASES: [&str; 2] = ["record", "end"];
 
-/// A collapsible section, addressed by both frontends and the workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SectionKey {
     Attributes,
@@ -131,8 +124,6 @@ impl SectionKey {
     }
 }
 
-/// What the reader chose, not what the recording says: the per-key radix, the
-/// collapsed sections, the attribute filter and the per-section row limit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewPrefs {
     pub detail_items: usize,
@@ -158,16 +149,12 @@ impl ViewPrefs {
     }
 }
 
-/// A bounded list whose heading always states the recorded total.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Section<T> {
     pub key: SectionKey,
-    /// Entries in the record.
     pub total: usize,
-    /// Entries left by the filter; equal to `total` when nothing filters.
     pub matched: usize,
     pub collapsed: bool,
-    /// At most `ViewPrefs::detail_items` rows.
     pub rows: Vec<T>,
 }
 
@@ -180,18 +167,13 @@ impl<T> Section<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Identity {
     pub track: Traced<TrackRef>,
-    /// The owning stream's path; empty when the generator has no stream.
     pub stream: Vec<String>,
     pub generator: String,
-    /// Position in the generator's record order.
     pub ordinal: usize,
     pub id: TransactionRef,
-    /// `vtr.label`; the title, never an attribute row.
     pub label: Option<String>,
     pub status: TxStatus,
-    /// The word on the badge; `TxStatus::name` is its tooltip.
     pub status_text: &'static str,
-    /// The OpenTelemetry span kind, when the producer set one.
     pub kind: Option<&'static str>,
     pub parent: Option<TransactionRef>,
 }
@@ -199,16 +181,13 @@ pub struct Identity {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Timing {
     pub begin: u64,
-    /// `None` while the record is open; never a fabricated end.
     pub end: Option<u64>,
     pub duration: u64,
     pub begin_text: String,
     pub end_text: String,
-    /// `≥` prefixed while open.
     pub duration_text: String,
 }
 
-/// One lane of the record's own Gantt, the primary lane first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LaneRow {
     pub lane: String,
@@ -221,11 +200,9 @@ pub struct LaneCell {
     pub name: String,
     pub begin: u64,
     pub end: u64,
-    /// Offset and width as fractions of the lifetime, for any pixel width.
     pub start: f32,
     pub width: f32,
     pub swatch: StageSwatch,
-    /// Index of the stage in the record, or `None` for a stageless lifetime.
     pub stage: Option<usize>,
 }
 
@@ -238,13 +215,10 @@ pub struct EventTick {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AttrRow {
-    /// The key without its folded phase suffix.
     pub key: String,
-    /// Index in the recorded attribute array; resolves the full key on interaction.
     pub attribute: usize,
     pub phase: Option<&'static str>,
     pub value: String,
-    /// The radix in effect, for integers only.
     pub radix: Option<Radix>,
     pub kind: &'static str,
     pub truncated: bool,
@@ -264,7 +238,6 @@ pub struct StageRow {
     pub begin: u64,
     pub end: Option<u64>,
     pub duration: u64,
-    /// Share of the lifetime, in `[0, 1]`.
     pub share: f32,
     pub swatch: StageSwatch,
     pub begin_text: String,
@@ -287,64 +260,47 @@ pub struct EventRow {
 pub enum RefRole {
     Parent,
     Child,
-    /// A recorded relation; `outgoing` is this record as the source.
-    Relation {
-        outgoing: bool,
-    },
+    Relation { outgoing: bool },
 }
 
-/// One reachable record: the parent, a child, or a relation's other end.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RefRow {
     pub role: RefRole,
-    /// `Parent`, `Children`, or `wakeup · from`.
     pub group: String,
-    /// The related record, in the shown record's trace.
     pub target: TransactionLocation,
     pub trace: crate::trace::TraceId,
-    /// The target's caption, when its generator is loaded.
     pub label: Option<String>,
-    /// The target's generator path when it is not this record's.
     pub track: Option<Vec<String>>,
-    /// The relation's own `vtr.label`, when it has one.
     pub relation_label: Option<String>,
-    /// False when the target's generator is not resident; a jump loads it.
     pub loaded: bool,
 }
 
 impl RefRow {
-    /// The related record's generator, where a jump goes.
     pub fn target_track(&self) -> Traced<TrackRef> {
         Traced::new(self.trace, self.target.generator)
     }
 }
 
-/// Everything a Transaction panel draws for one record.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TxView {
     pub identity: Identity,
     pub timing: Timing,
     pub lifeline: Vec<LaneRow>,
     pub event_ticks: Vec<EventTick>,
-    /// The shared cursor as a fraction of the lifetime, when it falls inside.
     pub cursor: Option<f32>,
     pub attributes: Section<AttrRow>,
     pub stages: Section<StageRow>,
     pub events: Section<EventRow>,
     pub related: Section<RefRow>,
-    /// The admitted byte budget cut a value short.
     pub truncated_bytes: bool,
 }
 
 impl TxView {
-    /// Whether the frontends offer a filter box over the attributes.
     pub fn filterable(&self) -> bool {
         self.attributes.total > FILTER_THRESHOLD
     }
 }
 
-/// Build the view of `id` in `track`, or `None` when the generator is not
-/// resident or holds no such record.
 pub fn view(
     doc: &Document,
     track: Traced<TrackRef>,
@@ -356,7 +312,6 @@ pub fn view(
     let session = doc.session(track.trace)?;
     let catalog = session.tracks();
     let declaration = catalog.iter().find(|t| t.id == track.item)?;
-    // Leave room for bounded formatting temporaries while output grows.
     let mut budget = Budget::new(VIEW_BYTES - 4096);
     let stream = match declaration.kind {
         TrackKind::Generator { stream } => catalog
@@ -455,8 +410,6 @@ pub fn view(
     })
 }
 
-/// Admit owned strings, collection capacities and bounded sorting scratch.
-/// Recorded totals survive truncation so omitted detail stays visible.
 struct Budget {
     remaining: usize,
     truncated: bool,
@@ -470,7 +423,6 @@ impl Budget {
         }
     }
 
-    /// A string bounded by what is left, never more than one preview.
     fn text(&mut self, value: &str) -> String {
         let room = self.remaining.min(PREVIEW_BYTES);
         let out = truncate_ref(value, room);
@@ -479,7 +431,6 @@ impl Budget {
         out
     }
 
-    /// An attribute rendered in `radix`, bounded the same way.
     fn value(&mut self, value: &AttributeValue, radix: Radix) -> (String, bool) {
         let room = self.remaining.min(PREVIEW_BYTES);
         let mut out = format_attribute_radix(value, radix, room);
@@ -490,7 +441,6 @@ impl Budget {
         (out, cut)
     }
 
-    /// Admit the next vector slot before any associated strings are built.
     fn slot<T>(&mut self, rows: &mut Vec<T>) -> bool {
         if rows.len() < rows.capacity() {
             return true;
@@ -517,8 +467,6 @@ impl Budget {
         out
     }
 
-    /// Select the first ordered items with bounded scratch, keeping recording
-    /// order in the key as a final tie breaker. Never collect the whole record.
     fn ordered<K: Ord, V>(
         &mut self,
         items: impl Iterator<Item = (K, V)>,
@@ -564,7 +512,6 @@ impl<K: Ord, V> Ord for Ranked<K, V> {
     }
 }
 
-/// Case-insensitive matching without copying an arbitrarily long recorded key.
 fn contains_folded(text: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
@@ -580,7 +527,6 @@ fn contains_folded(text: &str, needle: &str) -> bool {
 
 fn status_text(status: TxStatus) -> &'static str {
     match status {
-        // `Unset` means the record ended without a status, not that it failed.
         TxStatus::Unset => "ended",
         TxStatus::Ok => "ok",
         TxStatus::Error => "error",
@@ -618,7 +564,6 @@ fn value_kind(value: &AttributeValue) -> &'static str {
     }
 }
 
-/// Split a folded FTR phase suffix off a key (`addr.end` → `addr`, `end`).
 fn split_phase(key: &str) -> (&str, Option<&'static str>) {
     for phase in PHASES {
         if let Some(base) = key.strip_suffix(phase)
@@ -641,7 +586,6 @@ fn lifeline(
     let primary = palette.primary_lane();
     let mut lanes: Vec<LaneRow> = Vec::new();
     for (index, stage) in tx.stages.iter().enumerate().take(limit) {
-        // There can be at most detail_items lanes, so this lookup is bounded.
         let row = match lanes.iter().position(|l| {
             l.cells
                 .first()
@@ -722,7 +666,6 @@ fn attributes(
     budget: &mut Budget,
 ) -> Section<AttrRow> {
     let filter = prefs.filter.trim();
-    // The caption is the panel's title, so it is never an attribute row.
     let listed = tx
         .attributes
         .iter()
@@ -877,8 +820,6 @@ fn related(
         transaction: tx.id,
         generator: track.item,
     };
-    // Count every related record, but build only the rows shown: a parent
-    // may have a great many children or relations.
     let parent = generator.parent(tx.id);
     let children = || {
         doc.resident_generators(track.trace).flat_map(move |other| {
@@ -891,8 +832,6 @@ fn related(
                 })
         })
     };
-    // Relations are grouped by kind, then outgoing before incoming; within a
-    // group they keep recording order.
     let outgoing = |e: &volna_trace::data::loaded_tracks::LoadedRelation| {
         e.relation.from == tx.id && e.from_generator == track.item
     };
@@ -992,7 +931,6 @@ fn related(
     }
 }
 
-/// The complete record as TSV, refused rather than cut past `limit` bytes.
 pub fn copy_tsv(
     doc: &Document,
     track: Traced<TrackRef>,

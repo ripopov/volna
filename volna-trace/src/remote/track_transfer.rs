@@ -1,4 +1,5 @@
 //! Complete-object delivery of one complete transaction track.
+
 use super::ClientStep;
 use super::memory::MemoryBudget;
 use super::tracks::{TrackDecoder, TrackStep};
@@ -8,10 +9,6 @@ use crate::data::transactions::TrackRef;
 use crate::session::{LoadResult, Session};
 use std::sync::Arc;
 
-/// Receives one track and publishes [`LoadResult::Track`] with the original
-/// caller generation and request identity after the protocol End.
-/// Admission or record failures drain the object into a track error; protocol
-/// errors poison the transfer and are returned by `accept`.
 pub struct TrackTransfer<Tag = u64> {
     tag: Tag,
     generation: u64,
@@ -145,8 +142,6 @@ impl<Tag: Copy> TrackTransfer<Tag> {
                 }
             }
             Err(error) => {
-                // Drain the remainder with backpressure, releasing private
-                // allocations immediately. Later requests can still succeed.
                 self.decoder = None;
                 self.rejected = Some(format!("{error:#}"));
             }

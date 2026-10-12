@@ -17,7 +17,6 @@ fn bulk_owners_preserve_order_duplicates_and_missing_ids_across_blocks() {
     let ids: Vec<_> = (0..32)
         .map(|i| writer.begin_tx(if i % 2 == 0 { a } else { b }, i).unwrap())
         .collect();
-    // End in a different order, producing blocks whose ID ranges overlap.
     for (position, &i) in [
         0, 31, 2, 29, 4, 27, 6, 25, 8, 23, 10, 21, 12, 19, 14, 17, 16, 15, 18, 13, 20, 11, 22, 9,
         24, 7, 26, 5, 28, 3, 30, 1,

@@ -1,15 +1,4 @@
 //! The traces a document shows together.
-//!
-//! Every open file is a [`TraceSlot`] of the document's [`TraceSet`], named
-//! by a letter: A is the first. Everything that names trace data — a signal,
-//! a variable, a scope, a track, a clock — is local to one trace's session,
-//! so the rest of the viewer pairs it with its [`TraceId`] as a
-//! [`Traced`] value. There is no primary trace: a panel or row that shows
-//! trace data says which trace it comes from.
-//!
-//! Each trace keeps its own time unit on disk. The set places every trace on
-//! one session timeline ([`Placement`]) in the finest unit among them, so an
-//! FST in picoseconds and a VTR in nanoseconds share one ruler exactly.
 
 mod names;
 mod placement;
@@ -22,19 +11,13 @@ pub use placement::Placement;
 use volna_trace::data::TraceInfo;
 use volna_trace::session::Session;
 
-/// One trace of the set, by its letter. Letters are handed out lowest free
-/// first and never change while the trace is open, so a workspace names
-/// rows and panels by them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TraceId(u8);
 
 impl TraceId {
-    /// The first trace opened.
     pub const A: TraceId = TraceId(0);
-    /// Letters A to Z.
     pub const MAX: usize = 26;
 
-    /// The `index`th letter (0 is A).
     pub fn new(index: usize) -> Option<Self> {
         (index < Self::MAX).then_some(TraceId(index as u8))
     }
@@ -53,13 +36,11 @@ impl TraceId {
             .then(|| TraceId(letter as u8 - b'A'))
     }
 
-    /// Whether this is A, which workspaces leave unsaid.
     pub fn is_a(&self) -> bool {
         *self == TraceId::A
     }
 }
 
-/// Rows and panels of a one-trace workspace name no trace: they are A's.
 impl Default for TraceId {
     fn default() -> Self {
         TraceId::A
@@ -72,7 +53,6 @@ impl std::fmt::Display for TraceId {
     }
 }
 
-/// Workspaces store a trace as its letter.
 impl serde::Serialize for TraceId {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.collect_str(self)
@@ -92,8 +72,6 @@ impl<'de> serde::Deserialize<'de> for TraceId {
     }
 }
 
-/// Something that belongs to one trace: a signal, a variable, a scope, a
-/// member, a track or a clock path. Stored as `[letter, item]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Traced<T> {
     pub trace: TraceId,
@@ -105,7 +83,6 @@ impl<T> Traced<T> {
         Self { trace, item }
     }
 
-    /// The same trace with another item.
     pub fn with<U>(&self, item: U) -> Traced<U> {
         Traced::new(self.trace, item)
     }
@@ -128,8 +105,6 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Traced<T> {
     }
 }
 
-/// The unit of the session timeline: `10^timescale` seconds, or a
-/// producer-named unit (`cycle`) that is never rescaled.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unit {
     pub timescale: i8,
@@ -144,9 +119,6 @@ impl Unit {
         }
     }
 
-    /// How many of `self` make one of `coarser`, when both are SI units and
-    /// `coarser` is not finer. `None` when a producer-named unit is involved
-    /// or the factor does not fit in a `u64`.
     fn factor_to(&self, coarser: &Unit) -> Option<u64> {
         if self.name.is_some() || coarser.name.is_some() {
             return (self == coarser).then_some(1);
@@ -155,7 +127,6 @@ impl Unit {
         10u64.checked_pow(steps)
     }
 
-    /// `ns`, `ps`, or the producer's name.
     pub fn label(&self) -> String {
         match &self.name {
             Some(name) => name.clone(),
@@ -164,7 +135,6 @@ impl Unit {
     }
 }
 
-/// Whether a trace is open yet.
 #[derive(Clone)]
 pub enum SlotState {
     Loading,
@@ -172,25 +142,15 @@ pub enum SlotState {
     Error(String),
 }
 
-/// One open trace: where it came from, its session once opened, and where
-/// its times sit on the session timeline.
 #[derive(Clone)]
 pub struct TraceSlot {
     pub id: TraceId,
-    /// Where it was opened from, as a path or URI; names are derived from it.
     pub source: String,
-    /// Its durable identity for workspaces and the recent list, when the
-    /// host gave one.
     pub uri: Option<String>,
-    /// A name the user gave it; otherwise [`TraceSet::name`] derives one.
     pub rename: Option<String>,
     pub(crate) state: SlotState,
-    /// Loads requested under another generation are stale. Every slot gets
-    /// a fresh one when it is added and when its placement changes.
     pub(crate) generation: u64,
     pub(crate) placement: Placement,
-    /// Its scope sizes, once counted; they belong to the session and
-    /// survive a close that is undone.
     pub(crate) sizes: Option<Arc<volna_trace::data::ScopeSizes>>,
 }
 
@@ -208,7 +168,6 @@ impl TraceSlot {
         }
     }
 
-    /// Its scope sizes; `None` until the count after open finishes.
     pub fn sizes(&self) -> Option<&volna_trace::data::ScopeSizes> {
         self.sizes.as_deref()
     }
@@ -232,13 +191,10 @@ impl TraceSlot {
         self.placement
     }
 
-    /// The file name, as a loading chip shows it.
     pub fn file_name(&self) -> &str {
         names::file_name(&self.source)
     }
 
-    /// The format its session was read from: `VTR`, `FST`, or `remote`
-    /// for a recording a host serves.
     pub fn format(&self) -> Option<&'static str> {
         let session = self.session()?;
         Some(
@@ -252,12 +208,10 @@ impl TraceSlot {
         )
     }
 
-    /// Its own time unit.
     pub fn unit(&self) -> Option<Unit> {
         self.session().map(|s| Unit::of(s.info()))
     }
 
-    /// Its time range on the session timeline.
     pub fn range(&self) -> Option<(u64, u64)> {
         let (start, end) = self.session()?.info().time_range;
         Some((
@@ -267,16 +221,10 @@ impl TraceSlot {
     }
 }
 
-/// The traces of one document, in letter order, and the unit of the
-/// timeline they share.
 #[derive(Clone, Default)]
 pub struct TraceSet {
     slots: Vec<TraceSlot>,
-    /// Set by the first trace that opens and refined by finer ones; never
-    /// coarsened while the document lives, so times already shown keep
-    /// their precision.
     unit: Option<Unit>,
-    /// Counts every change of a slot (see [`TraceSet::revision`]).
     revision: u64,
 }
 
@@ -293,7 +241,6 @@ impl TraceSet {
         self.slots.is_empty()
     }
 
-    /// Whether more than one trace is open, so rows and panels show letters.
     pub fn is_combined(&self) -> bool {
         self.slots.len() > 1
     }
@@ -311,8 +258,6 @@ impl TraceSet {
         self.slots.iter_mut().find(|s| s.id == id)
     }
 
-    /// Changes whenever a trace joins, leaves, opens, is renamed or placed
-    /// anew: what frontends derive from the set holds until then.
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -321,14 +266,12 @@ impl TraceSet {
         self.get(id)?.session()
     }
 
-    /// The opened traces and their sessions.
     pub fn loaded(&self) -> impl Iterator<Item = (TraceId, &Arc<dyn Session>)> {
         self.slots
             .iter()
             .filter_map(|s| s.session().map(|session| (s.id, session)))
     }
 
-    /// The first opened trace.
     pub fn first_loaded(&self) -> Option<(TraceId, &Arc<dyn Session>)> {
         self.loaded().next()
     }
@@ -337,7 +280,6 @@ impl TraceSet {
         self.unit.as_ref()
     }
 
-    /// The span every opened trace covers on the session timeline.
     pub fn limits(&self) -> Option<(u64, u64)> {
         self.slots
             .iter()
@@ -345,14 +287,12 @@ impl TraceSet {
             .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
     }
 
-    /// The letter the next trace takes: the lowest one not in use.
     pub fn free_id(&self) -> Option<TraceId> {
         (0..TraceId::MAX)
             .filter_map(TraceId::new)
             .find(|id| self.get(*id).is_none())
     }
 
-    /// Put a slot in its letter's place.
     pub(crate) fn insert(&mut self, slot: TraceSlot) {
         debug_assert!(self.get(slot.id).is_none());
         self.revision += 1;
@@ -366,10 +306,6 @@ impl TraceSet {
         Some(self.slots.remove(at))
     }
 
-    /// Place an opened trace on the session timeline, refining the unit
-    /// when it is finer. Refused when its unit cannot share a timeline with
-    /// the others (a producer-named unit meets another unit) or its times
-    /// would not fit.
     pub(crate) fn admit(&self, info: &TraceInfo) -> anyhow::Result<(Unit, Placement, u64)> {
         let own = Unit::of(info);
         let Some(unit) = &self.unit else {
@@ -402,18 +338,14 @@ impl TraceSet {
         Ok((session, placement, factor))
     }
 
-    /// Start over: the next trace to open sets the unit.
     pub(crate) fn forget_unit(&mut self) {
         self.unit = None;
     }
 
-    /// Install the result of [`TraceSet::admit`].
     pub(crate) fn set_unit(&mut self, unit: Unit) {
         self.unit = Some(unit);
     }
 
-    /// The trace's name: the one it was given, or the part of its source
-    /// that tells it apart from the other traces.
     pub fn name(&self, id: TraceId) -> Option<String> {
         let slot = self.get(id)?;
         if let Some(name) = &slot.rename {
@@ -425,9 +357,6 @@ impl TraceSet {
     }
 }
 
-/// A change of the unit times are counted in: to a unit `factor` times
-/// finer (times multiply, exactly) or coarser (times divide, rounding to
-/// the nearest).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Rescale {
     Finer(u64),
@@ -435,8 +364,6 @@ pub(crate) enum Rescale {
 }
 
 impl Rescale {
-    /// From times in `10^from` seconds to times in `10^to` seconds; `None`
-    /// when the units are the same or too far apart for a `u64` factor.
     pub(crate) fn between(from: i8, to: i8) -> Option<Self> {
         let steps = i32::from(from) - i32::from(to);
         let factor = 10u64.checked_pow(steps.unsigned_abs())?;
@@ -462,9 +389,6 @@ impl Rescale {
     }
 }
 
-/// State that holds session times, rewritten when the unit they are counted
-/// in changes (a finer trace joins, or a workspace saved in another unit is
-/// restored) so every time keeps its meaning.
 pub(crate) trait Retime {
     fn retime(&mut self, by: Rescale);
 }
@@ -546,14 +470,12 @@ mod tests {
         let (unit, placement, factor) = set.admit(&info(-9, 1000, None)).unwrap();
         assert_eq!((placement, factor), (Placement::IDENTITY, 1));
         set.set_unit(unit);
-        // Picoseconds: the session unit refines a thousandfold.
         let (unit, placement, factor) = set.admit(&info(-12, 5, None)).unwrap();
         assert_eq!(
             (unit.timescale, placement, factor),
             (-12, Placement::IDENTITY, 1000)
         );
         set.set_unit(unit);
-        // Microseconds sit a million picoseconds apart.
         let (_, placement, factor) = set.admit(&info(-6, 5, None)).unwrap();
         assert_eq!((placement.to_session(5), factor), (5_000_000, 1));
     }

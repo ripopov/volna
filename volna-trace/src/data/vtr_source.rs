@@ -1,5 +1,5 @@
-//! [`Session`] over a VTR file in this process: memory-mapped from a path
-//! natively, parsed from an in-memory image on wasm.
+//! [`Session`] over a VTR file in this process: memory-mapped from a path natively, parsed
+//! from an in-memory image on wasm.
 
 use std::sync::Arc;
 
@@ -18,7 +18,6 @@ pub struct LocalSession {
     info: TraceInfo,
     hierarchy: Hierarchy,
     source_bytes: u64,
-    /// The local source and activity index, found at open or built later.
     activity: Option<super::activity::ActivitySource>,
 }
 
@@ -93,8 +92,6 @@ fn shape_of(kind: SignalKind, var_type: vtr::VarType) -> SignalShape {
     }
 }
 
-/// The reader owns declaration columns and names; only dense identity and
-/// membership indexes belong to this view.
 struct ReaderHierarchy {
     reader: Arc<Reader>,
     scopes: vtr::hierarchy_index::NodeIndex,
@@ -272,8 +269,6 @@ fn build_hierarchy(reader: Arc<Reader>) -> Hierarchy {
         .filter_map(|id| vars.ordinal(id).map(|id| id as u32))
         .collect();
     let first_root_var = root_vars.first().map(|&id| vars.node(id as usize));
-    // The synthetic scope enters declaration order at the first root variable,
-    // exactly as the owned model did. A later literal "(top)" stays distinct.
     let existing_top = h
         .roots()
         .filter(|&node| first_root_var.is_some_and(|first| node.0 < first.0))
@@ -483,9 +478,6 @@ impl SignalHistory for VtrHistory {
             SignalShape::Bit | SignalShape::Event => 1,
             SignalShape::Vector { width } => u64::from(width).div_ceil(2).max(1),
             SignalShape::Real => 8,
-            // Variable-length data has backend-owned offsets as well as bytes;
-            // use a conservative fixed floor when the opaque reader does not
-            // expose allocation capacities.
             SignalShape::Text => 24,
         };
         (self.data.len() as u64).saturating_mul(8 + value_bytes)

@@ -14,7 +14,6 @@ let viewer;
 let pendingLocal = null;
 let pendingSample = false;
 let currentTraceUri = null;
-// GPUI adds an IME mirror textarea asynchronously; keep it named for assistive technology.
 const labelViewerInputs = () => {
   document.querySelectorAll('textarea:not([aria-label])').forEach(input => {
     input.setAttribute('aria-label', 'Viewer text input');
@@ -37,7 +36,7 @@ function candidates(traceUri, sidecarBytes, workspaceUri = `${traceUri}.volna.js
   const key = `volna.workspace.${traceUri}`;
   let saved = null;
   if (!sidecarBytes) {
-    try { saved = localStorage.getItem(key); } catch { /* Private browsing can disable storage. */ }
+    try { saved = localStorage.getItem(key); } catch {}
   }
   return {
     sidecar: {

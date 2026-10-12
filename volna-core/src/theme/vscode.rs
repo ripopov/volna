@@ -1,6 +1,5 @@
-//! The only VS Code colour mapping. Input is the webview's resolved CSS snapshot:
-//! `kind=vscode-dark` followed by `--vscode-<id>=<CSS colour>` lines.
-//! Real webviews and checked-in fixtures use the same parser and fallback rules.
+//! The only VS Code colour mapping.
+
 use std::collections::HashMap;
 
 use super::{Appearance, ColorPair, HostPalette, parse_css_color};

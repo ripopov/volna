@@ -1,30 +1,19 @@
 //! How a run ended (SPEC section 8.5).
-//!
-//! A writer closed by [`Writer::close`](crate::Writer::close) writes nothing
-//! extra. Any other ending is one FATAL log record in the reserved root log
-//! stream [`STREAM`], written last by
-//! [`Writer::close_with`](crate::Writer::close_with); every reader that shows
-//! logs shows it, and [`Reader::ending`](crate::Reader::ending) decodes it.
 
 use crate::logblock::{LogArg, LogArgType};
 use std::fmt;
 
-/// Name of the reserved root log stream holding the ending record.
 pub const STREAM: &str = "vtr.run";
 
-/// How a run ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ending {
-    /// Closed normally. Not recorded: a complete file without a record.
     Closed,
-    /// A stop request (SIGTERM, SIGINT, ...) ended the run, and the writer
-    /// was closed normally afterwards.
-    Stopped { signal: i32 },
-    /// The program called `exit(status)` without closing the writer.
-    Exited { status: i32 },
-    /// A fatal signal: its number, `si_code`, fault address and the kernel
-    /// thread id that received it. `sealed` is true when the writer was
-    /// interrupted mid-call and only what had reached its encoder was kept.
+    Stopped {
+        signal: i32,
+    },
+    Exited {
+        status: i32,
+    },
     Crashed {
         signal: i32,
         code: i32,
@@ -32,16 +21,12 @@ pub enum Ending {
         thread: u64,
         sealed: bool,
     },
-    /// The file was recovered by scanning; `dropped` bytes followed the last
-    /// verified section.
-    Recovered { dropped: u64 },
-    /// A writer method panicked (a VTR bug), and the file was sealed with
-    /// what had reached the encoder.
+    Recovered {
+        dropped: u64,
+    },
     Poisoned,
 }
 
-/// Recorded endings: site format, argument names and types, in the order the
-/// variants of [`Ending`] after `Closed` are declared.
 pub(crate) const SITES: [(&str, &[&str], &[LogArgType]); 5] = [
     ("run stopped by signal {}", &["signal"], &[LogArgType::I64]),
     ("run exited with status {}", &["status"], &[LogArgType::I64]),
@@ -65,7 +50,6 @@ pub(crate) const SITES: [(&str, &[&str], &[LogArgType]); 5] = [
 ];
 
 impl Ending {
-    /// Index into [`SITES`] and the record's arguments; `None` for `Closed`.
     pub(crate) fn record(&self) -> Option<(usize, Vec<LogArg<'static>>)> {
         Some(match *self {
             Ending::Closed => return None,
@@ -92,7 +76,6 @@ impl Ending {
         })
     }
 
-    /// The ending a record of site `fmt` with `args` describes.
     pub(crate) fn from_record(fmt: &str, args: &[LogArg]) -> Option<Ending> {
         let site = SITES.iter().position(|s| s.0 == fmt)?;
         let i = |k: usize| match args.get(k) {
@@ -123,8 +106,6 @@ impl Ending {
     }
 }
 
-/// Every string an ending record uses: the stream, its kind, the sites'
-/// formats, attribute keys and argument names.
 pub(crate) fn strings() -> impl Iterator<Item = &'static str> {
     [
         STREAM,
@@ -141,7 +122,6 @@ pub(crate) fn strings() -> impl Iterator<Item = &'static str> {
     )
 }
 
-/// Linux name of a signal number (`"SIGSEGV"`), or `None`.
 pub fn signal_name(signal: i32) -> Option<&'static str> {
     const NAMES: [&str; 31] = [
         "SIGHUP",
@@ -190,8 +170,6 @@ impl fmt::Display for Sig {
     }
 }
 
-/// `closed`, `stopped by SIGTERM`, `exited with status 3`,
-/// `crashed by SIGSEGV (address 0x0, thread 41137)`, `recovered by scanning (12 bytes dropped)`.
 impl fmt::Display for Ending {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {

@@ -1,23 +1,18 @@
-//! Complete immutable transaction data. Local and remote loaders publish the
-//! same objects; interval queries below never access a reader or transport.
+//! Complete immutable transaction data.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::transactions::{Relation, TrackRef, Transaction, TransactionRef};
 
-/// Interval-tree subtrees with at most this many leaves are scanned flat.
 const SCAN_LEAVES: usize = 32;
 
-/// A reference remains useful when its generator has not been loaded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TransactionLocation {
     pub transaction: TransactionRef,
     pub generator: TrackRef,
 }
 
-/// Identity is the relation's ordinal in the immutable recording, not a hash
-/// of its contents: identical parallel edges are distinct relations.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LoadedRelation {
     pub id: u64,
@@ -26,8 +21,6 @@ pub struct LoadedRelation {
     pub relation: Relation,
 }
 
-/// Complete records of one generator. A loaded stream retains these same
-/// objects, so a generator displayed separately need not copy its records.
 #[derive(Debug)]
 pub struct LoadedGenerator {
     pub(crate) reservation: Option<crate::remote::memory::Reservation>,
@@ -35,25 +28,18 @@ pub struct LoadedGenerator {
     transactions: Vec<Transaction>,
     by_id: HashMap<TransactionRef, usize>,
     parents: HashMap<TransactionRef, TransactionLocation>,
-    /// Children of one parent, in this generator, in record order. VTR links
-    /// a child to its parent only, so the reverse edge is indexed here once.
     children: HashMap<TransactionLocation, Vec<TransactionRef>>,
     relations: Vec<LoadedRelation>,
-    /// Relations touching one local transaction, as indices into `relations`.
     by_endpoint: HashMap<TransactionRef, Vec<u32>>,
-    // Balanced max-end tree over records ordered by begin time. Unlike a
-    // begin-time binary search, this retains long overlapping transactions.
     max_end: Vec<u64>,
     leaves: usize,
 }
 
 impl LoadedGenerator {
-    /// Admission pool retained by this immutable owner, when accounted.
     pub fn memory_budget(&self) -> Option<crate::remote::memory::MemoryBudget> {
         self.reservation.as_ref().map(|r| r.budget())
     }
 
-    /// Retained record and raw query-index storage in bytes.
     pub fn resident_bytes(&self) -> u64 {
         let fixed = (self.transactions.capacity() as u64)
             .saturating_mul(std::mem::size_of::<Transaction>() as u64)
@@ -110,9 +96,6 @@ impl LoadedGenerator {
         })
     }
 
-    /// Validate and index a complete payload before publishing it. Parent
-    /// locations are keyed by child ID; every parent reference must resolve
-    /// to a generator, even if that generator is not part of this load.
     pub fn new(
         generator: TrackRef,
         mut transactions: Vec<Transaction>,
@@ -136,8 +119,6 @@ impl LoadedGenerator {
         }
     }
 
-    /// The server sends records in canonical begin/end/ID order. Validate that
-    /// order and build client indexes in steps, avoiding another large sort.
     pub(crate) async fn from_sorted<F: std::future::Future<Output = ()>>(
         generator: TrackRef,
         transactions: Vec<Transaction>,
@@ -258,25 +239,18 @@ impl LoadedGenerator {
     pub fn generator(&self) -> TrackRef {
         self.generator
     }
-    /// Records in canonical `(begin, end, id)` order.
     pub fn transactions(&self) -> &[Transaction] {
         &self.transactions
     }
-    /// Incident relations (either endpoint here), with identities and
-    /// endpoint owners, in recording order.
     pub fn relations(&self) -> &[LoadedRelation] {
         &self.relations
     }
-    /// The parent's location, including its owner when that track is not loaded.
     pub fn parent(&self, child: TransactionRef) -> Option<TransactionLocation> {
         self.parents.get(&child).copied()
     }
-    /// Children of `parent` recorded in this generator, in record order. The
-    /// parent may live in any generator, loaded or not.
     pub fn children(&self, parent: TransactionLocation) -> &[TransactionRef] {
         self.children.get(&parent).map_or(&[], Vec::as_slice)
     }
-    /// Relations with `id` as either endpoint, in recording order.
     pub fn relations_of(&self, id: TransactionRef) -> impl Iterator<Item = &LoadedRelation> {
         self.by_endpoint
             .get(&id)
@@ -288,15 +262,10 @@ impl LoadedGenerator {
         self.by_id.get(&id).map(|&index| &self.transactions[index])
     }
 
-    /// Position in canonical `(begin, end, id)` order, using the owner's
-    /// existing identity index rather than a table-owned inverse map.
     pub fn transaction_ordinal(&self, id: TransactionRef) -> Option<usize> {
         self.by_id.get(&id).copied()
     }
 
-    /// The first record begin or end strictly after `time`. Ends after
-    /// `time` that precede the next begin belong to records open at `time`,
-    /// so the query costs the records open there, not the generator.
     pub fn next_boundary(&self, time: u64) -> Option<u64> {
         let next = self.transactions.partition_point(|tx| tx.begin <= time);
         let mut best = self.transactions.get(next).map(|tx| tx.begin);
@@ -309,8 +278,6 @@ impl LoadedGenerator {
         best
     }
 
-    /// The last record begin or end strictly before `time`. An end between
-    /// the previous begin and `time` belongs to a record open at that begin.
     pub fn prev_boundary(&self, time: u64) -> Option<u64> {
         let before = self.transactions.partition_point(|tx| tx.begin < time);
         let begin = self.transactions[..before].last()?.begin;
@@ -324,8 +291,6 @@ impl LoadedGenerator {
         Some(best)
     }
 
-    /// Inclusive overlap, including point events at either boundary. Returns
-    /// false if the visitor stopped early. Results are in begin/end/ID order.
     pub fn visit_window<'a>(
         &'a self,
         start: u64,
@@ -335,7 +300,6 @@ impl LoadedGenerator {
         self.visit_window_ordinals(start, end, |_, tx| visitor(tx))
     }
 
-    /// [`LoadedGenerator::visit_window`] with each record's canonical ordinal.
     pub fn visit_window_ordinals<'a>(
         &'a self,
         start: u64,
@@ -359,8 +323,6 @@ impl LoadedGenerator {
         if lo >= limit || self.max_end[node] < start {
             return true;
         }
-        // Small subtrees are scanned: a flat pass over a few records costs
-        // less than descending to each leaf.
         if hi - lo <= SCAN_LEAVES {
             return (lo..hi.min(limit)).all(|i| {
                 let tx = &self.transactions[i];
@@ -373,7 +335,6 @@ impl LoadedGenerator {
     }
 }
 
-/// Resident bytes of a `HashMap<K, Vec<V>>` index.
 fn index_bytes(entries: usize, key: usize, values: usize, value: usize) -> u64 {
     (entries as u64)
         .saturating_mul((key + std::mem::size_of::<Vec<u8>>()) as u64)
@@ -429,8 +390,6 @@ fn attribute_value_bytes(value: &super::transactions::AttributeValue) -> u64 {
     }
 }
 
-/// An atomic successful load of a stream or generator, including empty
-/// generators. Consumers retain these handles for as long as they need them.
 #[derive(Clone, Debug)]
 pub struct LoadedTrack {
     pub track: TrackRef,

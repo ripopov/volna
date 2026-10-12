@@ -1,5 +1,5 @@
-/* Generates values.fst and values-wrapped.fst. Build instructions and fixture
- * provenance are in README.md in this directory. */
+/* Generates values.fst and values-wrapped.fst. */
+
 #include "fstapi.h"
 #include <assert.h>
 int main(int argc, char **argv) {

@@ -546,7 +546,6 @@ fn metadata_limit_and_per_signal_failure_are_explicit() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures/picorv32.vtr");
     let mut server = Server::start(&path);
     assert!(server.open(1).unwrap_err().contains("limit"));
-    // A rejected Open closes the service after the error acknowledgement.
     assert!(read_packet(&mut server.output).unwrap().is_none());
     assert!(server.wait().success());
     let mut server = Server::start(&path);
@@ -595,7 +594,6 @@ fn activity_sidecars_are_raw_cached_objects_shared_between_processes() {
         assert!(!a.activity.as_ref().unwrap().available);
         assert_eq!(a.activity, b.activity);
         assert!(!a.server.is_empty());
-        // Fetch-only does not authorize a build or create a sidecar.
         first.command(Command::Activity { build: false });
         assert!(first.receive::<Vec<u8>>(vec![ObjectId::Activity])[0].is_err());
         assert!(!path.with_extension(format!("{extension}.index")).exists());

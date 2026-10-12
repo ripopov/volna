@@ -31,7 +31,6 @@ fn remote_metadata_queues_complete_tracks() {
     );
     let mut document = Document::new();
     document.set_session(remote);
-    // Viewer metadata installation does not affect raw loading.
     for request in document.take_requests() {
         document.deliver(request.perform());
     }
@@ -94,7 +93,6 @@ fn document_track_loads_coalesce_share_release_retry_and_reject_stale_results() 
     let stream = TrackRef(stream.0);
     let mut doc = Document::new();
     doc.set_session(session.clone());
-    // The open's own work: count scope sizes.
     for request in doc.take_requests() {
         doc.deliver(request.perform());
     }

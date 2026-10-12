@@ -1,16 +1,10 @@
 //! Recent traces and workspaces (`volna/README.md`, "Workspace persistence"): the list the
-//! start page, File ▸ Open Recent and the palette offer. The core owns the
-//! list, its order and limit, the start page's selection and keys, and the
-//! row text; hosts stamp opens with the wall clock, report which files are
-//! missing, persist `state.json` and perform the opens.
-//!
-//! The list is application state, not part of a session: nothing here is an
-//! undo step.
+//! start page, File ▸ Open Recent and the palette offer.
+
 use crate::{App, Event};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// Rows the start page shows before *Show all*.
 pub const SHOWN: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,33 +14,26 @@ pub enum RecentKind {
     Workspace,
 }
 
-/// One opened trace or workspace file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Recent {
     pub uri: String,
     pub kind: RecentKind,
-    /// The trace a workspace entry opened, as a URI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<String>,
-    /// Unix seconds of the last open; 0 when unknown.
     pub opened: u64,
 }
 
-/// A command from the start page, File ▸ Open Recent or the palette.
-/// Indices count from the top of the whole list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecentCommand {
     Open(usize),
     Select(usize),
     Forget(usize),
     Clear,
-    /// *Show all* / *Show fewer*.
     ToggleAll,
     Key(RecentKey),
 }
 
-/// Keys the start page reads while no trace is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecentKey {
     Up,
@@ -55,46 +42,31 @@ pub enum RecentKey {
     End,
     Enter,
     Delete,
-    /// `1`–`9`: open the shown row with this number.
     Digit(u8),
 }
 
-/// The start page's view of the list.
 #[derive(Clone, Debug, Default)]
 pub struct View {
-    /// Hosts that can reopen files by path turn the list on.
     pub enabled: bool,
     pub selected: usize,
     pub expanded: bool,
-    /// Entries whose file the host could not find.
     pub missing: BTreeSet<String>,
-    /// Bumped whenever the list changes, so hosts can rebuild menus and
-    /// recheck files.
     pub revision: u64,
 }
 
-/// One row as the start page, menu and palette print it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecentRow {
     pub kind: RecentKind,
-    /// File name; a workspace drops `.volna.json`.
     pub name: String,
-    /// The trace file a workspace opens.
     pub trace: Option<String>,
-    /// Parent folder, home as `~`, long paths cut in the middle.
     pub folder: String,
-    /// The full path, for tooltips.
     pub path: String,
-    /// `12 min ago`, `yesterday`, `Sep 12`, `Not found`, or empty when the
-    /// open time is unknown.
     pub when: String,
     pub missing: bool,
 }
 
-/// Folders longer than this keep their root and last two folders.
 const FOLDER_CHARS: usize = 40;
 
-/// The decoded path of a file URI, `/`-separated.
 pub fn uri_path(uri: &str) -> String {
     let Ok(url) = url::Url::parse(uri) else {
         return uri.to_owned();
@@ -102,7 +74,6 @@ pub fn uri_path(uri: &str) -> String {
     let path = percent_encoding::percent_decode_str(url.path())
         .decode_utf8_lossy()
         .into_owned();
-    // `file:///C:/x` is a Windows drive path.
     match path.as_bytes() {
         [b'/', _, b':', ..] => path[1..].to_owned(),
         _ => path,
@@ -113,8 +84,6 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// The parent folder of `path`, `home` shown as `~`, and a long one cut in
-/// the middle: `~/…/gen/c910`.
 pub fn folder(path: &str, home: Option<&str>) -> String {
     let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
     let mut parent = parent.to_owned();
@@ -144,7 +113,6 @@ pub fn folder(path: &str, home: Option<&str>) -> String {
     format!("…{tail}")
 }
 
-/// How long ago `opened` was at `now` (both Unix seconds).
 pub fn ago(opened: u64, now: u64) -> String {
     const MIN: u64 = 60;
     const HOUR: u64 = 60 * MIN;
@@ -172,7 +140,6 @@ pub fn ago(opened: u64, now: u64) -> String {
     }
 }
 
-/// Days since 1970-01-01 to (year, month, day), proleptic Gregorian (UTC).
 fn civil(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -185,7 +152,6 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
-/// Print one entry.
 pub fn row(entry: &Recent, missing: bool, now: u64, home: Option<&str>) -> RecentRow {
     let path = uri_path(&entry.uri);
     let name = file_name(&path);
@@ -212,7 +178,6 @@ pub fn row(entry: &Recent, missing: bool, now: u64, home: Option<&str>) -> Recen
 }
 
 impl App {
-    /// The list as rows, newest first.
     pub fn recent_rows(&self, now: u64, home: Option<&str>) -> Vec<RecentRow> {
         let view = &self.workspace.recent;
         self.workspace
@@ -223,7 +188,6 @@ impl App {
             .collect()
     }
 
-    /// Rows the start page shows: the first [`SHOWN`], or all when expanded.
     pub fn recent_shown(&self) -> usize {
         let len = self.recent_len();
         if self.workspace.recent.expanded {
@@ -241,14 +205,11 @@ impl App {
         }
     }
 
-    /// Show the list (native hosts, which can reopen files by path).
     pub fn enable_recent(&mut self) {
         self.workspace.recent.enabled = true;
         self.recent_changed(false);
     }
 
-    /// Record an open at the top of the list, keeping `workspace.recentLimit`
-    /// entries; the host then saves `state.json`.
     pub fn remember_recent(&mut self, entry: Recent) {
         let limit = self.settings.resolved().workspace.recent_limit.max(1);
         let list = &mut self.workspace.state.recent;
@@ -260,7 +221,6 @@ impl App {
         self.recent_changed(true);
     }
 
-    /// The host checked the files: these are missing.
     pub fn set_recent_missing(&mut self, missing: BTreeSet<String>) {
         if self.workspace.recent.missing != missing {
             self.workspace.recent.missing = missing;
@@ -328,7 +288,6 @@ impl App {
         self.recent_command(RecentCommand::Select(select));
     }
 
-    /// Keep the selection on a shown row and tell the host.
     fn recent_changed(&mut self, persist: bool) {
         let shown = self.recent_shown();
         let view = &mut self.workspace.recent;
@@ -340,7 +299,6 @@ impl App {
         self.changed();
     }
 
-    /// A trace opened or closed: the page starts again on the newest entry.
     pub(crate) fn reset_recent_view(&mut self) {
         self.workspace.recent.selected = 0;
         self.workspace.recent.expanded = false;
@@ -352,7 +310,7 @@ mod tests {
     use super::*;
 
     const HOME: &str = "/home/ada";
-    const NOW: u64 = 1_790_589_600; // 2026-09-28 10:00 UTC
+    const NOW: u64 = 1_790_589_600;
 
     #[test]
     fn folders_shorten_home_and_long_paths() {

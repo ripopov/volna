@@ -1,12 +1,11 @@
+// Render canonical crate guides as documentation pages with repository links and source includes.
+
 import { readFile } from 'node:fs/promises';
 import { posix, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Loader } from 'astro/loaders';
 import { docsLoader } from '@astrojs/starlight/loaders';
 
-// Render crate guides directly from their canonical Markdown sources. Local
-// links between guides map to website routes; other repository links retain
-// their source locations. The container schematic is mirrored by Astro.
 const sources = [
   ['vtr/README.md', 'vtr', 'VTR trace library', 'What a VTR recording contains, and how to write, read, and recover one.'],
   ['vtr/docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR 1.1 container, encodings, recovery rules, and activity sidecar.'],
@@ -25,7 +24,6 @@ export function volnaDocsLoader(): Loader {
     name: 'volna-docs-loader',
     async load(context) {
       await authored.load(context);
-      // The authored loader removes entries outside its directory; load crate guides afterwards.
       const guides = new Map(sources.map(([source, slug, title, description]) => {
         const fileURL = new URL(`../../${source}`, import.meta.url);
         return [fileURLToPath(fileURL), { fileURL, id: slug, title, description }];
@@ -50,10 +48,7 @@ export function volnaDocsLoader(): Loader {
           const repoPath = relative(fileURLToPath(new URL('../../', import.meta.url)), path).split(sep).join('/');
           return `](https://github.com/ripopov/volna/blob/main/${repoPath}${fragment})`;
         });
-        // README-relative repo path of the container schematic -> page-relative public asset.
         body = body.replace('src="docs/container.svg"', 'src="../assets/container.svg"');
-        // Hidden Markdown markers embed source files on the website without
-        // duplicating code in repository guides. Paths are relative to the guide.
         const includes = [...body.matchAll(/^<!-- include-code: (\S+) (\w+) -->[ \t]*$/gm)];
         const includedPaths = new Set(includes.map((match) => fileURLToPath(new URL(match[1], guide.fileURL))));
         dependencies.set(path, includedPaths);
@@ -71,7 +66,6 @@ export function volnaDocsLoader(): Loader {
         context.store.set({ id: guide.id, data, body, filePath: relative(fileURLToPath(context.config.root), path), rendered });
       }
       for (const path of guides.keys()) await loadGuide(path);
-      // Astro can log a render error and cache an entry without its HTML. Reject incomplete Markdown.
       for (const [id, entry] of context.store.entries()) {
         if (entry.filePath?.endsWith('.md') && !entry.rendered) {
           throw new Error(`Documentation failed to render: ${id}`);
@@ -79,7 +73,6 @@ export function volnaDocsLoader(): Loader {
       }
       if (context.watcher) {
         context.watcher.add([...guides.keys()]);
-        // Serialize reloads so an older render cannot overwrite a newer source revision.
         let pending = Promise.resolve();
         const reload = (path: string) => {
           const affected = [...guides.keys()].filter((guidePath) => guidePath === path || dependencies.get(guidePath)?.has(path));

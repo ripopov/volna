@@ -8,9 +8,6 @@ use std::{cmp::Ordering, ops::Range};
 #[cfg(test)]
 use volna_trace::data::transactions::Transaction;
 
-/// Subtract the integer origin before conversion, retaining tick differences
-/// above 2^53. Only endpoints close to a pixel or clip edge take the exact
-/// dyadic-rational path; ordinary interval queries use floating arithmetic.
 #[derive(Debug)]
 pub(super) struct Axis {
     anchor: i128,
@@ -204,8 +201,6 @@ fn int(v: u64) -> BigRational {
     BigRational::from_integer(v.into())
 }
 
-/// Inverse pixel footprints in source coordinates. This deliberately
-/// avoids the forward mapper, union normalization and hierarchy traversal.
 #[cfg(test)]
 pub(super) fn oracle(records: &[Transaction], offset: usize, map: &PixelMap) -> PresenceMask {
     let footprints = |axis: &Axis| {

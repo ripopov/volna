@@ -1,4 +1,5 @@
 //! Position a GPUI Kit popup at the core's window-space menu coordinates.
+
 use crate::theme::{ThemePx, theme};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::prelude::FluentBuilder;
@@ -13,7 +14,6 @@ pub fn popup_at(
     window: &mut Window,
     cx: &mut App,
 ) -> impl IntoElement {
-    // Focus after the trigger's mouse event, when the popup joins the view tree.
     let focus = menu.read(cx).focus_handle(cx);
     if !focus.contains_focused(window, cx) {
         window.focus(&focus, cx);

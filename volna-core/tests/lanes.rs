@@ -1,8 +1,5 @@
-//! Headless tests of transaction lanes in the waveform panel, over the
-//! checked-in example traces: adding a generator as a row, sharing its
-//! records with other panels, stacking and default heights, the document
-//! selection, cursor snapping and edge steps, row operations, workspaces,
-//! and the painted bars, folds and density strip.
+//! Headless transaction lane tests for shared records, navigation, persistence, and
+//! painting.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -65,7 +62,6 @@ fn track(session: &dyn Session, path: &str) -> TrackRef {
         .id
 }
 
-/// The hierarchy member of the generator `track`.
 fn generator(session: &dyn Session, track: TrackRef) -> Member {
     Member::Generator(
         session
@@ -77,7 +73,6 @@ fn generator(session: &dyn Session, track: TrackRef) -> Member {
     )
 }
 
-/// `pipeline_showcase.vtr` with the given generators added as lanes.
 fn with_lanes(paths: &[&str]) -> (App, Arc<dyn Session>, PanelId, Vec<TrackRef>) {
     let session = example("pipeline_showcase.vtr");
     let mut app = App::new();
@@ -95,7 +90,6 @@ fn with_lanes(paths: &[&str]) -> (App, Arc<dyn Session>, PanelId, Vec<TrackRef>)
 const CPU0: &str = "soc.cpu0.pipeline.instruction";
 const CPU1: &str = "soc.cpu1.pipeline.instruction";
 
-/// Show `start..end` in the panel and lay it out again.
 fn show(app: &mut App, waves: PanelId, start: f64, end: f64) {
     let volna_core::App { panels, doc, .. } = app;
     panels
@@ -106,7 +100,6 @@ fn show(app: &mut App, waves: PanelId, start: f64, end: f64) {
     frame(app, waves);
 }
 
-/// Panel point in the middle of record `ordinal` of lane row `row`.
 fn bar_point(app: &App, waves: PanelId, row: usize, ordinal: usize) -> Point {
     let w = app.panels.waves(waves).unwrap();
     let lane = w.items()[row].lane().unwrap();
@@ -147,14 +140,12 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
     let w = app.panels.waves(waves).unwrap();
     assert_eq!(w.items().len(), 2);
     assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [0, 1]);
-    // Depths 5 and 16: the smallest preset that fits, capped at 4×.
     let heights: Vec<_> = w.items().iter().map(|r| r.height().multiple()).collect();
     assert_eq!(heights, [4, 4]);
     let cpu1 = w.items()[1].lane().unwrap();
     assert_eq!(cpu1.generator(&app.doc).unwrap().depth(), 16);
     assert_eq!(lane::folded(16, cpu1.height), 11);
 
-    // A Pipeline panel over the same generator shares the one object.
     app.handle(Command::OpenPipeline {
         track: a(tracks[0]),
     });
@@ -172,8 +163,6 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
         .unwrap() as *const _;
     assert!(std::ptr::eq(Arc::as_ptr(&object), lane_object));
 
-    // Removing the lanes keeps records a pipeline still shows, and frees
-    // the rest.
     app.handle(Command::Panels(volna_core::panels::PanelsCommand::Focus(
         waves,
     )));
@@ -190,8 +179,6 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
     )));
     assert!(app.doc.track(a(tracks[0])).is_none());
 
-    // Streams and variables: variables become signal rows, streams have
-    // no row form.
     let h = session.hierarchy();
     let stream = h
         .scopes()
@@ -219,7 +206,6 @@ fn clicking_a_bar_selects_the_record_everywhere_and_empty_space_clears_it() {
         .unwrap()
         .transactions()
         .to_vec();
-    // A record on sub-row 1, so the click must find the right sub-row.
     let ordinal = (0..g.len())
         .find(|&i| {
             app.panels.waves(waves).unwrap().items()[0]
@@ -246,16 +232,13 @@ fn clicking_a_bar_selects_the_record_everywhere_and_empty_space_clears_it() {
         (a(tracks[0]), tx.id, waves)
     );
     assert!(app.panels.waves(waves).unwrap().pressed_record);
-    // The cursor lands where the press was, snapped to a boundary nearby.
     let cursor = app.panels.waves(waves).unwrap().cursor(&app.doc).unwrap();
     assert!(cursor >= tx.begin && cursor <= tx.end);
 
-    // Enter (Show Transaction) opens the Transaction panel on it.
     app.handle(Command::ShowTransaction { from: waves });
     let panel = app.panels.focused_id();
     assert!(app.panels.transaction(panel).is_some());
 
-    // The highlight is painted with the focus colour.
     let theme = Theme::one_dark();
     let scene = frame(&mut app, waves);
     assert!(scene.prims.iter().any(|prim| matches!(
@@ -263,7 +246,6 @@ fn clicking_a_bar_selects_the_record_everywhere_and_empty_space_clears_it() {
         Prim::Quad { border_width, border_color, .. } if *border_width == 2.0 && *border_color == theme.border_focused
     )));
 
-    // A press on empty lane space (below the stack) clears the selection.
     let layout = app.panels.waves(waves).unwrap().last_layout().clone();
     let empty = point(
         layout.waves.left() + 5.0,
@@ -273,7 +255,6 @@ fn clicking_a_bar_selects_the_record_everywhere_and_empty_space_clears_it() {
     assert!(app.doc.selection().is_none());
     assert!(!app.panels.waves(waves).unwrap().pressed_record);
 
-    // Clicking near a bar end snaps the cursor to it.
     show(
         &mut app,
         waves,
@@ -328,7 +309,6 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
     app.handle(Command::AddVars(a_all(vec![0])));
     assert_eq!(app.panels.waves(waves).unwrap().items().len(), 2);
 
-    // Lanes cut and paste with signals, into another wave panel.
     app.panels.waves_mut(waves).unwrap().selected = [0, 1].into();
     app.handle(Command::Action(Action::CutSignals));
     assert!(app.panels.waves(waves).unwrap().items().is_empty());
@@ -342,7 +322,6 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
     assert_eq!(w.items()[0].height().multiple(), 4);
     assert!(w.items()[0].lane().unwrap().generator(&app.doc).is_some());
 
-    // The Height menu applies to lanes; folded sub-rows then show a chip.
     frame(&mut app, other);
     app.panels.waves_mut(other).unwrap().selected = [0].into();
     app.handle(Command::OpenSignalMenu(other));
@@ -361,7 +340,6 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
     let scene = frame(&mut app, other);
     assert!(scene.texts().any(|t| t == "+4"));
 
-    // Workspaces save lanes as typed rows and restore them, heights intact.
     let saved = serde_json::to_value(
         Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap(),
     )
@@ -401,7 +379,6 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
         saved
     );
 
-    // A generator the trace lacks restores as an empty, reported row.
     let mut missing = saved.clone();
     for panel in missing["panels"].as_array_mut().unwrap() {
         if panel["id"] == other.0 {
@@ -431,7 +408,6 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
     };
     assert!(depth > 5);
 
-    // Zoomed in, bars carry captions; the name cell counts folded rows.
     show(&mut app, waves, 0.0, (median * 6) as f64);
     let scene = frame(&mut app, waves);
     let label = lane::label(&first);
@@ -447,7 +423,6 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
         .filter(|(_, c)| *c == theme.wave_signal)
         .count();
     assert!(bar_quads > 5);
-    // Folded overlaps are hatched.
     assert!(
         scene
             .prims
@@ -455,7 +430,6 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
             .any(|prim| matches!(prim, Prim::Lines { .. }))
     );
 
-    // The value column lists what is open at the cursor.
     let volna_core::App { panels, doc, .. } = &mut app;
     panels
         .waves_mut(waves)
@@ -478,8 +452,6 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
         "value {expected}"
     );
 
-    // Zoomed out over the whole trace in a narrow panel, one column per
-    // pixel: no captions, and at most one quad per column.
     let end = app.doc.limits().1 as f64;
     show(&mut app, waves, 0.0, end);
     frame_w(&mut app, waves, 520.0);
@@ -503,7 +475,6 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
         columns > 10 && columns as f64 <= columns_w,
         "{columns} density runs"
     );
-    // Bars are not hit in the strip.
     let p = {
         let layout = app.panels.waves(waves).unwrap().last_layout();
         point(layout.waves.left() + 50.0, layout.row_y(0) + 10.0)

@@ -1,17 +1,4 @@
 //! The FST front end of the activity index.
-//!
-//! [`FstTrace`] maps an FST file and walks its blocks. Each value-change
-//! block is one index block. A scan reads the block's time table and position
-//! table, then each signal's value chain on its own, and walks the entry
-//! headers for their time indexes without decoding a value. A signal is an
-//! FST handle counted from 0 (handle 1 is signal 0). A change is a value
-//! recorded after the header's start time; a block's frame, the values at
-//! its start, is never a change.
-//!
-//! The writer chose the blocks' sizes, so every block's memory need is read
-//! from its section header first, and [`vtr::activity::build_from`] refuses
-//! a block over the limit. A gzip-wrapped file is unwrapped by streaming it to
-//! a temporary file, never into memory.
 
 use memmap2::Mmap;
 use std::io::{Read, Write};
@@ -33,22 +20,17 @@ const BL_VCDATA_DYN_ALIAS2: u8 = 8;
 const BL_GZIP_WRAPPER: u8 = 254;
 const BL_SKIP: u8 = 255;
 
-/// Geometry of a real signal (8-byte values) and of a variable-length one.
 const GEOM_REAL: u32 = 0;
 const GEOM_VARLEN: u32 = u32::MAX;
 
-/// A value-change block: its section (from the length field) and layout.
 #[derive(Clone, Copy, Debug)]
 struct Section {
     at: usize,
     len: usize,
     alias2: bool,
-    /// Bytes the writer says all the block's value chains take decompressed.
     mem: u64,
 }
 
-/// An FST file opened for the activity index: its blocks, signal geometry
-/// and identity over a memory map. `Sync`, so blocks scan in parallel.
 pub struct FstTrace {
     image: FstImage,
     identity: Identity,
@@ -58,8 +40,6 @@ pub struct FstTrace {
     sections: Vec<Section>,
 }
 
-/// Field drop order releases the mapping before removing its backing file,
-/// including when a parse fails. Windows cannot remove a mapped file.
 struct FstImage {
     map: Mmap,
     _unwrapped: Option<TempPath>,
@@ -75,7 +55,6 @@ fn be64(b: &[u8], at: usize) -> Result<u64> {
         .ok_or(Error::Corrupt("FST section truncated"))
 }
 
-/// An FST varint (LEB128) at `*p`.
 #[inline]
 fn varint(b: &[u8], p: &mut usize) -> Result<u64> {
     let mut v = 0u64;
@@ -93,7 +72,6 @@ fn varint(b: &[u8], p: &mut usize) -> Result<u64> {
     corrupt("FST varint too long")
 }
 
-/// A signed FST varint, sign-extended from its last group.
 fn svarint(b: &[u8], p: &mut usize) -> Result<i64> {
     let mut v = 0u64;
     for shift in (0..64).step_by(7) {
@@ -129,22 +107,15 @@ fn inflate(input: &[u8], len: usize, out: &mut Vec<u8>) -> Result<()> {
 }
 
 impl FstTrace {
-    /// Maps the FST file at `path` and reads its block list, header and
-    /// geometry. A gzip-wrapped file is unwrapped to a temporary file first.
-    /// A file without its geometry and hierarchy blocks (still being written,
-    /// or cut short) has no stable identity and fails.
     pub fn open(path: impl AsRef<Path>) -> Result<FstTrace> {
         let file = std::fs::File::open(path.as_ref())?;
-        // Safety: the file is only read; concurrent modification is a documented caller error.
         let map = unsafe { Mmap::map(&file)? };
         if map.first() == Some(&BL_GZIP_WRAPPER) {
             let (unwrapped, crc) = unwrap_gzip(&map)?;
             let length = map.len() as u64;
             let copy = std::fs::File::open(&unwrapped)?;
-            // Safety: the temporary file is private to this trace.
             let inner = unsafe { Mmap::map(&copy)? };
             let mut t = FstTrace::parse(inner, Some(unwrapped))?;
-            // A wrapped file is bound by its own bytes.
             t.identity = Identity {
                 format: SourceFormat::Fst,
                 length,
@@ -155,12 +126,8 @@ impl FstTrace {
         FstTrace::parse(map, None)
     }
 
-    /// The identity of the FST file at `path`, as [`open`](Self::open)
-    /// computes it, without unwrapping a gzip-wrapped file: what a caller
-    /// checks a sidecar against before it needs the blocks.
     pub fn identity_of(path: impl AsRef<Path>) -> Result<Identity> {
         let file = std::fs::File::open(path.as_ref())?;
-        // Safety: the file is only read; concurrent modification is a documented caller error.
         let map = unsafe { Mmap::map(&file)? };
         if map.first() == Some(&BL_GZIP_WRAPPER) {
             return Ok(Identity {
@@ -251,20 +218,14 @@ impl FstTrace {
         self.identity
     }
 
-    /// Number of signals: the highest handle.
     pub fn signal_count(&self) -> u32 {
         self.geometry.len() as u32
     }
 
-    /// Builds the activity index into `out` (see [`vtr::activity::build_from`]).
     pub fn build(&self, out: impl Write, opts: &BuildOptions) -> Result<Summary> {
         vtr::activity::build_from(self, out, opts)
     }
 
-    /// The signals among `signals` that change in `[t0, t1]`, ascending: the
-    /// exact answer for the ones the index leaves undecided. It reads the
-    /// blocks overlapping the window and, in them, only these signals' value
-    /// chains, each walked to its first entry in the window.
     pub fn resolve(&self, signals: &[SignalId], t0: u64, t1: u64) -> Result<Vec<SignalId>> {
         if t0 > t1 || t1 <= self.t_min {
             return Ok(Vec::new());
@@ -323,11 +284,9 @@ impl FstTrace {
             .collect())
     }
 
-    /// Reads block `k`'s time table and position table into `w`.
     fn view(&self, k: usize, w: &mut Scratch) -> Result<View<'_>> {
         let sec = self.sections[k];
         let s = &self.image.map[sec.at..sec.at + sec.len];
-        // The time table closes the section: its data, then three lengths.
         let (tu, tc, count) = (
             be64(s, sec.len.saturating_sub(24))?,
             be64(s, sec.len.saturating_sub(16))?,
@@ -354,7 +313,6 @@ impl FstTrace {
                 .ok_or(Error::Corrupt("FST time table overflow"))?;
             w.times.push(t);
         }
-        // The frame, then the value chains from `vc`, the pack type's byte.
         let mut p = 32usize;
         let (_, fclen, _) = (varint(s, &mut p)?, varint(s, &mut p)?, varint(s, &mut p)?);
         p = p
@@ -366,7 +324,6 @@ impl FstTrace {
         let pack = *s
             .get(vc)
             .ok_or(Error::Corrupt("FST value changes truncated"))?;
-        // The position table ends right before the time table's length field.
         let chain_len_at = tdata_at
             .checked_sub(8)
             .ok_or(Error::Corrupt("FST position table missing"))?;
@@ -386,7 +343,6 @@ impl FstTrace {
     }
 }
 
-/// The geometry: per signal, its bit length, or real, or variable length.
 fn read_geometry(sec: &[u8]) -> Result<Vec<u32>> {
     let (len, ulen, count) = (be64(sec, 0)?, be64(sec, 8)?, be64(sec, 16)?);
     let data = sec
@@ -410,8 +366,6 @@ fn read_geometry(sec: &[u8]) -> Result<Vec<u32>> {
         .collect()
 }
 
-/// Streams a gzip-wrapped FST into a temporary file; returns its path and
-/// the CRC-32 of the wrapped file, which identifies it.
 fn unwrap_gzip(b: &[u8]) -> Result<(TempPath, u32)> {
     let len = be64(b, 1)?;
     if len == 0 {
@@ -442,20 +396,14 @@ fn unwrap_gzip(b: &[u8]) -> Result<(TempPath, u32)> {
     Ok((temporary.into_temp_path(), crc32fast::hash(b)))
 }
 
-/// Decoding buffers: a block's time table and position table, and one
-/// decompressed value chain.
 #[derive(Default)]
 struct Scratch {
     times: Vec<u64>,
-    /// (signal, offset from the pack byte, length) of every chain, by signal.
     chains: Vec<(u32, u32, u32)>,
-    /// (signal, signal whose chain it shares).
     aliases: Vec<(u32, u32)>,
     chain: Vec<u8>,
 }
 
-/// Fills `w.chains` and `w.aliases` from a block's position table, `end`
-/// being where the last chain ends (relative to the pack byte).
 fn read_positions(
     t: &[u8],
     alias2: bool,
@@ -507,7 +455,6 @@ fn read_positions(
             return Err(bad());
         }
     }
-    // Each chain runs to the next one's start, the last to the table.
     for i in 0..w.chains.len() {
         let next = w.chains.get(i + 1).map_or(end, |c| c.1);
         w.chains[i].2 = next
@@ -518,7 +465,6 @@ fn read_positions(
     Ok(())
 }
 
-/// A block's bytes and where its value chains start.
 struct View<'a> {
     s: &'a [u8],
     vc: usize,
@@ -526,7 +472,6 @@ struct View<'a> {
 }
 
 impl View<'_> {
-    /// Offset and length of `signal`'s chain, following an alias.
     fn chain_of(&self, w: &Scratch, signal: u32) -> Option<(u32, u32)> {
         let find = |s: u32| {
             w.chains
@@ -542,7 +487,6 @@ impl View<'_> {
         })
     }
 
-    /// The decompressed chain at `off` (from the pack byte) of `len` bytes.
     fn decode<'b>(&'b self, off: u32, len: u32, buf: &'b mut Vec<u8>) -> Result<&'b [u8]> {
         let at = self.vc + off as usize;
         let c = self
@@ -572,8 +516,6 @@ impl View<'_> {
     }
 }
 
-/// Calls `f(time index)` for every entry of a decompressed value chain,
-/// skipping values, while `f` returns true.
 fn walk(chain: &[u8], geometry: u32, mut f: impl FnMut(usize) -> bool) -> Result<()> {
     let (mut p, mut ti) = (0usize, 0usize);
     let bytes = |n: usize| n.div_ceil(8);
@@ -621,7 +563,6 @@ fn walk(chain: &[u8], geometry: u32, mut f: impl FnMut(usize) -> bool) -> Result
     Ok(())
 }
 
-/// FastLZ (levels 1 and 2) decompression of `input` into `out` (`len` bytes).
 fn fastlz(input: &[u8], len: usize, out: &mut Vec<u8>) -> Result<()> {
     const MAX_L2_DISTANCE: usize = 8191;
     let bad = || Error::Corrupt("FST fastlz data out of range");
@@ -688,8 +629,6 @@ fn fastlz(input: &[u8], len: usize, out: &mut Vec<u8>) -> Result<()> {
 }
 
 impl Source for FstTrace {
-    /// Nothing: a scan's buffers are its block's own, freed with it, as
-    /// [`cost`](Self::cost) counts them.
     type Worker = ();
 
     fn identity(&self) -> Identity {
@@ -708,8 +647,6 @@ impl Source for FstTrace {
         &self.blocks
     }
 
-    /// The block's decompressed chains, as its writer states them, its time
-    /// table and position table, and the scan's rows and candidates.
     fn cost(&self, i: usize, budget: Budget) -> Result<u64> {
         let sec = self.sections[i];
         let s = &self.image.map[sec.at..sec.at + sec.len];
@@ -780,7 +717,6 @@ mod tests {
         too_large[9] = 2;
         assert!(svarint(&too_large, &mut 0).is_err());
 
-        // A sparse run larger than u32 must not wrap to a valid handle count.
         let run = [0x80, 0x80, 0x80, 0x80, 0x20];
         for alias2 in [false, true] {
             assert!(read_positions(&run, alias2, 1, 20, &mut Scratch::default()).is_err());
@@ -820,7 +756,6 @@ mod tests {
     fn failed_parse_removes_the_unwrapped_temporary_file() {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), b"invalid FST").unwrap();
-        // SAFETY: this private temporary file remains unchanged while mapped.
         let map = unsafe { Mmap::map(file.as_file()).unwrap() };
         let temporary = file.into_temp_path();
         let path = temporary.to_path_buf();
@@ -902,8 +837,6 @@ mod tests {
         }
     }
 
-    /// Both position-table formats: signal 0 at offset 3, two signals
-    /// without data, signal 3 sharing signal 0's chain, signal 4 at 8.
     #[test]
     fn position_tables() {
         let old = [7u8, 4, 0, 1, 11];
@@ -914,16 +847,12 @@ mod tests {
             assert_eq!(w.chains, [(0, 3, 5), (4, 8, 12)], "alias2 {is_alias2}");
             assert_eq!(w.aliases, [(3, 0)], "alias2 {is_alias2}");
         }
-        // A table naming more signals than the block has is refused.
         assert!(read_positions(&old, false, 4, 20, &mut Scratch::default()).is_err());
     }
 
-    /// FastLZ level 1: a literal run, then a match copying it twice over.
     #[test]
     fn fastlz_level1() {
         let mut out = Vec::new();
-        // Literal "abc" (ctrl 2), then a match of length 6 at distance 3:
-        // ctrl = (len - 2) << 5 | high distance = 4 << 5, then the low distance 2.
         fastlz(&[2, b'a', b'b', b'c', 4 << 5, 2], 9, &mut out).unwrap();
         assert_eq!(out, b"abcabcabc");
         assert!(

@@ -6,7 +6,6 @@ use volna_trace::data::source::Lookup;
 use volna_trace::data::transactions::{TrackKind, TrackRef};
 use volna_trace::data::{Hierarchy, SignalRef, VarId};
 
-/// A column of a signal table: a variable of one trace, by its path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignalSource {
     pub trace: TraceId,
@@ -33,7 +32,6 @@ impl SignalSource {
         })
     }
 
-    /// Find the variable again in its trace's `hierarchy`.
     pub fn resolve(&mut self, hierarchy: &Hierarchy) -> bool {
         match hierarchy.find_var(&self.path, self.nth) {
             Lookup::Found(var) => {
@@ -58,7 +56,6 @@ pub enum TableSource {
 }
 
 impl TableSource {
-    /// The traces the table's data comes from.
     pub fn traces(&self) -> impl Iterator<Item = TraceId> + '_ {
         let (generator, signals) = match self {
             Self::Generator(source) => (Some(source.trace()), &[][..]),
@@ -67,7 +64,6 @@ impl TableSource {
         generator.into_iter().chain(signals.iter().map(|s| s.trace))
     }
 
-    /// The generator a record table shows, in its trace.
     pub fn generator_track(&self) -> Option<Traced<TrackRef>> {
         match self {
             Self::Generator(source) => source.track(),
@@ -102,7 +98,6 @@ impl TableSource {
         Ok(Self::Generator(TrackSource::Resolved { track, path }))
     }
 
-    /// A table of variables, from any open traces.
     pub fn signals(doc: &crate::Document, vars: &[Traced<VarId>]) -> anyhow::Result<Self> {
         anyhow::ensure!(!vars.is_empty(), "Choose one generator, or only signals.");
         let mut sources = Vec::with_capacity(vars.len());

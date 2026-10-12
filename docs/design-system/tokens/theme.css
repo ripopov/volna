@@ -1,5 +1,5 @@
-/* Semantic roles for Instrument, the shared Volna design. Default = dark (the viewer's native appearance); light is first-class.
-   Set <html data-theme="light|dark">. Consumers select the theme before first paint; Starlight owns theme persistence in the documentation site. */
+/* Semantic Instrument roles for the dark and light Volna themes. */
+
 :root,[data-theme="dark"]{
   color-scheme:dark;
   --bg:var(--n-950);--bg-raised:var(--n-900);--bg-sunken:var(--n-1000);

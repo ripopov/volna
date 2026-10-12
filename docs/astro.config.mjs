@@ -6,8 +6,6 @@ import starlight from '@astrojs/starlight';
 import rehypeMermaid from 'rehype-mermaid';
 import { focusScrollRegions, rehypeFocusScrollRegions } from './scripts/focus-scroll-regions.mjs';
 
-// Mirror the canonical brand asset and the VTR container schematic into the
-// static public directory; both are ignored by Git.
 await mkdir(new URL('./public/assets/', import.meta.url), { recursive: true });
 await copyFile(new URL('./design-system/assets/volna.svg', import.meta.url),
   new URL('./public/assets/volna.svg', import.meta.url));

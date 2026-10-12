@@ -1,6 +1,5 @@
 use vtr::*;
 
-/// Declares a root wire of `width` bits.
 fn wire(w: &mut Writer, name: &str, width: u32, states: u8) -> (NodeId, SignalId) {
     w.add_var(
         None,
@@ -52,7 +51,6 @@ fn shared_signal_histories_preserve_order_and_lifetimes() {
     w.add_alias(None, "alias", VarType::Wire, Direction::Implicit, bits)
         .unwrap();
     for i in 0..40u64 {
-        // Two updates at each time must retain their emission order.
         w.set_time(10 + i / 2).unwrap();
         w.emit_u64(bits, i).unwrap();
         w.emit_varlen(text, format!("value-{i}").as_bytes())
@@ -117,7 +115,6 @@ fn shared_signal_histories_preserve_order_and_lifetimes() {
 fn signals_roundtrip_multi_block() {
     for background in [false, true] {
         let path = tmp(&format!("sig_{background}.vtr"));
-        // Small blocks and groups exercise many block boundaries.
         let opts = WriterOptions {
             block_records: 50,
             group_size: 3,
@@ -245,7 +242,6 @@ fn signals_roundtrip_multi_block() {
             .unwrap();
         w.node_attr(alias, "note", Value::U64(7)).unwrap();
         let _ = top;
-        // Expected values.
         let mut exp_cnt: Vec<(u64, String)> = Vec::new();
         let mut exp_wide: Vec<(u64, String)> = Vec::new();
         let mut exp_r: Vec<(u64, f64)> = Vec::new();
@@ -278,7 +274,6 @@ fn signals_roundtrip_multi_block() {
             if i % 11 == 0 {
                 w.emit_real(r, i as f64 * 0.5).unwrap();
                 if i > 0 {
-                    // 0.0 at time 0 equals the initial value and is deduplicated.
                     exp_r.push((t, i as f64 * 0.5));
                 }
             }
@@ -306,7 +301,6 @@ fn signals_roundtrip_multi_block() {
                 w.dump_on();
             }
         }
-        // Duplicate suppression: same value again is dropped.
         w.set_time(2000).unwrap();
         w.emit_u64(cnt, (399 / 3 * 3 * 7) & 0xff).unwrap();
         let stats = w.stats();
@@ -342,7 +336,6 @@ fn signals_roundtrip_multi_block() {
         assert_eq!(rd.full_path(alias, "."), "top.clk_alias");
         assert_eq!(h.node(alias).attrs[0].1, Value::U64(7));
 
-        // load_signal parity.
         let d = rd.load_signal(cnt).unwrap();
         assert_eq!(d.len(), exp_cnt.len());
         for (i, (t, v)) in exp_cnt.iter().enumerate() {
@@ -378,7 +371,6 @@ fn signals_roundtrip_multi_block() {
         assert_eq!(d.get(0).to_ascii(), "uwlh-1");
         let d = rd.load_signal(two).unwrap();
         assert_eq!(d.get(1).as_u64(), Some(17 | (0xff << 32)));
-        // value_at
         assert_eq!(rd.value_at(cnt, 0).unwrap().to_ascii(), "00000000");
         assert_eq!(rd.value_at(cnt, 14).unwrap().to_ascii(), "00000000");
         assert_eq!(
@@ -403,17 +395,14 @@ fn signals_roundtrip_multi_block() {
         assert_eq!(rd.value_at(s, 0).unwrap().to_ascii(), "str0");
         assert_eq!(rd.value_at(s, 64).unwrap().to_ascii(), "str0");
         assert_eq!(rd.value_at(s, 65).unwrap().to_ascii(), "str13");
-        // changes window
         let c = rd.changes(clk, 100, 120).unwrap();
         assert_eq!(c.len(), 5);
         assert_eq!(c[0].0, 100);
         assert_eq!(c[4].0, 120);
-        // global time table
         let tt = rd.time_table().unwrap();
         assert_eq!(tt.len(), 401);
         assert_eq!(tt[400], 2000);
         assert!(tt.windows(2).all(|w| w[0] < w[1]));
-        // for_each_change
         let mut n = 0;
         let mut last_t = 0;
         rd.for_each_change(0, u64::MAX, |t, _, _| {
@@ -499,7 +488,7 @@ fn transactions_roundtrip() {
     assert_eq!(rd.str(t7.attrs[1].key), "label");
     assert_eq!(t7.stages.len(), 2);
     assert_eq!(t7.stages[0].end, Some(8));
-    assert_eq!(t7.stages[1].end, Some(10)); // closed at tx end
+    assert_eq!(t7.stages[1].end, Some(10));
     assert_eq!(t7.stages[1].attrs[0].1, Value::I64(-3));
     assert_eq!(t7.events[0].time, 9);
     assert_eq!(rd.str(t7.events[0].name), "retire");
@@ -532,7 +521,6 @@ fn transactions_roundtrip() {
             ..Default::default()
         })
         .unwrap();
-    // begin in 97..=105 overlap [100,105]
     assert_eq!(win.len(), 9);
     assert_eq!(rd.time_range(), Some((0, 600)));
 }
@@ -632,8 +620,6 @@ fn recovery_without_directory() {
     let full = std::fs::read(&path).unwrap();
     let rd = Reader::from_bytes(full.clone()).unwrap();
     assert_eq!(rd.load_signal(a).unwrap().len(), 100);
-    // Chop off the directory + trailer + part of the last block.
-    // Find the last signal block and cut inside it (directory and trailer are gone too).
     let last_block_off = rd
         .sections()
         .iter()
@@ -647,7 +633,6 @@ fn recovery_without_directory() {
     let d = rd.load_signal(a).unwrap();
     assert!(d.len() >= 80 && d.len() < 100, "{}", d.len());
     assert_eq!(d.get(50).as_u64(), Some(50));
-    // Garbage is rejected.
     assert!(Reader::from_bytes(b"not a vtr file at all".to_vec()).is_err());
 }
 
@@ -709,7 +694,7 @@ fn long_columns_with_checkpoints() {
             i & 0xffff,
             "a at {t}"
         );
-        let ib = (i / 2) * 2; // last even index <= i
+        let ib = (i / 2) * 2;
         assert_eq!(
             rd.value_at(b, t).unwrap().to_ascii(),
             format!("{}", (ib / 2) & 1),
@@ -727,7 +712,7 @@ fn long_columns_with_checkpoints() {
     assert_eq!(ch[0].0, 30_000);
     let mut n = 0u64;
     rd.for_each_change(0, u64::MAX, |_, _, _| n += 1).unwrap();
-    assert_eq!(n, 20_000 + 10_000 + 4_000 - 1); // c at time 0 equals the initial 0.0 and is deduplicated
+    assert_eq!(n, 20_000 + 10_000 + 4_000 - 1);
 }
 
 trait AsciiU64 {
@@ -749,9 +734,9 @@ fn dynamic_aliasing_of_identical_columns() {
     };
     let mut w = Writer::create_with(&path, opts).unwrap();
     let (_, a) = wire(&mut w, "a", 1, 4);
-    let (_, b) = wire(&mut w, "b", 1, 4); // identical to a
-    let (_, c) = wire(&mut w, "c", 1, 4); // identical to a except the last change
-    let (_, d) = wire(&mut w, "d", 16, 4); // identical to e
+    let (_, b) = wire(&mut w, "b", 1, 4);
+    let (_, c) = wire(&mut w, "c", 1, 4);
+    let (_, d) = wire(&mut w, "d", 16, 4);
     let (_, e) = wire(&mut w, "e", 16, 4);
     for i in 0..5000u64 {
         w.set_time(i * 2).unwrap();
@@ -759,7 +744,7 @@ fn dynamic_aliasing_of_identical_columns() {
         w.emit_bit(a, bit).unwrap();
         w.emit_bit(b, bit).unwrap();
         w.emit_bit(c, if i == 4998 { vtr::Logic::X } else { bit })
-            .unwrap(); // an X breaks the identity
+            .unwrap();
         w.emit_u64(d, i * 7).unwrap();
         w.emit_u64(e, i * 7).unwrap();
     }
@@ -791,7 +776,6 @@ fn dynamic_aliasing_of_identical_columns() {
     rd.for_each_change(0, u64::MAX, |_, s, _| n[s.0 as usize] += 1)
         .unwrap();
     assert_eq!(n, [5000, 5000, 5000, 5000, 5000]);
-    // The file must actually contain aliases: it should be much smaller than 5 independent columns.
     let size = std::fs::metadata(&path).unwrap().len();
     let opts = WriterOptions {
         background: false,
@@ -811,8 +795,6 @@ fn dynamic_aliasing_of_identical_columns() {
 
 #[test]
 fn stream_delivers_same_step_repeats_in_order() {
-    // With dedup off, a signal may change several times in one time step; every
-    // streaming path must deliver all of them, in emission order.
     for n_sigs in [4u32, 40_000] {
         let path = tmp(&format!("repeat_{n_sigs}.vtr"));
         let opts = WriterOptions {
@@ -860,7 +842,6 @@ fn stream_delivers_same_step_repeats_in_order() {
         })
         .unwrap();
         assert_eq!(got.len(), expected.len(), "n_sigs {n_sigs}");
-        // Same (time, signal) pairs in the same order; signal order within a step is free.
         let key = |v: &[(u64, u32, u64)]| {
             let mut k = v.to_vec();
             k.sort_by_key(|e| (e.0, e.1));
@@ -872,9 +853,6 @@ fn stream_delivers_same_step_repeats_in_order() {
 
 #[test]
 fn dictionary_coded_columns_roundtrip() {
-    // Signals whose values come from small sets (FSM states, opcodes, handshake
-    // codes) are dictionary-coded (transform 4); a bus that never repeats is not.
-    // Both must read back exactly through every reader path.
     let path = tmp("dict.vtr");
     let opts = WriterOptions {
         background: false,
@@ -883,7 +861,7 @@ fn dictionary_coded_columns_roundtrip() {
     let mut w = Writer::create_with(&path, opts).unwrap();
     let (_, st) = wire(&mut w, "state", 16, 2);
     let (_, op) = wire(&mut w, "opcode", 32, 2);
-    let (_, wide) = wire(&mut w, "tag", 184, 2); // 23-byte entries, 9 distinct values
+    let (_, wide) = wire(&mut w, "tag", 184, 2);
     let (_, bus) = wire(&mut w, "bus", 32, 2);
     let states = [0x0001u64, 0x0010, 0x0100, 0x1000, 0x8000];
     let mut lcg = 0x1234_5678_9abc_def0u64;
@@ -894,7 +872,7 @@ fn dictionary_coded_columns_roundtrip() {
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         let s = states[((lcg >> 50) % 5) as usize];
-        let o = 0xdead_0000 + (lcg >> 60); // 16 distinct values
+        let o = 0xdead_0000 + (lcg >> 60);
         let t = ((lcg >> 40) % 9) * 0x0101_0101;
         let b = lcg >> 32;
         w.emit_u64(st, s).unwrap();
@@ -909,7 +887,6 @@ fn dictionary_coded_columns_roundtrip() {
     w.close().unwrap();
     let rd = Reader::open(&path).unwrap();
     let v = rd.load_signals(&[st, op, wide, bus]).unwrap();
-    // Duplicate suppression drops repeated values, so compare against the deduplicated stream.
     let mut prev = (u64::MAX, u64::MAX, u64::MAX, u64::MAX);
     let mut n = [0usize; 4];
     for (i, &(s, o, t, b)) in expect.iter().enumerate() {
@@ -922,7 +899,7 @@ fn dictionary_coded_columns_roundtrip() {
                 assert_eq!(v[k].times()[n[k]], time, "signal {k} change {}", n[k]);
                 let a = v[k].get(n[k]).to_ascii();
                 let low = u64::from_str_radix(&a[a.len().saturating_sub(64)..], 2).unwrap();
-                assert_eq!(low, val, "signal {k} at {time}"); // the 184-bit tag's low word is `t`
+                assert_eq!(low, val, "signal {k} at {time}");
                 n[k] += 1;
             }
         }
@@ -946,7 +923,6 @@ fn dictionary_coded_columns_roundtrip() {
     rd.for_each_change(0, u64::MAX, |_, s, _| streamed[s.0 as usize] += 1)
         .unwrap();
     assert_eq!(streamed, n);
-    // The low-cardinality columns must actually have been dictionary-coded.
     let st = rd.run_stats().unwrap();
     assert!(st[4].0 > 0, "no dictionary-coded run: {st:?}");
 }
@@ -954,7 +930,6 @@ fn dictionary_coded_columns_roundtrip() {
 #[test]
 fn logs_roundtrip() {
     let path = tmp("log.vtr");
-    // Small blocks so that several log blocks and transaction blocks interleave.
     let opts = WriterOptions {
         tx_block_bytes: 3000,
         ..Default::default()
@@ -1017,7 +992,7 @@ fn logs_roundtrip() {
         ))
         .unwrap();
     let fetch_node = w.log_site_node(s_fetch).unwrap();
-    let mut expect: Vec<(u64, u64, String, u8)> = Vec::new(); // (id, time, text, severity)
+    let mut expect: Vec<(u64, u64, String, u8)> = Vec::new();
     let mut tx_ids = Vec::new();
     for i in 0..1000u64 {
         let t = i * 10;
@@ -1091,7 +1066,6 @@ fn logs_roundtrip() {
             tx_ids.push(tx);
         }
     }
-    // Type errors are reported, not silently accepted.
     assert!(w.log(s_fetch, 0, &[LogArg::U64(1)]).is_err());
     assert!(w
         .log(s_fetch, 0, &[LogArg::I64(1), LogArg::U64(1)])
@@ -1111,7 +1085,6 @@ fn logs_roundtrip() {
     );
     assert_eq!(r.log_count(), expect.len() as u64);
     assert_eq!(r.tx_counts().0, expect.len() as u64 + tx_ids.len() as u64);
-    // Sites.
     assert_eq!(r.log_sites().len(), 5);
     let site = r.log_site(fetch_node).unwrap();
     assert_eq!(r.str(site.fmt), "fetch pc={:#x} inst={:#010x}");
@@ -1143,7 +1116,6 @@ fn logs_roundtrip() {
             .collect::<Vec<_>>(),
         vec!["0", "1", "2"]
     );
-    // All records, in order, formatted.
     let mut got = Vec::new();
     r.visit_log(&LogQuery::default(), |rec| {
         got.push((
@@ -1157,7 +1129,6 @@ fn logs_roundtrip() {
     .unwrap();
     assert_eq!(got.len(), expect.len());
     assert_eq!(got, expect);
-    // Severity filter prunes to warnings and errors only.
     let mut n_warn = 0;
     let mut n_err = 0;
     r.visit_log(
@@ -1179,7 +1150,6 @@ fn logs_roundtrip() {
         (n_warn, n_err),
         (expect.iter().filter(|e| e.3 == 3).count(), 10)
     );
-    // Stream and window filters.
     let mut n = 0;
     r.visit_log(
         &LogQuery {
@@ -1194,8 +1164,7 @@ fn logs_roundtrip() {
         },
     )
     .unwrap();
-    assert_eq!(n, 6); // t=2,3,4 and t=1002,1003,1004
-                      // Parent link and the transaction view.
+    assert_eq!(n, 6);
     let mut parents = 0;
     r.visit_log(
         &LogQuery {
@@ -1219,7 +1188,6 @@ fn logs_roundtrip() {
     assert_eq!(r.str(as_tx.attrs[0].key), "0");
     assert!(matches!(&as_tx.attrs[0].value, Value::Text(s) if s == "lsu"));
     assert_eq!(as_tx.attrs[1].value, Value::I64(-2));
-    // visit_transactions merges both kinds in file order and sees the Text attribute.
     let mut n_tx = 0;
     let mut n_log_as_tx = 0;
     let mut texts = 0;
@@ -1254,7 +1222,6 @@ fn logs_roundtrip() {
 
 #[test]
 fn log_raw_matches_log() {
-    // The pre-encoded path (used by the C++ header) must produce the same block bytes as `log`.
     let a = tmp("log_a.vtr");
     let b = tmp("log_b.vtr");
     let opts = WriterOptions {
@@ -1293,7 +1260,6 @@ fn log_raw_matches_log() {
             ];
             if raw {
                 let mut row = Vec::new();
-                // Row encoding: text = varint len + bytes; i64 zig-zag varint; u64 varint; f64 8 bytes; bool 1 byte; bytes = varint len + bytes.
                 let put = |out: &mut Vec<u8>, mut v: u64| {
                     while v >= 0x80 {
                         out.push((v as u8) | 0x80);
@@ -1460,7 +1426,7 @@ fn event_alias_classification_is_validated_across_hierarchy_chunks() {
     ] {
         let mut hierarchy = Hierarchy::new();
         for (index, var_type) in [declared, alias].into_iter().enumerate() {
-            let mut chunk = vec![index as u8, 1]; // first node, node count
+            let mut chunk = vec![index as u8, 1];
             let node = Node {
                 parent: None,
                 name: StrId(0),

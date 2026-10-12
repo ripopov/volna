@@ -1,6 +1,6 @@
-//! VTR's memory comes from the Rust global allocator, zstd's included:
-//! a program that gives VTR a heap of its own keeps every VTR allocation off the C
-//! library's heap, which a crash can leave locked.
+//! VTR's memory comes from the Rust global allocator, zstd's included: a program that gives
+//! VTR a heap of its own keeps every VTR allocation off the C library's heap, which a crash
+//! can leave locked.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,7 +33,6 @@ fn zstd_contexts_allocate_from_the_global_allocator() {
     let before = BYTES.load(Ordering::Relaxed);
     c.compress_into(Compression::ZSTD_DEFAULT, &input, &mut out)
         .unwrap();
-    // A level-3 context for a 1 MiB input needs about a megabyte of tables and window.
     let zstd = BYTES.load(Ordering::Relaxed) - before;
     assert!(
         zstd > 512 << 10,

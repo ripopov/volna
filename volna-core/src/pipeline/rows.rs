@@ -1,26 +1,16 @@
-//! The vertical axis of a pipeline panel: which fractional row sits at the
-//! top edge of the cells area and how tall a row is. It mirrors the time
-//! axis (`Viewport`): zoom about a pixel, pan by pixels, clamp with edge
-//! space, animate through a `Tween`.
+//! The vertical axis of a pipeline panel: which fractional row sits at the top edge of the
+//! cells area and how tall a row is.
 
 use crate::nav::Lerp;
 
-/// Fraction of the visible rows the view may scroll past either end.
 const EDGE_SPACE: f64 = 0.2;
-/// Row height limits in design pixels (interface zoom 1.0). The floor only
-/// guards against degenerate values: zooming out stops where every row
-/// fits (see `super::zoom`), which for a million rows is far below a pixel.
 pub const ROW_PX_MIN: f32 = 1e-6;
 pub const ROW_PX_MAX: f32 = 48.0;
-/// Row height a new panel opens with, in design pixels.
 pub const ROW_PX_DEFAULT: f32 = 18.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RowView {
-    /// Fractional row index at the top edge of the cells area.
     pub top: f64,
-    /// Row height in pixels. Stored at interface zoom 1.0; layout and input
-    /// work on the zoomed value (see [`RowView::zoomed`]).
     pub row_px: f32,
 }
 
@@ -34,7 +24,6 @@ impl Default for RowView {
 }
 
 impl RowView {
-    /// The same view with its row height at interface zoom `zoom`.
     pub fn zoomed(self, zoom: f32) -> Self {
         Self {
             top: self.top,
@@ -42,7 +31,6 @@ impl RowView {
         }
     }
 
-    /// Back to design pixels.
     pub fn unzoomed(self, zoom: f32) -> Self {
         Self {
             top: self.top,
@@ -50,19 +38,14 @@ impl RowView {
         }
     }
 
-    /// Fractional row under `y` pixels below the top edge.
     pub fn row_at(&self, y: f32) -> f64 {
         self.top + f64::from(y) / f64::from(self.row_px)
     }
 
-    /// Pixel offset of a (fractional) row from the top edge.
     pub fn y_of(&self, row: f64) -> f32 {
         ((row - self.top) * f64::from(self.row_px)) as f32
     }
 
-    /// Zoom by `factor` (> 1 makes rows taller) keeping the row under `y`
-    /// fixed. `zoom` is the interface zoom this view's pixels are at, so the
-    /// row height limits stay design pixels.
     pub fn zoom_about(&mut self, y: f32, factor: f64, height: f32, rows: usize, zoom: f32) {
         let anchor = self.row_at(y);
         let row_px = (f64::from(self.row_px) * factor)
@@ -72,16 +55,11 @@ impl RowView {
         self.clamp(height, rows, zoom);
     }
 
-    /// Pan by a pixel delta (positive moves the view towards later rows).
     pub fn pan_px(&mut self, dy: f32, height: f32, rows: usize, zoom: f32) {
         self.top += f64::from(dy) / f64::from(self.row_px);
         self.clamp(height, rows, zoom);
     }
 
-    /// Keep the window over the rows plus 20 % edge space, and the row
-    /// height within its design-pixel limits at interface zoom `zoom`.
-    /// Rows that fit in the area may sit anywhere from the top edge down to
-    /// that edge space.
     pub fn clamp(&mut self, height: f32, rows: usize, zoom: f32) {
         if !self.row_px.is_finite() {
             self.row_px = ROW_PX_DEFAULT * zoom;
@@ -101,9 +79,6 @@ impl Lerp for RowView {
     fn lerp(&self, to: &Self, t: f64) -> Self {
         Self {
             top: self.top + (to.top - self.top) * t,
-            // Interpolate rows per pixel, matching the time units per pixel
-            // interpolated by Viewport. Uniform zoom then preserves square
-            // cells and the fractional row at its anchor during animation.
             row_px: (1.0
                 / (1.0 / f64::from(self.row_px)
                     + (1.0 / f64::from(to.row_px) - 1.0 / f64::from(self.row_px)) * t))
@@ -134,7 +109,6 @@ mod tests {
         assert_eq!(v.row_px, ROW_PX_MAX);
         v.zoom_about(0.0, 1e-12, 400.0, 1000, 1.0);
         assert_eq!(v.row_px, ROW_PX_MIN);
-        // Limits are design pixels: at interface zoom 2 they double.
         v.row_px = 20.0;
         v.zoom_about(0.0, 1000.0, 400.0, 1000, 2.0);
         assert_eq!(v.row_px, ROW_PX_MAX * 2.0);
@@ -151,7 +125,6 @@ mod tests {
         v.top = 1e9;
         v.clamp(400.0, 100, 1.0);
         assert_eq!(v.top, 100.0 - 16.0);
-        // Fewer rows than fit: from the top edge down to the edge space.
         v.clamp(400.0, 5, 1.0);
         assert_eq!(v.top, 0.0);
         v.top = -1000.0;

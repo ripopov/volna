@@ -1,5 +1,5 @@
 //! Compare repeated raw relations without serializing their attributes again.
-//! Byte comparisons and traversal yield, including within a single large value.
+
 use crate::data::loaded_tracks::LoadedRelation;
 use crate::data::transactions::AttributeValue;
 

@@ -1,7 +1,4 @@
-//! The JSON view of the Settings tab: gpui-kit's `Editor` over the document
-//! text with completion, hover and diagnostics from the registry, a read-only
-//! "default settings" document, and the apply button that hands the text
-//! back to the core.
+//! Settings JSON editor with registry completion, diagnostics, defaults, and apply actions.
 
 use std::rc::Rc;
 
@@ -30,7 +27,6 @@ use crate::theme::theme;
 pub(crate) struct JsonView {
     editor: Entity<EditorState>,
     defaults: Entity<EditorState>,
-    /// The core text last pushed into the editor.
     synced: String,
     show_defaults: bool,
     _subscriptions: Vec<Subscription>,
@@ -86,7 +82,6 @@ impl JsonView {
         self.editor.read(cx).value().to_string()
     }
 
-    /// Show the core's diagnostics as squiggles.
     fn publish(&self, diagnostics: &[settings::Diagnostic], cx: &mut App) {
         self.editor.update(cx, |state, cx| {
             let text = state.text().clone();
@@ -127,7 +122,6 @@ impl JsonView {
         let diagnostics = store.diagnostics().to_vec();
         let editable = store.is_writable();
         let write_error: Option<SharedString> = store.last_error().map(|e| e.to_owned().into());
-        // Follow the core's text unless the user has unsaved edits.
         if core_text != self.synced {
             let local = self.text(cx);
             self.synced = core_text.clone();
@@ -265,12 +259,10 @@ impl JsonView {
     }
 }
 
-/// Completion and hover over the registry, without a language server.
 struct Registry {
     host: Host,
 }
 
-/// Where the caret is on its line: in a key, in a value of `key`, or elsewhere.
 enum Place {
     Key,
     Value(&'static Spec),

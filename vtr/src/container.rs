@@ -1,21 +1,4 @@
 //! Physical file container: file header, sections, directory and trailer.
-//!
-//! ```text
-//! +-------------------+
-//! | file header (32B) |
-//! +-------------------+
-//! | section ...       |   each: 24-byte header + payload
-//! +-------------------+
-//! | DIRECTORY section |   list of all sections with aux data (written at close)
-//! +-------------------+
-//! | trailer (24B)     |   offset of DIRECTORY + end magic
-//! +-------------------+
-//! ```
-//!
-//! A file whose writer crashed has no directory or trailer; the reader then
-//! rebuilds the directory by walking section headers from the start and
-//! keeps every section up to the first one that is cut short or fails its
-//! CRC.
 
 use crate::error::{Error, Result};
 use std::io::Write;
@@ -27,30 +10,19 @@ pub const SECTION_HEADER_LEN: usize = 24;
 pub const TRAILER_LEN: usize = 24;
 pub const DIR_ENTRY_LEN: usize = 40;
 
-/// Format version written by this library.
 pub const VERSION_MAJOR: u16 = 1;
 pub const VERSION_MINOR: u16 = 1;
 
-/// Section kinds. Values below 0x1000 are reserved for the specification;
-/// values 0x1000 and above are free for private extensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum SectionKind {
-    /// File-level metadata (timescale, strings, attributes).
     Meta = 1,
-    /// String table chunk (append-only interned strings).
     Strings = 2,
-    /// Hierarchy chunk (append-only nodes: scopes, vars, streams, ...).
     Hierarchy = 3,
-    /// Signal value-change block.
     SignalBlock = 4,
-    /// Transaction block.
     TxBlock = 5,
-    /// Dump-on/off (blackout) intervals.
     Blackout = 6,
-    /// Directory of all sections.
     Directory = 7,
-    /// Log block (zero-duration transactions of log sites), optional section.
     LogBlock = 8,
 }
 
@@ -70,21 +42,15 @@ impl SectionKind {
     }
 }
 
-/// Section flag: readers that do not understand `kind` may skip the section.
 pub const SECTION_FLAG_OPTIONAL: u32 = 1;
 
-/// One directory entry describing a section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirEntry {
     pub kind: u32,
     pub flags: u32,
-    /// Offset of the section header from the start of the file.
     pub offset: u64,
-    /// Payload length (excluding the 24-byte header).
     pub len: u64,
-    /// Kind-specific: first time / first id.
     pub aux0: u64,
-    /// Kind-specific: last time / count.
     pub aux1: u64,
 }
 
@@ -102,8 +68,6 @@ pub fn write_file_header(w: &mut impl Write) -> std::io::Result<()> {
     ))
 }
 
-/// A file header with its own magic and version, for companion files that
-/// reuse this container.
 pub fn encode_file_header(magic: &[u8; 8], major: u16, minor: u16) -> [u8; FILE_HEADER_LEN] {
     let mut h = [0u8; FILE_HEADER_LEN];
     h[..8].copy_from_slice(magic);
@@ -155,18 +119,14 @@ fn le_u64(b: &[u8]) -> u64 {
     u64::from_le_bytes(b[..8].try_into().unwrap())
 }
 
-/// Parsed container view over a complete file image.
 #[derive(Debug)]
 pub struct Container {
     pub version: (u16, u16),
     pub entries: Vec<DirEntry>,
-    /// `Some(dropped)` when the directory was rebuilt by scanning (no
-    /// trailer found): the bytes after the last verified section.
     pub recovered: Option<u64>,
 }
 
 impl Container {
-    /// Parses the header and directory of `data` (the whole file, e.g. an mmap).
     pub fn parse(data: &[u8]) -> Result<Container> {
         if data.len() < FILE_HEADER_LEN || data[..8] != FILE_MAGIC {
             return Err(Error::Corrupt("not a VTR file (bad magic)"));
@@ -187,10 +147,6 @@ impl Container {
                 recovered: None,
             });
         }
-        // Recovery: scan sections from the start. A write cut short by the
-        // process's death can leave a header whose payload is incomplete or,
-        // after a machine failure, zero-filled; the CRC tells them apart from
-        // a complete section, so decoding never sees a torn payload.
         let mut entries = Vec::new();
         let mut off = FILE_HEADER_LEN;
         while off + SECTION_HEADER_LEN <= data.len() {
@@ -201,11 +157,11 @@ impl Container {
             let crc = le_u32(&h[16..20]);
             let end = off as u64 + SECTION_HEADER_LEN as u64 + len;
             if kind == 0 || end > data.len() as u64 {
-                break; // truncated tail
+                break;
             }
             let payload = &data[off + SECTION_HEADER_LEN..end as usize];
             if crc != 0 && crc32fast::hash(payload) != crc {
-                break; // torn tail
+                break;
             }
             if kind == SectionKind::Directory as u32 {
                 off = end as usize;
@@ -229,8 +185,6 @@ impl Container {
         })
     }
 
-    /// The DIRECTORY payload named by a valid trailer; `None` when the file
-    /// has no trailer or the trailer does not describe this file.
     pub fn directory_payload(data: &[u8]) -> Option<&[u8]> {
         if data.len() < FILE_HEADER_LEN + TRAILER_LEN {
             return None;
@@ -257,10 +211,6 @@ impl Container {
         Self::directory_payload(data).map(Self::decode_directory)
     }
 
-    /// Version and directory of a closed file whose header starts with
-    /// `magic`: the strict parse of companion files that reuse this container
-    /// (the [activity index](crate::activity)). A file without a valid
-    /// trailer is [`Error::Corrupt`]; it is never recovered by scanning.
     pub fn parse_closed(data: &[u8], magic: &[u8; 8]) -> Result<((u16, u16), Vec<DirEntry>)> {
         if data.len() < FILE_HEADER_LEN || data[..8] != magic[..] {
             return Err(Error::Corrupt("bad magic"));
@@ -306,7 +256,6 @@ impl Container {
         Ok(entries)
     }
 
-    /// Returns the payload bytes of `entry` within `data`, optionally verifying its CRC.
     pub fn payload<'a>(data: &'a [u8], entry: &DirEntry, verify_crc: bool) -> Result<&'a [u8]> {
         let start = entry.offset as usize;
         let end = start + SECTION_HEADER_LEN + entry.len as usize;

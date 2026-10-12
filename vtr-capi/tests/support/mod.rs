@@ -1,14 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Ask Cargo for the static library artifact instead of guessing its cache layout.
 #[allow(dead_code)]
 pub fn static_library() -> PathBuf {
     static_library_with(&[])
 }
 
-/// The static library built with `features`, in a target directory of its own
-/// so that test binaries running in parallel never overwrite each other's library.
 #[allow(dead_code)]
 pub fn static_library_with(features: &[&str]) -> PathBuf {
     let mut build = Command::new(env!("CARGO"));

@@ -5,14 +5,7 @@ use std::sync::Arc;
 use volna_trace::data::SignalRef;
 use volna_trace::session::{OpenSpec, Session, SignalLoads};
 
-/// Work the document wants done. Obtain with [`crate::app::App::take_requests`].
-///
-/// Trace loads name their trace and the generation of its slot; the
-/// document places what they return on the session timeline as it arrives
-/// ([`crate::trace::Placement`]), so executors hand back trace times.
 pub enum LoadRequest {
-    /// Build a missing local sidecar off the UI thread. Progress and
-    /// cancellation travel through `options.control`.
     BuildActivity {
         trace: TraceId,
         generation: u64,
@@ -39,24 +32,17 @@ pub enum LoadRequest {
         session: Arc<dyn Session>,
         signals: Vec<SignalRef>,
     },
-    /// Count the distinct signals below every scope of an opened trace
-    /// (client-side work over its hierarchy).
     Sizes {
         trace: TraceId,
         generation: u64,
         session: Arc<dyn Session>,
     },
-    /// Build the census weights that count a trace's changing signals per
-    /// scope (client-side work over its hierarchy), once per trace with an
-    /// activity index.
     ActivityCounter {
         trace: TraceId,
         generation: u64,
         session: Arc<dyn Session>,
         budget: volna_trace::remote::memory::MemoryBudget,
     },
-    /// Classify every signal of a trace in `window` (trace times) with its
-    /// activity index and count per scope (client-side work).
     Activity {
         trace: TraceId,
         generation: u64,
@@ -65,8 +51,6 @@ pub enum LoadRequest {
         counter: Arc<crate::data::ActivityCounter>,
         budget: volna_trace::remote::memory::MemoryBudget,
     },
-    /// Read the signals `counts` leaves undecided from the trace and count
-    /// them in: the window's exact answer.
     ResolveActivity {
         trace: TraceId,
         generation: u64,
@@ -75,7 +59,6 @@ pub enum LoadRequest {
         counts: Arc<crate::data::ActivityCounts>,
         budget: volna_trace::remote::memory::MemoryBudget,
     },
-    /// Summarize a resident history for analog drawing (client-side work).
     Summary {
         generation: u64,
         signal: Traced<SignalRef>,
@@ -83,23 +66,18 @@ pub enum LoadRequest {
         kind: crate::data::NumericKind,
         budget: volna_trace::remote::memory::MemoryBudget,
     },
-    /// Summarize a folded group's signals over `range` (client-side work).
     GroupSummary {
         generation: u64,
         members: Vec<Arc<dyn volna_trace::data::SignalHistory>>,
         range: (u64, u64),
         budget: volna_trace::remote::memory::MemoryBudget,
     },
-    /// Summarize a long layer of a stacked group for column means
-    /// (client-side work).
     Integral {
         generation: u64,
         history: Arc<dyn volna_trace::data::SignalHistory>,
         reading: crate::wave::stack::Reading,
         budget: volna_trace::remote::memory::MemoryBudget,
     },
-    /// Walk a stacked group's layers once for its whole-trace scale
-    /// (client-side work).
     StackTotal {
         generation: u64,
         layers: Vec<crate::wave::stack::Layer>,
@@ -109,8 +87,6 @@ pub enum LoadRequest {
 }
 
 impl LoadRequest {
-    /// Transport routing for an already opened recording. Opening is routed
-    /// from its OpenSpec before a server identity exists.
     pub fn remote_id(&self) -> Option<u64> {
         match self {
             Self::Signals { session, .. }
@@ -128,7 +104,6 @@ impl LoadRequest {
         }
     }
 
-    /// Complete failed work with its original document and object identities.
     pub fn fail(self, error: anyhow::Error) -> LoadResult {
         match self {
             Self::BuildActivity {
@@ -250,7 +225,6 @@ impl LoadRequest {
         }
     }
 
-    /// Perform the request. Blocking; run it off the UI thread where possible.
     pub fn perform(self) -> LoadResult {
         match self {
             Self::BuildActivity {
@@ -419,7 +393,6 @@ impl LoadRequest {
     }
 }
 
-/// The outcome of a [`LoadRequest`], to hand to [`crate::app::App::deliver`].
 pub enum LoadResult {
     ActivityBuilt {
         trace: TraceId,
@@ -453,14 +426,12 @@ pub enum LoadResult {
         generation: u64,
         result: anyhow::Result<Arc<crate::data::ActivityCounter>>,
     },
-    /// What the activity index says about `window` (trace times).
     Activity {
         trace: TraceId,
         generation: u64,
         window: (u64, u64),
         result: anyhow::Result<Arc<crate::data::ActivityCounts>>,
     },
-    /// `window`'s exact counts, its undecided signals read from the trace.
     ActivityResolved {
         trace: TraceId,
         generation: u64,
@@ -471,26 +442,22 @@ pub enum LoadResult {
         generation: u64,
         signal: Traced<SignalRef>,
         kind: crate::data::NumericKind,
-        /// Identity of the summarized history.
         history: usize,
         result: anyhow::Result<Arc<crate::wave::analog::AnalogSummary>>,
     },
     GroupSummary {
         generation: u64,
-        /// Identity of the summarized signals ([`crate::wave::group::key`]).
         key: Vec<usize>,
         result: anyhow::Result<Arc<crate::wave::group::GroupSummary>>,
     },
     Integral {
         generation: u64,
-        /// Identity of the summarized history.
         history: usize,
         reading: crate::wave::stack::Reading,
         result: anyhow::Result<Arc<crate::wave::stack::IntegralSummary>>,
     },
     StackTotal {
         generation: u64,
-        /// Identity of the stacked layers ([`crate::wave::stack::key`]).
         key: crate::wave::stack::Key,
         result: anyhow::Result<Arc<crate::wave::stack::TotalSummary>>,
     },

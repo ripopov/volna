@@ -1,11 +1,5 @@
-//! The trace set seen from the app:
-//! adding a trace beside the open ones, closing one of several, naming
-//! them, and what the panels and the sidebar do when the set changes.
-//!
-//! Adding and closing are undoable steps. Closing a trace removes its rows,
-//! its rulers and the panels that show it together with the trace, so one
-//! undo puts all of it back; the closed session stays in the journal and
-//! comes back without reading the file again.
+//! The trace set seen from the app: adding a trace beside the open ones, closing one of
+//! several, naming them, and what the panels and the sidebar do when the set changes.
 
 use std::sync::Arc;
 
@@ -18,29 +12,20 @@ use crate::document::TraceEdit;
 use crate::trace::{Rescale, Retime, TraceId};
 use volna_trace::session::{OpenSpec, Session};
 
-/// One trace as its chip in the frontend's toolbar, and its row in the
-/// scope tree, show it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TraceChip {
     pub trace: TraceId,
     pub name: String,
-    /// Where it was opened from, for a tooltip.
     pub source: String,
-    /// `VTR`, `FST`; `None` while it opens.
     pub format: Option<&'static str>,
-    /// Its own time unit (`ns`); `None` while it opens.
     pub unit: Option<String>,
     pub signals: usize,
     pub loading: bool,
-    /// Whether Close applies to it alone: A holds the workspace while other
-    /// traces are open.
     pub closable: bool,
-    /// Whether the user named it.
     pub renamed: bool,
 }
 
 impl TraceChip {
-    /// `VTR · ns`, or `opening…`.
     pub fn detail(&self) -> String {
         match (self.format, &self.unit) {
             (Some(format), Some(unit)) => format!("{format} · {unit}"),
@@ -48,7 +33,6 @@ impl TraceChip {
         }
     }
 
-    /// `VTR · ns · 16 signals`, as the scope tree's trace row says it.
     pub fn row_detail(&self) -> String {
         if self.loading {
             return self.detail();
@@ -57,14 +41,12 @@ impl TraceChip {
         format!("{} · {} signal{s}", self.detail(), self.signals)
     }
 
-    /// The tooltip: the letter, the name and where it came from.
     pub fn tooltip(&self) -> String {
         format!("Trace {} · {} — {}", self.trace, self.name, self.source)
     }
 }
 
 impl App {
-    /// The open and opening traces, in letter order, as chips show them.
     pub fn trace_chips(&self) -> Vec<TraceChip> {
         let traces = self.doc.traces();
         let others = traces.len() > 1;
@@ -84,8 +66,6 @@ impl App {
             .collect()
     }
 
-    /// Changes whenever a wave panel's rows or the panels do: what
-    /// [`App::members_on_waves`] returns holds until then.
     pub fn rows_revision(&self) -> (u64, u64) {
         let rows = self
             .panels
@@ -96,9 +76,6 @@ impl App {
         (self.panels.revision(), rows)
     }
 
-    /// The variables and generators some wave panel shows as a row, so the
-    /// member list can mark them. It walks every row: frontends keep it
-    /// until [`App::rows_revision`] changes.
     pub fn members_on_waves(
         &self,
     ) -> std::collections::HashSet<crate::trace::Traced<volna_trace::data::Member>> {
@@ -122,19 +99,14 @@ impl App {
         shown
     }
 
-    /// The chip of one trace.
     pub fn trace_chip(&self, trace: TraceId) -> Option<TraceChip> {
         self.trace_chips().into_iter().find(|c| c.trace == trace)
     }
 
-    /// Add a trace a host opened from a durable location (a path or URI it
-    /// can open again).
     pub fn add_resource(&mut self, spec: OpenSpec, uri: String) {
         self.add_trace(spec, Some(uri));
     }
 
-    /// Start opening another trace beside the open ones. With nothing open
-    /// it is an ordinary open.
     pub(crate) fn add_trace(&mut self, spec: OpenSpec, uri: Option<String>) {
         if self.doc.traces().is_empty() {
             match uri {
@@ -150,8 +122,6 @@ impl App {
         self.changed();
     }
 
-    /// Add an opened session as another trace immediately (tests, and hosts
-    /// that already hold one). The first session is an ordinary open.
     pub fn add_session(&mut self, session: Arc<dyn Session>) -> Result<TraceId> {
         let session = self.account_local_session(session)?;
         if !self.doc.is_loaded() {
@@ -163,8 +133,6 @@ impl App {
         Ok(trace)
     }
 
-    /// Place an arriving trace and refresh its sidebar and panel identity.
-    /// Primary trace A can arrive after a secondary and never enters history.
     pub(super) fn trace_visible(&mut self, trace: TraceId, refined: Option<u64>, now: Instant) {
         if let Some(factor) = refined {
             self.refine(factor, now);
@@ -174,15 +142,11 @@ impl App {
         self.layout_changed();
     }
 
-    /// A secondary arrival is undoable, regardless of disk completion order.
     pub(super) fn trace_joined(&mut self, trace: TraceId, refined: Option<u64>, now: Instant) {
         self.trace_visible(trace, refined, now);
         self.record_trace_step(format!("Add trace {trace}"), TraceEdit::Remove(trace), now);
     }
 
-    /// Journal a trace edit as a step of its own, or as part of the command
-    /// being recorded. A trace arriving during a pointer gesture gets its own
-    /// step below the gesture's, so Esc or undo of the gesture keeps it.
     fn record_trace_step(&mut self, label: String, inverse: TraceEdit, now: Instant) {
         if self.history.is_recording() && self.gesture_open() {
             let gesture = self.history.take_open();
@@ -203,9 +167,6 @@ impl App {
         }
     }
 
-    /// The session unit became `factor` times finer to admit a trace:
-    /// every time outside the document follows, and every row, table and
-    /// summary of the traces already open loads again in the new unit.
     fn refine(&mut self, factor: u64, now: Instant) {
         let by = Rescale::Finer(factor);
         self.history.retime(by);
@@ -227,15 +188,11 @@ impl App {
         self.workspace.scheduler.changed(now);
     }
 
-    /// Close trace `trace` of several (`Command::RemoveTrace`): its rows,
-    /// its rulers and the panels that show it go with it, as one step named
-    /// “Close trace B”. Closing the only open trace closes everything.
     pub(super) fn remove_trace(&mut self, trace: TraceId) {
         let others = self.doc.traces().loaded().any(|(id, _)| id != trace);
         let Some(slot) = self.doc.traces().get(trace) else {
             return;
         };
-        // A trace still opening has not joined: closing it cancels the open.
         if slot.session().is_none() && others {
             self.doc.remove_trace(trace);
             self.scopes.remove_trace(self.doc.traces(), trace);
@@ -271,8 +228,6 @@ impl App {
                 self.events.push(Event::Notice(error.to_string()));
             }
         }
-        // Every edit above is collected before the trace leaves, so undo
-        // puts the trace back first and its rows and panels after.
         self.collect_edits();
         self.sync_lane_tracks();
         let Some(slot) = self.forget_trace(trace) else {
@@ -284,8 +239,6 @@ impl App {
         self.layout_changed();
     }
 
-    /// Take a trace out of the document after releasing what panels still
-    /// hold of it, and drop it from the sidebar.
     pub(crate) fn forget_trace(&mut self, trace: TraceId) -> Option<crate::trace::TraceSlot> {
         let Self { panels, doc, .. } = self;
         for panel in panels.iter_mut() {
@@ -301,14 +254,12 @@ impl App {
         Some(slot)
     }
 
-    /// Name a trace, as an undoable step.
     pub(super) fn rename_trace(&mut self, trace: TraceId, name: Option<&str>) {
         if self.doc.rename_trace(trace, name) {
             self.layout_changed();
         }
     }
 
-    /// Select a trace's row in the scope tree and scroll to it.
     pub(super) fn reveal_trace(&mut self, trace: TraceId) {
         let traces = self.doc.traces();
         if traces.session(trace).is_none() {
@@ -331,7 +282,6 @@ impl App {
         self.changed();
     }
 
-    /// Undo or redo a trace edit; returns its inverse.
     pub(super) fn apply_trace_edit(&mut self, edit: TraceEdit) -> Result<TraceEdit> {
         let inverse = match edit {
             TraceEdit::Remove(trace) => TraceEdit::Restore(Box::new(

@@ -1,8 +1,5 @@
-//! The reference and the Measure lane: `R` measures from the cursor, `⇧R`
-//! stops, Alt-click and a middle click measure from the pointer, `Z` zooms
-//! to the measurement. The reference follows its marker, stays where a
-//! removed marker was (undo of that edit reattaches it), is saved in
-//! workspaces, and setting it is never an undo step.
+//! The reference and the Measure lane: `R` measures from the cursor, `⇧R` stops, Alt-click
+//! and a middle click measure from the pointer, `Z` zooms to the measurement.
 
 use std::sync::Arc;
 use volna_core::testing::a_all;
@@ -60,7 +57,6 @@ fn lane(app: &mut App) -> MarkerLane {
         .clone()
 }
 
-/// Panel x of time `t` in the focused panel's time column.
 fn x_of(lane: &MarkerLane, app: &App, t: u64) -> f32 {
     let right = lane.band.right();
     let v = app.doc.shared.viewport.target();
@@ -107,14 +103,12 @@ fn r_measures_from_the_cursor_and_shift_r_stops() {
     assert_eq!(app.doc.reference(), Some(Reference::Time(1500)));
     assert_eq!(app.doc.reference_time(), Some(1500));
     assert!(said(&app).unwrap().starts_with("Measuring from "));
-    // Marking the cursor does not move the reference, nor attach it.
     act(&mut app, Action::AddOrRenameMarker);
     assert_eq!(app.doc.reference(), Some(Reference::Time(1500)));
 
     act(&mut app, Action::ClearReference);
     assert_eq!(app.doc.reference(), None);
     assert_eq!(said(&app).as_deref(), Some("Reference cleared"));
-    // None of it is an edit: the last undo step is still adding marker 2.
     assert_eq!(app.undo_label(), Some("Add marker 2"));
 }
 
@@ -138,8 +132,6 @@ fn the_reference_follows_its_marker_and_undo_restores_the_attachment() {
     act(&mut app, Action::SetReference);
     assert_eq!(app.doc.reference(), Some(Reference::Marker(id(2))));
 
-    // Removing its marker leaves the reference at that time; undo and redo
-    // of the removal reattach and detach it again.
     act(&mut app, Action::RemoveMarkerAtCursor);
     assert_eq!(app.doc.reference(), Some(Reference::Time(1600)));
     act(&mut app, Action::ClearSelection);
@@ -151,7 +143,6 @@ fn the_reference_follows_its_marker_and_undo_restores_the_attachment() {
     app.handle(Command::Undo);
     assert_eq!(app.doc.reference(), Some(Reference::Marker(id(2))));
 
-    // Undoing the add of the reference's marker detaches it; redo reattaches.
     app.doc.shared.cursor = Some(1800);
     act(&mut app, Action::AddOrRenameMarker);
     act(&mut app, Action::SetReference);
@@ -162,8 +153,6 @@ fn the_reference_follows_its_marker_and_undo_restores_the_attachment() {
     app.handle(Command::Redo);
     assert_eq!(app.doc.reference(), Some(Reference::Marker(id(3))));
 
-    // Removing all markers keeps it at its marker's time, and undo
-    // reattaches it.
     app.doc.shared.cursor = Some(1200);
     act(&mut app, Action::SetReference);
     act(&mut app, Action::RemoveAllMarkers);
@@ -171,14 +160,12 @@ fn the_reference_follows_its_marker_and_undo_restores_the_attachment() {
     app.handle(Command::Undo);
     assert_eq!(app.doc.reference(), Some(Reference::Marker(id(1))));
 
-    // A reference moved after the removal stays where the user put it.
     act(&mut app, Action::RemoveAllMarkers);
     app.doc.shared.cursor = Some(1500);
     act(&mut app, Action::SetReference);
     app.handle(Command::Undo);
     assert_eq!(app.doc.markers().len(), 3);
     assert_eq!(app.doc.reference(), Some(Reference::Time(1500)));
-    // A marker reference must name a marker.
     assert!(!app.doc.set_reference(Some(Reference::Marker(id(9)))));
 }
 
@@ -209,8 +196,6 @@ fn the_measure_lane_appears_with_a_reference_and_joins_it_to_the_cursor() {
         rows_top + m.band.height(),
         "the rows move down"
     );
-    // The tag is centred on the reference; the live span runs from it to
-    // the cursor, measured forward.
     let xr = x_of(&l, &app, 1300);
     assert!((m.tag.left() + m.tag.width() / 2.0 - xr).abs() <= 1.0);
     let live = m.live.clone().expect("a cursor away from the reference");
@@ -223,13 +208,11 @@ fn the_measure_lane_appears_with_a_reference_and_joins_it_to_the_cursor() {
     );
     assert_eq!(l.hit(mid), Some(volna_core::marker::LaneHit::Live));
 
-    // Before the reference the span is signed and ends at the tag.
     app.doc.shared.cursor = Some(1100);
     let l = lane(&mut app);
     let live = l.measure.unwrap().live.unwrap();
     assert!(live.measurement.dt() < 0);
     assert!(live.labels[0].starts_with('−'), "{:?}", live.labels);
-    // On the reference, or without a cursor, only the tag remains.
     app.doc.shared.cursor = Some(1300);
     assert!(lane(&mut app).measure.unwrap().live.is_none());
     app.doc.shared.cursor = None;
@@ -257,7 +240,6 @@ fn a_press_on_the_live_span_keeps_the_cursor_and_elsewhere_moves_it() {
     );
     pointer(&mut app, PointerEvent::Up);
     assert_eq!(app.doc.shared.cursor, Some(1700));
-    // Past the cursor the lane works like the time header.
     let x = x_of(&l, &app, 1900);
     press(&mut app, point(x, y), MouseButton::Left, false);
     pointer(&mut app, PointerEvent::Up);
@@ -273,8 +255,6 @@ fn alt_click_and_a_middle_click_measure_from_the_pointer() {
     let rows = app.panels.focused_waves().unwrap().last_layout().waves;
     let y = rows.top() + 4.0;
 
-    // Alt-click on the header beside marker 1: the reference snaps onto
-    // it, and the cursor stays.
     let header = app.panels.focused_waves().unwrap().last_layout().header;
     let x = x_of(&l, &app, 1400) + 2.0;
     press(
@@ -287,7 +267,6 @@ fn alt_click_and_a_middle_click_measure_from_the_pointer() {
     assert_eq!(app.doc.reference(), Some(Reference::Marker(id(1))));
     assert_eq!(app.doc.shared.cursor, Some(1100));
 
-    // A middle click without dragging measures from its point on release.
     let x = x_of(&l, &app, 1800);
     press(&mut app, point(x, y), MouseButton::Middle, false);
     assert_eq!(app.doc.reference(), Some(Reference::Marker(id(1))));
@@ -296,7 +275,6 @@ fn alt_click_and_a_middle_click_measure_from_the_pointer() {
     assert!(matches!(app.doc.reference(), Some(Reference::Time(_))));
     assert!((1790..=1810).contains(&t), "{t}");
 
-    // A middle drag pans and leaves the reference.
     let view = app.doc.shared.viewport.target();
     press(&mut app, point(x, y), MouseButton::Middle, false);
     pointer(
@@ -324,7 +302,6 @@ fn z_zooms_to_the_reference_and_the_cursor_with_a_margin() {
     app.doc.shared.cursor = Some(1400);
     act(&mut app, Action::ZoomToMeasurement);
     let v = app.doc.shared.viewport.target();
-    // 200 units measured, 15% of them on each side.
     assert!(
         (v.start - 1370.0).abs() < 1e-6 && (v.end - 1630.0).abs() < 1e-6,
         "{v:?}"
@@ -344,8 +321,6 @@ fn the_measure_lane_paints_in_both_themes() {
         for want in ["R → cursor", "R", "400 ns"] {
             assert!(texts.contains(&want), "{id}: {want} in {texts:?}");
         }
-        // The measured interval is tinted in the cursor colour, and the
-        // live span drawn in it.
         let tint = theme.wave_cursor.with_alpha(0.07);
         let quads: Vec<_> = scene.quads().collect();
         assert!(quads.iter().any(|(_, c)| *c == tint), "{id}: no tint");
@@ -409,8 +384,6 @@ fn the_measure_lanes_close_button_clears_the_reference_and_names_the_key() {
     app.doc.shared.cursor = Some(1700);
     let l = lane(&mut app);
     let m = l.measure.clone().unwrap();
-    // The × sits in the lane's cells, clear of the time column and of the
-    // values column's divider.
     let values = app.panels.focused_waves().unwrap().last_layout().values;
     assert!(m.clear.right() <= l.time_left - 4.0 && m.clear.left() > values.left());
     assert!(m.band.contains(m.clear.origin) && m.clear.bottom() <= m.band.bottom());
@@ -421,7 +394,6 @@ fn the_measure_lanes_close_button_clears_the_reference_and_names_the_key() {
     );
     assert_eq!(l.hit(centre(m.tag)), Some(volna_core::marker::LaneHit::Tag));
 
-    // Hovering each part names ⇧R.
     let tip = |app: &mut App, p: Point| -> Vec<String> {
         pointer(app, PointerEvent::Move { position: p });
         frame(app, &Theme::one_dark())
@@ -450,7 +422,6 @@ fn the_measure_lanes_close_button_clears_the_reference_and_names_the_key() {
         "{texts:?}"
     );
 
-    // A press on the tag keeps the cursor; one on the × clears.
     press(&mut app, centre(m.tag), MouseButton::Left, false);
     pointer(&mut app, PointerEvent::Up);
     assert_eq!(app.doc.shared.cursor, Some(1700));

@@ -1,7 +1,4 @@
 //! The Transaction panel: everything recorded about one selected record.
-//! Every decision (which record, what it contains, how a value reads, what it
-//! is related to) is `volna_core::transaction`; this module only draws the
-//! prepared view and forwards commands.
 
 #[cfg(not(target_arch = "wasm32"))]
 use gpui_kit::ClipboardItem;
@@ -32,9 +29,7 @@ use crate::app::Workspace;
 use crate::theme::{ThemePx, hsla, theme};
 use crate::ui::{Icon, IconName};
 
-/// Height of one lifeline lane, in design pixels.
 const LANE_PX: f32 = 18.0;
-/// One parent vertex and its incoming edge, in design pixels.
 const PARENT_ROW_PX: f32 = 88.0;
 
 actions!(transaction, [Back, Forward]);
@@ -140,7 +135,6 @@ impl TransactionPanelView {
         }
     }
 
-    /// Keep the filter box in step with the model (a split or a restore).
     fn sync_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ws) = self.ws.upgrade() else { return };
         let Some(text) = ws
@@ -170,7 +164,6 @@ impl base::Panel for TransactionPanelView {
     fn panel_name(&self) -> &'static str {
         "volna.transaction"
     }
-    // Only core close commands remove a panel; the dock never does.
     fn closable(&self, _: &App) -> bool {
         false
     }
@@ -356,7 +349,6 @@ impl Render for TransactionPanelView {
                         view.copy(cx);
                         cx.stop_propagation();
                     } else if key == "escape" {
-                        // Focus returns to the panel that chose the record.
                         if let Some(origin) = view
                             .ws
                             .upgrade()
@@ -635,8 +627,6 @@ impl TransactionPanelView {
         element.into_any_element()
     }
 
-    /// Virtualize vertices so a complete chain does not build every UI element
-    /// at once. Reverse the traversal's child-first order for the graph.
     fn parent_rows(
         &self,
         range: std::ops::Range<usize>,
@@ -743,7 +733,6 @@ impl TransactionPanelView {
             .collect()
     }
 
-    /// A timing tile; Begin and End move the shared cursor.
     fn tile(
         &self,
         t: &crate::theme::Theme,
@@ -786,8 +775,6 @@ impl TransactionPanelView {
         }
     }
 
-    /// The record's own Gantt: one row per lane, events as ticks, and the
-    /// shared cursor when it falls inside the lifetime.
     fn lifeline(
         &self,
         t: &crate::theme::Theme,
@@ -863,7 +850,6 @@ impl TransactionPanelView {
         lanes.into_any_element()
     }
 
-    /// A collapsible heading whose count is the recorded total, cut or not.
     fn heading<T>(
         &self,
         t: &crate::theme::Theme,
@@ -985,7 +971,6 @@ impl TransactionPanelView {
             .min_w_0()
             .font_family(t.mono_font)
             .child(SharedString::from(row.value.clone()));
-        // An integer cycles its radix on click, remembered per key.
         let value = match row.radix {
             Some(radix) => value
                 .id(SharedString::from(format!("tx-attr-{attribute}")))
@@ -1173,7 +1158,6 @@ fn tag(t: &crate::theme::Theme, text: &str) -> AnyElement {
         .into_any_element()
 }
 
-/// The word on the badge; the raw `TxStatus` name is its tooltip.
 fn status_badge(
     t: &crate::theme::Theme,
     text: &str,

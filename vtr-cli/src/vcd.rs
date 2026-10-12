@@ -1,4 +1,5 @@
 //! Streaming VCD conversion with checked identifiers, aliases, and time ordering.
+
 use anyhow::{bail, ensure, Context, Result};
 use std::collections::HashMap;
 use std::io::BufReader;
@@ -100,15 +101,6 @@ fn declarations(
     Ok(())
 }
 
-/// Convert standard VCD and its string extension into a fresh writer.
-///
-/// Preserves aliases, bus ranges, four-state values, event occurrences, real
-/// values, strings, dump-control intervals, and decimal timescales. Missing
-/// timescales default to nanoseconds. Values stream in timestamp order; only
-/// declarations and the current command are retained by the converter.
-/// Use `dedup: false` on the writer to preserve redundant held-value samples.
-/// Undeclared identifiers, incompatible aliases, overwide values, incomplete
-/// commands, and backwards timestamps are errors. EVCD is unsupported.
 pub fn convert_vcd(input: impl AsRef<Path>, w: &mut Writer) -> Result<()> {
     let mut parser = vcd::Parser::new(BufReader::new(std::fs::File::open(input)?));
     let header = parser.parse_header()?;
@@ -167,7 +159,6 @@ pub fn convert_vcd(input: impl AsRef<Path>, w: &mut Writer) -> Result<()> {
                         value.len() > 0 && value.len() <= width as usize,
                         "vector value exceeds declared width for {code}"
                     );
-                    // VTR applies VCD zero/X/Z extension for abbreviated vectors.
                     w.emit_logic_str(signal.id, value.to_string().as_bytes())?;
                 }
                 Command::ChangeReal(code, value) => w.emit_real(signal(code)?.id, value)?,

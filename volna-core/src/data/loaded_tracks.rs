@@ -1,12 +1,11 @@
-//! Viewer preparation of immutable raw transaction owners: stacking, palettes and placement.
+//! Viewer preparation of immutable raw transaction owners: stacking, palettes and
+//! placement.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use volna_trace::data::loaded_tracks::{LoadedGenerator as RawGenerator, LoadedTrack as RawTrack};
 use volna_trace::data::loaded_tracks::{LoadedRelation, TransactionLocation};
 use volna_trace::data::transactions::{TrackRef, Transaction, TransactionRef, TransactionStage};
-/// The stage names of a generator by lane, counted in one pass at load so a
-/// stage palette (`pipeline::palette`) never scans records. Lanes and the
-/// names within a lane keep their first appearance in record order.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StageCensus {
     pub lanes: Vec<LaneCensus>,
@@ -15,13 +14,10 @@ pub struct StageCensus {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LaneCensus {
     pub lane: String,
-    /// Stages recorded on this lane.
     pub stages: u64,
     pub names: Vec<NameCensus>,
 }
 
-/// One stage name on one lane: how often it occurs and the sum of its
-/// positions among a record's stages on that lane (first stage is 0).
 #[derive(Clone, Debug, PartialEq)]
 pub struct NameCensus {
     pub name: String,
@@ -29,7 +25,6 @@ pub struct NameCensus {
     pub position_sum: u64,
 }
 
-/// Borrowed load-time indexes; census vectors retain first appearance order.
 #[derive(Default)]
 struct StageIndex<'a> {
     lanes: HashMap<&'a str, usize>,
@@ -39,9 +34,6 @@ struct StageIndex<'a> {
 }
 
 impl StageCensus {
-    /// Count one record, reusing indexed lanes/names and pipeline-order hints.
-    /// Reset only lanes this record touched; a global lane census may be large
-    /// while individual records have very few stages.
     async fn add<'a, F: std::future::Future<Output = ()>>(
         &mut self,
         stages: &'a [TransactionStage],
@@ -141,7 +133,6 @@ impl std::ops::Deref for LoadedGenerator {
     }
 }
 impl LoadedGenerator {
-    /// Build client-side lane and palette indexes over shared raw records.
     pub fn prepare(
         raw: Arc<RawGenerator>,
         budget: Option<&volna_trace::remote::memory::MemoryBudget>,
@@ -162,8 +153,6 @@ impl LoadedGenerator {
         mut checkpoint: impl FnMut() -> F,
     ) -> anyhow::Result<Self> {
         let transactions = raw.transactions();
-        // Record arrays and stage ordinals grow with occurrences. Census and
-        // palette storage grow with distinct names, admitted when first seen.
         let mut upper = (transactions.len() as u64)
             .saturating_mul(128)
             .saturating_add(256);
@@ -176,10 +165,6 @@ impl LoadedGenerator {
         let mut reservation = budget
             .map(|b| b.reserve_object("the generator view", upper))
             .transpose()?;
-        // Greedy interval partitioning in begin order over half-open
-        // lifetimes: each record takes the lowest sub-row free at its begin.
-        // A zero-length record holds its instant, so records at one time
-        // stack instead of hiding each other.
         let mut sub_rows = Vec::new();
         sub_rows.try_reserve_exact(transactions.len())?;
         let mut open = std::collections::BinaryHeap::new();
@@ -197,7 +182,6 @@ impl LoadedGenerator {
             let row = match free.pop() {
                 Some(std::cmp::Reverse(row)) => row,
                 None => {
-                    // Past u16::MAX sub-rows, the deepest one is shared.
                     let row = depth;
                     depth = depth.saturating_add(1);
                     row.min(u16::MAX - 1)
@@ -309,8 +293,6 @@ impl LoadedGenerator {
             .iter()
             .filter_map(|tx| raw.parent(tx.id).map(|p| (tx.id, p)))
             .collect();
-        // Strict scaling preserves canonical row order. Saturating lifetimes
-        // can reorder records by ID; saturating stages can invent edge events.
         let time = |t: &mut u64| -> anyhow::Result<()> {
             *t = t
                 .checked_mul(scale)
@@ -357,7 +339,6 @@ impl LoadedGenerator {
         self._placed_reservation = reservation;
         Ok(())
     }
-    /// Construct a prepared owner for headless viewer fixtures.
     pub fn new(
         generator: TrackRef,
         transactions: Vec<Transaction>,
@@ -374,24 +355,18 @@ impl LoadedGenerator {
             None,
         )
     }
-    /// The sub-row of the record at canonical `ordinal` when overlapping
-    /// records stack: no two records on one sub-row overlap (a record may
-    /// begin where the previous one ends).
     pub fn sub_row(&self, ordinal: usize) -> u16 {
         self.sub_rows.get(ordinal).copied().unwrap_or(0)
     }
 
-    /// Sub-rows the stacking uses; 0 for an empty generator.
     pub fn depth(&self) -> u16 {
         self.depth
     }
 
-    /// Median record lifetime, in trace time units.
     pub fn median_lifetime(&self) -> u64 {
         self.median_lifetime
     }
 
-    /// Stage names per lane, counted at load.
     pub fn palette(&self) -> &crate::pipeline::palette::StagePalette {
         &self.palette
     }
@@ -408,7 +383,6 @@ pub struct LoadedTrack {
     pub generators: Vec<Arc<LoadedGenerator>>,
 }
 impl LoadedTrack {
-    /// Prepare a track on a blocking loader executor.
     pub fn prepare(
         raw: RawTrack,
         budget: Option<&volna_trace::remote::memory::MemoryBudget>,
@@ -440,8 +414,6 @@ impl LoadedTrack {
         })
     }
 }
-/// Scale a time attribute. A clock's period may be written as a plain
-/// integer ([`crate::clock::PERIOD_ATTRIBUTE`]); it is a time all the same.
 fn scale_attribute(
     key: &str,
     value: &mut volna_trace::data::transactions::AttributeValue,
@@ -492,7 +464,6 @@ mod tests {
             stage("E", ""),
             stage("W", ""),
         ];
-        // Out of pipeline order, so the next-name guess misses.
         let mut b = tx(1, 1, 5);
         b.stages = vec![stage("F", ""), stage("W", ""), stage("E", "")];
         let loaded = LoadedGenerator::new(TrackRef(1), vec![a, b], HashMap::new(), vec![]).unwrap();
@@ -549,8 +520,6 @@ mod tests {
         }
         let loaded = LoadedGenerator::new(TrackRef(1), records, HashMap::new(), vec![]).unwrap();
         let txs = loaded.transactions();
-        // No two records on one sub-row overlap, and the depth is the
-        // deepest overlap of half-open lifetimes.
         let mut deepest = 0;
         for (i, a) in txs.iter().enumerate() {
             let open = txs
@@ -560,7 +529,6 @@ mod tests {
             deepest = deepest.max(open);
             for (j, b) in txs.iter().enumerate().skip(i + 1) {
                 if loaded.sub_row(i) == loaded.sub_row(j) {
-                    // A zero-length record holds its instant.
                     let end = |t: &Transaction| t.end.max(t.begin + 1);
                     assert!(end(a) <= b.begin || end(b) <= a.begin, "{a:?} {b:?}");
                 }

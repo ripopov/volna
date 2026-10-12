@@ -1,5 +1,4 @@
 //! The transaction panel's workspace schema, capture, validation and resolution.
-//! Preparing content never retains data or changes the live document.
 
 use super::{ShownRecord, TransactionModel, ViewPrefs, view::SectionKey};
 use crate::panels::{Panel, PanelId, PanelKind, workspace::RestoreContext};
@@ -11,7 +10,6 @@ use serde_json::value::RawValue;
 
 pub(crate) const VERSION: u32 = 2;
 
-/// The record displayed by a transaction panel, independent of its pin state.
 #[derive(Serialize, Deserialize)]
 struct SavedRecord {
     #[serde(default, skip_serializing_if = "TraceId::is_a")]
@@ -20,8 +18,6 @@ struct SavedRecord {
     id: u64,
 }
 
-/// A transaction panel remembers its displayed record without requiring a pin.
-/// Unpinned panels resume following document selections after restoration.
 #[derive(Serialize, Deserialize)]
 struct TransactionPanel {
     id: PanelId,

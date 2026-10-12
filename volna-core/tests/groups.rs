@@ -1,8 +1,4 @@
-//! Headless tests of signal groups in the waveform panel:
-//! making, folding, renaming and dissolving
-//! groups; the folded summary, its value cell, hover list and edge
-//! stepping; commands on groups; dragging with a level; the clipboard;
-//! adding a scope as a group; and workspaces.
+//! Headless waveform group tests for editing, navigation, persistence, and summaries.
 
 use std::sync::Arc;
 use volna_core::testing::{a, a_all};
@@ -27,11 +23,8 @@ use volna_trace::session::{OpenSpec, Session};
 const TRACE: &str = "file:///tmp/groups.vtr";
 const LOCATION: &str = "file:///tmp/groups.vtr.volna.json";
 const END: u64 = 1000;
-/// `wdata` is X for one cycle from here.
 const X_AT: u64 = 505;
 
-/// A small SoC: `top.clk`, `top.rst_n`, an AXI write channel under
-/// `top.axi` with a read channel below it, and `top.core.pc`.
 fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
@@ -120,8 +113,6 @@ fn pump(app: &mut App) {
     }
 }
 
-/// The trace with every variable in the waveform panel, in declaration
-/// order: clk, rst_n, awvalid, wdata, bvalid, rvalid, rdata, pc.
 fn app() -> (tempfile::NamedTempFile, App, PanelId) {
     let (file, session) = trace();
     let mut app = App::new();
@@ -151,7 +142,6 @@ fn select(app: &mut App, id: PanelId, rows: &[usize]) {
     w.anchor = rows.first().copied();
 }
 
-/// Each entry as indentation plus name, a `+`/`-` before folded/open groups.
 fn outline(app: &App, id: PanelId) -> Vec<String> {
     waves(app, id)
         .items()
@@ -171,8 +161,6 @@ fn selected(app: &App, id: PanelId) -> Vec<usize> {
     waves(app, id).selected.iter().copied().collect()
 }
 
-/// A point on entry `entry`'s name cell, `x` pixels into the names column
-/// and `frac` of the way down its first line.
 fn name_at(app: &App, id: PanelId, entry: usize, x: f32, frac: f32) -> Point {
     let l = waves(app, id).last_layout();
     let (y, _) = l.entry_span(entry).expect("entry is visible");
@@ -204,7 +192,6 @@ fn click(app: &mut App, id: PanelId, position: Point) {
     frame(app, id);
 }
 
-/// Press on `from`, move through the drag threshold to `to`, release.
 fn drag(app: &mut App, id: PanelId, from: Point, to: Point) -> Option<Drag> {
     press(app, id, from, MouseButton::Left, Modifiers::default());
     for p in [point(from.x, from.y + 6.0), to] {
@@ -228,7 +215,6 @@ fn texts(scene: &Scene) -> Vec<&str> {
         .collect()
 }
 
-/// The same colour at any opacity.
 fn same_hue(a: volna_core::color::Color, b: volna_core::color::Color) -> bool {
     a.a > 0.0 && (a.h, a.s, a.l) == (b.h, b.s, b.l)
 }
@@ -242,8 +228,6 @@ fn view(app: &mut App, id: PanelId, start: f64, end: f64) {
         .jump_to(doc, Viewport { start, end });
 }
 
-/// clk, rst_n, [AXI: awvalid, wdata, bvalid, [Read: rvalid, rdata]], pc.
-/// Answer the open name field, as the frontend does with the typed text.
 fn commit_name(app: &mut App, text: &str) {
     let target = app.text_edit().expect("a name field is open").target;
     app.handle(Command::CommitText(target, Some(text.into())));
@@ -277,7 +261,6 @@ fn grouped(app: &mut App, id: PanelId) {
 #[test]
 fn g_groups_the_selection_in_place_and_starts_renaming_it() {
     let (_f, mut app, id) = app();
-    // Rows from two places keep their order under a group at the first one.
     select(&mut app, id, &[3, 4, 7]);
     app.handle(Command::Action(Action::GroupSelection));
     assert_eq!(
@@ -296,10 +279,8 @@ fn g_groups_the_selection_in_place_and_starts_renaming_it() {
     let l = waves(&app, id).last_layout();
     assert_eq!(rect.left(), indent_x(l.names.left(), 0, 1.0) + CHEVRON_W);
     assert_eq!(rect.top(), l.entry_span(3).unwrap().0);
-    // The group's name is left to the editor while it is open.
     assert!(!texts(frame(&mut app, id)).contains(&"Group 1"));
 
-    // Enter commits, an empty name or Escape keeps the old one.
     commit_name(&mut app, "  Write  ");
     assert_eq!(waves(&app, id).items()[3].name(), "Write");
     assert_eq!(waves(&app, id).rename, None);
@@ -311,7 +292,6 @@ fn g_groups_the_selection_in_place_and_starts_renaming_it() {
     assert_eq!(waves(&app, id).rename, None, "Escape cancels the rename");
     assert_eq!(selected(&app, id), [3], "and keeps the selection");
 
-    // A second group gets the next free name.
     select(&mut app, id, &[0]);
     app.handle(Command::Action(Action::GroupSelection));
     assert_eq!(waves(&app, id).items()[0].name(), "Group 1");
@@ -332,7 +312,6 @@ fn folding_hides_rows_and_moves_their_selection_to_the_group() {
     let shown = waves(&app, id).last_layout().visible.len();
     let pc = waves(&app, id).last_layout().entry_span(9).unwrap().0;
 
-    // A click on the chevron folds; a selected row inside goes to the group.
     select(&mut app, id, &[4, 9]);
     let at = chevron(&app, id, 2);
     click(&mut app, id, at);
@@ -349,10 +328,8 @@ fn folding_hides_rows_and_moves_their_selection_to_the_group() {
         "folded rows are not painted"
     );
     assert!(texts(scene).contains(&"AXI"));
-    // The number of signals it holds follows the name.
     assert!(texts(scene).contains(&"5"));
 
-    // → unfolds a selected group, ← folds it; Alt does the groups inside.
     select(&mut app, id, &[2]);
     let vp = waves(&app, id).viewport(&app.doc);
     app.handle(Command::Action(Action::PanRight));
@@ -369,18 +346,15 @@ fn folding_hides_rows_and_moves_their_selection_to_the_group() {
         vp,
         "fold keys do not pan"
     );
-    // On any other row the arrows pan as before.
     select(&mut app, id, &[0]);
     app.handle(Command::Action(Action::PanRight));
     app.tick(Instant::now() + std::time::Duration::from_secs(2));
     assert!(waves(&app, id).viewport(&app.doc).start > vp.start);
 
-    // ↓ walks visible rows only.
     select(&mut app, id, &[1]);
     app.handle(Command::Action(Action::MoveSelectionDown));
     app.handle(Command::Action(Action::MoveSelectionDown));
     assert_eq!(selected(&app, id), [9]);
-    // Shift-click takes the visible rows between.
     frame(&mut app, id);
     let at = name_at(&app, id, 0, 60.0, 0.5);
     press(
@@ -395,7 +369,6 @@ fn folding_hides_rows_and_moves_their_selection_to_the_group() {
     );
     app.handle(Command::Pointer(id, PointerEvent::Up));
     assert_eq!(selected(&app, id), [0, 1, 2, 9]);
-    // Fold all and unfold all come from the row menu.
     app.handle(Command::MenuSelect(id, MenuAction::FoldAll(false)));
     let at = name_at(&app, id, 0, 60.0, 0.5);
     press(&mut app, id, at, MouseButton::Right, Modifiers::default());
@@ -417,7 +390,6 @@ fn ungroup_keeps_rows_in_place_and_remove_takes_them() {
     );
     assert_eq!(selected(&app, id), [2, 3, 4, 5], "the former children");
 
-    // The row menu names what Delete does to a group.
     select(&mut app, id, &[5]);
     frame(&mut app, id);
     let at = name_at(&app, id, 5, 60.0, 0.5);
@@ -448,7 +420,6 @@ fn row_commands_take_the_subtree_and_value_commands_reach_its_signals() {
     let (_f, mut app, id) = app();
     grouped(&mut app, id);
     select(&mut app, id, &[6]);
-    // Format and analog apply to the signals in the group.
     let formats = |app: &App| -> Vec<String> {
         waves(app, id)
             .items()
@@ -473,7 +444,6 @@ fn row_commands_take_the_subtree_and_value_commands_reach_its_signals() {
             .is_some(),
         "rdata plots"
     );
-    // Height is the group row's own.
     app.handle(Command::Action(Action::IncreaseRowHeight));
     let heights: Vec<u8> = waves(&app, id)
         .items()
@@ -482,7 +452,6 @@ fn row_commands_take_the_subtree_and_value_commands_reach_its_signals() {
         .collect();
     assert_eq!(heights[6], 2);
     assert_eq!(heights[7], 1);
-    // Open in table opens the group's signals.
     app.handle(Command::OpenTableFromPanel {
         panel: id,
         row: None,
@@ -520,7 +489,6 @@ fn a_folded_group_summarises_its_signals_and_steps_through_their_changes() {
     let scene = frame(&mut app, id);
     let in_row =
         |r: &Rect| r.top() >= y - 0.5 && r.bottom() <= y + h + 0.5 && r.left() >= l.waves.left();
-    // The one-cycle X in wdata is drawn in the X colour at 505–515 ns.
     let x_rects: Vec<Rect> = scene
         .prims
         .iter()
@@ -541,13 +509,11 @@ fn a_folded_group_summarises_its_signals_and_steps_through_their_changes() {
         "{x_rects:?}"
     );
 
-    // Zoomed far out, a one-cycle X still shows.
     view(&mut app, id, 0.0, 1.0e6);
     let scene = frame(&mut app, id);
     assert!(scene.prims.iter().any(|p| matches!(p,
         Prim::Quad { rect, fill, .. } if in_row(rect) && same_hue(*fill, x_color))));
 
-    // Shift+→ steps through every change of any member.
     view(&mut app, id, 0.0, END as f64);
     let members: Vec<_> = waves(&app, id).group_histories(2);
     assert_eq!(members.len(), 5);
@@ -572,7 +538,6 @@ fn a_folded_group_summarises_its_signals_and_steps_through_their_changes() {
         Some(expected[expected.len() - 2])
     );
 
-    // The value cell counts the members that change at the cursor.
     let panel = app.panels.waves_mut(id).unwrap();
     panel.set_cursor(&mut app.doc, Some(X_AT));
     let scene = frame(&mut app, id);
@@ -586,7 +551,6 @@ fn a_folded_group_summarises_its_signals_and_steps_through_their_changes() {
     panel.set_cursor(&mut app.doc, Some(X_AT + 1));
     assert!(texts(frame(&mut app, id)).contains(&"5 signals"));
 
-    // Hovering the folded row lists the members' values there.
     let p = point(x_of((X_AT + 2) as f64), y + h / 2.0);
     app.handle(Command::Pointer(id, PointerEvent::Move { position: p }));
     let scene = frame(&mut app, id);
@@ -601,8 +565,6 @@ fn a_folded_group_summarises_its_signals_and_steps_through_their_changes() {
 fn dragging_names_picks_the_level_from_x_and_drops_into_folded_groups() {
     let (_f, mut app, id) = app();
     grouped(&mut app, id);
-    // Below bvalid the rows can go into AXI (depth 1) or Read (depth 2);
-    // drag clk there and let x choose the level.
     let row_h = waves(&app, id).last_layout().row_h;
     let depth_x = |d: f32| 12.0 + INDENT * d + 4.0;
     let from = name_at(&app, id, 0, 60.0, 0.5);
@@ -637,8 +599,6 @@ fn dragging_names_picks_the_level_from_x_and_drops_into_folded_groups() {
     );
     assert_eq!(selected(&app, id), [5]);
 
-    // The end of the list offers every level of the open groups above it;
-    // x at depth 0 puts pc back at the top level, x at depth 2 into Read.
     let from = name_at(&app, id, 9, 60.0, 0.5);
     let to = name_at(&app, id, 8, depth_x(2.0), 0.9);
     let shown = drag(&mut app, id, from, to);
@@ -648,7 +608,6 @@ fn dragging_names_picks_the_level_from_x_and_drops_into_folded_groups() {
     );
     assert_eq!(outline(&app, id)[9], "    pc");
 
-    // A group cannot go inside itself: no drop line.
     let from = name_at(&app, id, 1, 60.0, 0.5);
     let to = name_at(&app, id, 3, depth_x(1.0), 0.9);
     let shown = drag(&mut app, id, from, to);
@@ -658,7 +617,6 @@ fn dragging_names_picks_the_level_from_x_and_drops_into_folded_groups() {
     );
     assert_eq!(outline(&app, id)[1], "-AXI");
 
-    // The middle of a folded group's row takes the rows and stays folded.
     select(&mut app, id, &[6]);
     app.handle(Command::Action(Action::PanLeft));
     frame(&mut app, id);
@@ -685,8 +643,6 @@ fn dragging_names_picks_the_level_from_x_and_drops_into_folded_groups() {
             "    rst_n"
         ]
     );
-    // Nothing selected is hidden: the moved row is revealed by its group
-    // only when the group opens, so the selection moves to the group.
     assert_eq!(selected(&app, id), [5]);
     frame(&mut app, id);
     let _ = row_h;
@@ -704,7 +660,6 @@ fn the_clipboard_keeps_structure_and_pastes_under_the_last_selected_row() {
         app.doc.copied_rows[0].depth, 0,
         "normalised to the top level"
     );
-    // Paste lands after awvalid, at its level.
     select(&mut app, id, &[3]);
     app.handle(Command::Action(Action::PasteSignals));
     pump(&mut app);
@@ -713,13 +668,11 @@ fn the_clipboard_keeps_structure_and_pastes_under_the_last_selected_row() {
         ["  awvalid", "  -Read", "    rvalid", "    rdata"]
     );
     assert_eq!(selected(&app, id), [4]);
-    // Cut removes the group with its rows; paste puts it back whole.
     app.handle(Command::Action(Action::CutSignals));
     assert_eq!(outline(&app, id).len(), 10);
     select(&mut app, id, &[9]);
     app.handle(Command::Action(Action::PasteSignals));
     assert_eq!(outline(&app, id)[10..], ["-Read", "  rvalid", "  rdata"]);
-    // Pasted rows share the histories already loaded.
     let w = waves(&app, id);
     assert!(w.items()[11].signal().unwrap().history.is_some());
 }
@@ -818,7 +771,6 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
         read["rows"][0]["signal"],
         serde_json::json!(["top", "axi", "read", "rvalid"])
     );
-    // The selected rvalid is hidden in folded Read, so Read was selected.
     assert_eq!(panel["selected"], serde_json::json!([6]));
 
     let before = outline(&app, id);
@@ -844,13 +796,11 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
             .all(|s| s.history.is_some())
     );
 
-    // Selected rows inside a folded group are selected through the group.
     let mut hidden = saved.clone();
     hidden["panels"][0]["selected"] = serde_json::json!([7]);
     restore(&mut app, &hidden).unwrap();
     assert_eq!(selected(&app, id), [6]);
 
-    // A missing signal stays in its group as an unresolved row.
     let mut missing = saved.clone();
     missing["panels"][0]["rows"][2]["rows"][0]["signal"] =
         serde_json::json!(["top", "axi", "gone"]);
@@ -858,7 +808,6 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
     assert!(report.iter().any(|l| l.contains("gone")), "{report:?}");
     assert_eq!(outline(&app, id)[3], "  gone");
 
-    // Eight levels load; a ninth is refused.
     let nest = |levels: usize| {
         let mut row =
             serde_json::json!({"type": "signal", "signal": ["top", "clk"], "format": "bin"});
@@ -875,7 +824,6 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
     let err = restore(&mut app, &nest(8)).unwrap_err();
     assert!(format!("{err:#}").contains("nested deeper"), "{err:#}");
 
-    // A version 3 panel is reported and kept as it was.
     let mut old = saved.clone();
     old["panels"][0]["version"] = serde_json::json!(3);
     let report = restore(&mut app, &old).unwrap();
@@ -889,7 +837,6 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
 
 #[test]
 fn every_tree_edit_keeps_a_valid_tree_and_the_rows_it_had() {
-    // Random trees from a fixed seed, then random edits.
     let mut seed = 0x9e37_79b9_7f4a_7c15u64;
     let mut rnd = |n: usize| {
         seed ^= seed << 13;
@@ -929,7 +876,6 @@ fn every_tree_edit_keeps_a_valid_tree_and_the_rows_it_had() {
         let sel: std::collections::BTreeSet<usize> =
             (0..items.len()).filter(|_| rnd(4) == 0).collect();
 
-        // Group then ungroup restores the list.
         if let Some((splices, at)) = tree::group(&items, &sel, WaveRow::Group(GroupRow::new("new")))
         {
             let mut g = items.clone();
@@ -941,7 +887,6 @@ fn every_tree_edit_keeps_a_valid_tree_and_the_rows_it_had() {
             apply_checked(&mut u, splices);
             tree::validate(&u).unwrap();
             assert_eq!(names(&u), all);
-            // Grouping keeps leaves in order when the selection is one block.
             let roots = tree::roots(&items, &sel);
             if roots.len() == 1 {
                 assert_eq!(
@@ -957,8 +902,6 @@ fn every_tree_edit_keeps_a_valid_tree_and_the_rows_it_had() {
             }
         }
 
-        // Every drop the gaps offer keeps the tree valid, and moving the
-        // rows back where they were restores it.
         let visible = tree::visible(&items);
         for gap in 0..=visible.len() {
             let depths = tree::gap_depths(&items, &visible, gap);
@@ -972,7 +915,6 @@ fn every_tree_edit_keeps_a_valid_tree_and_the_rows_it_had() {
                 tree::validate(&m)
                     .unwrap_or_else(|e| panic!("round {round} gap {gap} depth {depth}: {e}"));
                 assert_eq!(names(&m), all);
-                // A single moved subtree moved back restores the list.
                 let roots = tree::roots(&items, &sel);
                 if roots.len() == 1 {
                     let r = roots[0];
@@ -1001,7 +943,6 @@ fn every_tree_edit_keeps_a_valid_tree_and_the_rows_it_had() {
             }
         }
 
-        // Remove takes whole subtrees; extract + insert round-trips them.
         let copied = tree::extract(&items, &sel);
         let mut r = items.clone();
         let removal = tree::removal(&items, &sel);
@@ -1023,7 +964,6 @@ fn every_tree_edit_keeps_a_valid_tree_and_the_rows_it_had() {
     }
 }
 
-/// Perform `splices`, then check their inverse puts every row back exactly.
 fn apply_checked(items: &mut Vec<Entry>, splices: Vec<tree::Splice>) {
     let key = |items: &[Entry]| -> Vec<(u8, String, bool)> {
         items
@@ -1073,7 +1013,6 @@ fn rows_are_a_tree_for_assistive_technology_and_group_names_take_a_double_click(
             ("pc".into(), 1, None, false),
         ]
     );
-    // A double-click renames on the name, not on the chevron.
     let w = waves(&app, id);
     assert_eq!(w.group_name_at(name_at(&app, id, 2, 80.0, 0.5)), Some(2));
     assert_eq!(w.group_name_at(chevron(&app, id, 2)), None);

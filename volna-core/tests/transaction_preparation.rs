@@ -42,9 +42,6 @@ fn prepare(distinct_lanes: bool) {
         Arc::new(LoadedGenerator::new(TrackRef(1), vec![tx], HashMap::new(), vec![]).unwrap());
     let palette = StagePalette::build(std::slice::from_ref(&generator));
     let elapsed = started.elapsed();
-    // This is a coarse stall guard, not a throughput benchmark. A 65k-entry
-    // census requires billions of comparisons with repeated linear searches;
-    // indexed preparation normally finishes far below this generous ceiling.
     assert!(
         elapsed < Duration::from_secs(5),
         "preparing 65k distinct entries stalled for {elapsed:?}"

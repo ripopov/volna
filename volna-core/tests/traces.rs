@@ -1,8 +1,4 @@
-//! Several traces in one session: a
-//! VTR in nanoseconds and an FST in picoseconds on one exact timeline, rows
-//! of either trace in one panel with their letters, closing one trace with
-//! everything that shows it, names, renames, undo, and workspaces that
-//! reopen every trace.
+//! Tests for multiple recordings sharing an exact timeline, names, undo, and workspaces.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,7 +16,6 @@ use volna_trace::data::source::Lookup;
 use volna_trace::data::{Member, VarId};
 use volna_trace::session::OpenSpec;
 
-/// The second trace.
 fn b() -> TraceId {
     TraceId::from_letter('B').unwrap()
 }
@@ -29,7 +24,6 @@ fn landing() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/landing.vtr")
 }
 
-/// Five changes of a few kinds, in picoseconds (`fixtures/fst_values.c`).
 fn values_fst() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures/values.fst")
 }
@@ -62,7 +56,6 @@ fn var(app: &App, trace: TraceId, path: &str) -> Traced<VarId> {
     }
 }
 
-/// The histories of the first wave panel's signal rows, by name.
 fn history(app: &App, trace: TraceId, name: &str) -> Arc<dyn volna_trace::data::SignalHistory> {
     let waves = app.panels.first_waves().and_then(|id| app.panels.waves(id));
     waves
@@ -100,8 +93,6 @@ fn a_vtr_in_ns_and_an_fst_in_ps_share_one_exact_timeline() {
     app.handle(Command::Action(volna_core::Action::NextMarker));
     assert_eq!(app.doc.time_base().timescale, -9);
 
-    // The FST counts picoseconds: the session timeline becomes a thousand
-    // times finer, and everything already on it follows exactly.
     app.handle(Command::AddTrace(OpenSpec::Path(values_fst())));
     assert_eq!(app.trace_chips()[1].detail(), "opening…");
     pump(&mut app);
@@ -125,15 +116,12 @@ fn a_vtr_in_ns_and_an_fst_in_ps_share_one_exact_timeline() {
         ]
     );
 
-    // B's rows keep their own picoseconds.
     let logic = var(&app, b(), "top.logic");
     app.handle(Command::AddVars(vec![logic]));
     pump(&mut app);
     let b = history(&app, b(), "logic");
     assert_eq!((b.time(0), b.time(1)), (5, 10));
 
-    // Undo takes B out and keeps the finer unit: undoing the marker edit
-    // made in nanoseconds lands exactly in picoseconds.
     app.handle(Command::Undo);
     assert_eq!(app.undo_label(), Some("Add trace B"));
     app.handle(Command::Undo);
@@ -165,7 +153,6 @@ fn rows_of_both_traces_show_their_letters_in_one_panel() {
     pump(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id);
-    // The member list marks what is on the waves, per trace.
     let shown = app.members_on_waves();
     let pc = |trace| var(&app, trace, "soc.cpu0.pc").map(Member::Var);
     assert!(shown.contains(&pc(TraceId::A)) && shown.contains(&pc(b())));
@@ -183,7 +170,6 @@ fn rows_of_both_traces_show_their_letters_in_one_panel() {
         .collect();
     assert_eq!(letters, ["A", "B"]);
 
-    // The scope tree heads each trace's scopes with a row of its own.
     let roots: Vec<_> = app
         .scopes
         .visible
@@ -197,7 +183,6 @@ fn rows_of_both_traces_show_their_letters_in_one_panel() {
         app.scopes.selected,
         Some(volna_core::sidebar::TreeNode::trace(b()))
     );
-    // Searching looks through both traces.
     app.handle(Command::SetSearchEverywhere(true));
     app.handle(Command::SetFilter("resp_valid".into()));
     let found: Vec<_> = app.variables.rows.iter().map(|m| m.trace).collect();
@@ -244,7 +229,6 @@ fn closing_a_trace_takes_its_rows_and_panels_in_one_step() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].row.trace(), Some(TraceId::A));
 
-    // One undo puts back the trace, already open, then its rows and panel.
     app.handle(Command::Undo);
     assert!(Arc::ptr_eq(app.doc.session(b()).unwrap(), &session));
     assert_eq!(app.panels.len(), 2);
@@ -261,7 +245,6 @@ fn closing_a_trace_takes_its_rows_and_panels_in_one_step() {
     assert_eq!(app.doc.traces().len(), 1);
     assert_eq!(app.panels.len(), 1);
 
-    // A holds the workspace: it closes only with everything.
     app.handle(Command::Undo);
     app.take_events();
     app.handle(Command::RemoveTrace(TraceId::A));
@@ -305,7 +288,6 @@ fn traces_are_named_by_what_tells_them_apart_and_renames_undo() {
     assert_eq!(app.doc.name().as_deref(), Some("base + slow DRAM"));
     app.handle(Command::Undo);
     assert_eq!(names(&app), ["base", "dram20"]);
-    // An empty name goes back to the derived one; nothing to undo then.
     app.handle(Command::Redo);
     app.handle(Command::RenameTrace(b(), Some(" ".into())));
     assert_eq!(names(&app), ["base", "dram20"]);
@@ -318,7 +300,6 @@ fn uri(path: &Path) -> String {
         .to_string()
 }
 
-/// Open `trace` as a host with persistence does, restoring `sidecar`.
 fn reopen(trace: &Path, sidecar: Content) -> App {
     let mut app = App::new();
     app.configure_persistence(Persistence::Auto);
@@ -381,7 +362,6 @@ fn a_workspace_reopens_every_trace_it_names() {
     assert!(rows[0].get("trace").is_none(), "A's rows name no trace");
     assert_eq!(rows[1]["trace"], "B");
 
-    // Opening A again restores the workspace: it opens B first.
     let app = reopen(&cpu, Content::Bytes(bytes));
     assert_eq!(app.workspace.notices, Vec::<String>::new());
     assert_eq!(app.doc.traces().len(), 2);
@@ -392,7 +372,6 @@ fn a_workspace_reopens_every_trace_it_names() {
     assert!(!history(&app, TraceId::A, "pc").is_empty());
 }
 
-/// A trace counted in cycles, with no seconds to place it by.
 struct Cycles {
     info: volna_trace::data::TraceInfo,
     hierarchy: volna_trace::data::Hierarchy,
@@ -463,7 +442,6 @@ fn landing_dram() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/landing_dram.fst")
 }
 
-/// The value of a loaded row at `time`, as text.
 fn text_at(history: &dyn volna_trace::data::SignalHistory, time: u64) -> String {
     match history.value(history.index_at(time)) {
         volna_trace::data::WaveValue::Text(text) => text,
@@ -475,9 +453,6 @@ fn text_at(history: &dyn volna_trace::data::SignalHistory, time: u64) -> String 
     }
 }
 
-/// The checked-in pair is one run: the CPU's VTR in nanoseconds and the
-/// DRAM controller's FST in picoseconds. On one timeline every DRAM burst
-/// the VTR records starts where the controller issues ACT for its address.
 #[test]
 fn the_landing_cpu_and_dram_traces_line_up_on_one_timeline() {
     let mut app = App::new();
@@ -526,8 +501,6 @@ fn the_landing_cpu_and_dram_traces_line_up_on_one_timeline() {
     }
 }
 
-/// `volna A B`: B is still opening when A's own workspace restores; it
-/// joins all the same.
 #[test]
 fn a_trace_opening_while_a_workspace_restores_still_joins() {
     let dir = tempfile::tempdir().unwrap();
@@ -540,7 +513,6 @@ fn a_trace_opening_while_a_workspace_restores_still_joins() {
     assert_eq!(requests.len(), 2);
     let second = requests.pop().unwrap();
     app.deliver(requests.pop().unwrap().perform());
-    // A's sidecar holds a workspace of A alone.
     let saved = {
         let mut other = App::new();
         other.handle(Command::Open(OpenSpec::Path(cpu.clone())));
@@ -574,8 +546,6 @@ fn a_trace_opening_while_a_workspace_restores_still_joins() {
     assert!(app.trace_chips().iter().all(|c| !c.loading));
 }
 
-/// Closing a trace that is still opening cancels the open: nothing was
-/// added, so there is nothing to undo.
 #[test]
 fn closing_a_trace_still_opening_cancels_it() {
     let mut app = App::new();
@@ -593,16 +563,12 @@ fn closing_a_trace_still_opening_cancels_it() {
     assert_eq!(app.doc.traces().free_id(), Some(b()));
 }
 
-/// A workspace's times are counted in the unit it was saved in: restored
-/// where the traces open in another unit, they convert, finer exactly and
-/// coarser to the nearest.
 #[test]
 fn saved_times_follow_the_unit_of_the_traces_open_now() {
     let dir = tempfile::tempdir().unwrap();
     let cpu = copy_to(dir.path(), "cpu.vtr");
     let dram = dir.path().join("dram.fst");
     std::fs::copy(values_fst(), &dram).unwrap();
-    // Saved with A alone, in nanoseconds; B was added to the file by hand.
     let mut saved = {
         let mut app = reopen(&cpu, Content::Missing);
         app.doc.shared.cursor = Some(783);
@@ -625,7 +591,6 @@ fn saved_times_follow_the_unit_of_the_traces_open_now() {
     );
     assert_eq!(app.doc.markers()[0].time, 757_000);
 
-    // Saved in picoseconds, restored where B is missing: rounded to ns.
     saved["timescale"] = (-12).into();
     saved["shared"]["cursor"] = 783_499.into();
     std::fs::remove_file(&dram).unwrap();
@@ -642,8 +607,6 @@ fn saved_times_follow_the_unit_of_the_traces_open_now() {
     );
 }
 
-/// Open Workspace flushes the open workspace with its own traces before
-/// opening and closing the ones the new workspace names.
 #[test]
 fn open_workspace_flushes_the_old_one_before_changing_traces() {
     let dir = tempfile::tempdir().unwrap();
@@ -666,7 +629,6 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
             })
             .collect()
     };
-    // W2 names y.fst as B; the open workspace (W1) has unsaved rows.
     app.save_workspace(None);
     let (old, mut w2) = writes(&mut app).pop().unwrap();
     w2["traces"][1]["path"] = "y.fst".into();
@@ -676,7 +638,6 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
             .unwrap()
             .to_string(),
     };
-    // Acknowledge the explicit save first.
     let ticket = app.workspace.scheduler.outstanding().cloned().unwrap();
     app.workspace_saved(ticket, None, volna_core::Instant::now());
     app.open_workspace(w2_target.clone(), &serde_json::to_vec(&w2).unwrap())

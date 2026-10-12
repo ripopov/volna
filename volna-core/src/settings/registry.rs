@@ -1,13 +1,9 @@
-//! The static settings table. Ids are lowercase dotted paths with camelCase
-//! leaves, so `waves.animation` is `volna.waves.animation` inside VS Code.
-//! Titles, descriptions and keywords live here; frontends never invent text.
+//! The static settings table.
 
 use super::Value;
 
-/// Upper bound of both memory settings, in MiB (256 GiB).
 pub const MAX_MEMORY_MIB: i64 = volna_trace::remote::limits::MAX_MEMORY_MIB as i64;
 
-/// The host the viewer runs on. Entries and enum members can be limited to hosts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Host {
     Native,
@@ -15,7 +11,6 @@ pub enum Host {
     Vscode,
 }
 
-/// A set of hosts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hosts(u8);
 
@@ -34,17 +29,14 @@ impl Hosts {
     }
 }
 
-/// How a change takes effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Apply {
     Live,
-    /// The value is read when a trace is opened.
     OnReopen,
     Restart,
 }
 
 impl Apply {
-    /// The badge shown on an item, if any.
     pub fn badge(self) -> Option<&'static str> {
         match self {
             Apply::Live => None,
@@ -54,7 +46,6 @@ impl Apply {
     }
 }
 
-/// A page of the settings editor, in display order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Page {
     Appearance,
@@ -118,7 +109,6 @@ impl Page {
     }
 }
 
-/// One member of an enum setting. `hosts` limits where it is offered.
 #[derive(Clone, Copy, Debug)]
 pub struct Choice {
     pub value: &'static str,
@@ -134,27 +124,16 @@ const fn choice(value: &'static str, label: &'static str) -> Choice {
     }
 }
 
-/// The type and constraints of a setting.
 #[derive(Clone, Copy, Debug)]
 pub enum Kind {
     Bool,
-    Integer {
-        min: i64,
-        max: i64,
-        step: i64,
-    },
-    Number {
-        min: f64,
-        max: f64,
-        step: f64,
-    },
+    Integer { min: i64, max: i64, step: i64 },
+    Number { min: f64, max: f64, step: f64 },
     Text,
     Enum(&'static [Choice]),
-    /// One Dark and the bundled palettes plus the palette names the host found.
     Theme,
 }
 
-/// A constant default; [`Literal::value`] turns it into a [`Value`].
 #[derive(Clone, Copy, Debug)]
 pub enum Literal {
     Bool(bool),
@@ -180,7 +159,6 @@ pub struct Spec {
     pub page: Page,
     pub group: &'static str,
     pub title: &'static str,
-    /// Markdown allowed (inline code only is rendered natively).
     pub description: &'static str,
     pub keywords: &'static [&'static str],
     pub kind: Kind,
@@ -194,7 +172,6 @@ impl Spec {
         self.hosts.contains(host)
     }
 
-    /// Enum members offered on `host`.
     pub fn choices(&self, host: Host) -> Vec<Choice> {
         match self.kind {
             Kind::Enum(choices) => choices
@@ -206,8 +183,6 @@ impl Spec {
         }
     }
 
-    /// Check a value against this entry on `host`; `themes` are the palette
-    /// names the host offers. Returns the problem the diagnostic reports.
     pub fn validate(&self, value: &Value, host: Host, themes: &[String]) -> Result<(), String> {
         match (self.kind, value) {
             (Kind::Bool, Value::Bool(_)) => Ok(()),
@@ -258,7 +233,6 @@ impl Spec {
         }
     }
 
-    /// The JSON Schema fragment of this entry (also the VS Code property body).
     pub fn schema(&self, host: Option<Host>) -> serde_json::Value {
         use serde_json::json;
         let mut out = match self.kind {
@@ -298,12 +272,10 @@ impl Spec {
     }
 }
 
-/// Range and step of `appearance.zoom`, the interface zoom factor.
 pub const ZOOM_MIN: f64 = 0.5;
 pub const ZOOM_MAX: f64 = 3.0;
 pub const ZOOM_STEP: f64 = 0.1;
 
-/// Every setting, in the order the editor shows them.
 pub static REGISTRY: &[Spec] = &[
     Spec {
         id: "hierarchy.activityIndex",
@@ -561,12 +533,10 @@ pub static REGISTRY: &[Spec] = &[
     },
 ];
 
-/// The entry with this id.
 pub fn spec(id: &str) -> Option<&'static Spec> {
     REGISTRY.iter().find(|s| s.id == id)
 }
 
-/// Keys the store recognises but does not register (tooling metadata).
 pub const META_KEYS: &[&str] = &["$schema"];
 
 #[cfg(test)]

@@ -1,14 +1,4 @@
 //! GPUI frontend for viewing VTR and FST recordings.
-//! Pipeline and transaction panels inspect runtime records from VTR.
-//!
-//! This crate is the GPUI frontend; every viewer decision lives in
-//! `volna_core`. Module map:
-//! - `app`: the `Workspace` root view, key bindings, the core command loop
-//! - `theme`, `assets`: the core theme mapped to GPUI colours; fonts and icons
-//! - `ui`: component styling/placement, text input, splitter, icons and headers
-//! - `sidebar`: scope tree and variable list rows
-//! - `settings_panel`, `settings_json`, `palette`: the Settings tab, its JSON view and ⌘K
-//! - `canvas`: the `PanelCanvas` element that paints the core's display list
 
 pub mod app;
 pub mod assets;
@@ -41,7 +31,6 @@ use gpui_kit::{
 
 pub use app::Workspace;
 
-/// Shared start-up: theme, fonts, key bindings.
 pub fn init_app(cx: &mut App) {
     gpui_kit::init(cx);
     theme::set(theme::CoreTheme::one_dark(), cx);
@@ -51,19 +40,8 @@ pub fn init_app(cx: &mut App) {
     app::init(cx);
 }
 
-/// The environment variable that overrides [`window_decorations`].
 const WINDOW_DECORATIONS_ENV: &str = "VOLNA_WINDOW_DECORATIONS";
 
-/// The decorations the main window asks for on X11 and Wayland (other
-/// platforms ignore the request).
-///
-/// Like Zed, Volna draws its own title bar and window controls by default.
-/// Wayland compositors without the `xdg-decoration` protocol (GNOME) never
-/// draw a frame, so asking for server decorations there leaves the window
-/// with no close, minimize or maximize controls at all, while compositors
-/// that do draw one stack it above Volna's own bar. `server` opts back in to
-/// the window manager's frame; GPUI falls back to it on its own on X11
-/// without a compositor, and Volna then draws no controls.
 fn window_decorations(env: Option<&str>) -> WindowDecorations {
     match env.map(str::trim) {
         Some("server") => WindowDecorations::Server,
@@ -75,7 +53,6 @@ fn window_decorations(env: Option<&str>) -> WindowDecorations {
     }
 }
 
-/// Options for the main window on desktop platforms.
 fn window_options(cx: &mut App) -> WindowOptions {
     let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
     let decorations = std::env::var(WINDOW_DECORATIONS_ENV).ok();
@@ -86,9 +63,6 @@ fn window_options(cx: &mut App) -> WindowOptions {
             appears_transparent: true,
             traffic_light_position: Some(point(px(10.0), px(10.0))),
         }),
-        // The title bar moves the window itself (`start_window_move`), so
-        // AppKit must not also treat it as a drag region: that delays title
-        // bar clicks while it disambiguates double-clicks.
         app_owns_titlebar_drag: true,
         window_decorations: Some(window_decorations(decorations.as_deref())),
         window_min_size: Some(size(px(800.0), px(500.0))),
@@ -100,7 +74,6 @@ fn window_options(cx: &mut App) -> WindowOptions {
     }
 }
 
-/// Build the application object with bundled assets for the current platform.
 pub fn application() -> Application {
     #[cfg(not(target_family = "wasm"))]
     {
@@ -108,12 +81,10 @@ pub fn application() -> Application {
     }
     #[cfg(target_family = "wasm")]
     {
-        // Keep the same bundle usable in webviews without shared memory.
         gpui_kit::platform::single_threaded_web().with_assets(assets::Assets)
     }
 }
 
-/// Open the main window and return the workspace entity.
 pub fn open_main_window(
     cx: &mut App,
     embedded: bool,
@@ -161,10 +132,6 @@ pub fn open_main_window(
 
 #[cfg(target_family = "wasm")]
 pub mod web {
-    //! Browser entry point and the JS bridge used by the VS Code extension.
-    //!
-    //! JS calls `open_trace(name, bytes)` to load a trace image; the app calls
-    //! `window.volnaOpen()` (if the host defines it) to request a file dialog.
 
     use std::cell::RefCell;
 
@@ -180,10 +147,8 @@ pub mod web {
         RemoteContinue(String),
         Workspace(WorkspaceMessage),
         Theme(Box<crate::theme::CoreTheme>),
-        /// The host's `volna.*` configuration, as generic values by id.
         Settings(std::collections::BTreeMap<String, volna_core::settings::Value>),
         Command(volna_core::app::Command),
-        /// Log the viewer state to the console (browser-driven verification).
         DebugState,
     }
 
@@ -192,7 +157,6 @@ pub mod web {
     struct OpenMetadata {
         trace_uri: String,
         candidates: Option<Candidates>,
-        /// `volna.*` keys without the prefix, as the host's configuration holds them.
         #[serde(default)]
         settings: serde_json::Map<String, serde_json::Value>,
     }
@@ -202,8 +166,6 @@ pub mod web {
         fallback: volna_core::workspace::persistence::Candidate,
     }
 
-    /// Host configuration values become generic setting values; the core
-    /// validates them against the registry and ignores what it cannot use.
     fn host_settings(
         map: &serde_json::Map<String, serde_json::Value>,
     ) -> std::collections::BTreeMap<String, volna_core::settings::Value> {
@@ -249,7 +211,6 @@ pub mod web {
         static HOST_TX: RefCell<Option<mpsc::UnboundedSender<HostEvent>>> = const { RefCell::new(None) };
     }
 
-    /// Load a VTR or FST file image after the host receives `volnaReady`.
     #[wasm_bindgen]
     pub fn open_trace(name: String, bytes: Vec<u8>) {
         enqueue(HostEvent::Open(name, bytes)).ok();
@@ -265,7 +226,6 @@ pub mod web {
         })
     }
 
-    /// Open a durable resource with opaque workspace candidates supplied by its host.
     #[wasm_bindgen]
     pub fn open_resource(name: String, bytes: Vec<u8>, metadata: &str) -> Result<(), JsValue> {
         let metadata = serde_json::from_str(metadata)
@@ -280,7 +240,6 @@ pub mod web {
     pub fn open_remote(name: String, metadata: &str) -> Result<(), JsValue> {
         let metadata: OpenMetadata = serde_json::from_str(metadata)
             .map_err(|e| JsValue::from_str(&format!("invalid open metadata: {e}")))?;
-        // Limits are resolved once the host settings are installed (below).
         enqueue(HostEvent::Resource(
             volna_trace::session::OpenSpec::Remote {
                 name,
@@ -290,8 +249,6 @@ pub mod web {
         ))
     }
 
-    /// The host's current `volna.*` configuration (VS Code's
-    /// `onDidChangeConfiguration`), applied live as overrides.
     #[wasm_bindgen]
     pub fn set_settings(json: &str) -> Result<(), JsValue> {
         let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(json)
@@ -309,7 +266,6 @@ pub mod web {
 
     const STORAGE_KEY: &str = "volna.settings";
 
-    /// Standalone web: the settings document lives in `localStorage`.
     pub fn read_settings() -> Option<String> {
         let storage = local_storage()?;
         let get = js_sys::Reflect::get(&storage, &JsValue::from_str("getItem")).ok()?;
@@ -335,7 +291,6 @@ pub mod web {
             .map_err(|_| "localStorage write failed".to_owned())
     }
 
-    /// Embedded: ask VS Code to open its settings editor filtered to Volna.
     pub fn open_host_settings() {
         post(serde_json::json!({"type":"openSettings"}));
     }
@@ -352,7 +307,6 @@ pub mod web {
         enqueue(HostEvent::RemoteContinue(connection))
     }
 
-    /// Workspace payloads are interpreted only by the Rust core.
     #[wasm_bindgen]
     pub fn workspace_message(json: &str) -> Result<(), JsValue> {
         let message = serde_json::from_str(json)
@@ -412,9 +366,6 @@ pub mod web {
         }
     }
 
-    /// Say `text` politely to assistive technology: `document.ariaNotify`
-    /// where the browser has it, else a visually hidden live region. The
-    /// page, not the host, speaks, so VS Code shows no popup for an undo.
     pub fn announce(text: &str) {
         use js_sys::{Array, Function, Reflect};
         let call = |target: &JsValue, name: &str, args: &Array| {
@@ -464,7 +415,6 @@ pub mod web {
         Reflect::set(&region, &JsValue::from_str("textContent"), &text).ok();
     }
 
-    /// Dispatch a named host command; unknown names are rejected before queuing.
     #[wasm_bindgen]
     pub fn dispatch_command(name: &str) -> Result<(), JsValue> {
         let command = volna_core::app::Command::named(name)
@@ -472,13 +422,11 @@ pub mod web {
         enqueue(HostEvent::Command(command))
     }
 
-    /// Print the one-line viewer state (`Workspace::debug_state`) to the console.
     #[wasm_bindgen]
     pub fn debug_state() {
         enqueue(HostEvent::DebugState).ok();
     }
 
-    /// Host-neutral JSON palette; malformed input leaves the current theme intact.
     #[wasm_bindgen]
     pub fn set_theme(json: &str) -> Result<(), JsValue> {
         let palette = crate::theme::HostPalette::from_json(json)
@@ -487,7 +435,6 @@ pub mod web {
         Ok(())
     }
 
-    /// Resolved VS Code CSS snapshot, parsed entirely by shared Rust code.
     #[wasm_bindgen]
     pub fn set_vscode_theme(snapshot: &str) {
         install_theme(crate::theme::CoreTheme::from_host(
@@ -495,7 +442,6 @@ pub mod web {
         ));
     }
 
-    // Keep the latest update while startup is pending; never re-enter GPUI.
     fn install_theme(theme: crate::theme::CoreTheme) {
         HOST_TX.with(|tx| {
             if let Some(tx) = tx.borrow().as_ref() {
@@ -506,7 +452,6 @@ pub mod web {
         });
     }
 
-    /// Ask the host page for a file. The host defines `window.volnaOpen`.
     pub fn request_open_dialog() {
         let global = js_sys::global();
         if let Ok(f) = js_sys::Reflect::get(&global, &JsValue::from_str("volnaOpen"))
@@ -540,7 +485,6 @@ pub mod web {
             set_vscode_theme(&snapshot);
         }
         let (tx, mut rx) = mpsc::unbounded::<HostEvent>();
-        // Embedded mode when the host page sets `window.volnaEmbedded = true`.
         let embedded = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("volnaEmbedded"))
             .ok()
             .and_then(|v| v.as_bool())
@@ -558,9 +502,6 @@ pub mod web {
                     let window = cx.windows().first().copied();
                     cx.spawn(async move |cx| {
                         while let Some(event) = rx.next().await {
-                            // Host undo and redo take the path of the keys:
-                            // a focused text field undoes its text; anything
-                            // else undoes the cockpit.
                             if let HostEvent::Command(
                                 command @ (volna_core::app::Command::Undo
                                 | volna_core::app::Command::Redo),
@@ -689,7 +630,6 @@ pub mod web {
                         }
                     })
                     .detach();
-                    // Tell the host we are ready to receive files.
                     if let Ok(f) =
                         js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("volnaReady"))
                         && let Some(f) = f.dyn_ref::<js_sys::Function>()
@@ -700,7 +640,6 @@ pub mod web {
                 Err(e) => log::error!("failed to open window: {e:#}"),
             }
         });
-        // The browser owns the run loop; keep the app alive for the page's lifetime.
         APP.with(|slot| *slot.borrow_mut() = Some(handle));
     }
 

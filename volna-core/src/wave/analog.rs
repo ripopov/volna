@@ -1,15 +1,5 @@
-//! Analog drawing of numeric signal rows: the row setting, its vertical
-//! range, the block min/max summary of long histories, and the geometry the
-//! painter strokes. A row's translator decides the numbers
-//! ([`Translator::numeric_kind`]), so signed and unsigned readings of one bus
-//! plot differently.
-//!
-//! Sparse views draw every change exactly. When changes outnumber a quarter
-//! of the plot's pixel columns, each column draws from its minimum to its
-//! maximum and joins its neighbours at its entry and exit values (M4), which
-//! renders a line chart without pixel error, so single-sample glitches
-//! survive any zoom level. An [`AnalogSummary`] answers those minima and
-//! maxima in O(log n), so the cost of a frame is bounded by its pixels.
+//! Analog drawing of numeric signal rows: the row setting, its vertical range, the block
+//! min/max summary of long histories, and the geometry the painter strokes.
 
 use std::sync::Arc;
 
@@ -20,30 +10,22 @@ use crate::wave::viewport::Viewport;
 use volna_trace::data::value_view::ValueView;
 use volna_trace::data::{Bit, SignalHistory, SignalShape};
 
-/// How consecutive values are joined.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalogDraw {
-    /// Sample-and-hold: a value holds until the next change.
     Step,
-    /// Straight lines between samples.
     Linear,
 }
 
-/// Which values the vertical range fits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalogRange {
-    /// Minimum and maximum over the whole history; stable while panning.
     Trace,
-    /// Minimum and maximum of the visible window, eased as it changes.
     Window,
-    /// The full range of the vector type in the row's format.
     Type,
 }
 
 impl AnalogDraw {
-    /// Registers hold their value; real signals sample a continuous quantity.
     pub fn default_for(shape: SignalShape) -> Self {
         if shape == SignalShape::Real {
             Self::Linear
@@ -70,31 +52,19 @@ impl AnalogRange {
     }
 }
 
-/// Visible changes at or below this fraction of the plot width are drawn
-/// exactly; above it, per-column min/max envelopes.
 pub const EXACT_RATIO: f64 = 0.25;
-/// Linear samples at least this many design pixels apart are marked.
 pub const DOT_SPACING: f32 = 9.0;
-/// Changes per leaf of an [`AnalogSummary`].
 pub const SUMMARY_BLOCK: usize = 64;
-/// Histories with fewer changes are scanned directly and get no summary.
 pub const SUMMARY_MIN_CHANGES: usize = 1 << 14;
-/// Time constant of the displayed range easing towards its target.
 const RANGE_TAU_S: f64 = 0.065;
 
-/// A signal row drawn as a plot.
 #[derive(Clone, Debug)]
 pub struct Analog {
     pub draw: AnalogDraw,
     pub range: AnalogRange,
-    /// The height analog replaced; restored when analog is turned off while
-    /// the row still has [`RowHeight::ANALOG`]. An explicit resize clears it.
     pub restore_height: Option<RowHeight>,
-    /// The displayed range, easing towards `target` (view state, not saved).
     pub shown: Option<(f64, f64)>,
     pub target: Option<(f64, f64)>,
-    /// Whole-history range of a short history, cached per history and
-    /// reading; long histories read their summary's root instead.
     trace: Option<TraceRange>,
 }
 
@@ -106,7 +76,6 @@ struct TraceRange {
 }
 
 impl PartialEq for Analog {
-    /// Settings equality; the displayed range and caches are view state.
     fn eq(&self, other: &Self) -> bool {
         self.draw == other.draw && self.range == other.range
     }
@@ -124,9 +93,6 @@ impl Analog {
         }
     }
 
-    /// Recompute the target range for `vp`; the first target is shown at once.
-    /// A long history's whole-trace range waits for its summary; meanwhile a
-    /// zoomed-in view fits its visible window.
     pub fn update_target(
         &mut self,
         series: &Series<'_>,
@@ -144,9 +110,6 @@ impl Analog {
         }
     }
 
-    /// Unpadded bounds for combining independent plots. The outer `None`
-    /// means a summary is still building; the inner one means no numeric
-    /// sample contributes to the range.
     pub(crate) fn raw_target(
         &mut self,
         series: &Series<'_>,
@@ -166,7 +129,6 @@ impl Analog {
             Some(range) => Some(range),
             None => match self.trace_range(series) {
                 Some(range) => range,
-                // Until the summary arrives, a cheap window stands in.
                 None if !series.waiting(visible_changes(series.history, vp)) => {
                     series.window_range(vp)
                 }
@@ -176,8 +138,6 @@ impl Analog {
         Some(range)
     }
 
-    /// The whole-history range: the summary's root, or a cached scan of a
-    /// short history. `None` while a long history's summary is building.
     fn trace_range(&mut self, series: &Series<'_>) -> Option<Option<(f64, f64)>> {
         if let Some(summary) = series.summary {
             return Some(summary.root().range());
@@ -200,8 +160,6 @@ impl Analog {
         }
     }
 
-    /// Move the displayed range towards the target over `dt` seconds;
-    /// returns whether it is still moving.
     pub fn ease(&mut self, dt: f64) -> bool {
         let (Some(shown), Some(target)) = (self.shown, self.target) else {
             return false;
@@ -225,8 +183,6 @@ impl Analog {
     }
 }
 
-/// Numeric interpretation for group plots. Bits use 0/1 regardless of their
-/// display format; buses and reals use their translator's interpretation.
 pub fn numeric_kind(shape: SignalShape, tr: &dyn Translator) -> Option<NumericKind> {
     match shape {
         SignalShape::Bit => Some(NumericKind::Unsigned),
@@ -235,17 +191,14 @@ pub fn numeric_kind(shape: SignalShape, tr: &dyn Translator) -> Option<NumericKi
     }
 }
 
-/// Whether a row of `shape` shown with `tr` can be drawn as a plot.
 pub fn supports(shape: SignalShape, tr: &dyn Translator) -> bool {
     matches!(shape, SignalShape::Vector { .. } | SignalShape::Real) && tr.numeric_kind().is_some()
 }
 
-/// Identity of a resident history, for matching derived data to it.
 pub fn history_identity(h: &Arc<dyn SignalHistory>) -> usize {
     Arc::as_ptr(h) as *const () as usize
 }
 
-/// A flat range gets room around it: ±0.5 for integers, ±5% for floats.
 pub(crate) fn padded((lo, hi): (f64, f64), shape: SignalShape) -> (f64, f64) {
     if hi - lo > 1e-12 * lo.abs().max(hi.abs()).max(1.0) {
         return (lo, hi);
@@ -258,12 +211,9 @@ pub(crate) fn padded((lo, hi): (f64, f64), shape: SignalShape) -> (f64, f64) {
     (lo - d, hi + d)
 }
 
-/// One value of a history as the painter sees it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Sample {
-    /// Nothing was recorded (before the first sample of some sources).
     Missing,
-    /// X, Z or a non-finite value: drawn as an undefined span.
     Undefined,
     Value(f64),
 }
@@ -274,7 +224,6 @@ pub fn sample(h: &dyn SignalHistory, kind: NumericKind, i: Option<usize>) -> Sam
             Bit::Zero => Sample::Value(0.0),
             Bit::One => Sample::Value(1.0),
             Bit::Unavailable => Sample::Missing,
-            // A weak drive still has a level.
             Bit::Other => match h.value_view(i) {
                 ValueView::Logic(l) if l.width == 1 => match l.bit(0) {
                     b'h' | b'H' => Sample::Value(1.0),
@@ -293,7 +242,6 @@ pub fn sample(h: &dyn SignalHistory, kind: NumericKind, i: Option<usize>) -> Sam
     kind.read(&view).map_or(Sample::Undefined, Sample::Value)
 }
 
-/// Minimum, maximum and undefined values of a run of changes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Extent {
     pub lo: f64,
@@ -330,16 +278,10 @@ impl Extent {
     }
 }
 
-/// Minimum and maximum per block of [`SUMMARY_BLOCK`] changes of one history
-/// read one way, with a binary tree of blocks above them. Built once on the
-/// load worker when a long history first turns analog; the document shares
-/// it between rows and releases it (and its memory reservation) with the
-/// history.
 pub struct AnalogSummary {
     kind: NumericKind,
     history: usize,
     len: usize,
-    /// `levels[0]` holds one extent per block; each level above halves it.
     levels: Vec<Vec<Extent>>,
     _reservation: volna_trace::remote::memory::Reservation,
 }
@@ -408,12 +350,10 @@ impl AnalogSummary {
         self.kind
     }
 
-    /// Identity of the summarized history.
     pub fn identity(&self) -> usize {
         self.history
     }
 
-    /// Whether this summarizes `h` read as `kind`.
     pub fn matches(&self, h: &Arc<dyn SignalHistory>, kind: NumericKind) -> bool {
         self.kind == kind && self.history == history_identity(h) && self.len == h.len()
     }
@@ -426,8 +366,6 @@ impl AnalogSummary {
             .unwrap_or(Extent::EMPTY)
     }
 
-    /// The extent of changes `a..=b`: full blocks from the tree, the partial
-    /// blocks at either end read from the history.
     pub fn query(&self, h: &dyn SignalHistory, a: usize, b: usize) -> Extent {
         let mut e = Extent::EMPTY;
         let b = b.min(self.len.saturating_sub(1));
@@ -464,19 +402,16 @@ impl AnalogSummary {
     }
 }
 
-/// A history read as numbers, with its summary when one is resident.
 #[derive(Clone, Copy)]
 pub struct Series<'a> {
     pub history: &'a dyn SignalHistory,
     pub kind: NumericKind,
     pub summary: Option<&'a AnalogSummary>,
-    /// A summary for this long history is still building.
     pub building: bool,
     identity: usize,
 }
 
 impl<'a> Series<'a> {
-    /// `summary` is used only when it summarizes this history and reading.
     pub fn new(
         history: &'a Arc<dyn SignalHistory>,
         kind: NumericKind,
@@ -491,8 +426,6 @@ impl<'a> Series<'a> {
         }
     }
 
-    /// The series a plot row draws: `history` read as `kind`, with the
-    /// document's summary of `signal` when it matches.
     pub fn of(
         doc: &'a crate::document::Document,
         signal: Option<crate::trace::Traced<volna_trace::data::SignalRef>>,
@@ -510,8 +443,6 @@ impl<'a> Series<'a> {
         series
     }
 
-    /// Whether reading `changes` changes should wait for the summary rather
-    /// than scan them on the UI thread.
     pub fn waiting(&self, changes: usize) -> bool {
         self.building && self.summary.is_none() && changes >= SUMMARY_MIN_CHANGES
     }
@@ -520,8 +451,6 @@ impl<'a> Series<'a> {
         sample(self.history, self.kind, i)
     }
 
-    /// The extent of the value at `from` (the value before the first change
-    /// when `None`) through change `to`.
     pub fn extent(&self, from: Option<usize>, to: Option<usize>) -> Extent {
         let mut e = Extent::EMPTY;
         let Some(to) = to else {
@@ -555,7 +484,6 @@ impl<'a> Series<'a> {
     }
 }
 
-/// The last change at or before `t`, `None` before the first (or before 0).
 fn index_at(h: &dyn SignalHistory, t: f64) -> Option<usize> {
     if t < 0.0 {
         return None;
@@ -563,7 +491,6 @@ fn index_at(h: &dyn SignalHistory, t: f64) -> Option<usize> {
     h.index_at(t.floor() as u64)
 }
 
-/// The last change strictly before `t`, searching from `hint`.
 fn index_before(h: &dyn SignalHistory, t: f64, hint: Option<usize>) -> Option<usize> {
     if t <= 0.0 {
         return None;
@@ -583,16 +510,13 @@ fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     }
 }
 
-/// Changes inside the visible window.
 pub fn visible_changes(h: &dyn SignalHistory, vp: &Viewport) -> usize {
     changes_between(index_at(h, vp.start), index_at(h, vp.end))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawMode {
-    /// Every change at its own time.
     Exact,
-    /// One min/max column per pixel.
     Envelope,
 }
 
@@ -604,7 +528,6 @@ pub fn draw_mode(h: &dyn SignalHistory, vp: &Viewport, width_px: f32) -> DrawMod
     }
 }
 
-/// Where a plot is drawn and which values map to its top and bottom.
 #[derive(Clone, Copy, Debug)]
 pub struct Plot {
     pub left: f32,
@@ -625,7 +548,6 @@ impl Plot {
         self.left + vp.x_of(t, f64::from(self.width)) as f32
     }
 
-    /// Where fills start: the zero line when it is inside the range.
     pub fn baseline(&self) -> f32 {
         if self.lo <= 0.0 && self.hi >= 0.0 {
             self.y_of(0.0)
@@ -635,17 +557,12 @@ impl Plot {
     }
 }
 
-/// The drawable shape of a plot for one frame.
 #[derive(Clone, Debug, Default)]
 pub struct Geometry {
     pub envelope: bool,
-    /// Too many changes to draw before the summary is ready.
     pub waiting: bool,
-    /// Polylines, broken at undefined and missing values.
     pub runs: Vec<Vec<Point>>,
-    /// Horizontal spans of undefined values.
     pub undefined: Vec<(f32, f32)>,
-    /// Sample marks of linear plots zoomed in.
     pub dots: Vec<Point>,
 }
 
@@ -658,7 +575,6 @@ impl Geometry {
     }
 }
 
-/// Build the geometry of `series` in `plot` for viewport `vp`.
 pub fn geometry(
     series: &Series<'_>,
     draw: AnalogDraw,
@@ -715,7 +631,6 @@ fn exact(
         .chain((first.unwrap_or(0)..=last).map(Some));
     let mut run: Option<Vec<Point>> = None;
     for i in indices {
-        // Unclipped x of this sample and the next, for Linear's edge points.
         let raw_a = i.map(|i| plot.x_of(vp, h.time(i) as f64));
         let xa = raw_a.map_or(plot.left - 1.0, |x| x.max(plot.left - 1.0));
         let next = i.map_or(0, |i| i + 1);
@@ -737,8 +652,6 @@ fn exact(
                             Some(Sample::Value(to)) => Some(to),
                             _ => None,
                         };
-                        // The segment to the next sample, cut at the plot's
-                        // edges: the y where it crosses x.
                         let at = |x: f32| match (raw_a, raw_b, to) {
                             (Some(a), Some(b), Some(to)) if b > a => {
                                 let f = f64::from((x - a) / (b - a));
@@ -752,7 +665,6 @@ fn exact(
                             g.dots.push(point(xa, y));
                         }
                         if to.is_none() {
-                            // Hold flat before an undefined value and at the end.
                             points.push(point(xb, y));
                         } else if raw_b.is_some_and(|b| b > right) {
                             points.push(point(right, at(right)));
@@ -816,8 +728,6 @@ fn envelope(series: &Series<'_>, vp: &Viewport, plot: &Plot, g: &mut Geometry) {
     g.runs.extend(run);
 }
 
-/// The curve's y at time `t`: the held value, or the line between two
-/// samples of a linear plot drawn exactly.
 pub fn y_at(
     series: &Series<'_>,
     draw: AnalogDraw,
@@ -845,16 +755,13 @@ pub fn y_at(
     Some(plot.y_of(v))
 }
 
-/// What the pointer reads on a plot.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Readout {
-    /// One sample (linear: the nearest; step: the one held at the pointer).
     Sample {
         index: Option<usize>,
         time: f64,
         at: Point,
     },
-    /// A dense pixel column: its range and number of changes.
     Column {
         lo: f64,
         hi: f64,
@@ -917,10 +824,6 @@ pub fn readout(
     })
 }
 
-/// Pixel columns under the polylines, merged where their height agrees:
-/// `(x, width, y)` quads that fill between the curve and the baseline. A
-/// column takes the curve's height at its centre, or the last point of a
-/// vertical (dense) stroke inside it.
 pub fn fill_columns(runs: &[Vec<Point>], left: f32, width: f32) -> Vec<(f32, f32, f32)> {
     let n = width.max(0.0).ceil() as usize;
     let mut ys: Vec<Option<f32>> = vec![None; n];
@@ -1011,7 +914,6 @@ mod tests {
         }
         assert_eq!(s.root(), direct(0, 999));
         assert!(s.root().undefined);
-        // 16 blocks, then 8, 4, 2 and the root.
         assert_eq!(
             s.resident_bytes(),
             (31 * std::mem::size_of::<Extent>() + 5 * std::mem::size_of::<Vec<Extent>>()) as u64
@@ -1020,7 +922,6 @@ mod tests {
 
     #[test]
     fn linear_plots_cross_the_edges_on_the_line() {
-        // A ramp: sample i at time 100 i holds 10 i.
         let h: Arc<dyn SignalHistory> = Arc::new(VecHistory {
             shape: SignalShape::Vector { width: 16 },
             times: (0..=10).map(|i| i * 100).collect(),

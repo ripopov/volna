@@ -1,6 +1,3 @@
-// The Rust side has already produced the complete, <=64 KiB TSV. Keep this
-// module host-only: it reports browser rejection without duplicating table
-// formatting or source access outside volna-core.
 export function copyTableText(text, host = globalThis) {
   let write;
   try {

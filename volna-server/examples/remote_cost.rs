@@ -1,5 +1,5 @@
 //! Native client of the actual child protocol, retaining all completed objects.
-//! CPU step timings exclude pipe waits; they are not browser frame measurements.
+
 use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -69,8 +69,6 @@ impl Measurement {
             if let Some(command) = self.client.take_command()? {
                 self.send(command)?;
             }
-            // Read the bounded frame first, so waiting for the child does not
-            // masquerade as a synchronous decode/install pause.
             let mut header = [0; 12];
             self.output.read_exact(&mut header)?;
             let length = u32::from_le_bytes(header[8..12].try_into()?) as usize;

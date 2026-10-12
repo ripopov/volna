@@ -1,5 +1,5 @@
-//! The open traces and everything every view over them must agree on: the
-//! trace set, shared navigation, markers, translators and load bookkeeping.
+//! The open traces and everything every view over them must agree on: the trace set, shared
+//! navigation, markers, translators and load bookkeeping.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -17,8 +17,6 @@ use volna_trace::data::transactions::{TrackKind, TrackRef, TransactionRef};
 use volna_trace::data::{Hierarchy, SignalRef};
 use volna_trace::session::{OpenSpec, Session};
 
-/// What the document shows as a whole: nothing, the first trace opening, a
-/// failed open, or opened traces (the first of them named).
 #[derive(Clone)]
 pub enum TraceState {
     Empty,
@@ -27,9 +25,6 @@ pub enum TraceState {
     Error(String),
 }
 
-/// The record every panel agrees is selected: which generator of which
-/// trace holds it, which record it is, and the panel that chose it. Panels
-/// that cannot show that generator simply show no highlight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TxSelection {
     pub track: Traced<TrackRef>,
@@ -51,17 +46,11 @@ impl Default for Shared {
     }
 }
 
-/// A completed load the document accepted (its generation was current).
 pub enum Delivered {
     Track,
     Summary,
-    /// A trace's scope sizes were counted.
     Sizes,
     Signals(TraceId, volna_trace::session::SignalLoads),
-    /// A trace finished opening, or failed to. `refined` is the factor by
-    /// which the session unit became finer to admit it: every time held
-    /// outside the document must be multiplied by it, and every other
-    /// trace's histories load again in the new unit.
     Opened {
         trace: TraceId,
         result: Result<Arc<dyn Session>, String>,
@@ -69,12 +58,9 @@ pub enum Delivered {
     },
 }
 
-/// Navigation behaviour mirrored from the resolved user settings, so the wave
-/// model reads it beside the shared viewport it animates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Navigation {
     pub animation: crate::settings::Animation,
-    /// Clicks snap the cursor to an edge within this many pixels.
     pub snap_px: f64,
 }
 
@@ -87,38 +73,22 @@ impl Default for Navigation {
     }
 }
 
-/// A change to the trace set as the undo journal swaps it
-/// ([`crate::history::Edit::Traces`]).
 #[derive(Clone)]
 pub(crate) enum TraceEdit {
-    /// Take the trace out of the set; the slot is kept so the inverse puts
-    /// it back already open.
     Remove(TraceId),
-    /// Put a removed trace back.
     Restore(Box<TraceSlot>),
-    /// Name a trace; `None` goes back to the derived name.
     Rename(TraceId, Option<String>),
 }
 
 pub struct Document {
     traces: TraceSet,
-    /// The document's identity: a new open or close ignores delayed input
-    /// and results from before.
     epoch: u64,
-    /// Hands out generations: every slot takes a fresh one when it is added
-    /// and when its placement changes.
     generations: u64,
     pub shared: Shared,
     pub navigation: Navigation,
-    /// Journaled cockpit state (`volna/README.md`, "Undo and redo"); read through
-    /// [`Document::markers`].
     markers: crate::history::Journaled<Vec<Marker>>,
-    /// Where measurements start; navigation state, outside the journal.
     reference: Option<Reference>,
-    /// The marker the reference was attached to when a marker edit since
-    /// the last [`Document::take_edits`] removed it.
     detached: Option<MarkerId>,
-    /// Trace set edits since the last [`Document::take_edits`], as inverses.
     trace_edits: Vec<(String, TraceEdit)>,
     pub translators: Translators,
     pending: HashSet<Traced<SignalRef>>,
@@ -126,40 +96,23 @@ pub struct Document {
     tracks: HashMap<Traced<TrackRef>, TrackLoad>,
     next_track_request: u64,
     selection: Option<TxSelection>,
-    /// Wave rows copied for pasting into any wave panel. They hold no
-    /// histories or records; a paste shares resident data or loads it again.
     pub copied_rows: Vec<crate::wave::Entry>,
-    /// Analog summaries of resident histories, per signal and reading.
     summaries: HashMap<(Traced<SignalRef>, NumericKind), SummaryLoad>,
-    /// Activity summaries of folded groups, by their signals' identity.
     group_summaries: HashMap<Vec<usize>, crate::wave::group::SummaryLoad>,
-    /// Whole-trace walks of stacked groups, by their layers' identity.
     stack_totals: HashMap<crate::wave::stack::Key, crate::wave::stack::TotalLoad>,
-    /// Integral summaries of long stacked layers, by history identity and
-    /// reading; the weak handle keeps the identity from being reused.
     integrals: HashMap<(usize, crate::wave::stack::Reading), Integral>,
-    /// Every open trace's declared clocks; their stretches load when the
-    /// trace opens.
     pub clocks: crate::clock::Clocks,
 }
 
-/// A long stacked layer's integral summary and the history it summarizes.
 struct Integral {
     history: std::sync::Weak<dyn volna_trace::data::SignalHistory>,
     load: crate::wave::stack::IntegralLoad,
 }
 
-/// The state of one analog summary; `history` is the identity of the
-/// history it summarizes.
 pub enum SummaryLoad {
-    Building {
-        history: usize,
-    },
+    Building { history: usize },
     Ready(Arc<AnalogSummary>),
-    /// Refused (the memory budget); plots scan the history instead.
-    Failed {
-        history: usize,
-    },
+    Failed { history: usize },
 }
 
 impl SummaryLoad {
@@ -171,14 +124,12 @@ impl SummaryLoad {
     }
 }
 
-/// A selected track has one document-owned load, shared by its consumers.
 pub struct TrackLoad {
     consumers: usize,
     request_id: u64,
     pub state: TrackLoadState,
 }
 
-/// Load state of a retained track, read without querying the session.
 pub enum TrackLoadState {
     Loading,
     Ready(LoadedTrack),
@@ -218,28 +169,20 @@ impl Document {
         }
     }
 
-    // -- selection -----------------------------------------------------------------
-
-    /// The selected record, or none. Writers are the table and pipeline
-    /// panels and the transaction panel's own jumps.
     pub fn selection(&self) -> Option<TxSelection> {
         self.selection
     }
 
-    /// Select a record, or clear the selection. Returns whether it changed.
     pub fn select(&mut self, selection: Option<TxSelection>) -> bool {
         let changed = self.selection != selection;
         self.selection = selection;
         changed
     }
 
-    // -- the trace set -----------------------------------------------------------------
-
     pub fn traces(&self) -> &TraceSet {
         &self.traces
     }
 
-    /// What the document shows as a whole (see [`TraceState`]).
     pub fn state(&self) -> TraceState {
         if let Some((_, session)) = self.traces.first_loaded() {
             return TraceState::Loaded(Arc::clone(session));
@@ -255,8 +198,6 @@ impl Document {
         }
     }
 
-    /// Changes on every open and close: input and results from before are
-    /// stale.
     pub fn generation(&self) -> u64 {
         self.epoch
     }
@@ -274,17 +215,14 @@ impl Document {
         self.session(trace).map(|s| s.hierarchy())
     }
 
-    /// Whether some trace is open.
     pub fn is_loaded(&self) -> bool {
         self.traces.first_loaded().is_some()
     }
 
-    /// The name of trace `trace` (see [`TraceSet::name`]).
     pub fn trace_name(&self, trace: TraceId) -> Option<String> {
         self.traces.name(trace)
     }
 
-    /// The traces' names, as a window title shows them.
     pub fn name(&self) -> Option<String> {
         let names: Vec<String> = self
             .traces
@@ -294,7 +232,6 @@ impl Document {
         (!names.is_empty()).then(|| names.join(" + "))
     }
 
-    /// The span of every open trace on the session timeline.
     pub fn limits(&self) -> (u64, u64) {
         self.traces.limits().unwrap_or((0, 1000))
     }
@@ -303,8 +240,6 @@ impl Document {
         self.traces.unit().map_or(-9, |u| u.timescale)
     }
 
-    /// How session times are written: the session unit's exponent and the
-    /// producers' unit name when they declared one.
     pub fn time_base(&self) -> TimeBase<'_> {
         match self.traces.unit() {
             Some(unit) => TimeBase {
@@ -318,10 +253,6 @@ impl Document {
         }
     }
 
-    // -- opening ----------------------------------------------------------------
-
-    /// Start opening a trace in place of every open one. The document shows
-    /// it loading; its panels are replaced when it arrives.
     pub fn open(&mut self, spec: OpenSpec) {
         self.epoch = self.next_generation();
         let generation = self.next_generation();
@@ -336,8 +267,6 @@ impl Document {
         });
     }
 
-    /// Start opening another trace beside the open ones, under the lowest
-    /// free letter.
     pub fn add_trace(&mut self, spec: OpenSpec) -> anyhow::Result<TraceId> {
         let id = self
             .traces
@@ -346,8 +275,6 @@ impl Document {
         self.add_trace_as(spec, id)
     }
 
-    /// Start opening another trace under letter `id` (a workspace names
-    /// its traces' letters).
     pub(crate) fn add_trace_as(&mut self, spec: OpenSpec, id: TraceId) -> anyhow::Result<TraceId> {
         anyhow::ensure!(self.traces.get(id).is_none(), "trace {id} is already open");
         let generation = self.next_generation();
@@ -361,15 +288,12 @@ impl Document {
         Ok(id)
     }
 
-    /// Record the durable identity of a trace (for workspaces and recents).
     pub(crate) fn set_uri(&mut self, trace: TraceId, uri: Option<String>) {
         if let Some(slot) = self.traces.get_mut(trace) {
             slot.uri = uri;
         }
     }
 
-    /// Replace every trace with `session` immediately (tests, demos, hosts
-    /// that already hold one).
     pub fn set_session(&mut self, session: Arc<dyn Session>) {
         self.epoch = self.next_generation();
         let generation = self.next_generation();
@@ -381,9 +305,6 @@ impl Document {
             .expect("the first trace sets the unit");
     }
 
-    /// Add an opened session as another trace immediately. Returns its
-    /// letter and, when the session unit became finer to admit it, the
-    /// factor (see [`Delivered::Opened`]).
     pub fn add_session(
         &mut self,
         session: Arc<dyn Session>,
@@ -405,12 +326,8 @@ impl Document {
         }
     }
 
-    /// Start every view afresh over the same traces (a restored
-    /// workspace): loads in flight become stale, retained tracks and
-    /// summaries go, and clocks and any unfinished scope counts load again.
     pub(crate) fn restart(&mut self) {
         self.epoch = self.next_generation();
-        // A trace still opening keeps its generation: its open completes.
         let loaded: Vec<TraceId> = self.traces.loaded().map(|(id, _)| id).collect();
         for id in loaded {
             let generation = self.next_generation();
@@ -432,7 +349,6 @@ impl Document {
         }
     }
 
-    /// Install a saved trace name; not an edit.
     pub(crate) fn restore_trace_name(&mut self, trace: TraceId, name: Option<String>) {
         if let Some(slot) = self.traces.get_mut(trace) {
             slot.rename = name;
@@ -445,7 +361,6 @@ impl Document {
         self.reset_state();
     }
 
-    /// Forget everything that belonged to the previous traces.
     fn reset_state(&mut self) {
         self.tracks.clear();
         self.selection = None;
@@ -465,10 +380,6 @@ impl Document {
         self.clocks = crate::clock::Clocks::default();
     }
 
-    /// Make an opened session trace `id`'s: place it on the session
-    /// timeline and start loading its clocks. The first trace of a document
-    /// starts everything shared afresh. Refused when its unit cannot share
-    /// the timeline (see [`TraceSet::admit`]).
     fn install(&mut self, id: TraceId, session: Arc<dyn Session>) -> anyhow::Result<Option<u64>> {
         let first = !self.is_loaded();
         if first {
@@ -488,15 +399,11 @@ impl Document {
         if first {
             self.shared.viewport.set(Viewport::fit(self.limits()));
         }
-        // Every clock is loaded with its trace: rulers, readouts and
-        // pipelines need them.
         self.clocks.add_trace(id, session.tracks());
         self.retain_clocks(id);
         Ok(refined)
     }
 
-    /// Completed counts survive a workspace restore; unfinished counts need
-    /// a request under the trace's current generation.
     fn load_scope_sizes(&mut self, trace: TraceId, session: &Arc<dyn Session>) {
         let slot = self
             .traces
@@ -528,9 +435,6 @@ impl Document {
         }
     }
 
-    /// The session unit becomes `factor` times finer: every trace open so
-    /// far is placed again (its loads start over under a new generation)
-    /// and every shared time is rewritten. Returns `factor`.
     fn refine(&mut self, factor: u64) -> u64 {
         let loaded: Vec<TraceId> = self.traces.loaded().map(|(id, _)| id).collect();
         for id in loaded {
@@ -541,8 +445,6 @@ impl Document {
             self.clocks.reload(id);
             self.reload_tracks(id);
         }
-        // Histories of the old placement leave with their rows, which the
-        // app attaches again.
         let stale: HashSet<TraceId> = self.traces.ids().collect();
         self.pending.retain(|s| !stale.contains(&s.trace));
         self.requests
@@ -555,9 +457,6 @@ impl Document {
         factor
     }
 
-    /// Rewrite the shared times: the viewport, the cursor, the markers (as
-    /// state, not an edit; the journal is rewritten with them) and a
-    /// reference at a time.
     pub(crate) fn retime(&mut self, by: Rescale) {
         self.shared.viewport.retime(by);
         self.shared.cursor.retime(by);
@@ -571,7 +470,6 @@ impl Document {
         }
     }
 
-    /// Load every retained track of `trace` again under its new generation.
     fn reload_tracks(&mut self, trace: TraceId) {
         let Some(session) = self.session(trace).cloned() else {
             return;
@@ -600,9 +498,6 @@ impl Document {
         }
     }
 
-    /// Take a trace out of the set with everything the document holds of
-    /// it. Its slot, still open, is returned for [`Document::restore_trace`].
-    /// Panels and rows that name it are the app's to remove first.
     pub(crate) fn remove_trace(&mut self, trace: TraceId) -> Option<TraceSlot> {
         let slot = self.traces.remove(trace)?;
         self.forget_trace(trace);
@@ -635,10 +530,6 @@ impl Document {
         self.clocks.remove_trace(trace);
     }
 
-    /// Put a removed trace back under its letter, already open. It takes a
-    /// new generation and reloads its clocks; rows that name it load again
-    /// as the app attaches them. Returns the factor by which the session
-    /// unit refined to admit it, as [`Delivered::Opened`] does.
     pub(crate) fn restore_trace(&mut self, mut slot: TraceSlot) -> anyhow::Result<Option<u64>> {
         anyhow::ensure!(
             self.traces.get(slot.id).is_none(),
@@ -656,8 +547,6 @@ impl Document {
         })
     }
 
-    /// Name a trace, or go back to its derived name. Returns whether its
-    /// name changed; the change is an undoable edit.
     pub fn rename_trace(&mut self, trace: TraceId, name: Option<&str>) -> bool {
         let name = name
             .map(str::trim)
@@ -677,14 +566,10 @@ impl Document {
         true
     }
 
-    /// Note that trace `trace` joined or left the set as an edit, with the
-    /// inverse the journal keeps.
     pub(crate) fn note_trace_edit(&mut self, label: String, inverse: TraceEdit) {
         self.trace_edits.push((label, inverse));
     }
 
-    /// Install a trace's name while undoing or redoing; returns the name
-    /// it replaces.
     pub(crate) fn swap_trace_name(
         &mut self,
         trace: TraceId,
@@ -697,9 +582,6 @@ impl Document {
         Ok(std::mem::replace(&mut slot.rename, name))
     }
 
-    // -- analog summaries ----------------------------------------------------------
-
-    /// The summary of `signal` read as `kind`, or whether one is building.
     pub fn analog_summary(
         &self,
         signal: Traced<SignalRef>,
@@ -708,9 +590,6 @@ impl Document {
         self.summaries.get(&(signal, kind))
     }
 
-    /// Hold summaries for exactly the `wanted` histories: queue builds for
-    /// new ones, and release those no plot shows (or whose history was
-    /// replaced) together with their memory.
     pub(crate) fn sync_summaries(
         &mut self,
         wanted: HashMap<
@@ -747,13 +626,10 @@ impl Document {
         }
     }
 
-    /// The activity summary of the folded group whose signals are `key`.
     pub fn group_summary(&self, key: &[usize]) -> Option<&crate::wave::group::SummaryLoad> {
         self.group_summaries.get(key)
     }
 
-    /// Hold summaries for exactly the `wanted` folded groups (by the key of
-    /// their signals): queue builds for new ones and release the others.
     pub(crate) fn sync_group_summaries(
         &mut self,
         wanted: HashMap<Vec<usize>, Vec<Arc<dyn volna_trace::data::SignalHistory>>>,
@@ -776,7 +652,6 @@ impl Document {
         }
     }
 
-    /// The whole-trace walk of the stacked layers whose identity is `key`.
     pub fn stack_total(
         &self,
         key: &crate::wave::stack::Key,
@@ -784,9 +659,6 @@ impl Document {
         self.stack_totals.get(key)
     }
 
-    /// Hold walks for exactly the `wanted` stacks (by the key of their
-    /// layers): short ones are walked at once, long ones queued for the load
-    /// worker, and the others are released.
     pub(crate) fn sync_stack_totals(
         &mut self,
         wanted: HashMap<crate::wave::stack::Key, Vec<crate::wave::stack::Layer>>,
@@ -816,8 +688,6 @@ impl Document {
         }
     }
 
-    /// The integral summary of `history` read as `reading`, or whether one
-    /// is building.
     pub fn integral(
         &self,
         history: &Arc<dyn volna_trace::data::SignalHistory>,
@@ -827,7 +697,6 @@ impl Document {
         self.integrals.get(&key).map(|i| &i.load)
     }
 
-    /// Give `layers` the integral summaries the document holds for them.
     pub fn summarize_layers(&self, layers: &mut [crate::wave::stack::Layer]) {
         use crate::wave::stack::IntegralLoad;
         for layer in layers {
@@ -842,9 +711,6 @@ impl Document {
         }
     }
 
-    /// Hold integral summaries for exactly the `wanted` histories: queue
-    /// builds for new ones and release the others, and those whose history
-    /// is gone, with their memory.
     pub(crate) fn sync_integrals(
         &mut self,
         wanted: HashMap<
@@ -876,10 +742,6 @@ impl Document {
         }
     }
 
-    // -- signal loads --------------------------------------------------------------
-
-    /// Retain a whole raw track for a panel or analysis. Pair with release_track.
-    /// A generator already loaded through a stream shares its existing object.
     pub fn retain_track(&mut self, track: Traced<TrackRef>) -> anyhow::Result<()> {
         if let Some(load) = self.tracks.get_mut(&track) {
             load.consumers = load
@@ -949,9 +811,6 @@ impl Document {
         Ok(())
     }
 
-    /// Every generator object of `trace` currently held by a selected
-    /// track, once per object: the same generator reached through a stream
-    /// and on its own is one shared object.
     pub fn resident_generators(
         &self,
         trace: TraceId,
@@ -968,7 +827,6 @@ impl Document {
             .filter(move |g| seen.insert(g.generator()))
     }
 
-    /// A generator object already held by another selected track.
     pub fn resident_generator(&self, id: Traced<TrackRef>) -> Option<Arc<LoadedGenerator>> {
         self.tracks
             .iter()
@@ -989,12 +847,10 @@ impl Document {
         Some(id)
     }
 
-    /// Load state of a retained track; `None` when no consumer retains it.
     pub fn track(&self, track: Traced<TrackRef>) -> Option<&TrackLoadState> {
         self.tracks.get(&track).map(|load| &load.state)
     }
 
-    /// Drop one consumer; the last one forgets the track and its queued load.
     pub fn release_track(&mut self, track: Traced<TrackRef>) {
         let Some(load) = self.tracks.get_mut(&track) else {
             return;
@@ -1009,9 +865,6 @@ impl Document {
         }
     }
 
-    /// Re-request a failed track under a new request identity, so a late
-    /// completion of the superseded load is ignored. Returns whether a
-    /// request was queued.
     pub fn retry_track(&mut self, track: Traced<TrackRef>) -> bool {
         let Some(slot) = self.traces.get(track.trace) else {
             return false;
@@ -1042,8 +895,6 @@ impl Document {
         true
     }
 
-    /// Queue a history load unless one is already pending. Returns whether a
-    /// request was queued.
     pub fn request_signal(&mut self, signal: Traced<SignalRef>) -> bool {
         let Some(slot) = self.traces.get(signal.trace) else {
             return false;
@@ -1079,15 +930,12 @@ impl Document {
         self.pending.contains(&signal)
     }
 
-    /// Whether a load requested under `generation` for `trace` is current.
     fn current(&self, trace: TraceId, generation: u64) -> bool {
         self.traces
             .get(trace)
             .is_some_and(|slot| slot.generation == generation)
     }
 
-    /// Prune unstarted work using the same ownership rules in every executor.
-    /// Stale queues must never clear pending demand for the new recording.
     pub(crate) fn retain_queued_signals(
         &mut self,
         trace: TraceId,
@@ -1130,16 +978,12 @@ impl Document {
         self.pending.len()
     }
 
-    /// Requests queued since the last call. The frontend performs them.
     pub fn take_requests(&mut self) -> Vec<LoadRequest> {
         std::mem::take(&mut self.requests)
     }
 
-    /// Accept a completed load if its generation is still current, placing
-    /// what it brought on the session timeline.
     pub fn deliver(&mut self, result: LoadResult) -> Option<Delivered> {
         match result {
-            // The sidebar's activity model owns these (`App::deliver`).
             LoadResult::ActivityBuilt { .. }
             | LoadResult::ActivityCounter { .. }
             | LoadResult::Activity { .. }
@@ -1160,8 +1004,6 @@ impl Document {
                     Ok(loaded)
                 }) {
                     Ok(mut loaded) if loaded.track == track => {
-                        // Reuse objects retained by other selected tracks. The
-                        // recording is immutable for this generation.
                         for generator in &mut loaded.generators {
                             if let Some(resident) =
                                 self.resident_generator(Traced::new(trace, generator.generator()))
@@ -1220,7 +1062,6 @@ impl Document {
                 if !self.current(trace, generation) {
                     return None;
                 }
-                // The count cannot fail locally; a lost one leaves the column empty.
                 self.traces.get_mut(trace)?.sizes = Some(result.ok()?);
                 Some(Delivered::Sizes)
             }
@@ -1316,8 +1157,6 @@ impl Document {
                     Err(error) => {
                         let error = format!("{error:#}");
                         if self.is_loaded() {
-                            // A trace that cannot join leaves the set; the app
-                            // says why.
                             self.traces.remove(trace);
                         } else {
                             self.traces.get_mut(trace)?.state = SlotState::Error(error.clone());
@@ -1333,21 +1172,15 @@ impl Document {
         }
     }
 
-    // -- cursor and markers ----------------------------------------------------------
-
-    /// Install already validated markers, in time order whatever order the
-    /// workspace listed them in.
     pub(crate) fn restore_markers(&mut self, mut markers: Vec<Marker>) {
         markers.sort_by_key(|m| m.time);
         self.markers.restore(markers);
     }
 
-    /// Where measurements start, if anywhere.
     pub fn reference(&self) -> Option<Reference> {
         self.reference
     }
 
-    /// The reference's time: its own, or its marker's.
     pub fn reference_time(&self) -> Option<u64> {
         match self.reference? {
             Reference::Time(t) => Some(t),
@@ -1355,9 +1188,6 @@ impl Document {
         }
     }
 
-    /// Set or clear the reference. Not an undoable edit: the reference is
-    /// navigation state like the cursor. A marker reference must name an
-    /// existing marker. Returns whether it changed.
     pub fn set_reference(&mut self, reference: Option<Reference>) -> bool {
         if let Some(Reference::Marker(id)) = reference
             && !self.markers.iter().any(|m| m.id == id)
@@ -1369,9 +1199,6 @@ impl Document {
         changed
     }
 
-    /// Keep the reference where its marker was when an edit removed that
-    /// marker; `before` is the list before the edit. Returns the marker it
-    /// was attached to, if it detached.
     fn detach_reference(&mut self, before: &[Marker]) -> Option<MarkerId> {
         let Some(Reference::Marker(id)) = self.reference else {
             return None;
@@ -1386,9 +1213,6 @@ impl Document {
         Some(id)
     }
 
-    /// Reattach the reference to marker `id` if it still sits at that
-    /// marker's time, as its detachment left it; a reference moved since
-    /// stays where the user put it.
     fn reattach_reference(&mut self, id: MarkerId) {
         if let (Some(Reference::Time(t)), Some(m)) =
             (self.reference, self.markers.iter().find(|m| m.id == id))
@@ -1398,22 +1222,15 @@ impl Document {
         }
     }
 
-    /// The markers, in time order: the Markers lane finds the visible ones
-    /// by binary search.
     pub fn markers(&self) -> &[Marker] {
         &self.markers
     }
 
-    /// Mark `time` with the lowest free number; `None` when a marker is
-    /// already there.
     pub fn add_marker(&mut self, time: u64) -> Option<MarkerId> {
         let id = marker::free_id(&self.markers)?;
         self.set_marker(id, time).then_some(id)
     }
 
-    /// Place marker `id` at `time`, or move it there while preserving its
-    /// name and attached reference. Refused when another marker is there;
-    /// returns whether the markers changed.
     pub fn set_marker(&mut self, id: MarkerId, time: u64) -> bool {
         if self.markers.iter().any(|m| m.id == id) {
             return self.move_marker(id, time);
@@ -1434,9 +1251,6 @@ impl Document {
         })
     }
 
-    /// Move marker `id` to `time`, keeping the list in time order; a
-    /// reference on the marker follows it. Refused when another marker is
-    /// already there. Returns whether it moved.
     pub fn move_marker(&mut self, id: MarkerId, time: u64) -> bool {
         let Some(ix) = self.markers.iter().position(|m| m.id == id) else {
             return false;
@@ -1452,7 +1266,6 @@ impl Document {
         })
     }
 
-    /// Remove marker `id`; a reference on it stays at its time.
     pub fn remove_marker(&mut self, id: MarkerId) -> bool {
         let Some(ix) = self.markers.iter().position(|m| m.id == id) else {
             return false;
@@ -1470,8 +1283,6 @@ impl Document {
         changed
     }
 
-    /// Name marker `id` (see [`marker::clean_name`]); an empty name clears
-    /// it. Returns whether the name changed.
     pub fn rename_marker(&mut self, id: MarkerId, name: &str) -> bool {
         let label = marker::clean_name(name);
         match self.markers.iter().position(|m| m.id == id) {
@@ -1480,8 +1291,6 @@ impl Document {
         }
     }
 
-    /// Hand the markers before the edits since the last call to the undo
-    /// journal, unless they cancelled out.
     pub(crate) fn take_edits(&mut self, history: &mut crate::history::History) {
         self.take_marker_edits(history);
         for (label, edit) in std::mem::take(&mut self.trace_edits) {
@@ -1494,7 +1303,6 @@ impl Document {
         let Some(before) = self.markers.take_before() else {
             return;
         };
-        // The one marker whose name alone differs between `a` and `b`.
         let renamed = |a: &[Marker], b: &[Marker]| {
             let mut diff = a.iter().zip(b).filter(|(x, y)| x != y);
             match (diff.next(), diff.next()) {
@@ -1502,13 +1310,11 @@ impl Document {
                 _ => None,
             }
         };
-        // The one marker in `a` that `b` lacks.
         let only = |a: &[Marker], b: &[Marker]| {
             a.iter()
                 .find(|m| !b.iter().any(|n| n.id == m.id))
                 .map(|m| m.id)
         };
-        // The one marker whose time alone differs between `a` and `b`.
         let moved = |a: &[Marker], b: &[Marker]| {
             let mut diff = a.iter().filter(|x| !b.contains(x));
             match (diff.next(), diff.next()) {
@@ -1546,10 +1352,6 @@ impl Document {
         );
     }
 
-    /// Install markers while undoing or redoing, reattaching the reference
-    /// to marker `attach` when it came back where the reference still is.
-    /// Returns the replaced markers and the marker this swap detached the
-    /// reference from, which the inverse reattaches.
     pub(crate) fn swap_markers(
         &mut self,
         markers: Vec<Marker>,

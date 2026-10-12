@@ -1,6 +1,4 @@
-//! `App`: the whole viewer with no toolkit attached. Frontends feed it
-//! [`Command`]s, drain [`Event`]s, perform the [`LoadRequest`]s it queues, and
-//! ask it to lay out and paint the wave panel into a [`Scene`].
+//! `App`: the whole viewer with no toolkit attached.
 
 mod traces;
 mod undo;
@@ -35,7 +33,6 @@ use volna_trace::data::transactions::{TrackRef, TransactionRef};
 use volna_trace::data::{ScopeId, VarId};
 use volna_trace::session::{OpenSpec, Session};
 
-/// Keyboard actions of the wave panel. Frontends bind keys to these.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     SplitRight,
@@ -59,84 +56,45 @@ pub enum Action {
     PanRight,
     NextEdge,
     PrevEdge,
-    /// `M`: mark the focused panel's cursor, or open the name field of the
-    /// marker already there.
     AddOrRenameMarker,
-    /// `Ctrl+1`–`Ctrl+6`: place or move this numbered marker at the focused
-    /// timed panel's cursor, or the shared cursor from a non-timed panel,
-    /// preserving its name and attached reference.
     SetMarker(crate::marker::MarkerId),
-    /// `⇧M`: remove the marker at the focused panel's cursor.
     RemoveMarkerAtCursor,
-    /// Palette only: remove every marker, as one undoable step.
     RemoveAllMarkers,
-    /// `.` / `,`: move the cursor to the next / previous marker in time.
     NextMarker,
     PrevMarker,
-    /// `1`–`9`: move the cursor onto the marker with this number.
     GoToMarker(crate::marker::MarkerId),
-    /// `` ` ``: return to the cursor and view from before the last marker
-    /// jump; again, go forward to where the return started.
     JumpBack,
-    /// `R`: measure from the focused panel's cursor, attached to a marker
-    /// there.
     SetReference,
-    /// `⇧R`: stop measuring.
     ClearReference,
-    /// `Z`: zoom the focused panel to the reference and the cursor.
     ZoomToMeasurement,
-    /// `'`: find a marker by name or number; the host opens its palette in
-    /// marker mode ([`Event::OpenMarkerNavigator`]).
     MarkerNavigator,
     RemoveSelected,
-    /// Copy the selected wave rows to the document clipboard; cut also
-    /// removes them. Paste inserts copies below the selection, sharing data.
     CopySignals,
     CutSignals,
     PasteSignals,
     SelectAll,
     ClearSelection,
     CycleFormat,
-    /// Draw the selected rows as plots, or back to digital.
     ToggleAnalog,
-    /// `Shift+A`: draw the selected groups as stacked areas, or back as
-    /// activity.
     ToggleStack,
-    /// Shift+O: draw selected groups as independent overlaid lines.
     ToggleOverlaid,
-    /// Colour the selected rows and groups, or clear their own colour with
-    /// `None`; the menu, palette and agents use it.
     SetTint(Option<crate::wave::Tint>),
-    /// Step the selected rows to the next larger / smaller height preset,
-    /// or back to the default height.
     IncreaseRowHeight,
     DecreaseRowHeight,
     ResetRowHeight,
     MoveSelectionUp,
     MoveSelectionDown,
-    /// `G`: put the selected wave rows under a new group and rename it.
     GroupSelection,
-    /// `Shift+G`: dissolve the selected groups, keeping their rows.
     Ungroup,
-    /// `F2`: rename the selected group.
     RenameGroup,
-    /// `Alt+←` / `Alt+→`: fold or unfold the selected group and every group
-    /// inside it. Plain `←` / `→` ([`Action::PanLeft`] / [`Action::PanRight`])
-    /// fold and unfold a selected group, and pan otherwise.
     FoldGroupDeep,
     UnfoldGroupDeep,
-    /// Step the cursor to the next / previous rising edge of the panel's
-    /// selected clock (`]` / `[`).
     NextCycle,
     PrevCycle,
-    /// Number every clock's cycles from the cursor's cycle, or from the
-    /// first edge again when the origin is already there.
     ToggleCycleOrigin,
 }
 
 impl Command {
-    /// Stable command names for hosts whose shortcuts run outside the viewer.
-    /// Routing and the meaning of each command remain in the core.
     pub fn named(name: &str) -> Option<Self> {
         let action = match name {
             "openWorkspace" => return Some(Self::RequestOpenWorkspace),
@@ -188,12 +146,12 @@ impl Command {
     }
 }
 
-/// What the text field the frontend hosts edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditTarget {
-    /// The name of group row `entry` of a wave panel.
-    Group { panel: PanelId, entry: usize },
-    /// The name of a marker, over its chip in `panel`'s Markers lane.
+    Group {
+        panel: PanelId,
+        entry: usize,
+    },
     Marker {
         panel: PanelId,
         id: crate::marker::MarkerId,
@@ -208,24 +166,15 @@ impl EditTarget {
     }
 }
 
-/// A text field the frontend hosts over a panel: it opens one when this
-/// appears, answers with [`Command::CommitText`], and closes it when the
-/// target changes or goes away.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextEdit {
     pub target: EditTarget,
-    /// Where the field sits in the panel; `None` while its subject is out
-    /// of view, and the field waits hidden.
     pub rect: Option<Rect>,
-    /// The text it opens with.
     pub text: String,
-    /// Whether the text starts selected, so typing replaces it.
     pub select_all: bool,
-    /// Its accessible name, also shown while it is empty.
     pub label: String,
 }
 
-/// Which sash of the workspace chrome is being dragged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChromeDrag {
     Sidebar,
@@ -234,28 +183,16 @@ pub enum ChromeDrag {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    /// Frontend-owned operations (clipboard, dialogs) report a concise error
-    /// through the same accessible notice path as core failures.
     Notice(String),
-    /// File actions and derived state; outside the workspace and undo journal.
     BuildActivity(TraceId),
     DismissActivity(TraceId),
     CancelActivity(TraceId),
-    /// Start opening a trace in place of the open ones.
     Open(OpenSpec),
-    /// Start opening another trace beside the open ones.
     AddTrace(OpenSpec),
-    /// Ask the frontend for a file (it answers with [`Command::Open`]).
     RequestOpenDialog,
-    /// Ask the frontend for a file to add (it answers with
-    /// [`Command::AddTrace`]).
     RequestAddTraceDialog,
-    /// Close one trace of several, with its rows and the panels that show
-    /// it, as one undoable step. Closing the only trace closes everything.
     RemoveTrace(TraceId),
-    /// Name a trace; `None` or an empty name goes back to the derived one.
     RenameTrace(TraceId, Option<String>),
-    /// Select a trace's row in the scope tree (a click on its chip).
     RevealTrace(TraceId),
     RequestOpenWorkspace,
     RequestSaveWorkspaceAs,
@@ -263,65 +200,42 @@ pub enum Command {
     RequestQuit,
     CloseTrace,
     ToggleSidebar,
-    /// Take back the last cockpit edit, or cancel the gesture in progress
-    /// (`volna/README.md`, "Undo and redo").
     Undo,
-    /// Put back the last edit undone.
     Redo,
     Action(Action),
     Pointer(PanelId, PointerEvent),
     Panels(PanelsCommand),
-    /// Add rows for these variables to the wave view.
     AddVars(Vec<Traced<VarId>>),
-    /// Add members to the wave view: variables as signal rows, generators as
-    /// transaction lanes, clock streams and generators as clock rows. Other
-    /// streams and log sites have no row form.
     AddToWaves(Vec<Traced<Member>>),
-    /// Show the clocks of these members (clock streams or their generators;
-    /// other members are ignored) as rulers of the panel `AddToWaves` targets.
     AddClockRulers(Vec<Traced<Member>>),
     ActivateMembers(Vec<Traced<Member>>),
-    /// Show a stream or generator as a pipeline panel: focus the panel that
-    /// already shows it, or open one below the focused panel.
     OpenPipeline {
         track: Traced<TrackRef>,
     },
-    /// Capture one generator or an all-signal selection and open the reduced
-    /// immutable table view below the invoking content panel.
     OpenTable {
         selected: Vec<Traced<Member>>,
         clicked: Option<Traced<Member>>,
     },
-    /// Open from a Waves selection or a single-generator Pipeline panel.
     OpenTableFromPanel {
         panel: PanelId,
         row: Option<usize>,
     },
     Table(PanelId, crate::table::TableCommand),
-    /// Make one record the document selection, optionally moving the
-    /// originating panel's cursor to the time under the pointer.
     SelectTransaction {
         panel: PanelId,
         track: Traced<TrackRef>,
         id: TransactionRef,
         cursor: Option<u64>,
     },
-    /// Show the selection in a Transaction panel: focus the first one that is
-    /// not pinned, or open one beside the panel that asked.
     ShowTransaction {
         from: PanelId,
     },
-    /// Pan a pipeline to the start of one of its transaction rows without
-    /// changing its time scale.
     PanToTransactionStart {
         panel: PanelId,
         row: usize,
     },
     Transaction(PanelId, TransactionCommand),
-    /// The focused panel's clocks: rulers, the selected clock and go-to-cycle.
     Clocks(ClockCommand),
-    /// Scroll the pipeline showing this panel's record to its row and fit the
-    /// time axis to its lifetime, or open that track as a pipeline.
     RevealTransaction {
         panel: PanelId,
     },
@@ -336,114 +250,69 @@ pub enum Command {
         ix: usize,
         modifiers: Modifiers,
     },
-    /// The `+` button: add every listed variable.
     AddAllVars,
-    /// Enter in the filter box: add the selected variables, or all.
     AddSelectedOrAllVars,
     VariablesKey(Key, Modifiers),
-    /// Add a scope's variables to the wave view as a group named after it;
-    /// with `recursive`, child scopes with variables become folded subgroups.
     AddScopeAsGroup {
         scope: Traced<ScopeId>,
         recursive: bool,
     },
-    /// The frontend's text field over [`App::text_edit`] finished: `Some`
-    /// commits the text to its target, `None` cancels.
     CommitText(EditTarget, Option<String>),
-    /// Open the name field of a marker over its chip in a panel (a
-    /// double-click on the chip).
     RenameMarker(PanelId, crate::marker::MarkerId),
-    /// A marker verb for the focused panel without a menu: the navigator's
-    /// `↵` (go), `⇧↵` (measure from), `F2` (rename) and `Del` (remove).
     Lane(crate::marker::LaneVerb),
-    /// Zoom a panel to the span between two markers (a double-click on the
-    /// span).
     ZoomToSpan(PanelId, crate::marker::MarkerId, crate::marker::MarkerId),
-    /// Open the selected signal's row menu, or report a wave-row menu choice.
     OpenSignalMenu(PanelId),
     MenuSelect(PanelId, MenuAction),
     MenuDismiss(PanelId),
     SetSidebarWidth(f32),
-    /// Scope tree height as a fraction of the sidebar.
     SetScopesFraction(f32),
     ChromeDragStart(ChromeDrag),
     ChromeDragEnd,
     Settings(SettingsCommand),
-    /// The recent traces and workspaces (`volna/README.md`, "Workspace persistence").
     Recent(crate::workspace::recent::RecentCommand),
 }
 
-/// The focused timed panel's clock choices, for menus and the palette.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClockChoices {
-    /// Every clock of the open traces: its key and whether it is shown as
-    /// a ruler.
     pub clocks: Vec<(ClockKey, bool)>,
-    /// Cycles are numbered from a chosen origin.
     pub origin: bool,
 }
 
-/// What a timed panel shows of the trace's clocks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClockCommand {
-    /// Show or hide the ruler of this clock.
     ToggleRuler(ClockKey),
-    /// The clock clicks snap to and `[` / `]` step through.
     Select(ClockKey),
-    /// Put the cursor on this cycle of the panel's selected clock, as the
-    /// panel numbers its cycles.
     GoToCycle(i64),
 }
 
-/// The settings editor. GUI edits become surgical text edits in the core;
-/// the query and JSON toggle live here so the command palette can drive them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SettingsCommand {
-    /// Open the Settings tab, or focus its search box when it is open.
     Open,
     Close,
-    Set {
-        id: String,
-        value: Value,
-    },
-    Reset {
-        id: String,
-    },
-    /// The JSON view's save: replace the whole document text.
+    Set { id: String, value: Value },
+    Reset { id: String },
     ReplaceText(String),
     Query(String),
     ToggleJson,
-    /// Open the tab filtered to one setting (`@id:`), from the palette.
-    Reveal {
-        id: String,
-    },
-    /// Step `appearance.zoom` (⌘= / ⌘- / ⌘0); the new value is written to
-    /// the settings file like any other change.
+    Reveal { id: String },
     Zoom(settings::ZoomStep),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// Something visible changed; repaint.
     Changed,
     LayoutChanged {
         revision: u64,
     },
     Notice(String),
-    /// Say what undo or redo did (“Undid Remove 2 rows”) to assistive
-    /// technology, politely; not a warning. The status bar shows it too.
     Announce(String),
     LoadWorkspace {
         trace_uri: String,
     },
-    /// A trace with a durable identity finished opening; native hosts record
-    /// it (or the workspace that named it) in the recent list.
     TraceOpened {
         trace_uri: String,
     },
-    /// Open this recent entry: a trace, or a workspace and its trace.
     OpenRecent(crate::workspace::recent::Recent),
-    /// The recent list changed; save `state.json`.
     RecentChanged,
     PersistWorkspace {
         ticket: crate::workspace::persistence::SaveTicket,
@@ -455,48 +324,34 @@ pub enum Event {
         trace_uri: String,
     },
     Quit,
-    /// Show the platform file dialog, then send [`Command::Open`].
     OpenFileDialog,
-    /// Show the platform file dialog, then send [`Command::AddTrace`].
     AddTraceDialog,
-    /// Scroll the scope tree so this row is visible.
     RevealScopeRow(usize),
-    /// Scroll the variable list so this row is visible.
     RevealVarRow(usize),
-    /// Typing in the variable list: move keyboard focus to the filter box.
     FocusFilter,
-    /// Write `settings.json`; acknowledge through [`App::settings_saved`].
     WriteSettings {
         ticket: u64,
         bytes: Vec<u8>,
     },
-    /// Resolved settings changed for these ids (registry order is not implied).
     SettingsChanged {
         keys: Vec<&'static str>,
     },
-    /// Move keyboard focus to the settings search box.
     FocusSettingsSearch,
-    /// Put this text on the system clipboard (a marker's *Copy as Text*).
     CopyText(String),
-    /// Open the palette in marker mode (`@`), listing
-    /// [`App::navigator_rows`].
     OpenMarkerNavigator,
 }
 
-/// Transient state of the settings editor, owned by the core.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SettingsView {
     pub query: String,
     pub json: bool,
 }
 
-/// Text the status bar shows, already formatted.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Status {
     pub sidebar_notice: Option<String>,
     pub workspace_notice: Option<String>,
     pub panel: Option<String>,
-    /// What the pointer is over in the focused pipeline panel.
     pub hover: Option<String>,
     pub file: Option<String>,
     pub time_range: Option<String>,
@@ -504,24 +359,14 @@ pub struct Status {
     pub changes: Option<String>,
     pub px_per: Option<String>,
     pub cursor: Option<String>,
-    /// The cursor's cycle in each clock ruler of the focused panel, e.g.
-    /// `core_clk 150231 + 0.42`.
     pub clocks: Vec<String>,
-    /// From the reference to the cursor, in time and in counted cycles of
-    /// each ruler clock (see [`crate::measure`]): `R → cursor 20 ns · 40
-    /// core_clk · 10.5 bus_clk`.
     pub measure: Option<String>,
     pub markers: Option<String>,
-    /// What the last undo, redo or marker jump did, or why it did nothing,
-    /// until the next key, click or edit.
     pub announcement: Option<String>,
-    /// Whole-window frame timing; absent until the frontend reports frames.
     pub frames: Option<crate::frames::FrameStatus>,
-    /// Decoded trace data against the open trace's memory budget.
     pub memory: Option<MemoryStatus>,
 }
 
-/// How much of the client memory budget loaded trace data holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryStatus {
     pub used: u64,
@@ -529,7 +374,6 @@ pub struct MemoryStatus {
 }
 
 impl MemoryStatus {
-    /// From this fraction on, the indicator warns that loads may fail.
     pub const NEARLY_FULL: f32 = 0.9;
 
     pub fn fraction(self) -> f32 {
@@ -543,7 +387,6 @@ impl MemoryStatus {
         self.fraction() >= Self::NEARLY_FULL
     }
 
-    /// Compact "used / limit" in the limit's unit, e.g. `412 / 512 MiB`.
     pub fn label(self) -> String {
         let (unit, scale) = byte_unit(self.limit);
         format!(
@@ -553,7 +396,6 @@ impl MemoryStatus {
         )
     }
 
-    /// The indicator's tooltip.
     pub fn detail(self) -> String {
         let (unit, scale) = byte_unit(self.limit);
         format!(
@@ -566,7 +408,6 @@ impl MemoryStatus {
     }
 }
 
-/// One preset in the status bar's memory menu: choosing it sets `id` to `mib`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryChoice {
     pub id: &'static str,
@@ -584,24 +425,19 @@ impl MemoryChoice {
     }
 }
 
-/// The memory menu the status bar meter opens: presets for both limits. A
-/// value the host owns (VS Code's `volna.memory.*`) is shown but not editable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryMenu {
     pub budget_title: String,
     pub budget: Vec<MemoryChoice>,
     pub object_title: String,
     pub object: Vec<MemoryChoice>,
-    /// Shown under the object presets.
     pub object_note: Option<&'static str>,
-    /// Why the presets are disabled, when the host owns the values.
     pub locked: Option<&'static str>,
 }
 
 pub const BUDGET_PRESETS_MIB: [u64; 8] = [256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
 pub const OBJECT_PRESETS_MIB: [u64; 7] = [64, 128, 256, 512, 1024, 2048, 4096];
 
-/// `512 MiB`, `2 GiB`, `1.5 GiB`.
 pub fn format_mib(mib: u64) -> String {
     if mib >= 1024 {
         format!("{} GiB", short_amount(mib as f64 / 1024.0))
@@ -612,7 +448,6 @@ pub fn format_mib(mib: u64) -> String {
 
 fn memory_choices(id: &'static str, presets: &[u64], current: u64) -> Vec<MemoryChoice> {
     let mut values = presets.to_vec();
-    // A hand-written value keeps its place and its check mark.
     if !values.contains(&current) {
         values.push(current);
         values.sort_unstable();
@@ -637,7 +472,6 @@ fn byte_unit(bytes: u64) -> (&'static str, f64) {
     }
 }
 
-/// One decimal below 10 (`0.3`, `1.5`), whole numbers above; no trailing `.0`.
 fn short_amount(value: f64) -> String {
     let text = if value < 10.0 {
         format!("{value:.1}")
@@ -649,21 +483,15 @@ fn short_amount(value: f64) -> String {
 
 pub const SIDEBAR_FRACTION_MIN: f32 = 0.15;
 
-/// What a start panel shows about the open trace: enough to choose the
-/// first view without a waveform panel being assumed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StartSummary {
     pub name: String,
-    /// The trace extent as the status bar prints it.
     pub time_range: String,
     pub variables: usize,
-    /// Streams and generators of the transaction catalog.
     pub tracks: usize,
-    /// The recognized PIPELINE streams of every trace: (dotted path, track).
     pub pipelines: Vec<(String, Traced<TrackRef>)>,
 }
 
-/// The rectangles a frontend needs for hit regions, by panel kind.
 pub enum PanelLayout<'a> {
     Waves(&'a WaveLayout),
     Pipeline(&'a PipelineLayout),
@@ -676,33 +504,23 @@ pub struct App {
     pub panels: Panels,
     pub scopes: ScopeTreeModel,
     pub variables: MemberListModel,
-    /// The scope rows' activity in the viewport.
     pub activity: crate::sidebar::ActivityModel,
     pub sidebar_width: f32,
     pub sidebar_visible: bool,
-    /// Height of the scope tree as a fraction of the sidebar.
     pub scopes_fraction: f32,
     pub drag: Option<ChromeDrag>,
     pub settings: settings::Store,
     pub settings_view: SettingsView,
-    /// Undo and redo of cockpit edits, dropped with the trace.
     pub history: crate::history::History,
-    /// What the last undo or redo did, shown until the next edit.
     announcement: Option<String>,
-    /// The marker whose name field is open, over its chip in this panel.
     marker_edit: Option<(PanelId, crate::marker::MarkerId)>,
-    /// An open menu owned by the app rather than by a wave panel.
     transient_menu: Option<(PanelId, WaveMenu)>,
-    /// Each transient menu gets a distinct `row` for popup identity.
     transient_menus: usize,
-    /// Whole-window frame timing the frontend samples from its toolkit.
     pub frames: crate::frames::FrameStats,
     pub(crate) events: Vec<Event>,
     text: TextCache,
     scene: Scene,
     table_budget: volna_trace::remote::memory::MemoryBudget,
-    /// Generators retained for wave lanes, one document retain each, for
-    /// the document generation that granted them.
     lane_tracks: (u64, std::collections::HashSet<Traced<TrackRef>>),
 }
 
@@ -749,15 +567,11 @@ impl App {
         }
     }
 
-    // -- opening -------------------------------------------------------------------
-
-    /// Open a VTR file from disk (native).
     #[cfg(not(target_family = "wasm"))]
     pub fn open_path(&mut self, path: std::path::PathBuf) {
         self.open(OpenSpec::Path(path));
     }
 
-    /// Open a VTR image held in memory (web hosts and drag-drop).
     pub fn open_bytes(&mut self, name: String, bytes: Vec<u8>) {
         self.open(OpenSpec::Bytes { name, bytes });
     }
@@ -767,7 +581,6 @@ impl App {
         self.changed();
     }
 
-    /// Replace the session immediately (tests and hosts that hold one).
     pub fn set_session(&mut self, session: Arc<dyn Session>) {
         let session = if session.memory_budget().is_none() {
             match self.account_local_session(session) {
@@ -791,8 +604,6 @@ impl App {
         self.on_session_changed();
     }
 
-    /// The document now shows other traces from scratch (an open, a close,
-    /// or the first trace of a document arriving).
     fn on_session_changed(&mut self) {
         self.activity = Default::default();
         self.reset_recent_view();
@@ -824,11 +635,6 @@ impl App {
         self.changed();
     }
 
-    // -- the pull-based load loop --------------------------------------------------
-
-    /// Loads the frontend should perform, then hand to [`App::deliver`].
-    /// Taken every frame, they also bring the scope meters to the current
-    /// viewport (see [`crate::sidebar::activity`]).
     pub fn take_requests(&mut self) -> Vec<LoadRequest> {
         let mut requests = self.doc.take_requests();
         {
@@ -881,8 +687,6 @@ impl App {
             .collect()
     }
 
-    /// The viewport scope meters follow: the focused panel's, when it has
-    /// a time axis, else the document's shared one.
     pub fn activity_viewport(&self) -> crate::wave::Viewport {
         self.panels
             .focused()
@@ -893,9 +697,6 @@ impl App {
             })
     }
 
-    /// A scope row's activity in the viewport, once its trace's activity
-    /// index and scope sizes are counted; `None` for trace rows and traces
-    /// without an index.
     pub fn scope_activity(
         &self,
         node: crate::sidebar::TreeNode,
@@ -1015,7 +816,6 @@ impl App {
         }
     }
 
-    /// Events since the last call.
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }
@@ -1026,8 +826,6 @@ impl App {
         }
     }
 
-    /// Frontends mirror the current layout, so one pending event with the
-    /// latest revision stands for every edit since the last drain.
     pub(crate) fn layout_changed(&mut self) {
         self.events
             .retain(|e| !matches!(e, Event::LayoutChanged { .. }));
@@ -1037,8 +835,6 @@ impl App {
         self.changed();
     }
 
-    /// Adopt panels entering the live layout through the same content lifecycle.
-    /// Failures are visible notices; the panel keeps its own loading/error state.
     pub(crate) fn adopt_panels(&mut self, ids: &[PanelId]) -> Vec<String> {
         if ids.is_empty() {
             return Vec::new();
@@ -1055,14 +851,12 @@ impl App {
         notices
     }
 
-    /// Release the current view before a workspace replaces it.
     pub(crate) fn retire_panels(&mut self) {
         for panel in self.panels.iter_mut() {
             panel.kind.retire(&mut self.doc);
         }
     }
 
-    /// An empty waveform panel fitted to the trace, linked per the settings.
     fn fresh_waves(&self) -> PanelKind {
         let mut waves = crate::wave::model::WaveModel::new();
         waves.reset(self.doc.is_loaded().then(|| self.doc.limits()));
@@ -1070,9 +864,6 @@ impl App {
         PanelKind::Waves(Box::new(waves))
     }
 
-    /// Put `kind` where the panel `id` is (the start panel giving way to
-    /// content), as a layout edit named `label` (none when the step is
-    /// named by what follows). Returns the new panel's ID.
     fn replace_panel(
         &mut self,
         id: PanelId,
@@ -1089,9 +880,6 @@ impl App {
         }
     }
 
-    /// The waveform panel new rows go to: the focused one, the start panel
-    /// turned into one, the first one in layout order (focused), a start
-    /// panel elsewhere turned into one, or a new tab beside the focused panel.
     fn waves_target(&mut self) -> Option<PanelId> {
         let focused = self.panels.focused_id();
         let kind = &self.panels.focused().kind;
@@ -1131,8 +919,6 @@ impl App {
         let start =
             |panels: &Panels, id: PanelId| panels.get(id).is_some_and(|p| p.kind.is_start());
         let result = match command {
-            // Splitting or tabbing a start panel asks for a waveform panel
-            // where the placeholder is; nothing is left to put beside it.
             PanelsCommand::Split { panel, .. } | PanelsCommand::NewTab { group_of: panel }
                 if start(&self.panels, panel) =>
             {
@@ -1192,7 +978,6 @@ impl App {
         }
         if let Err(e) = result {
             self.events.push(Event::Notice(e.to_string()));
-            // A rejected dock proposal must be resynchronized too.
             self.layout_changed();
         } else if revision != self.panels.revision() {
             self.layout_changed();
@@ -1201,10 +986,6 @@ impl App {
         }
     }
 
-    // -- commands ----------------------------------------------------------------
-
-    /// Delayed input from a panel or dialog belongs to the document generation
-    /// that produced it, even when a restored file reuses saved panel IDs.
     pub fn handle_if_current(&mut self, generation: u64, command: Command) -> bool {
         if generation != self.doc.generation() {
             return false;
@@ -1217,7 +998,6 @@ impl App {
         self.handle_at(command, Instant::now());
     }
 
-    /// Like [`App::handle`] with an explicit clock for animations.
     pub fn handle_at(&mut self, command: Command, now: Instant) {
         let before = crate::workspace::Stamp::capture(self, &command);
         let tracked = before.as_ref().map(|_| command.clone());
@@ -1235,16 +1015,12 @@ impl App {
         if key_or_click && self.announcement.take().is_some() {
             self.changed();
         }
-        // The name field holds the keys while it is open, so a key reaching
-        // the panel means it lost them: close it without renaming.
         if matches!(command, Command::Action(_)) && self.marker_edit.take().is_some() {
             self.changed();
         }
         self.dispatch(command, now);
         self.panels.sync_timeline_dividers();
         self.activity.prune(self.doc.traces());
-        // Pointer input moves rows but never adds or removes them; a press
-        // or release may fold a group.
         if !pointer {
             self.sync_lane_tracks();
             self.sync_analog_summaries();
@@ -1262,8 +1038,6 @@ impl App {
         }
     }
 
-    /// Carry out one command. Its arms may return early; `handle_at` still
-    /// syncs derived state and closes the undo step afterwards.
     fn dispatch(&mut self, command: Command, now: Instant) {
         match command {
             Command::Notice(message) => {
@@ -1604,11 +1378,6 @@ impl App {
         }
     }
 
-    // -- the selected record ---------------------------------------------------------
-
-    /// Hand the document selection to every panel that reads it: the
-    /// transaction panels that are not pinned, and the tables whose
-    /// generator holds the record.
     pub(crate) fn sync_selection(&mut self) {
         let Self { panels, doc, .. } = self;
         for (_, model) in panels.transactions_mut() {
@@ -1642,8 +1411,6 @@ impl App {
         self.changed();
     }
 
-    /// Enter, a double-click, the Details button and the palette all land
-    /// here: focus a transaction panel that is free, or open one.
     fn show_transaction(&mut self, from: PanelId) {
         if self.doc.selection().is_none() {
             self.events
@@ -1685,8 +1452,6 @@ impl App {
         }
     }
 
-    /// Reveal the panel's record where it is drawn: the pipeline that already
-    /// has a row for it, or a new pipeline over its track.
     fn reveal_transaction(&mut self, panel: PanelId, now: Instant) {
         let Some(shown) = self
             .panels
@@ -1711,8 +1476,6 @@ impl App {
         self.changed();
     }
 
-    /// Variables become wave rows, streams and generators become pipeline
-    /// panels (one per distinct track), log sites only report a notice.
     fn activate_members(&mut self, members: &[Traced<Member>]) {
         let mut vars = Vec::new();
         let mut tracks = Vec::new();
@@ -1749,8 +1512,6 @@ impl App {
         self.changed();
     }
 
-    /// Histories some panel already holds, by signal: new rows and tables
-    /// share them instead of loading again.
     fn resident_histories(&self) -> crate::wave::model::Resident {
         self.panels
             .iter()
@@ -1767,7 +1528,6 @@ impl App {
             .collect()
     }
 
-    /// Charge a newly opened local trace to the process budget.
     fn account_local_session(&self, session: Arc<dyn Session>) -> anyhow::Result<Arc<dyn Session>> {
         volna_trace::session::account_local_session(session, self.table_budget.clone())
     }
@@ -1782,7 +1542,6 @@ impl App {
             budget: memory_choices("memory.budgetMiB", &BUDGET_PRESETS_MIB, memory.budget_mib),
             object_title: format!("Object size limit: {}", format_mib(memory.object_mib)),
             object: memory_choices("memory.objectMiB", &OBJECT_PRESETS_MIB, memory.object_mib),
-            // Only a remote trace fixes the object limit when it connects.
             object_note: self
                 .doc
                 .traces()
@@ -1793,9 +1552,6 @@ impl App {
         }
     }
 
-    /// Apply the `memory.*` settings live: to the process budget local traces
-    /// and procedural sessions use, and to an open remote trace's own budget.
-    /// A remote trace keeps the object limit it negotiated when it opened.
     pub(crate) fn apply_memory_limits(&self) {
         let Ok((limit, object_limit)) = self.settings.resolved().limits().bytes() else {
             return;
@@ -1806,8 +1562,6 @@ impl App {
         }
     }
 
-    /// The budget panels charge their own memory to: the first open
-    /// trace's, or the process budget local traces share.
     pub(crate) fn table_memory_budget(&self) -> volna_trace::remote::memory::MemoryBudget {
         self.doc
             .traces()
@@ -1845,7 +1599,6 @@ impl App {
         }
     }
 
-    /// The table of one generator member.
     fn generator_table(&self, member: Traced<Member>) -> anyhow::Result<crate::table::TableSource> {
         let session = self
             .doc
@@ -1877,13 +1630,11 @@ impl App {
                 }
                 _ => waves.selected.clone(),
             };
-            // A group opens the rows it holds.
             let rows = crate::wave::tree::selected_leaves(waves.items(), &rows);
             let vars = rows
                 .iter()
                 .filter_map(|&index| waves.signal(index)?.source.var())
                 .collect::<Vec<_>>();
-            // Lanes alone open their generator's table.
             let lane = rows
                 .iter()
                 .find_map(|&index| waves.items().get(index)?.lane_track());
@@ -2015,7 +1766,6 @@ impl App {
         let Some(target) = self.waves_target() else {
             return;
         };
-        // Reuse histories already held in another panel before queuing work.
         let loaded = self.resident_histories();
         if let Some(w) = self.panels.waves_mut(target) {
             w.add_vars(&mut self.doc, vars, loaded);
@@ -2023,8 +1773,6 @@ impl App {
         self.changed();
     }
 
-    /// Signal rows for variables and lanes for generators, in the wave panel
-    /// that receives new signals.
     fn add_to_waves(&mut self, members: &[Traced<Member>]) {
         let vars: Vec<Traced<VarId>> = members
             .iter()
@@ -2040,7 +1788,6 @@ impl App {
                 continue;
             };
             let track = member.with(track);
-            // A clock stream or its generator is drawn from its stretches.
             if let Some(key) = self.member_clock(member) {
                 if !clocks.contains(&key) {
                     clocks.push(key);
@@ -2068,8 +1815,6 @@ impl App {
         self.changed();
     }
 
-    /// The clock a sidebar member declares: a clock stream or its
-    /// generator. Frontends offer it as a ruler or a clock row.
     pub fn member_clock(&self, member: Traced<Member>) -> Option<ClockKey> {
         let session = self.doc.session(member.trace)?;
         let track = session.hierarchy().member_track(member.item)?;
@@ -2104,8 +1849,6 @@ impl App {
         self.changed();
     }
 
-    /// Hold an analog summary for every long history a plot shows, and
-    /// release the others with their memory.
     pub(crate) fn sync_analog_summaries(&mut self) {
         let mut wanted = std::collections::HashMap::new();
         for waves in self.panels.iter().filter_map(|panel| panel.kind.waves()) {
@@ -2142,9 +1885,6 @@ impl App {
         self.sync_group_summaries();
     }
 
-    /// Hold an activity summary for every visible folded group whose
-    /// signals change more often than a frame can walk, and release the
-    /// others with their memory.
     pub(crate) fn sync_group_summaries(&mut self) {
         let mut wanted = std::collections::HashMap::new();
         for waves in self.panels.iter().filter_map(|panel| panel.kind.waves()) {
@@ -2164,9 +1904,6 @@ impl App {
         self.sync_stack_totals();
     }
 
-    /// Hold the whole-trace walk of every visible stacked group's layers,
-    /// which sets its scale, and the integral
-    /// summaries of the long layers of long stacks; release the others.
     pub(crate) fn sync_stack_totals(&mut self) {
         let mut wanted = std::collections::HashMap::new();
         let mut integrals = std::collections::HashMap::new();
@@ -2176,7 +1913,6 @@ impl App {
                     continue;
                 }
                 let layers = waves.stack_layers(i as usize);
-                // Long stacks read their long layers' column means from summaries.
                 if crate::wave::stack::changes(&layers) > crate::wave::stack::WALK_MAX {
                     for l in &layers {
                         if l.history.len() >= crate::wave::stack::INTEGRAL_MIN_CHANGES {
@@ -2222,7 +1958,6 @@ impl App {
                 added = true;
             }
         }
-        // Records another panel already holds are ready at once.
         if added {
             let Self { panels, doc, .. } = self;
             for waves in panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
@@ -2231,8 +1966,6 @@ impl App {
         }
     }
 
-    /// Paste the document clipboard into a wave panel, sharing histories
-    /// resident in any panel before queuing loads.
     fn paste_signals(&mut self, panel: PanelId) {
         if self.doc.copied_rows.is_empty() || self.panels.waves(panel).is_none() {
             return;
@@ -2244,7 +1977,6 @@ impl App {
         self.changed();
     }
 
-    /// Apply a clock choice or go-to to the focused timed panel.
     fn clock_command(&mut self, command: ClockCommand) {
         let now = Instant::now();
         let doc = &mut self.doc;
@@ -2254,7 +1986,6 @@ impl App {
             return;
         };
         match command {
-            // Rulers are cockpit state of the panels that draw them.
             ClockCommand::ToggleRuler(key) if rulers => nav.toggle_ruler(&doc.clocks, &key),
             ClockCommand::ToggleRuler(_) => return,
             ClockCommand::Select(key) => nav.select_clock(key),
@@ -2267,7 +1998,6 @@ impl App {
         self.changed();
     }
 
-    /// The focused panel's clock choices; `None` without clocks or a timed panel.
     pub fn clock_choices(&self) -> Option<ClockChoices> {
         let clocks = &self.doc.clocks;
         if clocks.is_empty() {
@@ -2289,8 +2019,6 @@ impl App {
         })
     }
 
-    /// The clocks the workspace's pipelines count in, in panel order: the
-    /// rulers a panel shows until it chooses its own.
     fn pipeline_clocks(&self) -> Vec<ClockKey> {
         let mut keys: Vec<ClockKey> = Vec::new();
         for p in self.panels.iter().filter_map(|p| p.kind.pipeline()) {
@@ -2317,7 +2045,6 @@ impl App {
                 axis: Axis::Vertical,
             }),
             Action::NewPanel => Some(PanelsCommand::NewTab { group_of: panel }),
-            // A lone start panel has nothing left to close but the trace.
             Action::ClosePanel
                 if self.panels.focused().kind.is_start()
                     && self
@@ -2345,7 +2072,6 @@ impl App {
             self.panel_command(command);
             return;
         }
-        // Esc during a drag cancels the gesture and what it changed.
         if action == Action::ClearSelection && self.cancel_gesture() {
             return;
         }
@@ -2353,7 +2079,6 @@ impl App {
             self.paste_signals(panel);
             return;
         }
-        // Markers belong to the document; a timed panel only lends its cursor.
         if matches!(
             action,
             Action::AddOrRenameMarker
@@ -2368,8 +2093,6 @@ impl App {
                 .nav()
                 .map(|n| n.cursor(&self.doc))
                 .unwrap_or_else(|| {
-                    // Detail time links move the shared cursor without owning
-                    // a timed view. Numbered markers use that same cursor.
                     matches!(action, Action::SetMarker(_))
                         .then_some(self.doc.shared.cursor)
                         .flatten()
@@ -2417,8 +2140,6 @@ impl App {
             action,
             Action::NextMarker | Action::PrevMarker | Action::GoToMarker(_) | Action::JumpBack
         ) {
-            // Non-timed panels navigate the shared cursor. Reuse a linked
-            // panel's navigation so its jump-back position remains available.
             let target = self.panels.focused().kind.nav().map(|_| panel).or_else(|| {
                 matches!(action, Action::GoToMarker(_))
                     .then(|| {
@@ -2594,7 +2315,6 @@ impl App {
                 Action::ResetRowHeight => w.step_row_height(0),
                 Action::MoveSelectionUp => w.move_selection(-1),
                 Action::MoveSelectionDown => w.move_selection(1),
-                // Panel actions and paste were resolved before borrowing a wave model.
                 Action::PasteSignals
                 | Action::SplitRight
                 | Action::SplitDown
@@ -2620,8 +2340,6 @@ impl App {
                 | Action::ZoomToMeasurement
                 | Action::MarkerNavigator => unreachable!(),
             },
-            // The same keys, with rows in place of selection: ↑ ↓ scroll rows,
-            // zoom scales both axes, Escape cancels a drag then the cursor.
             PanelKind::Pipeline(p) => match action {
                 Action::ZoomIn => p.zoom_in(doc, now),
                 Action::ZoomOut => p.zoom_out(doc, now),
@@ -2686,9 +2404,6 @@ impl App {
         self.changed();
     }
 
-    // -- frames --------------------------------------------------------------------
-
-    /// Advance animations. Returns true while another frame is needed.
     pub fn tick(&mut self, now: Instant) -> bool {
         let mut animating = self.doc.shared.viewport.tick(now);
         for panel in self.panels.iter_mut() {
@@ -2703,9 +2418,6 @@ impl App {
         self.doc.shared.viewport.is_animating() || self.panels.iter().any(Panel::is_animating)
     }
 
-    /// Lay a canvas panel out in `bounds`; the result feeds hit regions.
-    /// `device_scale` is physical pixels per logical pixel, independent of theme zoom.
-    /// Invalid scales use 1.0. `None` for panels the core does not paint.
     pub fn layout_panel(
         &mut self,
         id: PanelId,
@@ -2732,7 +2444,6 @@ impl App {
         })
     }
 
-    /// Paint a canvas panel with the layout from the last [`App::layout_panel`].
     pub fn render_panel(
         &mut self,
         id: PanelId,
@@ -2745,8 +2456,6 @@ impl App {
         &self.scene
     }
 
-    /// Like [`App::render_panel`] into a caller-owned buffer, for frontends
-    /// that must hand the scene to their painter while the app is borrowed.
     pub fn render_panel_into(
         &mut self,
         id: PanelId,
@@ -2806,15 +2515,10 @@ impl App {
         }
     }
 
-    /// The last painted scene.
     pub fn scene(&self) -> &Scene {
         &self.scene
     }
 
-    // -- chrome text ------------------------------------------------------------------
-
-    /// The recognized PIPELINE streams of the open traces: (dotted path,
-    /// track), the path after its trace's letter while several are open.
     pub fn pipeline_streams(&self) -> Vec<(String, Traced<TrackRef>)> {
         use volna_trace::data::transactions::TrackKind;
         let traces = self.doc.traces();
@@ -2838,7 +2542,6 @@ impl App {
             .collect()
     }
 
-    /// The session's span as the status bar and start panel print it.
     fn time_range_text(&self) -> String {
         let base = self.doc.time_base();
         let (a, b) = self.doc.limits();
@@ -2849,7 +2552,6 @@ impl App {
         )
     }
 
-    /// What a start panel shows, once a trace is open.
     pub fn start_summary(&self) -> Option<StartSummary> {
         let traces = self.doc.traces();
         traces.first_loaded()?;
@@ -2863,8 +2565,6 @@ impl App {
         })
     }
 
-    /// The text field the frontend should host: an open marker name field in
-    /// the focused panel, else the focused wave panel's group rename.
     pub fn text_edit(&self) -> Option<TextEdit> {
         let panel = self.panels.focused_id();
         if let Some((p, id)) = self.marker_edit.filter(|(p, _)| *p == panel) {
@@ -2894,8 +2594,6 @@ impl App {
         })
     }
 
-    /// Open marker `id`'s name field over its chip in `panel`, revealing the
-    /// marker when it is off the view.
     fn open_marker_name(&mut self, panel: PanelId, id: crate::marker::MarkerId, now: Instant) {
         let Some(time) = self
             .doc
@@ -2915,8 +2613,6 @@ impl App {
         self.changed();
     }
 
-    /// `R`, `⇧R` and `Z` in the focused timed panel. The reference is
-    /// navigation state: none of these is an undoable edit.
     fn reference_action(&mut self, action: Action, now: Instant) {
         let doc = &mut self.doc;
         let Some(nav) = self.panels.focused_mut().kind.nav_mut() else {
@@ -2959,8 +2655,6 @@ impl App {
         self.changed();
     }
 
-    /// The marker navigator's rows for `query` (after the `@`), with
-    /// distances in the focused panel's selected clock.
     pub fn navigator_rows(&self, query: &str) -> Vec<crate::marker::NavigatorRow> {
         let selected = self
             .panels
@@ -2971,8 +2665,6 @@ impl App {
         crate::marker::navigator_rows(&self.doc, query, selected)
     }
 
-    /// The context menu the frontend should show for the focused panel: an
-    /// open lane or pipeline-label menu, else the focused wave panel's row menu.
     pub fn menu(&self) -> Option<&WaveMenu> {
         let panel = self.panels.focused_id();
         match &self.transient_menu {
@@ -2981,9 +2673,6 @@ impl App {
         }
     }
 
-    /// Where a double-click adds a marker in `panel` (after its first click
-    /// put the cursor there): the time header, or the Markers lane away
-    /// from its chips and spans.
     pub fn adds_marker_at(&self, panel: PanelId, p: Point) -> bool {
         let Some(panel) = self.panels.get(panel) else {
             return false;
@@ -2997,10 +2686,6 @@ impl App {
             && (header.contains(p) || (lane.band.contains(p) && lane.hit(p).is_none()))
     }
 
-    /// Gestures on the lanes that every timed panel answers alike, before
-    /// the panel sees the press: a right-click opens the lane menu, and
-    /// Alt-click or a middle click on a chip measures from its marker.
-    /// Returns whether the press was taken.
     fn lane_press(&mut self, panel: PanelId, ev: PointerEvent) -> bool {
         let PointerEvent::Down {
             position,
@@ -3053,8 +2738,6 @@ impl App {
         }
     }
 
-    /// Right-clicking a readable pipeline label selects its transaction and
-    /// offers the same navigation as a double-click on that label.
     fn pipeline_label_press(&mut self, panel: PanelId, ev: PointerEvent) -> bool {
         let PointerEvent::Down {
             position,
@@ -3092,7 +2775,6 @@ impl App {
         true
     }
 
-    /// Carry out a lane menu's choice in `panel`.
     fn lane_verb(&mut self, panel: PanelId, verb: LaneVerb, now: Instant) {
         let find = |doc: &Document, id| doc.markers().iter().find(|m| m.id == id).cloned();
         match verb {
@@ -3157,7 +2839,6 @@ impl App {
         }
     }
 
-    /// Zoom `panel` to the markers `from` and `to` and the time between.
     fn zoom_to_span(
         &mut self,
         panel: PanelId,
@@ -3278,7 +2959,6 @@ impl App {
         self.doc.state()
     }
 
-    /// One-line summary of the viewer state, for diagnostics and tests.
     pub fn debug_state(&self) -> String {
         self.panels.layout().panels().into_iter().map(|id| {
         let panel = self.panels.get(id).unwrap();

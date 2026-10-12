@@ -1,31 +1,5 @@
 // The crash matrix's simulated run (tests/crash.rs).
-//
-// The main thread writes value changes and a log record every 64 time steps
-// into a VTR writer, then ends as <mode> says:
-//
-//   none      closes the writer and returns 0
-//   segv      null pointer write (SIGSEGV)
-//   abort     abort() (SIGABRT)
-//   throw     an uncaught C++ exception (std::terminate, SIGABRT)
-//   stack     unbounded recursion (SIGSEGV on the guard page)
-//   heap      double free of a small block (glibc's tcache check, SIGABRT)
-//   heaplock  double free of a 64 KiB block (detected under the main arena's lock, SIGABRT)
-//   term      SIGTERM while the simulation runs
-//   deaf      SIGTERM, and the simulation never polls vtr_guard_stop_requested()
-//   exit      exit(3) from deep code
-//   kill      SIGKILL
-//   thread    a second thread faults while the owner keeps writing
-//   slowkill  a slow run (--pace-us per time step) that SIGKILLs itself after --kill-ms,
-//             printing "progress changes=N logs=M ms=T" as it goes
-//
-// usage: crash_harness <mode> <out.vtr> [--records N] [--signals S] [--block-records B] [--inline] [--guard]
-//                      [--commit-ms C] [--pace-us P] [--kill-ms K]
-//
-// With --guard the crash guard is installed and watches the writer; a stop
-// request ends the loop and closes the writer with the guard's ending.
-// Before it can die the harness prints "emitted changes=N logs=M time=T" on
-// stderr, what the writer accepted up to that point (the last line counts),
-// and "dying at <monotonic ms>".
+
 #include "vtr.h"
 
 #include <atomic>
@@ -76,7 +50,6 @@ void emitted(uint64_t records, uint64_t logs, uint64_t t) {
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     fprintf(stderr, "dying at %lld\n", static_cast<long long>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000);
-    // Function pointers through volatile keep the compiler from eliding the heap misuse.
     void *(*volatile m)(size_t) = malloc;
     void (*volatile f)(void *) = free;
     if (mode == "segv") *static_cast<volatile int *>(nullptr) = 1;
@@ -100,7 +73,7 @@ void emitted(uint64_t records, uint64_t logs, uint64_t t) {
     for (;;) pause();
 }
 
-}  // namespace
+}
 
 int main(int argc, char **argv) {
     if (argc < 3) {
@@ -113,7 +86,7 @@ int main(int argc, char **argv) {
     const char *path = argv[2];
     uint64_t target = 3000000, signals = 2000, block_records = 1 << 20;
     bool inline_encoder = false, guard = false;
-    uint64_t commit_ms = UINT64_MAX, pace_us = 0, kill_ms = 0;  // commit: the library default unless given
+    uint64_t commit_ms = UINT64_MAX, pace_us = 0, kill_ms = 0;
     for (int i = 3; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--records") target = strtoull(argv[++i], nullptr, 10);
@@ -127,7 +100,7 @@ int main(int argc, char **argv) {
     }
     vtr_writer_options o;
     vtr_writer_options_default(&o);
-    o.dedup = 0;  // Every emitted value is recorded, including repeats.
+    o.dedup = 0;
     o.block_records = block_records;
     o.background = inline_encoder ? 0 : 1;
     if (commit_ms != UINT64_MAX) o.commit_interval_ms = static_cast<uint32_t>(commit_ms);
@@ -180,10 +153,10 @@ int main(int argc, char **argv) {
             sent = true;
             if (mode == "thread") {
                 emitted(records, logs, t);
-                g_crash_thread.store(true);  // the owner keeps writing while the other thread dies
+                g_crash_thread.store(true);
             } else if (mode == "term" || mode == "deaf") {
                 emitted(records, logs, t);
-                kill(getpid(), SIGTERM);  // arrives while the simulation runs
+                kill(getpid(), SIGTERM);
             } else {
                 break;
             }
@@ -202,7 +175,6 @@ int main(int argc, char **argv) {
     }
     emitted(records, logs, t);
     if (mode == "none" || (guard && vtr_guard_stop_requested())) {
-        // A normal close, recording a stop request; returning lets the guard re-raise it.
         vtr_ending end;
         vtr_guard_ending(&end);
         vtr_guard_unwatch(w);

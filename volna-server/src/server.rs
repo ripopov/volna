@@ -1,4 +1,5 @@
 //! Sequential complete-object service, independent of process and GUI hosting.
+
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -48,8 +49,6 @@ fn open_object<R: Read, W: Write, T: Serialize>(
     }
 }
 
-/// Serve one recording. The host assigns a fresh nonzero session identity and
-/// supplies the immutable-file check. EOF or Close drops all service-owned data.
 pub fn serve(
     mut input: impl Read,
     mut output: impl Write,
@@ -93,8 +92,6 @@ pub fn serve(
         if !open_object(&mut writer, ObjectId::Metadata, &header, max_object_bytes)? {
             return Ok(());
         }
-        // The client waits for exactly the pages the header's counts imply;
-        // sending fewer would leave both sides waiting.
         let hierarchy = session.hierarchy();
         let pages = |n: usize| n.div_ceil(volna_trace::remote::hierarchy::PAGE_ENTRIES);
         let mut sent = 0;
@@ -176,8 +173,6 @@ pub fn serve(
                 let cache = vtr::activity::default_cache_dir();
                 let result = (|| {
                     if build && session.activity().is_none() {
-                        // This server owns the scan. A disconnected client's
-                        // scan may finish and publish for subsequent clients.
                         let options = vtr::activity::BuildOptions {
                             control: Some(Arc::new(vtr::activity::BuildControl::default())),
                             ..Default::default()

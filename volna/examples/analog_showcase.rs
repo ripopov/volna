@@ -1,9 +1,4 @@
 //! Compact analog and stacked-group fixture for the Volna viewer.
-//!
-//! Regenerate from the workspace root:
-//!     cargo run --locked -p volna --example analog_showcase
-//!
-//! An optional output path replaces `volna/examples/analog_showcase.vtr`.
 
 use std::f64::consts::TAU;
 use std::path::PathBuf;
@@ -39,8 +34,6 @@ fn group<const N: usize>(
     Ok(signals)
 }
 
-/// Binary fractions keep smooth plots while compressing better than full
-/// precision floating-point samples. Non-finite samples retain their meaning.
 fn quantize(value: f64) -> f64 {
     (value * 4096.0).round() / 4096.0
 }
@@ -146,8 +139,6 @@ fn generate(path: &std::path::Path) -> vtr::Result<()> {
     let float32 = numeric_signal("float32_bits", 32)?;
     let float64 = numeric_signal("float64_bits", 64)?;
 
-    // Fixed seed and sample schedule, with no wall-clock metadata or periodic
-    // commits: identical runs produce identical bytes on the same toolchain.
     let mut noise = 0x5eed_1234u32;
     for i in 0..=INTERVALS {
         writer.set_time(i * STEP_NS)?;
@@ -203,8 +194,6 @@ fn generate(path: &std::path::Path) -> vtr::Result<()> {
                 12.0 * (1.0 + sine),
             ],
         )?;
-        // Slower integer and bit channels make both individual steps and
-        // dense column averages visible when their scopes are stacked.
         if i % 8 == 0 {
             for (k, &signal) in queues.iter().enumerate() {
                 if k == 2 && (512..560).contains(&i) {

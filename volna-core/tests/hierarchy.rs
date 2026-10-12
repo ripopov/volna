@@ -146,8 +146,6 @@ fn search_order_activation_keyboard_and_notices() {
     assert_eq!(app.panels.focused_waves().unwrap().items().len(), 1);
     app.take_requests();
     app.take_events();
-    // A generator opens a pipeline panel (one track load); a log site only
-    // reports a notice.
     app.handle(Command::ActivateMembers(vec![rows[1], rows[2]]));
     let requests = app.take_requests();
     assert!(matches!(
@@ -240,13 +238,10 @@ fn expand_all_keeps_gate_leaves_out_of_state_and_saved_paths() {
     assert_eq!(saved.sidebar.expanded.len(), 2);
     assert!(saved.to_bytes().unwrap().len() < 10_000);
 
-    // Clicking a leaf cannot create an expansion entry either.
     app.handle(Command::ToggleScope(TreeNode::scope(a(leaf))));
     assert_eq!(app.scopes.expanded().count(), 2);
     app.handle(Command::ExpandAllScopes(false));
     assert_eq!(app.scopes.visible, [(TreeNode::scope(a(root)), 0)]);
-    // A saved path to a leaf (from an older or hand-written workspace)
-    // resolves normally but has no expansion state to restore.
     saved
         .sidebar
         .expanded
@@ -321,7 +316,7 @@ fn icons_have_assets_and_malformed_track_references_are_rejected() {
     let session = fixture();
     let mut metadata = Metadata::from_session(session.as_ref());
     let mut builder = metadata.hierarchy.to_builder();
-    builder.generators[0].stream = 0; // a scope, rather than its stream
+    builder.generators[0].stream = 0;
     metadata.hierarchy = builder.finish();
     assert!(metadata.validate().is_err());
     let mut metadata = Metadata::from_session(session.as_ref());

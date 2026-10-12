@@ -1,13 +1,5 @@
-//! Window controls (minimize, maximize/restore, close) for the title bar Volna
-//! draws itself, after Zed's `platform_title_bar`:
-//!
-//! - Linux and FreeBSD with client-side decorations: round buttons on the
-//!   sides the desktop configures (GNOME's `button-layout`, read by GPUI),
-//!   limited to the controls the compositor supports. Under server-side
-//!   decorations the window manager draws its own frame and none are drawn.
-//! - Windows: caption buttons whose hit regions the platform handles.
-//! - macOS: none; the native traffic lights sit over the transparent title bar.
-//! - wasm: none; the page has no window frame.
+//! Window controls (minimize, maximize/restore, close) for the title bar Volna draws
+//! itself, after Zed's `platform_title_bar`:
 
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -19,7 +11,6 @@ use crate::app::Quit;
 use crate::theme::{ThemePx, theme};
 use crate::ui::{Icon, IconName};
 
-/// A side of the title bar.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Side {
     Left,
@@ -29,14 +20,10 @@ pub enum Side {
 const LINUX: bool = cfg!(any(target_os = "linux", target_os = "freebsd"));
 const WINDOWS: bool = cfg!(target_os = "windows");
 
-/// Whether this window's controls are drawn by the application rather than by
-/// the platform: Linux with client-side decorations, or Windows.
 pub fn app_draws_controls(window: &Window) -> bool {
     (LINUX && matches!(window.window_decorations(), Decorations::Client { .. })) || WINDOWS
 }
 
-/// The controls to draw on `side` of the title bar, or `None` when the
-/// platform draws them (or there are none on that side).
 pub fn render_window_controls(side: Side, window: &Window, cx: &App) -> Option<AnyElement> {
     if !app_draws_controls(window) || window.is_fullscreen() {
         return None;
@@ -69,8 +56,6 @@ pub fn render_window_controls(side: Side, window: &Window, cx: &App) -> Option<A
     })
 }
 
-/// The layout used when the desktop does not report one: every control on the
-/// right, as most Linux desktops and Windows place them.
 fn linux_default() -> WindowButtonLayout {
     WindowButtonLayout {
         left: [None; gpui_kit::MAX_BUTTONS_PER_SIDE],
@@ -82,9 +67,6 @@ fn linux_default() -> WindowButtonLayout {
     }
 }
 
-/// One side of a layout filtered by what the window manager can honour: a
-/// tiling compositor may support neither minimize nor maximize. Close is
-/// always offered.
 fn visible_buttons(side: &[Option<WindowButton>], supported: &WindowControls) -> Vec<WindowButton> {
     side.iter()
         .flatten()
@@ -149,8 +131,6 @@ impl Control {
         }
     }
 
-    /// Perform the control. Close goes through the app's quit path so the
-    /// workspace is persisted like it is for ⌘Q and the window manager's close.
     fn activate(self, window: &mut Window, cx: &mut App) {
         match self {
             Control::Minimize => window.minimize_window(),
@@ -160,7 +140,6 @@ impl Control {
     }
 }
 
-/// Zed-style round buttons for Linux client-side decorations.
 #[derive(IntoElement)]
 struct LinuxControls {
     id: &'static str,
@@ -179,7 +158,6 @@ impl RenderOnce for LinuxControls {
             .h_full()
             .gap(t.px(12.0))
             .px(t.px(12.0))
-            // Clicks on the controls must not start a window move or select text.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .children(self.buttons.into_iter().map(|button| {
                 let control = Control::for_button(button, maximized);
@@ -193,7 +171,6 @@ impl RenderOnce for LinuxControls {
                     .w(size)
                     .h(size)
                     .rounded_full()
-                    // Muted like the bar's other buttons, lit when hovered.
                     .text_color(if enabled {
                         t.bar.icon_muted
                     } else {
@@ -216,8 +193,6 @@ impl RenderOnce for LinuxControls {
     }
 }
 
-/// Caption buttons for Windows: the platform hit-tests the marked areas and
-/// performs the control, so the buttons only draw themselves.
 #[derive(IntoElement)]
 struct WindowsControls {
     buttons: Vec<WindowButton>,

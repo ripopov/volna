@@ -1,7 +1,6 @@
-//! The landing fixture restores its checked-in
-//! workspace over its checked-in trace without a notice, loads its data panels,
-//! reuses its transaction panel for selections, and saves back to the same bytes.
-//! Regenerate both with the landing trace fixture.
+//! The landing fixture restores its checked-in workspace over its checked-in trace without
+//! a notice, loads its data panels, reuses its transaction panel for selections, and saves
+//! back to the same bytes.
 
 use std::path::PathBuf;
 
@@ -31,7 +30,6 @@ fn pump(app: &mut App) {
     }
 }
 
-/// The landing trace with its checked-in workspace restored.
 fn landing() -> App {
     let trace = examples().join("landing.vtr").canonicalize().unwrap();
     let workspace = examples().join("landing-page.volna.json");
@@ -52,10 +50,6 @@ fn landing() -> App {
     app
 }
 
-/// Waveform panel rendering rules over the whole landing
-/// run in Volna Dark: clocks show periods, states get a tint, numbers keep
-/// their last digits, and labels never shrink to a lone ellipsis. X bands
-/// and gated clocks are covered by the painter's unit tests.
 #[test]
 fn the_whole_landing_run_follows_the_rendering_rules() {
     let mut app = landing();
@@ -91,7 +85,6 @@ fn the_whole_landing_run_follows_the_rendering_rules() {
         let shown = text.trim_matches('…').chars().count();
         assert!(!text.contains('…') || shown >= 2, "lone ellipsis {text:?}");
     }
-    // The interrupt window: the fast clock is a square wave again.
     app.doc.shared.viewport.value.start = 717.0;
     app.doc.shared.viewport.value.end = 849.0;
     let (texts, _) = render(&mut app);

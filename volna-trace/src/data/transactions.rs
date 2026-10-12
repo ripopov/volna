@@ -1,8 +1,6 @@
-//! Raw transaction records and catalog. Identities are local to an open session;
-//! names and attribute values are resolved, with no backend string handles.
+//! Raw transaction records and catalog.
 
 use serde::{Deserialize, Serialize};
-// Semantic enums, not reader handles or storage representations.
 pub use vtr::{TxKind, TxStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -20,7 +18,6 @@ pub enum AttributeValue {
     F64(f64),
     Text(String),
     Bytes(Vec<u8>),
-    /// Packed LSB-first codes, with 2, 4 or 9 logic states per bit.
     Logic {
         width: u32,
         states: u8,
@@ -106,8 +103,6 @@ pub struct Relation {
     pub attributes: Attributes,
 }
 
-// Keep wire serialization in the adapter; the VTR crate need not depend on
-// serde. Reject unknown codes instead of using the reader enums' fallbacks.
 macro_rules! wire_code {
     ($module:ident, $ty:ident, $max:expr) => {
         mod $module {

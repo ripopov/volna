@@ -1,11 +1,12 @@
 //! The start page's recent list (`volna/README.md`, "Workspace persistence"): order, limit,
 //! keys, removal, missing files and the events hosts act on.
+
 use std::collections::BTreeSet;
 use volna_core::testing::ProceduralTrace;
 use volna_core::workspace::recent::{Recent, RecentCommand, RecentKey, RecentKind, SHOWN};
 use volna_core::{App, Command, Event};
 
-const NOW: u64 = 1_790_589_600; // 2026-09-28 10:00 UTC
+const NOW: u64 = 1_790_589_600;
 
 fn trace(name: &str, ago: u64) -> Recent {
     Recent {
@@ -16,7 +17,6 @@ fn trace(name: &str, ago: u64) -> Recent {
     }
 }
 
-/// A native app that remembered `n` traces, `t0.vtr` the newest.
 fn app(n: u64) -> App {
     let mut app = App::new();
     app.enable_recent();
@@ -67,7 +67,6 @@ fn enter_reopens_the_newest_and_digits_open_by_position() {
     key(&mut app, RecentKey::Digit(4));
     key(&mut app, RecentKey::Digit(0));
     assert!(opened(&mut app).is_empty(), "no such row");
-    // The host records the successful open; it moves to the top once.
     app.remember_recent(trace("t2.vtr", 0));
     assert_eq!(names(&app), ["t2.vtr", "t0.vtr", "t1.vtr"]);
     assert_eq!(app.workspace.recent.selected, 0);
@@ -143,7 +142,6 @@ fn missing_files_stay_listed_and_can_still_be_tried() {
     key(&mut app, RecentKey::Digit(2));
     assert_eq!(opened(&mut app), ["file:///home/ada/sim/t1.vtr"]);
     assert_eq!(app.workspace.state.recent.len(), 3, "kept");
-    // Reopened after the file came back: no longer missing.
     app.remember_recent(trace("t1.vtr", 0));
     assert!(!app.recent_rows(NOW, None)[0].missing);
 }

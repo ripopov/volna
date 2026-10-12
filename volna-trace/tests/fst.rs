@@ -1,5 +1,6 @@
-//! FST loading and agreement with paired VTR recordings; fixture provenance is
-//! documented in tests/fixtures/README.md.
+//! FST loading and agreement with paired VTR recordings; fixture provenance is documented
+//! in tests/fixtures/README.md.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use volna_trace::data::{SignalRef, WaveValue};
@@ -86,7 +87,6 @@ fn malformed_images_report_errors() {
 #[test]
 fn truncated_sections_and_overflowing_lengths_return_errors() {
     let original = include_bytes!("fixtures/values.fst");
-    // Selected truncated prefixes must fail cleanly.
     for end in [9, 100, 329, original.len() - 1] {
         assert!(
             OpenSpec::Bytes {
@@ -100,7 +100,7 @@ fn truncated_sections_and_overflowing_lengths_return_errors() {
     }
     for size in [0u64, 7, u64::MAX] {
         let mut bytes = original.to_vec();
-        let offset = 330; // first section after the fixed FST header
+        let offset = 330;
         bytes[offset + 1..offset + 9].copy_from_slice(&size.to_be_bytes());
         assert!(
             OpenSpec::Bytes {

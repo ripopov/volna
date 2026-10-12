@@ -1,5 +1,5 @@
 //! Machine state that is not a setting: the recent traces and workspaces.
-//! Plain versioned JSON written only by the app; never synced or hand-edited.
+
 use super::recent::Recent;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,6 @@ pub const MAX_BYTES: usize = 1024 * 1024;
 #[serde(rename_all = "camelCase", default)]
 pub struct State {
     pub version: u32,
-    /// Traces and workspaces, newest first.
     pub recent: Vec<Recent>,
 }
 
@@ -23,9 +22,6 @@ impl State {
         }
     }
 
-    /// An older version starts empty and is replaced on the next save. An
-    /// unreadable or newer file yields an error; callers fall back to an
-    /// empty list and must not overwrite the file.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         #[derive(Deserialize)]
         struct Version {

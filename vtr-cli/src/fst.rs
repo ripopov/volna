@@ -1,19 +1,11 @@
 //! FST waveforms converted through the shared trace session API.
+
 use anyhow::{bail, ensure, Result};
 use std::collections::{BTreeMap, BinaryHeap};
 use std::path::Path;
 use volna_trace::data::{Direction, SignalShape, WaveValue};
 use vtr::{LogicStates, ScopeType, SignalKind, VarType, Writer};
 
-/// Convert FST hierarchy, aliases, and recorded values into a fresh writer.
-///
-/// All distinct signal histories must fit in memory. Scope/variable types,
-/// input/output/inout directions, components, and the time base are preserved.
-/// Other directions become implicit; root variables use the session's `(top)`
-/// scope. FST-specific attributes and enum tables are not exported by the session
-/// API. Nonzero time offsets and dump-off regions are rejected by that API.
-/// Nine-state declarations preserve the full FST logic alphabet. Use a writer
-/// with `dedup: false` to retain repeated non-event samples.
 pub fn convert_fst(input: impl AsRef<Path>, w: &mut Writer) -> Result<()> {
     let session = volna_trace::OpenSpec::Path(input.as_ref().to_owned()).open()?;
     ensure!(session.format() == Some("FST"), "expected an FST recording");
@@ -69,7 +61,6 @@ pub fn convert_fst(input: impl AsRef<Path>, w: &mut Writer) -> Result<()> {
             heap.push(std::cmp::Reverse((h.time(0), i, 0)));
         }
     }
-    // Merge complete histories so the writer sees globally nondecreasing times.
     while let Some(std::cmp::Reverse((time, i, offset))) = heap.pop() {
         let (signal, history) = &histories[i];
         w.set_time(time)?;

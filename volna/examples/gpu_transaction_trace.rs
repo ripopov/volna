@@ -1,41 +1,4 @@
 //! Hardware streams and cross-stream workload provenance for a synthetic SIMT GPU.
-//!
-//! Regenerate: cargo run --locked -p volna --example gpu_transaction_trace
-//! An optional argument replaces examples/gpu_transaction_trace.vtr in this crate.
-//!
-//! A synthetic 1 GHz clock gives each one-nanosecond cycle a rising edge.
-//! Two sequential grids
-//! each run two workgroups of four 32-lane warps, reusing eight hardware slots.
-//! Each warp runs 50 iterations of a 100-instruction tiled arithmetic loop.
-//! Resource paths are static; logical ownership lives exclusively in TX parents.
-//!
-//! Scheduling assumptions: strict round-robin issue within each two-warp
-//! partition, at most one issue/cycle; an unready turn can idle the scheduler
-//! (no ready-warp selection). Fetch/decode take one cycle each. Four scoreboard
-//! registers bound independent work. ADD/XOR take 2 cycles, FMA 6, branch 2,
-//! plus issue and writeback. ALUs accept one operation/cycle (up to six in flight).
-//! Each SM has one blocking LSU port, two wide shared-memory bank groups
-//! (8 lanes per 3-cycle round), one matrix engine and one DMA engine. Cache
-//! service is blocking per resource; the bidirectional fabric link serializes
-//! 64-byte transfers at 16 bytes/cycle. Ingress/routing/arbitration/acceptance
-//! cost 2/1/1/1 cycles, plus credit waits. Lookup latencies are 4/12/24 cycles,
-//! return/fill 2/4, DRAM activate/read/precharge 12/40/12. Atomics add an 8-cycle
-//! exclusive update; stores/atomics use 16 active lanes (64 bytes), loads use
-//! all 32 lanes (two sectors). Matrix jobs execute four 40-cycle microtiles;
-//! DMA jobs fetch two sectors through L2, bypassing L1, then deposit into shared.
-//! Cache residency is scripted (prewarmed hits and distinct cold lines), not a
-//! cache simulator. No merging, coherence, replacement, or virtual-memory model.
-//!
-//! The illustrative L3 is deliberately NOT representative of modern NVIDIA
-//! GPUs, which normally expose L2 as the last-level GPU cache. Per-SM matrix/DMA
-//! placement and all capacities/latencies are illustrative, not a SKU model.
-//! Parents express provenance, not temporal containment: asynchronous jobs
-//! outlive their launch instructions. Directed relations are consumer->producer
-//! (depends_on), instruction->job (launches/waits_for), arrival->barrier
-//! (arrives_at), warp->job (participates_in), and packet->fill (served_by).
-//! Stage lanes are lifecycle tracks, never the 32 scalar SIMT lanes.
-//! `gpu.resource` and numeric `gpu.destination_resource` values identify
-//! hierarchy generator nodes; `gpu.job` identifies an asynchronous TX.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -54,7 +17,6 @@ const WARPS: usize = PARTITIONS * SLOTS;
 const INSTRUCTIONS: u64 = 5_000;
 const CLOCK_PATH: &str = "gpu.clock";
 
-// A fixed vocabulary keeps interning out of the emission loop.
 macro_rules! vocabulary {
     ($($field:ident: $text:literal),* $(,)?) => {
         struct Names { $( $field: StrId, )* }
@@ -349,15 +311,12 @@ struct Resources {
     bank: [[u64; 2]; SMS],
     matrix: [u64; SMS],
     dma: [u64; SMS],
-    // L1 per SM, then shared L2 and L3. Each permits one outstanding service.
     cache: [u64; SMS + 2],
     link: u64,
     dram: u64,
     walker: u64,
 }
 
-/// A real fabric transfer, separate from cache-local service packets. Buffering
-/// can overlap earlier transfers; only link traversal reserves the shared link.
 #[expect(
     clippy::too_many_arguments,
     reason = "explicit route and time at each scripted hop"
@@ -431,9 +390,6 @@ fn dram(
     Ok(time)
 }
 
-/// `depth`: 0=L1 hit, 1=L2 hit, 2=illustrative L3 hit, 3=DRAM.
-/// A cache miss retains the upstream packet as parent, while transport packets
-/// describe the distinct request/response link work beneath that same packet.
 #[expect(
     clippy::too_many_arguments,
     reason = "explicit origin, route, and service parameters in the recursive cache path"
@@ -520,15 +476,10 @@ fn cache_access(
         e.stage(tx, e.n.hit, done, done + 2)?;
         done += 2;
     }
-    // Only the originating cache modifies data; lower requests fetch a line.
-    // Atomics hold the blocking cache port through a read-modify-write step.
     if operation == e.n.atomic {
         e.stage(tx, e.n.execute, done, done + 8)?;
         done += 8;
     }
-    // Commit modified bytes through a local write buffer. This is separate
-    // resource work, not a second copy of the whole cache-service interval;
-    // eviction/coherence traffic beyond the buffer is deliberately not modeled.
     if operation != e.n.read
         && let Some(generator) = c.writeback
     {
@@ -751,7 +702,6 @@ fn async_job(
                 },
             )?;
             e.stage(tx, e.n.memory_wait, done, end)?;
-            // Deposit into the same finite bank ports used by LDS instructions.
             let bank = chunk as usize;
             let deposit = end.max(r.bank[sm][bank]);
             e.stage(tx, e.n.queued, end, deposit)?;
@@ -848,7 +798,6 @@ impl Op {
     }
 }
 
-/// Returns the issued instruction and issue cycle; completion is class-specific.
 #[expect(
     clippy::too_many_arguments,
     reason = "script coordinates are distinct from mutable warp scheduling state"
@@ -886,8 +835,6 @@ fn issue(
     ] {
         e.attr(tx, key, value)?;
     }
-    // Each instruction reads its destination accumulator. Half the arithmetic
-    // loop also reads the previous result, producing visible dependency stalls.
     let register = sequence as usize % 4;
     let mut operands = vec![warp.registers[register]];
     if sequence % 8 >= 4 {
@@ -970,8 +917,6 @@ fn instruction(
             e.attr(tx, e.n.bytes, Value::U64(sectors * 64))?;
             let mut end = start;
             for sector in 0..sectors {
-                // Distinct lines per logical origin/iteration; cache residency
-                // for each line is a deliberate workload input, not simulated.
                 let address = 0x1000_0000
                     + (grid * SMS * WARPS + sm * WARPS + slot) as u64 * 0x100_000
                     + sequence * 128
@@ -1009,8 +954,6 @@ fn instruction(
         Op::Shared => {
             e.attr(tx, e.n.space, Value::Str(e.n.shared))?;
             e.attr(tx, e.n.operation, Value::Str(e.n.read))?;
-            // Two bank groups, two serialized rounds: an illustrative 2-way
-            // conflict, not 32 independent VTR stage lanes.
             let mut end = start;
             for bank in 0..2 {
                 for round in 0..2 {
@@ -1071,7 +1014,6 @@ fn instruction(
         ready: done + 1,
     });
     warp.completion = warp.completion.max(done + 1);
-    // Branches and explicit waits stop the frontend, unlike scoreboarded loads.
     if matches!(op, Op::Branch | Op::WaitMatrix | Op::WaitDma) {
         warp.fetch = done + 1;
     }
@@ -1204,8 +1146,6 @@ fn generate(path: &Path) -> vtr::Result<()> {
             }
             warps.push(group);
         }
-        // Emission order is deliberately not timestamp order: independent SMs
-        // and outstanding jobs advance separately, as permitted by the VTR API.
         for sequence in 0..INSTRUCTIONS {
             for sm in 0..SMS {
                 if sequence == 2499 {
@@ -1278,8 +1218,6 @@ fn label(rd: &Reader, tx: &Transaction) -> String {
         .unwrap_or_default()
 }
 
-/// Deliberately small readback oracle: instruction counts are the only goldens.
-/// Shape/timing changes should be reviewed, not frozen by this API example.
 fn readback(path: &Path) -> anyhow::Result<()> {
     let rd = Reader::open_with(
         path,
@@ -1346,8 +1284,6 @@ fn readback(path: &Path) -> anyhow::Result<()> {
         "unexpected total instruction count"
     );
 
-    // A stream query includes Warp and Instruction, while a generator query
-    // selects just one type. Stop early: do not retain the entire trace.
     let (&warp_id, &warp_gen) = warps.first_key_value().context("no warp")?;
     let slot = rd
         .hierarchy()

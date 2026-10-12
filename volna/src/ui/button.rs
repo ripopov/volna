@@ -1,4 +1,5 @@
 //! Volna's compact icon-button styling over GPUI Kit's interaction component.
+
 use super::IconName;
 use crate::theme::{Surface, ThemePx, theme};
 use gpui_kit::component::{

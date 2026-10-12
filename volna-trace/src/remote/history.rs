@@ -1,5 +1,4 @@
 //! Immutable packed signal payload shared by the remote receiver and renderer.
-//! Offsets include the initial value followed by every recorded change.
 
 use crate::data::value_view::ValueView;
 use crate::data::{Bit, SignalHistory, SignalShape, WaveValue};
@@ -8,10 +7,6 @@ use serde::{Deserialize, Serialize};
 const LOGIC: &[u8; 9] = b"01xzuwlh-";
 pub mod stream;
 
-/// A [`SignalHistory`] over packed storage: fixed-width values use fixed
-/// strides, logic uses nibbles, and only variable-length values need offsets.
-/// Initial availability, same-time order, real bit patterns and raw bytes
-/// survive transport; deserialization validates the storage.
 #[derive(Debug, Serialize)]
 pub struct PackedHistory {
     shape: SignalShape,
@@ -120,7 +115,6 @@ impl PackedHistory {
         Ok(result)
     }
 
-    /// Append one value, read in place from the history's own storage.
     fn push_value(&mut self, value: ValueView<'_>, limit: u64) -> anyhow::Result<()> {
         let length = stride(self.shape).unwrap_or_else(|| match &value {
             ValueView::Text(value) => value.len().saturating_add(1),
@@ -171,7 +165,6 @@ impl PackedHistory {
         Ok(())
     }
 
-    /// Required before any deserialized payload is exposed to SignalHistory.
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             !matches!(self.shape, SignalShape::Vector { width: 0 | 1 }),

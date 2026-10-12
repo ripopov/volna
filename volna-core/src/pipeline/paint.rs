@@ -1,9 +1,6 @@
-//! Paint the pipeline panel into a [`Scene`]: the label column, one row per
-//! transaction with a cell per stage on the primary lane and a band per
-//! overlay stage, plus the shared timeline header, cursor and markers.
-//!
-//! Detailed rows retain stage geometry. Overview rows query exact opaque
-//! presence from immutable row hierarchies at the current physical-pixel phase.
+//! Paint the pipeline panel into a [`Scene`]: the label column, one row per transaction
+//! with a cell per stage on the primary lane and a band per overlay stage, plus the shared
+//! timeline header, cursor and markers.
 
 use crate::color::Color;
 use crate::document::Document;
@@ -17,21 +14,13 @@ use volna_trace::data::transactions::TxStatus;
 
 use super::model::{Drag, Hit, PipelineModel, Rows};
 
-/// Rows at least this tall get a stroked cell edge and a gap between cells.
 const EDGE_MIN_PX: f32 = 6.0;
-/// Rows at least this tall show stage names in wide enough cells.
 const TEXT_MIN_PX: f32 = 10.0;
-/// Rows at least this tall show label text; below, only flush ticks.
 const LABEL_MIN_PX: f32 = 7.0;
-/// Dash length of an open transaction's trailing edge.
 const DASH_PX: f32 = 3.0;
-/// Hatch spacing inside a flushed instruction's hollow cells.
 const HOLLOW_HATCH_PX: f32 = 3.0;
-/// Total horizontal clearance around a stage name inside its cell.
 const CELL_TEXT_PAD_PX: f32 = 4.0;
 
-/// Keep the longest leading part of a stage name that fits the cell. Widths
-/// come from the frontend so the text never reaches the adjacent stage.
 fn fitting_stage_label(
     p: &mut TextPainter<'_>,
     name: &str,
@@ -65,7 +54,6 @@ fn fitting_stage_label(
     Some(fit)
 }
 
-/// The two short segments of an arrow head at the `to` end of a segment.
 fn arrow_head(from: Point, to: Point, size: f32) -> [[Point; 2]; 2] {
     let (dx, dy) = (to.x - from.x, to.y - from.y);
     let length = dx.hypot(dy).max(f32::EPSILON);
@@ -78,7 +66,6 @@ fn arrow_head(from: Point, to: Point, size: f32) -> [[Point; 2]; 2] {
     ]
 }
 
-/// Paint `model` using the layout from its last [`PipelineModel::layout`] call.
 pub fn paint(
     model: &PipelineModel,
     doc: &Document,
@@ -122,7 +109,6 @@ pub fn paint(
     };
     let clocks = model.nav.clocks();
 
-    // -- backgrounds and the tick grid ----------------------------------------
     p.scene.fill(bounds, t.editor.bg);
     p.scene.fill(labels, t.panel.bg);
     p.scene.fill(header, t.panel.bg);
@@ -130,7 +116,6 @@ pub fn paint(
     overlay::grid(&mut p, &column, &tick_list);
     overlay::cycle_grid(&mut p, &column, clocks, &doc.clocks);
 
-    // -- outside the trace: before and after its time, above and below its rows
     let rows = model.rows(doc);
     if let Rows::Ready(set) = &rows
         && doc.is_loaded()
@@ -151,7 +136,6 @@ pub fn paint(
         }
     }
 
-    // -- rows --------------------------------------------------------------------
     let hover_row = match model.hover {
         Some(Hit::Row(row) | Hit::Cell { row, .. }) => Some(row),
         _ => None,
@@ -167,8 +151,6 @@ pub fn paint(
             } else {
                 0.0
             };
-            // Equal insets on both axes keep a one-cycle primary stage
-            // square when cycle width equals row height.
             let gap = 2.0 * pad;
             let wave_wf = column.width_f64();
             let x_of = |time: u64| cells.left() + viewport.x_of_tick(time, wave_wf) as f32;
@@ -186,7 +168,6 @@ pub fn paint(
                 let primary = palette.primary_lane();
                 let band = t.editor.text.with_alpha(0.28);
                 let band_edge = t.editor.text.with_alpha(0.5);
-                // Text is measured outside the clip closure; positions are exact.
                 let mut cell_texts = Vec::new();
                 let mut open_edges = Vec::new();
                 for r in layout.row_range.clone() {
@@ -210,7 +191,6 @@ pub fn paint(
                     for stage in &tx.stages {
                         let sb = stage.begin;
                         let se = PipelineModel::stage_end(tx, stage);
-                        // A zero-length stage at the window edge still counts.
                         let visible = if sb == se {
                             (sb as f64) >= viewport.start && (sb as f64) <= viewport.end
                         } else {
@@ -242,8 +222,6 @@ pub fn paint(
                             Rect::from_xywh(xa, y + pad, xb - xa, (row_px - 2.0 * pad).max(1.0));
                         let flushed = tx.status == TxStatus::Aborted;
                         if flushed {
-                            // Hollow: "fetched, never retired" in any colour vision. The
-                            // outline takes whichever of fill and edge stands out more.
                             let ink = if contrast(style.fill, t.editor.bg)
                                 >= contrast(style.edge, t.editor.bg)
                             {
@@ -289,7 +267,6 @@ pub fn paint(
                         }
                     }
                     if tx.stages.is_empty() {
-                        // A transaction without stages is one cell over its lifetime.
                         let style = t.stage_fallback();
                         let mut xa = x_of(tx.begin) + gap / 2.0;
                         let mut xb = x_of(tx.end) - gap / 2.0;
@@ -330,7 +307,6 @@ pub fn paint(
                 });
             }
 
-            // -- the selection: an outline, and its relations as arrows ----------
             if let Some(row) = selected_row {
                 let y = layout.row_y(row);
                 let rect = Rect::new(point(cells.left(), y), size(cells.width(), row_px));
@@ -339,8 +315,6 @@ pub fn paint(
                 let selection = doc.selection();
                 p.scene.clipped(cells, |scene| {
                     scene.quad(rect, Color::TRANSPARENT, 0.0, 1.0, focus);
-                    // Arrows for one row are a fact about that row; arrows for
-                    // every row would be a wall of lines.
                     let Some(selection) = selection else { return };
                     let Some(generator) = doc.resident_generator(selection.track) else {
                         return;
@@ -379,7 +353,6 @@ pub fn paint(
                 });
             }
 
-            // -- label column ---------------------------------------------------------
             let label_font = (row_px * 0.62).clamp(z(7.0), t.mono_size);
             let digits = set.len().max(1).to_string().len();
             let digit_w = p.width("0", FontRole::Mono, label_font);
@@ -455,7 +428,6 @@ pub fn paint(
             }
         }
         _ => {
-            // -- empty states --------------------------------------------------------
             let area = Rect::new(
                 point(bounds.left(), cells.top()),
                 size(bounds.width(), cells.height()),
@@ -574,7 +546,6 @@ pub fn paint(
         p.scene.cursors.push((*rect, CursorIcon::PointingHand));
     }
 
-    // -- header: column titles, tick labels, unit ------------------------------
     p.scene.clipped(
         Rect::new(header.origin, size(labels.width(), header.height())),
         |scene| {
@@ -610,7 +581,6 @@ pub fn paint(
         cursor,
     );
 
-    // -- markers and cursor -----------------------------------------------------
     overlay::marker_lane_paint(
         &mut p,
         &column,
@@ -660,7 +630,6 @@ pub fn paint(
         });
     }
 
-    // -- borders and pointer shapes ---------------------------------------------
     let near_split = model.hover == Some(Hit::LabelSplit);
     let split_border = if near_split || model.drag == Some(Drag::LabelSplit) {
         t.border_focused

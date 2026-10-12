@@ -1,15 +1,4 @@
-//! User settings: one registry declares every setting; the store resolves a
-//! JSONC `settings.json` plus host overrides into a typed [`Settings`] value
-//! with diagnostics, computes surgical text edits for GUI changes, ranks
-//! settings for a search query, and emits the JSON Schema and the VS Code
-//! contribution block. Hosts move bytes; nothing here touches a file.
-//!
-//! - `registry`: the static table of [`Spec`]s, pages and value kinds
-//! - `jsonc`: tolerant parser with spans, and comment-preserving edits
-//! - `store`: layers, resolution, diagnostics, the write queue
-//! - `search`: the ranked fuzzy matcher with `@modified`, `@page:`, `@id:`
-//! - `schema`: JSON Schema, `contributes.configuration`, default document
-//! - `controller`: the [`crate::App`] methods that drive the store from commands and hosts
+//! Settings declarations, layered resolution, editing, search, and generated schemas.
 
 mod controller;
 pub mod jsonc;
@@ -25,7 +14,6 @@ pub use registry::{
 pub use search::{Hit, Matched, search};
 pub use store::{Diagnostic, Severity, Store, WRITE_IDLE};
 
-/// A setting value. Integers and numbers are distinct kinds in the registry.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Bool(bool),
@@ -44,7 +32,6 @@ impl Value {
         }
     }
 
-    /// The JSON text of the value, as the editor writes it into the document.
     pub fn to_json_text(&self) -> String {
         self.to_json().to_string()
     }
@@ -102,7 +89,6 @@ impl From<String> for Value {
     }
 }
 
-/// Viewport animation for keyboard and menu navigation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Animation {
     #[default]
@@ -112,7 +98,6 @@ pub enum Animation {
 }
 
 impl Animation {
-    /// Duration of one navigation animation; `None` jumps.
     pub fn duration(self) -> Option<std::time::Duration> {
         match self {
             Animation::On => Some(std::time::Duration::from_millis(140)),
@@ -129,12 +114,10 @@ impl Animation {
     }
 }
 
-/// Where a trace's workspace is saved.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Autosave {
     #[default]
     Sidecar,
-    /// VS Code's per-workspace storage; only offered inside VS Code.
     Vscode,
     Off,
 }
@@ -151,20 +134,13 @@ impl Autosave {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppearanceSettings {
-    /// `one-dark` or the stem of a palette file in the host's theme directory.
     pub theme: String,
-    /// Interface zoom factor, 1.0 = design sizes; see [`ZoomStep`].
     pub zoom: f64,
-    /// Digital trace stroke width in logical pixels, independent of UI zoom.
     pub digital_wave_width: f64,
-    /// Analog curve stroke width at UI zoom 1.
     pub analog_wave_width: f64,
-    /// Vertical padding on each side of a waveform at UI zoom 1.
     pub wave_spacing: f64,
 }
 
-/// A keyboard or menu step of `appearance.zoom`, like VS Code's View: Zoom
-/// In / Zoom Out / Reset Zoom.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZoomStep {
     In,
@@ -173,10 +149,6 @@ pub enum ZoomStep {
 }
 
 impl ZoomStep {
-    /// The zoom after this step from `current`: one [`ZOOM_STEP`] in either
-    /// direction, clamped to the registry range (a step at the limit is a
-    /// no-op) and rounded to the step so the file shows `1.2`, never
-    /// `1.2000000000000002`.
     pub fn apply(self, current: f64) -> f64 {
         let next = match self {
             ZoomStep::In => current + ZOOM_STEP,
@@ -187,7 +159,6 @@ impl ZoomStep {
     }
 }
 
-/// Round a zoom factor to the step and clamp it to the registry range.
 fn normalize_zoom(zoom: f64) -> f64 {
     let zoom = if zoom.is_finite() { zoom } else { 1.0 };
     let steps = (zoom / ZOOM_STEP).round();
@@ -221,7 +192,6 @@ pub struct RemoteSettings {
     pub server_path: String,
 }
 
-/// Policy for a recording without an activity index.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ActivityIndexPolicy {
     #[default]
@@ -235,8 +205,6 @@ pub struct HierarchySettings {
     pub activity_index: ActivityIndexPolicy,
 }
 
-/// The resolved settings the viewer reads. Every field has a registry entry;
-/// invalid or missing document values fall back to that entry's default.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     pub appearance: AppearanceSettings,
@@ -256,7 +224,6 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Build the typed struct from a resolved generic value per id.
     pub(super) fn from_values(value: &dyn Fn(&str) -> Value) -> Self {
         let text = |id: &str| value(id).as_str().unwrap_or_default().to_owned();
         let int = |id: &str| value(id).as_i64().unwrap_or_default();
@@ -299,7 +266,6 @@ impl Settings {
         }
     }
 
-    /// The link flags new panels start with.
     pub fn link_by_default(&self) -> crate::wave::model::Link {
         crate::wave::model::Link {
             viewport: self.panels.link_by_default,
@@ -307,7 +273,6 @@ impl Settings {
         }
     }
 
-    /// The memory limits a trace is opened with.
     pub fn limits(&self) -> volna_trace::remote::limits::Limits {
         volna_trace::remote::limits::Limits {
             memory_mib: self.memory.budget_mib,
@@ -329,7 +294,6 @@ mod tests {
         assert_eq!(ZoomStep::Out.apply(0.5), 0.5);
         assert_eq!(ZoomStep::In.apply(3.0), 3.0);
         assert_eq!(ZoomStep::Reset.apply(2.3), 1.0);
-        // Twenty steps in from the minimum land exactly on 2.5.
         let mut z = 0.5;
         for _ in 0..20 {
             z = ZoomStep::In.apply(z);

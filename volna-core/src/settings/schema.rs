@@ -3,7 +3,6 @@
 
 use super::registry::{Apply, Host, REGISTRY};
 
-/// The JSON Schema used by the in-app completion and by external editors.
 pub fn json_schema(host: Host) -> serde_json::Value {
     let mut properties = serde_json::Map::new();
     properties.insert(
@@ -23,7 +22,6 @@ pub fn json_schema(host: Host) -> serde_json::Value {
     })
 }
 
-/// VS Code's `contributes.configuration` object for the keys the extension owns.
 pub fn vscode_configuration() -> serde_json::Value {
     let mut properties = serde_json::Map::new();
     for spec in REGISTRY.iter().filter(|s| s.available(Host::Vscode)) {
@@ -41,7 +39,6 @@ pub fn vscode_configuration() -> serde_json::Value {
     })
 }
 
-/// Every key with its default and its description as a comment, read-only.
 pub fn default_document(host: Host) -> String {
     let mut out = String::from(
         "// Default settings. This document is generated and read-only;\n// copy a key into settings.json to change it.\n{\n",

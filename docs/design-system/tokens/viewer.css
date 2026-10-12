@@ -1,16 +1,5 @@
-/* Shared Volna viewer theme for waveform and pipeline canvases. These roles are independent of page chrome.
-   Surfaces are Instrument neutrals; data colours are specified in OKLCH and stored as their sRGB values, so every
-   value stroke is at least 4.5:1 on the canvas. Stage fills are computed: hue runs from --viewer-stage-hue-from to
-   --viewer-stage-hue-to in pipeline order and lightness alternates between --viewer-stage-l and --viewer-stage-l-alt
-   (OKLCH, chroma --viewer-stage-c; the edge is the fill with lightness + --viewer-stage-edge-dl).
-   Dark: signal oklch(.80 .12 155), X oklch(.70 .17 25), Z oklch(.84 .12 85), don't-care oklch(.72 .13 330),
-   weak oklch(.66 .02 265), coalesced events oklch(.94 .05 155), outgoing relations oklch(.78 .13 55), markers L .78 C .11.
-   Light: signal oklch(.54 .13 160), X oklch(.45 .19 25), Z oklch(.56 .12 72), don't-care oklch(.52 .17 330),
-   weak oklch(.55 .02 265), coalesced events oklch(.34 .09 160), outgoing relations oklch(.58 .15 50), markers L .52 C .15.
-   Differences between traces: dark oklch(.70 .16 285), light oklch(.48 .18 280); the
-   fill tints a differing stretch of a row, and the shape (tint plus a bar on the row's lower edge) carries the meaning.
-   A mixed canvas/chrome theme needs no tokens of its own: panels that draw against time (waves, pipeline, analog, transaction lanes) use the
-   dark block, and the chrome (bars, sidebar, table, menus, status bar) always uses the light one. */
+/* Shared Volna viewer theme for waveform and pipeline canvases. */
+
 :root,[data-theme="dark"]{
   --viewer-canvas:#1f2228;--viewer-panel:#282c33;--viewer-bar:#1f2228;--viewer-elevated:#2f343e;--viewer-border:#3b414d;--viewer-border-subtle:#2f343e;--viewer-text:#eceef1;--viewer-text-muted:#b9bfc9;--viewer-text-faint:#8f94a4;--viewer-selection:#1f2f45;--viewer-hover:#363c46;--viewer-accent:#74ade8;--viewer-on-accent:#1f2228;
   --viewer-signal:#7ad59c;--viewer-undef:#f66d67;--viewer-highimp:#eec469;--viewer-dontcare:#d285cb;--viewer-weak:#8c929f;--viewer-event:#d2f6dd;--viewer-relation-out:#f7a062;--viewer-diff:#968dfd;--viewer-diff-fill:rgb(150 141 253 / 0.16);

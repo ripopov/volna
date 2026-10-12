@@ -1,9 +1,9 @@
-//! VCD export of VTR waveforms. Transactions, logs, and clocks are not exported.
+//! VCD export of VTR waveforms.
+
 use anyhow::{bail, ensure, Result};
 use std::io::{self, Write};
 use vtr::{NodeData, NodeId, Reader, ScopeType, SignalKind, SignalValue};
 
-/// VCD identifier code for signal `i`: base-94 digits over the printable ASCII range.
 fn id_code(mut i: usize) -> String {
     let mut s = String::new();
     loop {
@@ -46,12 +46,6 @@ fn scope_keyword(t: ScopeType) -> &'static str {
     }
 }
 
-/// Export a reader's waveforms to VCD and return the number of changes.
-///
-/// Supports 2/4-state vectors, events, and reals. Byte strings, nine-state
-/// declarations, time-zero offsets, and blackout intervals are rejected.
-/// Names are emitted verbatim, including bus ranges; whitespace is permitted
-/// only before a final range. Output errors propagate to the caller.
 pub fn write_vcd(r: &Reader, mut w: impl Write) -> Result<u64> {
     ensure!(
         r.meta().time_zero == 0,
@@ -88,7 +82,6 @@ pub fn write_vcd(r: &Reader, mut w: impl Write) -> Result<u64> {
     }
     writeln!(w, "$version Volna vtr $end")?;
     writeln!(w, "{}", timescale_line(r.meta().timescale)?)?;
-    // Depth-first over the hierarchy, scopes and vars only.
     fn walk(r: &Reader, n: NodeId, w: &mut impl Write) -> io::Result<()> {
         let h = r.hierarchy();
         match h.node(n).data {

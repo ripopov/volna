@@ -15,7 +15,6 @@ function run(command, args, cwd, env = process.env) {
 
 await mkdir(pkg, { recursive: true });
 await mkdir(examples, { recursive: true });
-// wasm_thread currently uses stdarch_wasm_atomic_wait behind an unstable gate.
 run('cargo', ['build', '-p', 'volna', '--lib', '--target', 'wasm32-unknown-unknown', '--release', '--locked'], root,
   { ...process.env, RUSTC_BOOTSTRAP: '1' });
 run('wasm-bindgen', [
