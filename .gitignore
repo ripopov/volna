@@ -40,3 +40,6 @@ rustc-ice-*.txt
 /docs/public/assets/container.svg
 /docs/public/viewer/pkg/
 /docs/public/examples/
+
+# Local Codex configuration
+/.codex/
