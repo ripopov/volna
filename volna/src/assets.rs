@@ -8,7 +8,19 @@ use volna_core::icons::{FONTS, IconName};
 gpui_kit::assets::icon_assets!(
     ComponentAssets,
     [
-        Check, Link, Unlink, Scan, Crosshair, Plus, Minus, X, Ellipsis, Maximize, Minimize
+        Check,
+        Link,
+        Unlink,
+        Scan,
+        Crosshair,
+        Plus,
+        Minus,
+        X,
+        Ellipsis,
+        Maximize,
+        Minimize,
+        Pin,
+        ChevronLeft
     ]
 );
 
