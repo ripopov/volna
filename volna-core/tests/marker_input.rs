@@ -446,3 +446,47 @@ fn a_double_click_adds_on_the_header_and_the_empty_lane_only() {
     assert_eq!(app.doc.markers().last().unwrap().time, c);
     assert_eq!(app.doc.markers().len(), 3);
 }
+
+#[test]
+fn numbered_markers_preserve_local_cursor_scope_and_work_without_timed_panels() {
+    use volna_core::nav::LinkDim;
+    use volna_core::panels::PanelsCommand;
+    let mut app = app();
+    let panel = app.panels.focused_id();
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel,
+        dim: LinkDim::Cursor,
+    }));
+    app.panels
+        .focused_mut()
+        .kind
+        .nav_mut()
+        .unwrap()
+        .local_cursor = Some(1300);
+    app.handle(Command::Action(Action::SetMarker(id(3))));
+    assert!(times(&app).contains(&(3, 1300)));
+    app.handle(Command::Action(Action::GoToMarker(id(1))));
+    assert_eq!(
+        app.panels.focused().kind.nav().unwrap().cursor(&app.doc),
+        Some(1200)
+    );
+    assert_eq!(app.doc.shared.cursor, Some(1100));
+    app.panels
+        .focused_mut()
+        .kind
+        .nav_mut()
+        .unwrap()
+        .local_cursor = None;
+    app.handle(Command::Action(Action::SetMarker(id(4))));
+    assert_eq!(
+        app.doc.markers().len(),
+        3,
+        "an empty local cursor must not fall back to the shared cursor"
+    );
+    app.handle(Command::Panels(PanelsCommand::Close(panel)));
+    assert!(app.panels.focused().kind.nav().is_none());
+    app.handle(Command::Action(Action::SetMarker(id(4))));
+    assert!(times(&app).contains(&(4, 1100)));
+    app.handle(Command::Action(Action::GoToMarker(id(3))));
+    assert_eq!(app.doc.shared.cursor, Some(1300));
+}

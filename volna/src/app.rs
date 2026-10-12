@@ -134,14 +134,14 @@ actions!(
     ]
 );
 
-/// `1`–`9`: move the focused panel's cursor onto marker `n`.
+/// `1`–`9`: move the effective panel or shared cursor onto marker `n`.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
 pub struct GoToMarker {
     pub n: u32,
 }
 
-/// `Ctrl+1`–`Ctrl+6`: place or move marker `n` at the focused panel's cursor.
+/// `Ctrl+1`–`Ctrl+6`: place or move marker `n` at the effective cursor.
 #[derive(Clone, PartialEq, Debug, gpui_kit::Action)]
 #[action(namespace = waves, no_json)]
 pub struct SetMarker {
@@ -386,6 +386,17 @@ pub fn init(cx: &mut App) {
             KeyBinding::new("ctrl-y", InputRedo, Some("Input")),
         ]);
     }
+    // Editors, dialogs, and start-page recent-file shortcuts keep digits
+    // even though marker keys are available throughout the workspace.
+    for n in 1..=9 {
+        for key in [n.to_string(), format!("ctrl-{n}")] {
+            cx.bind_keys([KeyBinding::new(
+                &key,
+                gpui_kit::NoAction {},
+                Some("TextInput || Input || Command || Dialog || StartPage"),
+            )]);
+        }
+    }
     cx.bind_keys([
         KeyBinding::new("cmd-1", FocusPanel1, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-alt-1", FocusPanel1, Some("Workspace && !Embedded")),
@@ -506,12 +517,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-right", NextEdge, Some("Waves")),
         KeyBinding::new("shift-left", PrevEdge, Some("Waves")),
         KeyBinding::new("m", AddOrRenameMarker, Some("Waves")),
-        KeyBinding::new("ctrl-1", SetMarker { n: 1 }, Some("Waves && !Table")),
-        KeyBinding::new("ctrl-2", SetMarker { n: 2 }, Some("Waves && !Table")),
-        KeyBinding::new("ctrl-3", SetMarker { n: 3 }, Some("Waves && !Table")),
-        KeyBinding::new("ctrl-4", SetMarker { n: 4 }, Some("Waves && !Table")),
-        KeyBinding::new("ctrl-5", SetMarker { n: 5 }, Some("Waves && !Table")),
-        KeyBinding::new("ctrl-6", SetMarker { n: 6 }, Some("Waves && !Table")),
+        KeyBinding::new("ctrl-1", SetMarker { n: 1 }, Some("Workspace")),
+        KeyBinding::new("ctrl-2", SetMarker { n: 2 }, Some("Workspace")),
+        KeyBinding::new("ctrl-3", SetMarker { n: 3 }, Some("Workspace")),
+        KeyBinding::new("ctrl-4", SetMarker { n: 4 }, Some("Workspace")),
+        KeyBinding::new("ctrl-5", SetMarker { n: 5 }, Some("Workspace")),
+        KeyBinding::new("ctrl-6", SetMarker { n: 6 }, Some("Workspace")),
         KeyBinding::new("shift-m", RemoveMarkerAtCursor, Some("Waves")),
         KeyBinding::new("r", SetReference, Some("Waves && !Table")),
         KeyBinding::new("shift-r", ClearReference, Some("Waves && !Table")),
@@ -522,15 +533,15 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(".", NextMarker, Some("Waves && !Table")),
         KeyBinding::new(",", PrevMarker, Some("Waves && !Table")),
         KeyBinding::new("`", JumpBack, Some("Waves && !Table")),
-        KeyBinding::new("1", GoToMarker { n: 1 }, Some("Waves && !Table")),
-        KeyBinding::new("2", GoToMarker { n: 2 }, Some("Waves && !Table")),
-        KeyBinding::new("3", GoToMarker { n: 3 }, Some("Waves && !Table")),
-        KeyBinding::new("4", GoToMarker { n: 4 }, Some("Waves && !Table")),
-        KeyBinding::new("5", GoToMarker { n: 5 }, Some("Waves && !Table")),
-        KeyBinding::new("6", GoToMarker { n: 6 }, Some("Waves && !Table")),
-        KeyBinding::new("7", GoToMarker { n: 7 }, Some("Waves && !Table")),
-        KeyBinding::new("8", GoToMarker { n: 8 }, Some("Waves && !Table")),
-        KeyBinding::new("9", GoToMarker { n: 9 }, Some("Waves && !Table")),
+        KeyBinding::new("1", GoToMarker { n: 1 }, Some("Workspace")),
+        KeyBinding::new("2", GoToMarker { n: 2 }, Some("Workspace")),
+        KeyBinding::new("3", GoToMarker { n: 3 }, Some("Workspace")),
+        KeyBinding::new("4", GoToMarker { n: 4 }, Some("Workspace")),
+        KeyBinding::new("5", GoToMarker { n: 5 }, Some("Workspace")),
+        KeyBinding::new("6", GoToMarker { n: 6 }, Some("Workspace")),
+        KeyBinding::new("7", GoToMarker { n: 7 }, Some("Workspace")),
+        KeyBinding::new("8", GoToMarker { n: 8 }, Some("Workspace")),
+        KeyBinding::new("9", GoToMarker { n: 9 }, Some("Workspace")),
         KeyBinding::new("backspace", RemoveSelected, Some("Waves")),
         KeyBinding::new("delete", RemoveSelected, Some("Waves")),
         KeyBinding::new("shift-f10", OpenSignalMenu, Some("Waves")),

@@ -4010,3 +4010,121 @@ fn shift_o_toggles_group_overlays_and_hosts_their_menu(cx: &mut TestAppContext) 
         })
         .unwrap();
 }
+
+#[gpui_kit::test]
+fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use volna_core::{panels::PanelsCommand, table::TableCommand, transaction::TransactionCommand};
+    use volna_trace::data::Member;
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let window = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    let table = window
+        .update(cx, |ws, window, cx| {
+            let session = OpenSpec::Path(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/examples/pipeline_showcase.vtr"
+                )
+                .into(),
+            )
+            .open()
+            .unwrap();
+            ws.set_session(session, cx);
+            ws.dispatch(
+                Command::OpenTable {
+                    selected: a_all(vec![Member::Generator(0)]),
+                    clicked: None,
+                },
+                Some(window),
+                cx,
+            );
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    let mut vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.run_until_parked();
+    let time = window
+        .update(&mut vcx, |ws, window, cx| {
+            ws.dispatch(
+                Command::Table(table, TableCommand::GoTo(10)),
+                Some(window),
+                cx,
+            );
+            ws.app.doc.shared.cursor.expect("table row sets cursor")
+        })
+        .unwrap();
+    vcx.simulate_keystrokes("ctrl-1");
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            assert_eq!(ws.app.doc.markers()[0].time, time);
+            ws.dispatch(Command::ShowTransaction { from: table }, Some(window), cx);
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    let detail = window
+        .update(&mut vcx, |ws, window, cx| {
+            let detail = ws.app.panels.focused_id();
+            assert!(ws.app.panels.transaction(detail).is_some());
+            ws.dispatch(
+                Command::Transaction(detail, TransactionCommand::Cursor(time + 1)),
+                Some(window),
+                cx,
+            );
+            detail
+        })
+        .unwrap();
+    vcx.simulate_keystrokes("ctrl-2 1");
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            assert_eq!(
+                ws.app
+                    .doc
+                    .markers()
+                    .iter()
+                    .find(|m| m.id.get() == 2)
+                    .unwrap()
+                    .time,
+                time + 1
+            );
+            assert_eq!(ws.app.doc.shared.cursor, Some(time));
+            assert_eq!(ws.app.panels.focused_id(), detail);
+            // Workspace chrome retains the core panel selection.
+            window.focus(&ws.focus_handle, cx);
+            cx.notify();
+        })
+        .unwrap();
+    vcx.simulate_keystrokes("2");
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            assert_eq!(ws.app.doc.shared.cursor, Some(time + 1));
+            ws.dispatch(
+                Command::Panels(PanelsCommand::Focus(table)),
+                Some(window),
+                cx,
+            );
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            window.focus(&ws.filter.read(cx).focus_handle(cx), cx);
+        })
+        .unwrap();
+    vcx.simulate_keystrokes("1 2 3 ctrl-3");
+    window
+        .update(&mut vcx, |ws, _, cx| {
+            assert_eq!(ws.filter.read(cx).text(), "123");
+            assert_eq!(ws.app.doc.shared.cursor, Some(time + 1));
+            assert_eq!(ws.app.doc.markers().len(), 2);
+        })
+        .unwrap();
+}

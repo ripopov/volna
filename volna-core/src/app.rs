@@ -63,7 +63,8 @@ pub enum Action {
     /// marker already there.
     AddOrRenameMarker,
     /// `Ctrl+1`–`Ctrl+6`: place or move this numbered marker at the focused
-    /// panel's cursor, preserving its name and attached reference.
+    /// timed panel's cursor, or the shared cursor from a non-timed panel,
+    /// preserving its name and attached reference.
     SetMarker(crate::marker::MarkerId),
     /// `⇧M`: remove the marker at the focused panel's cursor.
     RemoveMarkerAtCursor,
@@ -2365,7 +2366,14 @@ impl App {
                 .focused()
                 .kind
                 .nav()
-                .and_then(|n| n.cursor(&self.doc));
+                .map(|n| n.cursor(&self.doc))
+                .unwrap_or_else(|| {
+                    // Detail time links move the shared cursor without owning
+                    // a timed view. Numbered markers use that same cursor.
+                    matches!(action, Action::SetMarker(_))
+                        .then_some(self.doc.shared.cursor)
+                        .flatten()
+                });
             let changed = match (action, cursor) {
                 (Action::RemoveAllMarkers, _) => self.doc.remove_all_markers(),
                 (Action::SetMarker(id), Some(c)) => {
@@ -2409,10 +2417,24 @@ impl App {
             action,
             Action::NextMarker | Action::PrevMarker | Action::GoToMarker(_) | Action::JumpBack
         ) {
-            let doc = &mut self.doc;
-            let Some(nav) = self.panels.focused_mut().kind.nav_mut() else {
-                return;
+            // Non-timed panels navigate the shared cursor. Reuse a linked
+            // panel's navigation so its jump-back position remains available.
+            let target = self.panels.focused().kind.nav().map(|_| panel).or_else(|| {
+                matches!(action, Action::GoToMarker(_))
+                    .then(|| {
+                        self.panels
+                            .iter()
+                            .find_map(|p| p.kind.nav().filter(|n| n.link.cursor).map(|_| p.id))
+                    })
+                    .flatten()
+            });
+            let mut shared_nav = crate::nav::NavState::new();
+            let nav = match target {
+                Some(id) => self.panels.get_mut(id).unwrap().kind.nav_mut().unwrap(),
+                None if matches!(action, Action::GoToMarker(_)) => &mut shared_nav,
+                None => return,
             };
+            let doc = &mut self.doc;
             let walk = match action {
                 Action::NextMarker => crate::marker::Walk::Next,
                 Action::PrevMarker => crate::marker::Walk::Prev,

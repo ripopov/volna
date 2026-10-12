@@ -96,13 +96,16 @@ discarded. Settings and recent items live separately in the config directory.
 
 ### Marker shortcuts
 
-In waveform and pipeline panels, **Ctrl+1–6** places the numbered marker at
-that panel's cursor, or moves it there if it exists. Moving preserves the
-marker's name and measurement reference. Another marker at the same time
+Across the workspace, **Ctrl+1–6** places the numbered marker at the cursor,
+or moves it there if it exists. Waveform, pipeline, and table panels use their
+own effective cursor; transaction details and other non-timed panels use the
+shared cursor. **1–9** jumps to the corresponding marker with the same cursor
+scope. Text fields and dialogs keep their normal number input. Moving preserves
+the marker's name and measurement reference. Another marker at the same time
 blocks placement. Each placement or move is one undoable step.
 
-**1–9** jumps to the corresponding marker; **.** and **,** walk markers in
-time order, and **`** returns from a jump. **M** adds the lowest free marker
+In waveform and pipeline panels, **.** and **,** walk markers in time order,
+and **`** returns from a jump. **M** adds the lowest free marker
 number or names the marker at the cursor. **Ctrl+Alt+1–9** focuses panels;
 **Cmd+1–9** also focuses panels on macOS.
 
