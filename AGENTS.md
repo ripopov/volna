@@ -1,8 +1,20 @@
 # Comments and documentation
 
-Write comments and documentation for maintainers who have never seen the prompts or conversation. Preserve useful technical rationale, constraints, and invariants in self-contained terms; omit prompt references, acknowledgments, and change narration. Before finishing, review added or edited comments and documentation for reliance on conversation context.
+Express ideas directly through clear names, types, control flow, and meaningful
+tests. Improve confusing code before adding a comment to explain it. Avoid
+comments that restate the implementation. Keep module descriptions brief and at
+the top of the module.
 
-A useful review test is: If the conversation disappeared, would this comment still help someone understand or safely change the code?
+Use brief comments when code cannot convey the reason for a constraint or
+decision: external requirements, non-obvious tradeoffs or rejected alternatives,
+and subtle safety invariants that a maintainer might otherwise remove. Explain
+why the constraint or decision matters, rather than narrating how the code works.
+
+Write comments and documentation for maintainers who have never seen the prompts
+or conversation. Keep rationale self-contained; omit prompt references,
+acknowledgments, and change narration. Before finishing, review added or edited
+comments and documentation: would they still help someone understand or safely
+change the code if the conversation disappeared?
 
 # Testing
 
