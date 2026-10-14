@@ -81,7 +81,18 @@ pub fn strokes(
     bounds: crate::geometry::Rect,
 ) -> Vec<[crate::geometry::Point; 2]> {
     runs.iter()
-        .flat_map(|run| run.windows(2))
+        .flat_map(|run| {
+            let singleton = match run.as_slice() {
+                [only] => Some([
+                    crate::geometry::point(only.x - 0.5, only.y),
+                    crate::geometry::point(only.x + 0.5, only.y),
+                ]),
+                _ => None,
+            };
+            singleton
+                .into_iter()
+                .chain(run.windows(2).map(|pair| [pair[0], pair[1]]))
+        })
         .filter_map(|pair| clip_segment(pair[0], pair[1], bounds).map(|(a, b)| [a, b]))
         .collect()
 }

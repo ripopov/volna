@@ -84,7 +84,7 @@ fn raw_bytes_reals_nine_states_and_time_boundaries() {
         .filter(|&k| segments[k][0].x == segments[k][1].x)
         .collect();
     assert_eq!(stems.len(), 2, "one marker per occurrence");
-    for (k, (&stem, x)) in stems.iter().zip([25.0, 50.0]).enumerate() {
+    for (k, (&stem, x)) in stems.iter().zip([25.5, 50.5]).enumerate() {
         let head = &segments[stem + 1..stems.get(k + 1).copied().unwrap_or(segments.len())];
         assert_eq!(segments[stem][0].x, x);
         assert!(segments[stem][0].y < segments[stem][1].y);

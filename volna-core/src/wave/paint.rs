@@ -186,6 +186,8 @@ pub fn paint(
     }
 
     let row_h = layout.row_h;
+    let rows_clip = Rect::from_xywh(bounds.left(), waves.top(), bounds.width(), waves.height());
+    p.scene.prims.push(crate::scene::Prim::PushClip(rows_clip));
     let mut inks = crate::wave::tint::InkWalk::default();
     let plots = GroupPlots::of(model, doc, &layout.visible, theme);
     let mut stack_rows: Vec<StackRow> = Vec::new();
@@ -556,6 +558,8 @@ pub fn paint(
         }
     }
 
+    p.scene.prims.push(crate::scene::Prim::PopClip);
+
     if layout.rows.is_empty() && doc.is_loaded() {
         let area = Rect::new(
             point(bounds.left(), layout.names.top()),
@@ -867,7 +871,7 @@ fn analog_plot(a: &Analog, wave_row: Rect, t: &Theme) -> Option<Plot> {
     let (lo, hi) = a.shown.or(a.target)?;
     Some(Plot {
         left: wave_row.left(),
-        width: wave_row.width().floor(),
+        width: wave_row.width(),
         top: wave_row.top() + trace_pad(wave_row.height(), t),
         bottom: wave_row.bottom() - trace_pad(wave_row.height(), t),
         lo,
@@ -968,22 +972,17 @@ fn paint_analog_row(
         }
         let base = plot.baseline();
         for (x, w, y) in analog::fill_columns(&g.runs, plot.left, plot.width) {
+            let y = y.clamp(plot.top, plot.bottom);
             let (y0, y1) = (y.min(base), y.max(base));
             if y1 - y0 >= 0.5 {
                 scene.fill(Rect::from_xywh(x, y0, w, y1 - y0), t.wave_high_fill);
             }
         }
-        let mut segments = Vec::new();
-        for run in &g.runs {
-            match run.as_slice() {
-                [only] => segments.push([*only, point(only.x + 1.0, only.y)]),
-                points => segments.extend(points.windows(2).map(|w| [w[0], w[1]])),
-            }
-        }
+        let segments = crate::wave::overlaid::strokes(&g.runs, clip);
         let width = if g.envelope {
             1.0
         } else {
-            z(t.analog_wave_width).max(1.0)
+            z(t.analog_wave_width)
         };
         scene.lines(segments, t.wave_signal, width);
         let r = z(2.0);
@@ -997,15 +996,14 @@ fn paint_analog_row(
             );
         }
     });
-    let Some((lo, hi)) = a.target else { return };
     if wave_row.height() < 2.0 * row_h - 0.5 {
         return;
     }
     let size = t.ui_size_small;
     let label_h = z(14.0);
     for (v, y, bound) in [
-        (hi, plot.top + z(1.0), "max"),
-        (lo, plot.bottom - label_h - z(1.0), "min"),
+        (plot.hi, plot.top + z(1.0), "max"),
+        (plot.lo, plot.bottom - label_h - z(1.0), "min"),
     ] {
         let text = format!("{bound} {}", analog_label(item, v));
         let w = p.width(&text, FontRole::Mono, size) + z(8.0);
@@ -1070,14 +1068,13 @@ fn paint_analog_overlays(
             continue;
         };
         let series = Series::of(doc, item.source.signal(), h, kind);
-        let envelope = analog::draw_mode(h.as_ref(), vp, plot.width) == analog::DrawMode::Envelope;
         let clip = intersect(wave_row, waves);
         if let Some(c) = cursor
             && (c as f64) >= vp.start
             && (c as f64) <= vp.end
-            && let Some(y) = analog::y_at(&series, a.draw, envelope, &plot, c as f64)
+            && let Some(y) = analog::y_at(&series, a.draw, &plot, c)
         {
-            let x = snap(plot.left + vp.x_of(c as f64, f64::from(plot.width)) as f32) + 0.5;
+            let x = plot.left + vp.x_of_tick(c, f64::from(plot.width)) as f32;
             let r = z(3.25);
             p.scene.clipped(clip, |scene| {
                 scene.quad(
@@ -1143,7 +1140,9 @@ fn paint_analog_overlays(
             pointer.y - h_chip - z(10.0)
         } else {
             pointer.y + z(16.0)
-        };
+        }
+        .min(waves.bottom() - h_chip)
+        .max(waves.top());
         let chip = Rect::from_xywh(snap(x), snap(y), w_chip, h_chip);
         p.scene.clipped(waves, |scene| {
             scene.quad(chip, t.tooltip.bg, z(4.0), 1.0, t.border);
@@ -1167,25 +1166,29 @@ pub fn paint_event_row(
     scene: &mut Scene,
 ) -> Vec<(f32, usize, f32)> {
     let mut counts: Vec<(f32, usize, f32)> = Vec::new();
-    if area.width() <= 0.0 || vp.width() <= 0.0 {
+    if area.width() <= 0.0 || area.height() <= 0.0 || vp.width() <= 0.0 {
         return counts;
     }
-    let mut i = if vp.start <= 0.0 {
-        0
-    } else {
-        h.index_at((vp.start.ceil() as u64).saturating_sub(1))
-            .map_or(0, |last| last + 1)
-    };
+    let mut i = vp
+        .tick_before(0.0, f64::from(area.width()))
+        .and_then(|t| h.index_at(t))
+        .map_or(0, |last| last + 1);
     let pad = trace_pad(area.height(), t);
     let (mut plain, mut coalesced) = (Vec::new(), Vec::new());
-    while i < h.len() && h.time(i) as f64 <= vp.end {
-        let x = vp.x_of(h.time(i) as f64, f64::from(area.width())).floor();
-        let screen_x = area.left() + x as f32;
+    while i < h.len() && vp.x_of_tick(h.time(i), f64::from(area.width())) <= f64::from(area.width())
+    {
+        let x = vp.x_of_tick(h.time(i), f64::from(area.width())).floor();
+        let screen_x = area.left() + (x as f32 + 0.5).min(area.width());
         let top = area.top() + pad;
         let bottom = (area.bottom() - pad).max(top);
         let head_height = (bottom - top) * 0.2;
-        let next = vp.time_at(x + 1.0, f64::from(area.width())).ceil();
-        let last_time = ((next as u64).saturating_sub(1)).min(vp.end.floor() as u64);
+        let width = f64::from(area.width());
+        let last_time = if x + 1.0 > width {
+            vp.tick_at(width, width)
+        } else {
+            vp.tick_before(x + 1.0, width)
+        }
+        .unwrap_or(0);
         let end = h
             .index_at(last_time)
             .map_or(i + 1, |last| (last + 1).max(i + 1));
@@ -1261,7 +1264,7 @@ pub fn paint_bit_row(
     t: &Theme,
     scene: &mut Scene,
 ) {
-    let columns = 0..area.width().floor().max(0.0) as usize;
+    let columns = 0..area.width().ceil().max(0.0) as usize;
     paint_bits(h, vp, area, t, scene, true, columns);
 }
 
@@ -1274,16 +1277,16 @@ fn paint_bits(
     high_fill: bool,
     columns: std::ops::Range<usize>,
 ) {
-    let w_px = area.width().floor().max(0.0) as usize;
+    let w_px = area.width().ceil().max(0.0) as usize;
     let columns = columns.start.min(w_px)..columns.end.min(w_px);
-    if columns.is_empty() {
+    if columns.is_empty() || area.height() <= 0.0 || vp.width() <= 0.0 {
         return;
     }
-    let wf = w_px as f64;
+    let wf = f64::from(area.width());
     let x0 = area.left();
     let top = area.top() + trace_pad(area.height(), t);
     let bottom = area.bottom() - trace_pad(area.height(), t);
-    let mid = snap(top + (bottom - top) / 2.0);
+    let mid = (top + bottom - t.digital_wave_width) / 2.0;
     let y_of = |b: Bit| -> f32 {
         match b {
             Bit::One => top,
@@ -1291,21 +1294,23 @@ fn paint_bits(
             _ => mid,
         }
     };
-    let mut idx = index_at_x(h, vp, wf, columns.start as f64, None);
+    let mut idx = vp
+        .tick_at(columns.start as f64, wf)
+        .and_then(|t| h.index_at(t));
     let mut bit = h.bit(idx);
     let mut hint = idx.unwrap_or(0);
-    let mut run_start = columns.start;
+    let mut run_start = columns.start as f32;
     let mut dense: Vec<marks::Aliased> = Vec::new();
     let mut kinds = marks::KindReader::new(h, true);
     let mut dotted: Vec<[Point; 2]> = Vec::new();
     let mut dashed: Vec<[Point; 2]> = Vec::new();
 
-    let mut emit_run = |scene: &mut Scene, xs: usize, xe: usize, b: Bit| {
+    let mut emit_run = |scene: &mut Scene, xs: f32, xe: f32, b: Bit| {
         if xe <= xs || b == Bit::Unavailable {
             return;
         }
-        let x = x0 + xs as f32;
-        let w = (xe - xs) as f32;
+        let x = x0 + xs;
+        let w = xe - xs;
         let kind = b.kind();
         let color = t.value_color(kind);
         match kind {
@@ -1315,11 +1320,25 @@ fn paint_bits(
                 marks::hatch(scene, t, band, x0);
             }
             ValueKind::DontCare => {
-                marks::dashes(&mut dotted, x, x + w, y_of(b), x0, marks::DOTTED);
+                marks::dashes(
+                    &mut dotted,
+                    x,
+                    x + w,
+                    mid + t.digital_wave_width / 2.0 - 0.5,
+                    x0,
+                    marks::DOTTED,
+                );
                 return;
             }
             ValueKind::Weak => {
-                marks::dashes(&mut dashed, x, x + w, y_of(b), x0, scaled(marks::DASHED, t));
+                marks::dashes(
+                    &mut dashed,
+                    x,
+                    x + w,
+                    mid + t.digital_wave_width / 2.0 - 0.5,
+                    x0,
+                    scaled(marks::DASHED, t),
+                );
                 return;
             }
             _ => {}
@@ -1340,7 +1359,7 @@ fn paint_bits(
     };
 
     for x in columns.clone() {
-        let idx1 = index_at_x(h, vp, wf, (x + 1) as f64, Some(hint));
+        let idx1 = index_before_x(h, vp, wf, ((x + 1) as f64).min(wf), Some(hint));
         let n = changes_between(idx, idx1);
         if n < 2 && !dense.is_empty() {
             marks::paint_aliased(scene, t, &dense, x0, top, bottom);
@@ -1350,7 +1369,13 @@ fn paint_bits(
             continue;
         }
         let new_bit = h.bit(idx1);
-        emit_run(scene, run_start, x, bit);
+        let edge = if n == 1 {
+            vp.x_of_tick(h.time(idx1.unwrap()), wf)
+                .clamp(x as f64, ((x + 1) as f64).min(wf)) as f32
+        } else {
+            x as f32
+        };
+        emit_run(scene, run_start, edge, bit);
         if n == 1 && bit != Bit::Unavailable && new_bit != Bit::Unavailable {
             let (ya, yb) = (y_of(bit), y_of(new_bit));
             let (lo, hi) = if ya <= yb { (ya, yb) } else { (yb, ya) };
@@ -1361,7 +1386,7 @@ fn paint_bits(
             });
             scene.fill(
                 Rect::new(
-                    point(x0 + x as f32, lo),
+                    point(x0 + edge + 0.5 - t.digital_wave_width / 2.0, lo),
                     size(t.digital_wave_width, hi - lo + t.digital_wave_width),
                 ),
                 color,
@@ -1374,7 +1399,7 @@ fn paint_bits(
                 kinds: kinds.column(idx, last),
             });
         }
-        run_start = x + 1;
+        run_start = if n == 1 { edge } else { (x + 1) as f32 };
         bit = new_bit;
         idx = idx1;
         hint = idx1.unwrap_or(0);
@@ -1382,7 +1407,12 @@ fn paint_bits(
     if !dense.is_empty() {
         marks::paint_aliased(scene, t, &dense, x0, top, bottom);
     }
-    emit_run(scene, run_start, columns.end, bit);
+    emit_run(
+        scene,
+        run_start,
+        (columns.end as f32).min(area.width()),
+        bit,
+    );
     scene.lines(dotted, t.wave_dontcare, t.digital_wave_width);
     scene.lines(dashed, t.wave_weak, t.digital_wave_width);
 }
@@ -1391,20 +1421,17 @@ fn scaled((on, off): (f32, f32), t: &Theme) -> (f32, f32) {
     (on * t.zoom, off * t.zoom)
 }
 
-fn index_at_x(
+fn index_before_x(
     h: &dyn SignalHistory,
     vp: &Viewport,
     width_px: f64,
     x: f64,
     hint: Option<usize>,
 ) -> Option<usize> {
-    let t = vp.time_at(x, width_px);
-    if t < 0.0 {
-        return None;
-    }
+    let t = vp.tick_before(x, width_px)?;
     match hint {
-        Some(hint) => h.index_at_hint(t as u64, hint),
-        None => h.index_at(t as u64),
+        Some(hint) => h.index_at_hint(t, hint),
+        None => h.index_at(t),
     }
 }
 
@@ -1504,7 +1531,8 @@ fn fill_hexagon(
     let mid = top + half;
     let steps = tw.ceil().max(0.0) as usize;
     for k in 0..steps {
-        let reach = ((k as f32 + 0.5) / tw).min(1.0) * half;
+        let width = (tw - k as f32).min(1.0);
+        let reach = ((k as f32 + width / 2.0) / tw).min(1.0) * half;
         for (edge, open, dir) in [(xa, open.0, 1.0), (xb, open.1, -1.0)] {
             if open {
                 continue;
@@ -1512,9 +1540,9 @@ fn fill_hexagon(
             let x = if dir > 0.0 {
                 edge + k as f32
             } else {
-                edge - k as f32 - 1.0
+                edge - k as f32 - width
             };
-            scene.fill(Rect::from_xywh(x, mid - reach, 1.0, 2.0 * reach), color);
+            scene.fill(Rect::from_xywh(x, mid - reach, width, 2.0 * reach), color);
         }
     }
 }
@@ -1529,11 +1557,11 @@ fn paint_bus_row(
     p: &mut TextPainter<'_>,
 ) {
     let t = p.theme;
-    let w_px = area.width().floor().max(0.0) as usize;
-    if w_px == 0 {
+    let w_px = area.width().ceil().max(0.0) as usize;
+    if w_px == 0 || area.height() <= 0.0 || vp.width() <= 0.0 {
         return;
     }
-    let wf = w_px as f64;
+    let wf = f64::from(area.width());
     let x0 = area.left();
     let top = area.top() + trace_pad(area.height(), t);
     let bottom = area.bottom() - trace_pad(area.height(), t);
@@ -1543,11 +1571,11 @@ fn paint_bus_row(
     let mut segments: Vec<Segment> = Vec::new();
     let mut columns: Vec<(usize, marks::Kinds)> = vec![(0, marks::Kinds::NONE); w_px];
     let mut kinds = marks::KindReader::new(h, false);
-    let mut idx = index_at_x(h, vp, wf, 0.0, None);
+    let mut idx = vp.tick_at(0.0, wf).and_then(|t| h.index_at(t));
     let mut hint = idx.unwrap_or(0);
     let mut cur_start = 0usize;
     for (x, column) in columns.iter_mut().enumerate() {
-        let idx1 = index_at_x(h, vp, wf, (x + 1) as f64, Some(hint));
+        let idx1 = index_before_x(h, vp, wf, ((x + 1) as f64).min(wf), Some(hint));
         let n = changes_between(idx, idx1);
         if n == 0 {
             continue;
@@ -1613,7 +1641,7 @@ fn paint_bus_row(
     p.scene.clipped(clip, |scene| {
         for seg in &segments {
             let xa = x0 + seg.x_start as f32;
-            let xb = x0 + seg.x_end as f32;
+            let xb = x0 + (seg.x_end as f32).min(area.width());
             if seg.dense {
                 let entering = marks::Kinds::of(h.value_view(seg.idx).kind());
                 let aliased: Vec<marks::Aliased> = (seg.x_start..seg.x_end)
@@ -1657,7 +1685,12 @@ fn paint_bus_row(
             match look {
                 BusLook::Floating => {
                     scene.fill(
-                        Rect::from_xywh(xa, snap(midf), seg_w, t.digital_wave_width),
+                        Rect::from_xywh(
+                            xa,
+                            midf - t.digital_wave_width / 2.0,
+                            seg_w,
+                            t.digital_wave_width,
+                        ),
                         color,
                     );
                     continue;
@@ -1738,12 +1771,12 @@ fn paint_bus_row(
                 lines.push([point(xb, midf), point(xb - tw, topf)]);
                 lines.push([point(xb, midf), point(xb - tw, botf)]);
             }
-            let avail = seg_w - 2.0 * (tw + LABEL_GAP_PX * t.zoom);
+            let avail = rb - la - 2.0 * LABEL_GAP_PX * t.zoom;
             if avail >= char_w {
                 let max_chars = (avail / char_w).floor() as usize;
                 let tr = translator.translate(&value);
                 if let Some(text) = fit_label(&tr.text, max_chars, numeric) {
-                    let x = snap(xa + tw + LABEL_GAP_PX * t.zoom);
+                    let x = la + LABEL_GAP_PX * t.zoom;
                     let plain = match look {
                         BusLook::Unknown => t.wave_undef,
                         _ if tr.kind == ValueKind::Normal => t.wave_bus_text,
@@ -1874,15 +1907,15 @@ fn paint_clock_wave(
 ) {
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
-    let w_px = area.width().floor().max(0.0) as usize;
+    let w_px = area.width().ceil().max(0.0) as usize;
     if w_px == 0 {
         return;
     }
-    let wf = w_px as f64;
+    let wf = f64::from(area.width());
     let ppu = vp.px_per_unit(wf);
     let top = area.top() + trace_pad(area.height(), t);
     let bottom = area.bottom() - trace_pad(area.height(), t);
-    let col = |time: u64| vp.x_of(time as f64, wf).clamp(0.0, wf);
+    let col = |time: u64| vp.x_of_tick(time, wf).clamp(0.0, wf);
     let history = crate::clock::ClockHistory::new(timeline.clone());
     let all = timeline.stretches();
     let lo = all.partition_point(|s| (s.end as f64) < vp.start);
@@ -1969,7 +2002,7 @@ fn paint_clock_wave(
                 &mut dashed,
                 xa,
                 xb,
-                bottom - t.digital_wave_width,
+                bottom - t.digital_wave_width / 2.0 - 0.5,
                 area.left(),
                 scaled(marks::DASHED, t),
             );
@@ -2217,7 +2250,7 @@ fn paint_group_summary(
     p: &mut TextPainter<'_>,
 ) {
     let t = p.theme;
-    let w_px = area.width().floor().max(0.0) as usize;
+    let w_px = area.width().ceil().max(0.0) as usize;
     if w_px == 0 || members.is_empty() {
         return;
     }
@@ -2245,6 +2278,7 @@ fn paint_group_summary(
         }
     };
     let x0 = area.left();
+    let pixel = area.width() / w_px as f32;
     let top = area.top() + trace_pad(area.height(), t);
     let bottom = area.bottom() - trace_pad(area.height(), t);
     let mid = top + (bottom - top) / 2.0;
@@ -2286,9 +2320,10 @@ fn paint_group_summary(
         let mut slants: Vec<[Point; 2]> = Vec::new();
         let mut undef_slants: Vec<[Point; 2]> = Vec::new();
         for (a, b, dense) in merged {
-            let (xa, xb) = (x0 + a as f32, x0 + b as f32);
-            let own = if dense || a == 0 { a } else { (a + 1).min(b) };
-            let undefined = columns[own..b].iter().any(|c| c.undefined);
+            let (xa, xb) = (x0 + a as f32 * pixel, x0 + b as f32 * pixel);
+            let own = a;
+            let settled = if dense || a == 0 { a } else { (a + 1).min(b) };
+            let undefined = columns[settled..b].iter().any(|c| c.undefined);
             if dense {
                 let color = if undefined { undef } else { t.wave_dense };
                 scene.fill(Rect::from_xywh(xa, top, xb - xa, bottom - top), color);
@@ -2302,7 +2337,7 @@ fn paint_group_summary(
                 }
                 let run = columns[x..b].iter().take_while(|c| c.undefined).count();
                 scene.fill(
-                    Rect::from_xywh(x0 + x as f32, top, run as f32, bottom - top),
+                    Rect::from_xywh(x0 + x as f32 * pixel, top, run as f32 * pixel, bottom - top),
                     undef.with_alpha(0.14),
                 );
                 x += run;
@@ -2522,7 +2557,7 @@ fn paint_stack_row(
     }
     let wave_row = Rect::from_xywh(waves.left(), y, waves.width(), full_h);
     let clip = intersect(wave_row, waves);
-    let width = wave_row.width().floor().max(0.0) as usize;
+    let width = wave_row.width().ceil().max(0.0) as usize;
     if n == 0 || width == 0 {
         return None;
     }
@@ -2557,7 +2592,7 @@ fn paint_stack_row(
     };
     let plot = Plot {
         left: wave_row.left(),
-        width: width as f32,
+        width: wave_row.width(),
         top: y + trace_pad(full_h, t),
         bottom: y + full_h - trace_pad(full_h, t),
         lo,
@@ -2569,7 +2604,12 @@ fn paint_stack_row(
     let readout = reading.filter(|pt| clip.contains(*pt)).and_then(|pt| {
         let f = f64::from((plot.bottom - pt.y) / (plot.bottom - plot.top));
         let value = plot.lo + f * (plot.hi - plot.lo);
-        stack::readout(&frame, f64::from(pt.x - plot.left), value).map(|r| (pt, r))
+        stack::readout(
+            &frame,
+            f64::from(pt.x - plot.left) * width as f64 / f64::from(plot.width),
+            value,
+        )
+        .map(|r| (pt, r))
     });
     let hot = readout.as_ref().and_then(|(_, r)| r.hot);
     let right = plot.left + plot.width;
@@ -2586,8 +2626,9 @@ fn paint_stack_row(
         let mut last_net: Option<(f32, f32)> = None;
         for s in 0..frame.spans.len() {
             let (a, b) = frame.spans[s];
-            let x0 = (plot.left + a as f32).round().max(plot.left);
-            let x1 = (plot.left + b as f32).round().min(right);
+            let pixel = plot.width / width as f32;
+            let x0 = (plot.left + a as f32 * pixel).max(plot.left);
+            let x1 = (plot.left + b as f32 * pixel).min(right);
             if x1 <= x0 {
                 continue;
             }
@@ -2776,7 +2817,7 @@ fn paint_stack_overlays(
             && (c as f64) >= vp.start
             && (c as f64) <= vp.end
         {
-            let x = snap(plot.left + vp.x_of(c as f64, f64::from(plot.width)) as f32) + 0.5;
+            let x = plot.left + vp.x_of_tick(c, f64::from(plot.width)) as f32;
             let y = plot.y_of(sum).clamp(plot.top, plot.bottom);
             let r = z(3.25);
             p.scene.clipped(row.clip, |scene| {
@@ -2835,7 +2876,7 @@ fn paint_stack_overlays(
                 let at = vp.time_at(f64::from(pointer.x - plot.left), w).max(0.0);
                 format_time(at.floor(), doc.time_base())
             } else {
-                let span = vp.time_at(b, w) - vp.time_at(a, w);
+                let span = (b - a) / row.frame.spans.last().unwrap().1 * vp.width();
                 let means = format!("means over {}", format_time(span, doc.time_base()));
                 match row.peaks.get(read.span).copied().flatten() {
                     Some((low, high)) if low < 0.0 => format!(
@@ -3103,7 +3144,7 @@ fn paint_lane_bars(
     let z = |v: f32| v * t.zoom;
     let width = f64::from(waves.width()).max(1.0);
     let x_of = |time: u64| {
-        (waves.left() + viewport.x_of(time as f64, width) as f32)
+        (waves.left() + viewport.x_of_tick(time, width) as f32)
             .clamp(waves.left() - z(8.0), waves.right() + z(8.0))
     };
     let inset = z(2.0);
@@ -3384,7 +3425,7 @@ mod tests {
         assert!(
             scene
                 .quads()
-                .any(|(r, c)| c == t.wave_highimp && r.left() == 299.0 && r.height() == 3.0)
+                .any(|(r, c)| c == t.wave_highimp && r.left() == 300.0 && r.height() == 3.0)
         );
         for color in [t.wave_signal, t.wave_undef] {
             assert!(scene.prims.iter().any(|p| matches!(p,
@@ -3413,7 +3454,7 @@ mod tests {
         assert!(scene.prims.iter().any(|p| matches!(p, Prim::Lines { color, .. } if *color == t.wave_undef.with_alpha(marks::HATCH_ALPHA))));
         let z: Vec<_> = quads.iter().filter(|(_, c)| *c == t.wave_highimp).collect();
         assert_eq!(z.len(), 1);
-        assert_eq!((z[0].0.left(), z[0].0.height()), (299.0, 1.0));
+        assert_eq!((z[0].0.left(), z[0].0.height()), (300.0, 1.0));
         let slants = scene.prims.iter().find_map(|p| match p {
             Prim::Lines {
                 segments, color, ..
@@ -3424,7 +3465,7 @@ mod tests {
             slants
                 .unwrap()
                 .iter()
-                .any(|[a, b]| a.x == 99.0 && b.x == 103.0)
+                .any(|[a, b]| a.x == 100.0 && b.x == 104.0)
         );
     }
 
@@ -3504,7 +3545,7 @@ mod tests {
         assert!(
             scene
                 .quads()
-                .any(|(r, c)| c == t.wave_undef_fill && r.left() == 100.0 && r.width() == 99.0)
+                .any(|(r, c)| c == t.wave_undef_fill && r.left() == 100.0 && r.width() == 100.0)
         );
         assert!(
             lines(t.wave_undef.with_alpha(marks::HATCH_ALPHA)).sum::<usize>() >= 20,
@@ -3675,5 +3716,168 @@ mod tests {
             ["×3"],
             "no room beside the second"
         );
+    }
+
+    #[test]
+    fn digital_levels_and_transitions_are_vertically_symmetric() {
+        for width in [1.0, 1.5, 3.0, 4.0] {
+            let mut t = Theme::volna(true);
+            t.digital_wave_width = width;
+            let area = Rect::from_xywh(37.25, 11.5, 400.5, 24.0);
+            let vp = Viewport {
+                start: 0.0,
+                end: 400.5,
+            };
+            let draw = |first, second| {
+                let h = VecHistory {
+                    shape: SignalShape::Bit,
+                    times: vec![100, 200],
+                    values: [second, first]
+                        .map(|s: &str| WaveValue::Bits(s.into()))
+                        .to_vec(),
+                    initial: WaveValue::Bits(first.into()),
+                };
+                let mut scene = Scene::default();
+                paint_bits(&h, &vp, area, &t, &mut scene, false, 0..401);
+                scene
+            };
+            let (rising, falling) = (draw("0", "1"), draw("1", "0"));
+            let falling: Vec<_> = falling.quads().collect();
+            for (r, c) in rising.quads() {
+                let mirrored = Rect::from_xywh(
+                    r.left(),
+                    area.top() + area.bottom() - r.bottom(),
+                    r.width(),
+                    r.height(),
+                );
+                assert!(falling.contains(&(mirrored, c)), "width {width}: {r:?}");
+            }
+            assert!(rising.quads().any(|(r, _)| r.right() == area.right()));
+            for state in ["x", "z", "-", "l"] {
+                let h = VecHistory {
+                    shape: SignalShape::Bit,
+                    times: vec![],
+                    values: vec![],
+                    initial: WaveValue::Bits(state.into()),
+                };
+                let mut scene = Scene::default();
+                paint_bit_row(&h, &vp, area, &t, &mut scene);
+                let center = area.top() + area.height() / 2.0;
+                assert!(
+                    scene
+                        .quads()
+                        .filter(|(_, c)| *c == t.value_color(h.bit(None).kind()))
+                        .all(|(r, _)| r.top() + r.height() / 2.0 == center)
+                );
+                assert!(
+                    scene
+                        .prims
+                        .iter()
+                        .filter_map(|p| match p {
+                            Prim::Lines {
+                                segments, color, ..
+                            } if *color == t.wave_dontcare || *color == t.wave_weak =>
+                                Some(segments),
+                            _ => None,
+                        })
+                        .flatten()
+                        .all(|[a, b]| a.y == center && b.y == center)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn waveform_kinds_agree_on_transition_columns_and_exclude_outside_events() {
+        let t = Theme::volna(true);
+        let h = bus(&[(100, "10000000"), (400, "00000000")]);
+        let bus_scene = paint_bus(&h, "hex", &t);
+        assert!(bus_scene.prims.iter().any(|p| matches!(p, Prim::Lines { segments, .. } if segments.iter().any(|[a, _]| a.x == 100.0))));
+        let area = Rect::from_xywh(0.0, 0.0, 400.5, 24.0);
+        let vp = Viewport {
+            start: 0.0,
+            end: 400.5,
+        };
+        let mut bit = VecHistory {
+            shape: SignalShape::Bit,
+            times: vec![100],
+            values: vec![WaveValue::Bits("1".into())],
+            initial: WaveValue::Bits("0".into()),
+        };
+        let mut scene = Scene::default();
+        paint_bit_row(&bit, &vp, area, &t, &mut scene);
+        assert!(scene.quads().any(|(r, c)| c == t.wave_signal
+            && r.left() == 100.0
+            && r.width() == 1.0
+            && r.height() > 1.0));
+        assert!(
+            scene
+                .quads()
+                .any(|(r, c)| c == t.wave_signal && r.right() == area.right() && r.top() == 5.0)
+        );
+        bit.shape = SignalShape::Event;
+        scene.clear();
+        paint_event_row(&bit, &vp, area, &t, &mut scene);
+        assert!(scene.prims.iter().any(|p| matches!(p, Prim::Lines { segments, .. } if segments.iter().any(|[a, b]| a.x == 100.5 && b.x == a.x && b.y > a.y))));
+        bit.times = vec![401];
+        scene.clear();
+        paint_event_row(&bit, &vp, area, &t, &mut scene);
+        assert!(scene.prims.is_empty());
+    }
+
+    #[test]
+    fn late_single_tick_changes_remain_distinct() {
+        let origin = 1u64 << 60;
+        let h = VecHistory {
+            shape: SignalShape::Bit,
+            times: vec![origin + 1, origin + 2],
+            values: ["1", "0"].map(|s| WaveValue::Bits(s.into())).to_vec(),
+            initial: WaveValue::Bits("0".into()),
+        };
+        let t = Theme::volna(true);
+        let area = Rect::from_xywh(0.0, 0.0, 4096.0, 24.0);
+        let vp = Viewport {
+            start: origin as f64,
+            end: origin as f64 + 4096.0,
+        };
+        let mut scene = Scene::default();
+        paint_bit_row(&h, &vp, area, &t, &mut scene);
+        for x in [1.0, 2.0] {
+            assert!(
+                scene.quads().any(|(r, c)| c == t.wave_signal
+                    && r.left() == x
+                    && r.width() == 1.0
+                    && r.height() > 1.0),
+                "{x}"
+            );
+        }
+    }
+
+    #[test]
+    fn fractional_hexagon_tips_do_not_overlap_the_translucent_body() {
+        let mut scene = Scene::default();
+        let color = Theme::volna(true).wave_undef_fill;
+        fill_hexagon(
+            &mut scene,
+            0.0,
+            20.0,
+            1.25,
+            (false, false),
+            0.0,
+            10.0,
+            color,
+        );
+        let quads: Vec<_> = scene.quads().map(|(r, _)| r).collect();
+        for (i, a) in quads.iter().enumerate() {
+            assert!(quads.contains(&Rect::from_xywh(
+                20.0 - a.right(),
+                a.top(),
+                a.width(),
+                a.height()
+            )));
+            for b in &quads[i + 1..] {
+                assert!(intersect(*a, *b).is_empty());
+            }
+        }
     }
 }

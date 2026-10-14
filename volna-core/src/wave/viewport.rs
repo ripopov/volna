@@ -67,6 +67,31 @@ impl Viewport {
     }
 
     #[must_use]
+    /// Last tick at or before a horizontal position, or `None` before time zero.
+    pub fn tick_at(&self, x_px: f64, width_px: f64) -> Option<u64> {
+        self.tick_boundary(x_px, width_px, false)
+    }
+
+    #[must_use]
+    /// Last tick strictly before a horizontal position, or `None` at or before time zero.
+    pub fn tick_before(&self, x_px: f64, width_px: f64) -> Option<u64> {
+        self.tick_boundary(x_px, width_px, true)
+    }
+
+    fn tick_boundary(&self, x_px: f64, width_px: f64, exclusive: bool) -> Option<u64> {
+        // Keep integer ticks distinct when the absolute time exceeds f64's precision.
+        let origin = self.start.floor() as i128;
+        let offset = self.start - origin as f64 + x_px / width_px * self.width();
+        let offset = if exclusive {
+            offset.ceil() - 1.0
+        } else {
+            offset.floor()
+        };
+        let tick = origin.saturating_add(offset as i128);
+        (tick >= 0).then(|| tick.min(i128::from(u64::MAX)) as u64)
+    }
+
+    #[must_use]
     pub fn x_of(&self, t: f64, width_px: f64) -> f64 {
         (t - self.start) / self.width() * width_px
     }
@@ -184,7 +209,25 @@ mod tests {
                 view.x_of_tick(origin + 2, 4096.0) - view.x_of_tick(origin + 1, 4096.0),
                 1.0
             );
+            for x in [1.0, 2.0, 511.0, 4095.0] {
+                assert_eq!(view.tick_at(x, 4096.0), Some(origin + x as u64));
+                assert_eq!(view.tick_before(x, 4096.0), Some(origin + x as u64 - 1));
+            }
         }
+    }
+
+    #[test]
+    fn tick_boundaries_distinguish_negative_times_and_fractional_offsets() {
+        let view = Viewport {
+            start: -0.5,
+            end: 3.5,
+        };
+        assert_eq!(view.tick_at(0.0, 4.0), None);
+        assert_eq!(view.tick_before(0.5, 4.0), None);
+        assert_eq!(view.tick_at(0.5, 4.0), Some(0));
+        assert_eq!(view.tick_before(0.75, 4.0), Some(0));
+        assert_eq!(view.tick_at(2.0, 4.0), Some(1));
+        assert_eq!(view.tick_before(2.0, 4.0), Some(1));
     }
 
     #[test]

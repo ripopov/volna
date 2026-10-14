@@ -193,7 +193,7 @@ impl WaveLayout {
                 size(z(SCROLLBAR_W), rows_h),
             );
             let ratio = rows_h / content_h;
-            let thumb_h = (rows_h * ratio).max(z(24.0));
+            let thumb_h = (rows_h * ratio).max(z(24.0)).min(rows_h);
             let travel = rows_h - thumb_h;
             let top = rows_top + travel * (scroll_y / max_scroll).clamp(0.0, 1.0);
             let thumb = Rect::new(
@@ -385,6 +385,10 @@ mod tests {
         }
         assert_eq!(base.zoom, 1.0);
         assert_eq!(base.names_split.width(), 8.0);
+        let cramped = layout(5.0, 100);
+        let (track, thumb) = cramped.scrollbar.unwrap();
+        assert!(thumb.height() <= track.height());
+        assert!(thumb.top() >= track.top() && thumb.bottom() <= track.bottom());
     }
 
     #[test]

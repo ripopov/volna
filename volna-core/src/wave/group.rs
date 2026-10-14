@@ -40,7 +40,7 @@ pub fn visible_changes(members: &[Arc<dyn SignalHistory>], vp: &Viewport) -> usi
 }
 
 fn column_of(vp: &Viewport, width: usize, t: u64) -> Option<usize> {
-    let x = vp.x_of(t as f64, width as f64).ceil() - 1.0;
+    let x = vp.x_of_tick(t, width as f64).floor();
     (x >= 0.0 && x < width as f64).then_some(x as usize)
 }
 
@@ -64,11 +64,13 @@ pub fn walk(members: &[Arc<dyn SignalHistory>], vp: &Viewport, width: usize) -> 
             let t = (next < h.len())
                 .then(|| h.time(next))
                 .filter(|&t| t as f64 <= end);
-            let to = t.map_or(Some(width - 1), |t| column_of(vp, width, t));
-            if is_undefined(h, i)
-                && let Some(to) = to
-            {
-                for c in &mut out[from.min(width)..=to.min(width - 1)] {
+            let to = t.map_or(width, |t| {
+                vp.x_of_tick(t, width as f64)
+                    .ceil()
+                    .clamp(0.0, width as f64) as usize
+            });
+            if is_undefined(h, i) && to > from {
+                for c in &mut out[from.min(width)..to] {
                     c.undefined = true;
                 }
             }
@@ -228,9 +230,9 @@ impl GroupSummary {
         let block_at = |t: f64| ((t - self.start as f64) / ticks).floor();
         let mut out = vec![Column::default(); width];
         for (x, column) in out.iter_mut().enumerate() {
-            let a = block_at(vp.time_at(x as f64, width as f64)) + 1.0;
+            let a = block_at(vp.time_at(x as f64, width as f64));
             let b = block_at(vp.time_at((x + 1) as f64, width as f64));
-            let (a, b) = (a.max(0.0) as usize, (b.max(-1.0) + 1.0) as usize);
+            let (a, b) = (a.max(0.0) as usize, b.max(0.0) as usize);
             for blk in a.min(blocks)..b.min(blocks) {
                 column.changes = column.changes.saturating_add(u32::from(level.changes[blk]));
                 column.undefined |= level.is_undefined(blk);
@@ -324,7 +326,7 @@ mod tests {
             .filter(|(_, c)| c.changes > 0)
             .map(|(x, _)| x)
             .collect();
-        assert_eq!(at, [9, 14, 19]);
+        assert_eq!(at, [10, 15, 20]);
         assert!(cols.iter().all(|c| !c.undefined));
     }
 

@@ -10,6 +10,7 @@ use crate::wave::overlaid;
 
 pub(super) struct OverlaidRow {
     plot: Plot,
+    draw: analog::AnalogDraw,
     clip: Rect,
     entries: Vec<usize>,
     colors: Vec<Color>,
@@ -135,10 +136,12 @@ pub(super) fn paint_row(
                 0.4
             };
             let color = colors[k].with_alpha(alpha);
-            let width = if focused == Some(k) {
-                z(1.75)
+            let width = if geometry.envelope {
+                1.0
+            } else if focused == Some(k) {
+                z(t.analog_wave_width.max(1.75))
             } else {
-                z(t.analog_wave_width).max(1.0)
+                z(t.analog_wave_width)
             };
             scene.lines(overlaid::strokes(&geometry.runs, clip), color, width);
             let unknown_y = plot.bottom - z(2.0) - (k % 4) as f32 * z(3.0);
@@ -210,6 +213,7 @@ pub(super) fn paint_row(
     });
     Some(OverlaidRow {
         plot,
+        draw,
         clip,
         entries: entries.to_vec(),
         colors: colors.to_vec(),
@@ -233,7 +237,7 @@ pub(super) fn paint_probes(
             if (time as f64) < vp.start || (time as f64) > vp.end {
                 continue;
             }
-            let x = row.plot.left + vp.x_of(time as f64, f64::from(row.plot.width)) as f32;
+            let x = row.plot.left + vp.x_of_tick(time, f64::from(row.plot.width)) as f32;
             for (k, &entry) in row.entries.iter().enumerate() {
                 let s = model.signal(entry).unwrap();
                 if s.overlay_hidden {
@@ -242,12 +246,10 @@ pub(super) fn paint_probes(
                 let Some(h) = &s.history else {
                     continue;
                 };
-                let sample =
-                    analog::sample(h.as_ref(), s.numeric_kind().unwrap(), h.index_at(time));
-                let analog::Sample::Value(value) = sample else {
+                let series = Series::of(doc, s.source.signal(), h, s.numeric_kind().unwrap());
+                let Some(y) = analog::y_at(&series, row.draw, &row.plot, time) else {
                     continue;
                 };
-                let y = row.plot.y_of(value);
                 let r = z(2.75);
                 p.scene.clipped(row.clip, |scene| {
                     scene.quad(

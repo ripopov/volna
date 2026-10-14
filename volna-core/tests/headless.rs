@@ -123,6 +123,37 @@ fn missing_initial_sample_is_not_painted_as_a_logic_level() {
 }
 
 #[test]
+fn partially_scrolled_row_backgrounds_are_clipped_below_the_timeline() {
+    let (mut app, _) = loaded_app(40);
+    app.handle(Command::AddVars(a_all((0..40).collect::<Vec<_>>())));
+    pump(&mut app);
+    let id = app.panels.focused_id();
+    let t = Theme::volna(true);
+    app.panels.waves_mut(id).unwrap().selected = [0, 39].into();
+    app.panels.waves_mut(id).unwrap().scroll_y = 11.5;
+    frame(&mut app, &t);
+    let top = app.panels.waves(id).unwrap().last_layout().waves.top();
+    let scene = app.render_panel(id, &t, &mut MonoMeasure);
+    let mut clips = Vec::new();
+    let mut backgrounds = 0;
+    for prim in &scene.prims {
+        match prim {
+            Prim::PushClip(rect) => clips.push(*rect),
+            Prim::PopClip => {
+                clips.pop().unwrap();
+            }
+            Prim::Quad { fill, .. } if *fill == t.wave_row_selected || *fill == t.selection.bg => {
+                assert!(clips.iter().any(|r| r.top() >= top));
+                backgrounds += 1;
+            }
+            _ => {}
+        }
+    }
+    assert!(backgrounds >= 2);
+    assert!(clips.is_empty());
+}
+
+#[test]
 fn batch_loads_coalesce_and_stale_batches_preserve_new_pending() {
     let (mut app, source) = loaded_app(10);
     app.handle(Command::AddVars(a_all(vec![0, 1, 0])));
@@ -976,8 +1007,18 @@ fn dense_columns_collapse_into_one_band_and_zooming_in_resolves_edges() {
         .scene()
         .quads()
         .filter(|(r, c)| r.width() == 1.0 && r.height() > 2.0 && *c == theme.wave_signal)
-        .count();
-    assert_eq!(edges, 20, "one vertical edge per change in view");
+        .map(|(r, _)| r)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        edges.len(),
+        19,
+        "one vertical edge per change inside the window"
+    );
+    let layout = app.panels.focused_waves().unwrap().last_layout();
+    for (edge, tick) in edges.iter().zip(1..20) {
+        let expected = layout.waves.left() + tick as f32 / 20.0 * layout.waves.width();
+        assert!((edge.left() - expected).abs() < 0.001);
+    }
 }
 
 #[test]

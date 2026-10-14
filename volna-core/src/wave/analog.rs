@@ -176,13 +176,15 @@ impl Analog {
         let (Some(shown), Some(target)) = (self.shown, self.target) else {
             return false;
         };
-        let span = (target.1 - target.0).abs().max(f64::MIN_POSITIVE);
+        let span = (target.1 / 2.0 - target.0 / 2.0)
+            .abs()
+            .max(f64::MIN_POSITIVE);
         let k = 1.0 - (-dt / RANGE_TAU_S).exp();
         let step = |from: f64, to: f64| {
-            if (to - from).abs() <= span * 2e-3 {
+            if (to / 2.0 - from / 2.0).abs() <= span * 2e-3 {
                 to
             } else {
-                from + (to - from) * k
+                interpolate(from, to, k)
             }
         };
         let next = (step(shown.0, target.0), step(shown.1, target.1));
@@ -219,9 +221,17 @@ pub(crate) fn padded((lo, hi): (f64, f64), shape: SignalShape) -> (f64, f64) {
     let d = if shape == SignalShape::Real {
         (lo.abs() * 0.05).max(0.05)
     } else {
-        0.5
+        (lo.abs() * (16.0 * f64::EPSILON)).max(0.5)
     };
-    (lo - d, hi + d)
+    ((lo - d).max(-f64::MAX), (hi + d).min(f64::MAX))
+}
+
+fn interpolate(from: f64, to: f64, fraction: f64) -> f64 {
+    if from.signum() == to.signum() {
+        from + (to - from) * fraction
+    } else {
+        from * (1.0 - fraction) + to * fraction
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -512,17 +522,6 @@ fn index_at(h: &dyn SignalHistory, t: f64) -> Option<usize> {
     h.index_at(t.floor() as u64)
 }
 
-fn index_before(h: &dyn SignalHistory, t: f64, hint: Option<usize>) -> Option<usize> {
-    if t <= 0.0 {
-        return None;
-    }
-    let t = (t.ceil() as u64).saturating_sub(1);
-    match hint {
-        Some(hint) => h.index_at_hint(t, hint),
-        None => h.index_at(t),
-    }
-}
-
 fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     match (a, b) {
         (_, None) => 0,
@@ -562,21 +561,23 @@ pub struct Plot {
 impl Plot {
     #[must_use]
     pub fn y_of(&self, v: f64) -> f32 {
-        let f = (v - self.lo) / (self.hi - self.lo);
-        self.bottom - (f as f32) * (self.bottom - self.top)
+        let span = self.hi - self.lo;
+        let f = if span.is_finite() {
+            (v - self.lo) / span
+        } else {
+            (v / 2.0 - self.lo / 2.0) / (self.hi / 2.0 - self.lo / 2.0)
+        };
+        (f64::from(self.bottom) - f * f64::from(self.bottom - self.top))
+            .clamp(-f64::from(f32::MAX), f64::from(f32::MAX)) as f32
     }
 
-    fn x_of(&self, vp: &Viewport, t: f64) -> f32 {
-        self.left + vp.x_of(t, f64::from(self.width)) as f32
+    fn x_of(&self, vp: &Viewport, t: u64) -> f32 {
+        self.left + vp.x_of_tick(t, f64::from(self.width)) as f32
     }
 
     #[must_use]
     pub fn baseline(&self) -> f32 {
-        if self.lo <= 0.0 && self.hi >= 0.0 {
-            self.y_of(0.0)
-        } else {
-            self.bottom
-        }
+        self.y_of(0.0f64.clamp(self.lo, self.hi))
     }
 }
 
@@ -616,7 +617,7 @@ pub fn geometry(
             g.envelope = true;
             g.waiting = true;
         }
-        DrawMode::Envelope => envelope(series, vp, plot, &mut g),
+        DrawMode::Envelope => envelope(series, draw, vp, plot, &mut g),
     }
     g
 }
@@ -631,7 +632,9 @@ fn exact(
 ) {
     let h = series.history;
     let len = h.len();
-    let first = index_at(h, vp.start);
+    let first = vp
+        .tick_at(0.0, f64::from(plot.width))
+        .and_then(|t| h.index_at(t));
     let right = plot.left + plot.width + 1.0;
     let last = match index_at(h, vp.end) {
         Some(i) => (i + 1).min(len - 1),
@@ -655,10 +658,10 @@ fn exact(
         .chain((first.unwrap_or(0)..=last).map(Some));
     let mut run: Option<Vec<Point>> = None;
     for i in indices {
-        let raw_a = i.map(|i| plot.x_of(vp, h.time(i) as f64));
+        let raw_a = i.map(|i| plot.x_of(vp, h.time(i)));
         let xa = raw_a.map_or(plot.left - 1.0, |x| x.max(plot.left - 1.0));
         let next = i.map_or(0, |i| i + 1);
-        let raw_b = (next < len).then(|| plot.x_of(vp, h.time(next) as f64));
+        let raw_b = (next < len).then(|| plot.x_of(vp, h.time(next)));
         let xb = raw_b.map_or(right, |x| x.min(right));
         match series.sample(i) {
             Sample::Missing => g.runs.extend(run.take()),
@@ -679,7 +682,7 @@ fn exact(
                         let at = |x: f32| match (raw_a, raw_b, to) {
                             (Some(a), Some(b), Some(to)) if b > a => {
                                 let f = f64::from((x - a) / (b - a));
-                                plot.y_of(v + (to - v) * f)
+                                plot.y_of(interpolate(v, to, f.clamp(0.0, 1.0)))
                             }
                             _ => y,
                         };
@@ -704,28 +707,26 @@ fn exact(
     g.runs.extend(run);
 }
 
-fn envelope(series: &Series<'_>, vp: &Viewport, plot: &Plot, g: &mut Geometry) {
-    let h = series.history;
-    let n = plot.width.floor().max(1.0) as usize;
+fn envelope(series: &Series<'_>, draw: AnalogDraw, vp: &Viewport, plot: &Plot, g: &mut Geometry) {
+    let n = plot.width.ceil().max(1.0) as usize;
     let w = f64::from(plot.width);
-    let mut j = index_at(h, vp.start);
-    let mut entry = series.sample(j);
     let mut run: Option<Vec<Point>> = None;
+    let mut hint = None;
     for x in 0..n {
-        let end = index_before(h, vp.time_at((x + 1) as f64, w), j).max(j);
-        let changes = changes_between(j, end);
-        let mut e = Extent::EMPTY;
-        e.add(entry);
-        let exit = if changes > 0 {
-            e.merge(&series.extent(Some(j.map_or(0, |j| j + 1)), end));
-            series.sample(end)
-        } else {
-            entry
-        };
-        j = end;
-        let xc = plot.left + x as f32 + 0.5;
+        let xa = x as f64;
+        let xb = ((x + 1) as f64).min(w);
+        let Column {
+            extent: e,
+            changes,
+            entry,
+            exit,
+            last,
+        } = column(series, draw, vp, w, xa, xb, hint);
+        hint = last;
+        let xc = plot.left + xa.midpoint(xb) as f32;
         if e.undefined {
-            g.undefined(plot.left + x as f32, plot.left + x as f32 + 1.0);
+            g.runs.extend(run.take());
+            g.undefined(plot.left + xa as f32, plot.left + xb as f32);
         }
         match e.range() {
             None => g.runs.extend(run.take()),
@@ -746,38 +747,123 @@ fn envelope(series: &Series<'_>, vp: &Viewport, plot: &Plot, g: &mut Geometry) {
                 }
             }
         }
-        entry = exit;
+        if e.undefined {
+            g.runs.extend(run.take());
+        }
     }
     g.envelope = true;
     g.runs.extend(run);
 }
 
-#[must_use]
-pub fn y_at(
+struct Column {
+    extent: Extent,
+    changes: usize,
+    entry: Sample,
+    exit: Sample,
+    last: Option<usize>,
+}
+
+fn column(
     series: &Series<'_>,
     draw: AnalogDraw,
-    envelope: bool,
-    plot: &Plot,
-    t: f64,
-) -> Option<f32> {
+    vp: &Viewport,
+    width: f64,
+    from: f64,
+    to: f64,
+    hint: Option<usize>,
+) -> Column {
     let h = series.history;
-    let i = index_at(h, t);
+    let lookup = |time, hint| match hint {
+        Some(hint) => h.index_at_hint(time, hint),
+        None => h.index_at(time),
+    };
+    let first = vp.tick_at(from, width).and_then(|t| lookup(t, hint));
+    let last = vp
+        .tick_before(to, width)
+        .and_then(|t| lookup(t, first))
+        .max(first);
+    let changes = changes_between(first, last);
+    let mut entry = series.sample(first);
+    let mut exit = series.sample(last);
+    let mut extent = Extent::EMPTY;
+    if draw == AnalogDraw::Linear {
+        for (sample, index, x) in [(&mut entry, first, from), (&mut exit, last, to)] {
+            if matches!(sample, Sample::Value(_))
+                && let Some(v) = value_at_x(series, draw, vp, index, x, width)
+            {
+                *sample = Sample::Value(v);
+            }
+            extent.add(*sample);
+        }
+    } else {
+        extent.add(entry);
+    }
+    if changes > 0 {
+        extent.merge(&series.extent(Some(first.map_or(0, |i| i + 1)), last));
+    }
+    Column {
+        extent,
+        changes,
+        entry,
+        exit,
+        last,
+    }
+}
+
+#[must_use]
+pub fn y_at(series: &Series<'_>, draw: AnalogDraw, plot: &Plot, t: u64) -> Option<f32> {
+    let h = series.history;
+    let i = h.index_at(t);
+    let next = i.map_or(0, |i| i + 1);
+    let fraction = if let Some(i) = i.filter(|&i| next < h.len() && h.time(next) > h.time(i)) {
+        (t - h.time(i)) as f64 / (h.time(next) - h.time(i)) as f64
+    } else {
+        0.0
+    };
+    interpolated_value(series, draw, i, fraction).map(|v| plot.y_of(v))
+}
+
+fn value_at_x(
+    series: &Series<'_>,
+    draw: AnalogDraw,
+    vp: &Viewport,
+    i: Option<usize>,
+    x: f64,
+    width: f64,
+) -> Option<f64> {
+    let h = series.history;
+    let next = i.map_or(0, |i| i + 1);
+    let fraction = if let Some(i) = i.filter(|_| next < h.len()) {
+        let (a, b) = (
+            vp.x_of_tick(h.time(i), width),
+            vp.x_of_tick(h.time(next), width),
+        );
+        if b > a { (x - a) / (b - a) } else { 0.0 }
+    } else {
+        0.0
+    };
+    interpolated_value(series, draw, i, fraction)
+}
+
+fn interpolated_value(
+    series: &Series<'_>,
+    draw: AnalogDraw,
+    i: Option<usize>,
+    fraction: f64,
+) -> Option<f64> {
+    let h = series.history;
     let Sample::Value(mut v) = series.sample(i) else {
         return None;
     };
     let next = i.map_or(0, |i| i + 1);
     if draw == AnalogDraw::Linear
-        && !envelope
         && i.is_some()
         && next < h.len()
         && let Sample::Value(v1) = series.sample(Some(next))
     {
-        let (t0, t1) = (h.time(next - 1) as f64, h.time(next) as f64);
-        if t1 > t0 {
-            v += (v1 - v) * ((t - t0) / (t1 - t0)).clamp(0.0, 1.0);
-        }
+        v = interpolate(v, v1, fraction.clamp(0.0, 1.0));
     }
-    Some(plot.y_of(v))
+    Some(v)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -813,24 +899,24 @@ pub fn readout(
         if series.waiting(visible_changes(h, vp)) {
             return None;
         }
-        let col = dx.floor();
-        let ia = index_at(h, vp.time_at(col, w));
-        let ib = index_before(h, vp.time_at(col + 1.0, w), ia).max(ia);
-        let (lo, hi) = series.range(ia, ib)?;
+        let col = dx.floor().min(w.ceil() - 1.0);
+        let end = (col + 1.0).min(w);
+        let column = column(series, draw, vp, w, col, end, None);
+        let (lo, hi) = column.extent.range()?;
         return Some(Readout::Column {
             lo,
             hi,
-            changes: changes_between(ia, ib),
-            x: plot.left + col as f32 + 0.5,
+            changes: column.changes,
+            x: plot.left + col.midpoint(end) as f32,
         });
     }
     let t = vp.time_at(dx, w);
-    let mut i = index_at(h, t);
+    let mut i = vp.tick_at(dx, w).and_then(|t| h.index_at(t));
     if draw == AnalogDraw::Linear {
         let next = i.map_or(0, |i| i + 1);
-        let here = i.map(|i| (plot.x_of(vp, h.time(i) as f64) - x).abs());
+        let here = i.map(|i| (plot.x_of(vp, h.time(i)) - x).abs());
         if next < h.len() {
-            let there = (plot.x_of(vp, h.time(next) as f64) - x).abs();
+            let there = (plot.x_of(vp, h.time(next)) - x).abs();
             if here.is_none_or(|here| there < here) {
                 i = Some(next);
             }
@@ -840,7 +926,7 @@ pub fn readout(
         return None;
     };
     let (time, px) = match (draw, i) {
-        (AnalogDraw::Linear, Some(i)) => (h.time(i) as f64, plot.x_of(vp, h.time(i) as f64)),
+        (AnalogDraw::Linear, Some(i)) => (h.time(i) as f64, plot.x_of(vp, h.time(i))),
         _ => (t, x),
     };
     Some(Readout::Sample {
@@ -872,11 +958,14 @@ pub fn fill_columns(runs: &[Vec<Point>], left: f32, width: f32) -> Vec<(f32, f32
                 }
                 continue;
             }
-            let c0 = (a.x - left - 0.5).ceil().max(0.0) as usize;
-            let c1 = ((b.x - left - 0.5).floor() + 1.0).clamp(0.0, n as f32) as usize;
+            let c0 = (a.x - left).floor().max(0.0) as usize;
+            let c1 = (b.x - left).ceil().clamp(0.0, n as f32) as usize;
             for (c, y) in ys.iter_mut().enumerate().take(c1).skip(c0) {
-                let xc = left + c as f32 + 0.5;
-                *y = Some(a.y + (b.y - a.y) * (xc - a.x) / (b.x - a.x));
+                let xc = left + c as f32 + (width - c as f32).min(1.0) / 2.0;
+                if xc >= a.x && xc <= b.x {
+                    let f = f64::from(xc - a.x) / f64::from(b.x - a.x);
+                    *y = Some((f64::from(a.y) + (f64::from(b.y) - f64::from(a.y)) * f) as f32);
+                }
             }
         }
     }
@@ -884,9 +973,12 @@ pub fn fill_columns(runs: &[Vec<Point>], left: f32, width: f32) -> Vec<(f32, f32
     for (c, y) in ys.into_iter().enumerate() {
         let Some(y) = y else { continue };
         let x = left + c as f32;
+        let width = (width - c as f32).min(1.0);
         match out.last_mut() {
-            Some((x0, w, y0)) if (*x0 + *w - x).abs() < 1e-3 && (*y0 - y).abs() < 0.5 => *w += 1.0,
-            _ => out.push((x, 1.0, y)),
+            Some((x0, w, y0)) if (*x0 + *w - x).abs() < 1e-3 && (*y0 - y).abs() < 0.5 => {
+                *w += width;
+            }
+            _ => out.push((x, width, y)),
         }
     }
     out
@@ -984,5 +1076,162 @@ mod tests {
             assert_eq!(last.x, plot.width + 1.0, "{run:?}");
             assert!((last.y - on_line(last.x, &vp)).abs() < 0.01, "{run:?}");
         }
+    }
+
+    fn real_history(times: Vec<u64>, values: Vec<f64>) -> Arc<dyn SignalHistory> {
+        Arc::new(VecHistory {
+            shape: SignalShape::Real,
+            times,
+            values: values.into_iter().map(WaveValue::Real).collect(),
+            initial: WaveValue::Unavailable,
+        })
+    }
+
+    fn test_plot(width: f32, lo: f64, hi: f64) -> Plot {
+        Plot {
+            left: 0.0,
+            width,
+            top: 0.0,
+            bottom: 100.0,
+            lo,
+            hi,
+        }
+    }
+
+    #[test]
+    fn envelopes_break_at_unknown_boundaries_without_carrying_the_previous_sample() {
+        let h = real_history(
+            (0..40).collect(),
+            (0..40)
+                .map(|t| {
+                    if (10..20).contains(&t) {
+                        f64::NAN
+                    } else {
+                        f64::from(t)
+                    }
+                })
+                .collect(),
+        );
+        let series = Series::new(&h, NumericKind::Real, None);
+        let vp = Viewport {
+            start: 0.0,
+            end: 40.0,
+        };
+        let plot = test_plot(40.0, 0.0, 40.0);
+        for draw in [AnalogDraw::Step, AnalogDraw::Linear] {
+            let g = geometry(&series, draw, &vp, &plot, 1.0);
+            assert!(g.envelope);
+            assert_eq!(g.undefined, [(10.0, 20.0)]);
+            assert!(
+                g.runs
+                    .iter()
+                    .flatten()
+                    .all(|p| !(10.0..20.0).contains(&p.x))
+            );
+            assert_eq!(g.runs.len(), 2);
+        }
+    }
+
+    #[test]
+    fn linear_envelopes_and_readouts_include_interpolated_column_edges() {
+        let h = real_history(vec![0, 100], vec![0.0, 100.0]);
+        let series = Series::new(&h, NumericKind::Real, None);
+        let vp = Viewport {
+            start: 40.0,
+            end: 100.0,
+        };
+        let plot = test_plot(2.5, 0.0, 100.0);
+        let g = geometry(&series, AnalogDraw::Linear, &vp, &plot, 1.0);
+        assert!(g.envelope);
+        assert!(g.runs[0].iter().all(|p| p.y <= plot.y_of(40.0)));
+        assert!(
+            g.runs[0]
+                .iter()
+                .any(|p| p.x == 0.5 && p.y == plot.y_of(64.0))
+        );
+        assert!(
+            g.runs[0]
+                .iter()
+                .any(|p| p.x == 2.25 && p.y == plot.y_of(100.0))
+        );
+        assert_eq!(
+            readout(&series, AnalogDraw::Linear, &vp, &plot, 0.5),
+            Some(Readout::Column {
+                lo: 40.0,
+                hi: 64.0,
+                changes: 0,
+                x: 0.5
+            })
+        );
+        let Some(Readout::Column { lo, hi, changes, x }) =
+            readout(&series, AnalogDraw::Linear, &vp, &plot, 2.5)
+        else {
+            panic!("expected a column readout")
+        };
+        assert!((lo - 88.0).abs() < 1e-12);
+        assert_eq!((hi, changes, x), (100.0, 0, 2.25));
+    }
+
+    #[test]
+    fn finite_extreme_values_keep_ranges_interpolation_and_animation_finite() {
+        let plot = test_plot(100.0, -f64::MAX, f64::MAX);
+        assert_eq!(plot.y_of(-f64::MAX), plot.bottom);
+        assert_eq!(plot.y_of(0.0), 50.0);
+        assert_eq!(plot.y_of(f64::MAX), plot.top);
+        assert_eq!(interpolate(-f64::MAX, f64::MAX, 0.5), 0.0);
+        for shape in [SignalShape::Real, SignalShape::Vector { width: 64 }] {
+            for value in [-f64::MAX, f64::MAX, 1e30] {
+                let (lo, hi) = padded((value, value), shape);
+                assert!(lo.is_finite() && hi.is_finite() && hi > lo);
+            }
+        }
+        let mut a = Analog::new(AnalogDraw::Linear, AnalogRange::Trace);
+        a.shown = Some((-f64::MAX, -f64::MAX / 2.0));
+        a.target = Some((f64::MAX / 2.0, f64::MAX));
+        for _ in 0..100 {
+            a.ease(0.016);
+            let (lo, hi) = a.shown.unwrap();
+            assert!(lo.is_finite() && hi.is_finite() && hi > lo);
+        }
+        assert!(a.is_settled());
+    }
+
+    #[test]
+    fn negative_traces_fill_toward_zero_and_fractional_columns_stay_inside_the_plot() {
+        let plot = test_plot(2.5, -10.0, -1.0);
+        assert_eq!(plot.baseline(), plot.top);
+        let run = vec![point(-1.0, 50.0), point(3.5, 50.0)];
+        let columns = fill_columns(&[run], plot.left, plot.width);
+        assert_eq!(columns, [(0.0, 2.5, 50.0)]);
+        let run = vec![point(0.5, 50.0), point(2.25, 50.0)];
+        assert_eq!(fill_columns(&[run], 0.0, 2.5), [(0.0, 2.5, 50.0)]);
+        let run = vec![point(0.0, -f32::MAX), point(2.0, f32::MAX)];
+        let columns = fill_columns(&[run], 0.0, 2.0);
+        assert!(columns.iter().all(|(_, _, y)| y.is_finite()));
+        assert_eq!(columns[0].2, -columns[1].2);
+    }
+
+    #[test]
+    fn late_linear_probes_interpolate_between_distinct_integer_ticks() {
+        let origin = 1u64 << 60;
+        let h = real_history(vec![origin + 1, origin + 3], vec![0.0, 10.0]);
+        let series = Series::new(&h, NumericKind::Real, None);
+        let plot = test_plot(4096.0, 0.0, 10.0);
+        assert_eq!(
+            y_at(&series, AnalogDraw::Linear, &plot, origin + 2),
+            Some(50.0)
+        );
+        assert_eq!(
+            y_at(&series, AnalogDraw::Step, &plot, origin + 2),
+            Some(100.0)
+        );
+        let vp = Viewport {
+            start: origin as f64,
+            end: origin as f64 + 4096.0,
+        };
+        assert_eq!(
+            value_at_x(&series, AnalogDraw::Linear, &vp, Some(0), 2.0, 4096.0),
+            Some(5.0)
+        );
     }
 }

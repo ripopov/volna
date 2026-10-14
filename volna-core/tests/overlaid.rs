@@ -448,6 +448,41 @@ fn both_themes_draw_independent_gaps_and_exact_held_probe_values() {
 }
 
 #[test]
+fn linear_probe_markers_follow_the_curve_and_focus_preserves_the_chosen_width() {
+    let (_f, mut app, id) = fixture(101);
+    let mut t = Theme::volna(true);
+    t.analog_wave_width = 3.0;
+    app.configure_settings(volna_core::settings::Host::Native, None);
+    app.handle(Command::Settings(volna_core::app::SettingsCommand::Set {
+        id: "appearance.analogWaveWidth".into(),
+        value: volna_core::settings::Value::Number(3.0),
+    }));
+    app.handle(Command::Action(Action::ToggleOverlaid));
+    choose(
+        &mut app,
+        id,
+        0,
+        MenuAction::OverlaidDraw(AnalogDraw::Linear),
+    );
+    view(&mut app, id, 0.0, 100.0);
+    app.panels
+        .waves_mut(id)
+        .unwrap()
+        .set_cursor(&mut app.doc, Some(35));
+    frame(&mut app, id, &t);
+    let layout = app.panels.waves(id).unwrap().last_layout().clone();
+    let color = t.markers[0].stroke;
+    let x = layout.waves.left() + layout.waves.width() * 0.35;
+    let top = layout.row_y(0) + 5.0;
+    let height = layout.row_height(0) - 10.0;
+    let y = top + height * (1.0 - 126.0 / 250.0);
+    app.panels.waves_mut(id).unwrap().selected = [1].into();
+    let scene = frame(&mut app, id, &t);
+    assert!(scene.prims.iter().any(|p| matches!(p, Prim::Quad { rect, border_color, border_width, .. } if *border_color == color && *border_width > 0.0 && (rect.left() + rect.width() / 2.0 - x).abs() < 0.01 && (rect.top() + rect.height() / 2.0 - y).abs() < 0.01)));
+    assert!(scene.prims.iter().any(|p| matches!(p, Prim::Lines { segments, color: c, width } if *c == color && *width == 3.0 && segments.iter().any(|[a, _]| a.y >= top && a.y <= top + height))));
+}
+
+#[test]
 fn stacked_and_overlaid_members_share_colors_stripes_and_solid_swatches() {
     use volna_core::wave::Tint;
 
@@ -740,6 +775,11 @@ fn overlay_strokes_clip_offscreen_samples_and_reject_nonfinite_points() {
     assert_eq!(strokes, vec![[point(50.0, 0.0), point(50.0, 100.0)]]);
     let bad = [vec![point(0.0, f32::INFINITY), point(50.0, 50.0)]];
     assert!(volna_core::wave::overlaid::strokes(&bad, bounds).is_empty());
+    let isolated = [vec![point(0.0, 50.0)], vec![point(200.0, 50.0)]];
+    assert_eq!(
+        volna_core::wave::overlaid::strokes(&isolated, bounds),
+        [[point(0.0, 50.0), point(0.5, 50.0)]]
+    );
 }
 
 #[test]
