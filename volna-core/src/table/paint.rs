@@ -34,10 +34,45 @@ pub fn paint(model: &TableModel, theme: &Theme, scene: &mut Scene) {
         for column in &layout.columns {
             label(
                 scene,
-                column.rect,
+                Rect::from_xywh(
+                    column.rect.left(),
+                    column.rect.top(),
+                    (column.rect.width() - 22.0 * theme.zoom).max(0.0),
+                    column.rect.height(),
+                ),
                 model.column_title(column.source_index),
                 theme.panel.text,
             );
+            let enabled = model.can_sort_column(column.source_index);
+            let active = model
+                .applied_sort()
+                .filter(|sort| sort.column == column.source_index);
+            let x = column.rect.right() - 14.0 * theme.zoom;
+            let y = column.rect.top() + column.rect.height() * 0.5;
+            let d = 3.0 * theme.zoom;
+            for (descending, offset) in [(false, -4.0), (true, 4.0)] {
+                let selected = active.is_some_and(|sort| sort.descending == descending);
+                let tip = y + offset * theme.zoom;
+                let base = tip + if descending { -d } else { d };
+                scene.lines(
+                    vec![
+                        [point(x - d, base), point(x, tip)],
+                        [point(x, tip), point(x + d, base)],
+                    ],
+                    if !enabled {
+                        theme.panel.text_muted.with_alpha(0.45)
+                    } else if selected {
+                        theme.panel.icon_accent
+                    } else {
+                        theme.panel.text
+                    },
+                    if selected {
+                        2.0 * theme.zoom
+                    } else {
+                        theme.zoom
+                    },
+                );
+            }
         }
     });
 

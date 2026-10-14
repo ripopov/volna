@@ -17,11 +17,16 @@ use volna_core::icons::IconName;
 use volna_core::table::columns::{ColumnSet, TransactionColumn};
 use volna_core::table::{TableCommand, TableState};
 
-gpui_kit::actions!(table_column, [NarrowColumn, WidenColumn, FitColumn]);
+gpui_kit::actions!(
+    table_column,
+    [NarrowColumn, WidenColumn, FitColumn, SortColumn]
+);
 
 pub(crate) fn init(cx: &mut gpui_kit::App) {
     use gpui_kit::KeyBinding;
     cx.bind_keys([
+        KeyBinding::new("enter", SortColumn, Some("TableColumnSort")),
+        KeyBinding::new("space", SortColumn, Some("TableColumnSort")),
         KeyBinding::new("left", NarrowColumn, Some("TableColumnResize")),
         KeyBinding::new("shift-left", NarrowColumn, Some("TableColumnResize")),
         KeyBinding::new("right", WidenColumn, Some("TableColumnResize")),
@@ -61,8 +66,9 @@ impl CanvasPanelView {
         };
         let t = *theme(cx);
         let has_selection = table.selected.is_some();
-        let failed = matches!(table.state, TableState::Failed(_) | TableState::Refused(_));
-        let loading = matches!(table.state, TableState::Loading);
+        let failed = matches!(table.state, TableState::Failed(_) | TableState::Refused(_))
+            || table.sort_error.is_some();
+        let loading = matches!(table.state, TableState::Loading) || table.sorting();
         let column_items: Vec<(String, bool, TableCommand)> = match table.columns.get() {
             ColumnSet::Transactions(visible) => TransactionColumn::ALL
                 .iter()

@@ -3919,6 +3919,82 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
             .unwrap();
         vcx.run_until_parked();
         vcx.update(|window, cx| window.draw(cx).clear(cx));
+        vcx.simulate_resize(size(px(360.0), px(700.0)));
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let header = window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                let column = &table.layout.columns[0];
+                point(px(column.rect.left() + 20.0), px(column.rect.top() + 12.0))
+            })
+            .unwrap();
+        let (budget, previous_limit) = window
+            .update(&mut vcx, |ws, _, _| {
+                let budget = ws
+                    .app
+                    .doc
+                    .session(TraceId::A)
+                    .unwrap()
+                    .memory_budget()
+                    .unwrap();
+                let previous_limit = budget.limit();
+                budget.set_limit(budget.used());
+                (budget, previous_limit)
+            })
+            .unwrap();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        vcx.simulate_click(header, Modifiers::default());
+        vcx.simulate_keystrokes("enter");
+        window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                assert!(!table.can_sort_column(0));
+                assert_eq!(table.sort_requested, None);
+                assert!(!table.sorting());
+            })
+            .unwrap();
+        budget.set_limit(previous_limit);
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        for expected in [Some(false), Some(true), None] {
+            match expected {
+                Some(false) => vcx.simulate_click(header, Modifiers::default()),
+                Some(true) => vcx.simulate_keystrokes("enter"),
+                None => vcx.simulate_keystrokes("space"),
+            }
+            vcx.run_until_parked();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let sorting = window
+                    .update(&mut vcx, |ws, _, _| {
+                        ws.app.tick(volna_core::Instant::now());
+                        let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                        assert_eq!(
+                            table.sort_requested.map(|s| s.descending),
+                            expected,
+                            "one header click must cycle once"
+                        );
+                        assert!(table.sort_error.is_none(), "{:?}", table.sort_error);
+                        table.sorting()
+                    })
+                    .unwrap();
+                if !sorting {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert_eq!(table.applied_sort().map(|s| s.descending), expected);
+                    assert_eq!(table.selected, None);
+                    assert_eq!(ws.app.panels.len(), 1);
+                })
+                .unwrap();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+        vcx.simulate_resize(size(px(1600.0), px(700.0)));
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
         let edge = |vcx: &mut VisualTestContext, source_index| {
             window
                 .update(vcx, |ws, _, _| {

@@ -135,6 +135,43 @@ grows with the column. Table panel schema version 3 stores widths per column,
 including hidden columns. **Columns → Reset to defaults** restores column
 visibility and automatic widths.
 
+### Table sorting
+
+Click a column header to cycle ascending, descending, and source order. Tab to a
+header and use Enter or Space for the same action; divider shortcuts still resize
+columns. Blue chevrons show the **applied** direction. While sorting, the status
+bar labels the previous order and offers Cancel. Selection follows the record,
+including after sorting, Go to, and copying. Sort choices are local to the open
+view and are not saved in workspace files.
+
+Native sorting compares complete typed values, never cell previews: integers and
+timestamps stay exact, text uses case-sensitive byte order, and ties retain
+source order in both directions. Missing labels, unavailable signal samples, and
+open transaction end/duration values sort last. Attributes compare key/value
+sequences in stored order, excluding `vtr.label`. Different attribute types sort
+by type; real values use IEEE total order and logic values use width then bits.
+
+Sorting stays entirely in RAM. A cancellable worker sorts an admitted index in
+place, using 32-bit source ordinals for up to 2³² rows and 64-bit ordinals above
+that. The 100M-row index needs 400 MB. Its shared-budget reservation remains held
+for the index's entire lifetime; the previous index also remains charged while
+its replacement is built. Allocation failures preserve the previous order.
+
+When there is insufficient budget for a new index, the header's sort icons turn
+gray and mouse/keyboard sorting is refused. Returning a descending column to
+source order remains available because it frees memory. Sorting becomes
+available again when budget permits; after an allocation error, use Retry. No
+sort files or memory mappings are used.
+Rank access is O(1); locating a selected source row is O(log N). Source rows must
+also fit in RAM. Browser builds currently do not support sorting.
+
+The reproducible scale check sorts and verifies 100M procedural keys in RAM.
+It measures the sorter, independently of trace loading and frame latency:
+
+```sh
+cargo test --release -p volna-core --lib hundred_million_rows -- --ignored --nocapture
+```
+
 ### Marker shortcuts
 
 Across the workspace, **Ctrl+1–6** places the numbered marker at the cursor,

@@ -711,10 +711,82 @@ impl PanelCanvas {
             .h(px(header.height()))
             .overflow_hidden();
         for column in &table.layout.columns {
-            if column.resize.right() <= header.left() || column.resize.left() >= header.right() {
+            if column.rect.right() <= header.left() || column.rect.left() >= header.right() {
                 continue;
             }
             let source_index = column.source_index;
+            let sort_owner = self.ws.clone();
+            let generation = self.generation;
+            let panel = self.panel;
+            let current = table
+                .applied_sort()
+                .filter(|sort| sort.column == source_index);
+            let direction = current.map_or("source order", |sort| {
+                if sort.descending {
+                    "descending"
+                } else {
+                    "ascending"
+                }
+            });
+            let enabled = table.can_sort_column(source_index);
+            let key_owner = sort_owner.clone();
+            edges = edges.child(
+                div()
+                    .id(("table-sort", source_index))
+                    .occlude()
+                    .when(enabled, |style| style.cursor_pointer())
+                    .role(gpui_kit::accesskit::Role::Button)
+                    .tab_index((source_index * 2) as isize)
+                    .tab_stop(enabled)
+                    .focus(move |style| style.border_1().border_color(t.border_focused))
+                    .absolute()
+                    .top_0()
+                    .left(px(
+                        column.rect.left() - header.left() + column.resize.width() * 0.5
+                    ))
+                    .w(px((column.rect.width() - column.resize.width()).max(0.0)))
+                    .h_full()
+                    .aria_label(format!(
+                        "Sort {}: {direction}",
+                        table.column_title(source_index)
+                    ))
+                    .aria_description(if enabled {
+                        "Enter or Space cycles ascending, descending, then source order"
+                    } else {
+                        "Sorting unavailable: insufficient memory or source not ready"
+                    })
+                    .key_context("TableColumnSort")
+                    .on_action(move |_: &crate::table_panel::SortColumn, window, cx| {
+                        cx.stop_propagation();
+                        key_owner.update(cx, |ws, cx| {
+                            ws.dispatch_if_current(
+                                generation,
+                                Command::Table(
+                                    panel,
+                                    volna_core::table::TableCommand::SortColumn(source_index),
+                                ),
+                                Some(window),
+                                cx,
+                            )
+                        });
+                    })
+                    .on_click(move |_, window, cx| {
+                        sort_owner.update(cx, |ws, cx| {
+                            ws.dispatch_if_current(
+                                generation,
+                                Command::Table(
+                                    panel,
+                                    volna_core::table::TableCommand::SortColumn(source_index),
+                                ),
+                                Some(window),
+                                cx,
+                            )
+                        });
+                    }),
+            );
+            if column.resize.right() <= header.left() || column.resize.left() >= header.right() {
+                continue;
+            }
             let group: SharedString =
                 format!("table-{}-column-edge-{source_index}", self.panel.0).into();
             let active = table.resizing_column() == Some(source_index);
@@ -755,7 +827,7 @@ impl PanelCanvas {
                     .aria_min_numeric_value(volna_core::table::layout::MIN_COLUMN_WIDTH as f64)
                     .aria_max_numeric_value(volna_core::table::layout::MAX_COLUMN_WIDTH as f64)
                     .aria_numeric_value_step(8.0)
-                    .tab_index(source_index as isize)
+                    .tab_index((source_index * 2 + 1) as isize)
                     .focus(move |style| style.bg(t.hover.bg))
                     .child(highlight)
                     .key_context("TableColumnResize")
