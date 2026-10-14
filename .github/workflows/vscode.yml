@@ -1,0 +1,117 @@
+name: VS Code extension
+
+on:
+  push:
+    paths: ['volna-vscode/**', 'volna/**', 'volna-core/**', 'volna-trace/**', 'volna-server/**', 'vtr/**', 'docs/design-system/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.github/workflows/vscode.yml']
+  pull_request:
+    paths: ['volna-vscode/**', 'volna/**', 'volna-core/**', 'volna-trace/**', 'volna-server/**', 'vtr/**', 'docs/design-system/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.github/workflows/vscode.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  media:
+    name: Build WebAssembly and test extension host
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: volna-vscode
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: volna-vscode/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run test:package
+      - run: npm run build
+      - uses: actions/upload-artifact@v6
+        with:
+          name: volna-vscode-media
+          path: volna-vscode/media/
+          if-no-files-found: error
+
+  vsix:
+    name: Package ${{ matrix.target }}
+    needs: media
+    timeout-minutes: 45
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+          - os: macos-15
+            target: darwin-arm64
+          - os: windows-2022
+            target: win32-x64
+          - os: windows-11-arm
+            target: win32-arm64
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v6
+        with:
+          name: volna-vscode-media
+          path: volna-vscode/media/
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: volna-vscode/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+      - uses: Swatinem/rust-cache@v2
+      - run: npm ci
+        working-directory: volna-vscode
+      - name: Build and verify VSIX
+        run: python volna-vscode/package_vsix.py --target ${{ matrix.target }}
+      - name: Provision headless VS Code
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libasound2t64 libgbm1 libnss3 libgtk-3-0t64 libxss1 libvulkan1
+          mkdir -p "$RUNNER_TEMP/volna-code"
+          curl --fail --location --output "$RUNNER_TEMP/volna-code.tar.gz" https://update.code.visualstudio.com/latest/linux-x64/stable
+          tar -xzf "$RUNNER_TEMP/volna-code.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/volna-code"
+          sudo chown root:root "$RUNNER_TEMP/volna-code/chrome-sandbox"
+          sudo chmod 4755 "$RUNNER_TEMP/volna-code/chrome-sandbox"
+          echo "VOLNA_CODE=$RUNNER_TEMP/volna-code/bin/code" >> "$GITHUB_ENV"
+      - name: Test installed VSIX with VTR and FST
+        if: matrix.target == 'linux-x64'
+        run: node --test volna-vscode/vsix.test.mjs
+      - name: Upload installed-extension screenshots
+        if: ${{ always() && matrix.target == 'linux-x64' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: volna-vscode-screenshots
+          path: volna-vscode/test-results/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v6
+        with:
+          name: volna-${{ matrix.target }}
+          path: volna-vscode/volna-*-${{ matrix.target }}.vsix
+          if-no-files-found: error

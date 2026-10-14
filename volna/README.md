@@ -18,6 +18,11 @@ shortcuts apply to the focused detail panel.
 See the [`volna-core` guide](../volna-core/README.md) for the frontend contract,
 headless tests, persistence model, and undo journal.
 
+The same viewer runs in the [VS Code extension](../volna-vscode/README.md).
+Its WebAssembly build is shared with the documentation site through
+`tools/build-web.mjs`; the extension bundles a native `volna-server` for the
+workspace host.
+
 VTR transactions may be recorded with out-of-order timestamps, as in
 temporally decoupled TLM simulations. Volna's loading layer sorts each
 generator's transactions by `(begin, end, transaction ID)` before building

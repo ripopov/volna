@@ -41,5 +41,14 @@ rustc-ice-*.txt
 /docs/public/viewer/pkg/
 /docs/public/examples/
 
+/volna-vscode/node_modules/
+/volna-vscode/media/
+/volna-vscode/bin/
+/volna-vscode/licenses/
+/volna-vscode/LICENSE
+/volna-vscode/*.vsix
+/volna-vscode/test-results/
+**/__pycache__/
+
 # Local Codex configuration
 /.codex/

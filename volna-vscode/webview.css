@@ -1,0 +1,24 @@
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--vscode-editor-background, var(--viewer-canvas));
+  color: var(--vscode-editor-foreground, var(--viewer-text));
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+}
+
+#viewer-status,
+noscript {
+  position: absolute;
+  margin: var(--space-4);
+}

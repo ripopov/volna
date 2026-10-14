@@ -1,0 +1,10 @@
+**
+!package.json
+!README.md
+!LICENSE
+!extension.js
+!workspace.js
+!trace-host.cjs
+!media/**
+!bin/**
+!licenses/**

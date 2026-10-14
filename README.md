@@ -4,7 +4,7 @@ Volna is a hardware debug environment under development.
 
 ## Workspace
 
-| Crate | Responsibility |
+| Package | Responsibility |
 | --- | --- |
 | [`vtr`](vtr/README.md) | Versatile Trace Record: runtime trace format, reader, writer, and derived indexes |
 | [`vtr-capi`](vtr-capi/README.md) | C ABI, public C/C++ headers, and simulator integration helpers for VTR |
@@ -14,6 +14,7 @@ Volna is a hardware debug environment under development.
 | [`volna-server`](volna-server/README.md) | Headless process serving one recording over framed stdin/stdout |
 | [`volna-core`](volna-core/README.md) | Toolkit-independent viewer state, commands, layouts, and display lists |
 | [`volna`](volna/README.md) | GPUI desktop viewer for VTR and FST recordings |
+| [`volna-vscode`](volna-vscode/README.md) | VS Code custom editor, WebAssembly host, and platform VSIX packaging |
 
 ## VTR/VDB boundary
 

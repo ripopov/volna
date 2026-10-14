@@ -622,8 +622,12 @@ pub mod web {
                                 }
                                 HostEvent::Command(command) => ws.dispatch(command, None, cx),
                                 HostEvent::DebugState => log::info!(
-                                    "STATE {}\n{}",
+                                    "STATE {}\ntrace_loaded={}\n{}",
                                     ws.debug_state(),
+                                    matches!(
+                                        ws.app.trace_state(),
+                                        volna_core::document::TraceState::Loaded(_)
+                                    ),
                                     ws.app.frames.debug_state()
                                 ),
                             });
