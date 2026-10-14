@@ -656,27 +656,28 @@ impl TableModel {
                 super::sort::retire(order);
             }
         }
-        if self.sort_job.is_none() && self.sorting() {
-            if let Some(sort) = self.sort_requested {
-                let source = match &self.rows {
-                    Rows::Generator(g) => super::sort::Source::Generator(g.clone()),
-                    Rows::Signals {
-                        histories,
-                        axis,
-                        _axis_reservation,
-                    } => super::sort::Source::Signals {
-                        histories: histories.clone(),
-                        axis: axis.clone(),
-                        _reservation: _axis_reservation.clone(),
-                    },
-                    Rows::None => return changed,
-                };
-                match super::sort::Job::start(source, self.len(), sort, self.budget.clone()) {
-                    Ok(job) => self.sort_job = Some((self.sort_revision, job)),
-                    Err(error) => self.sort_error = Some(format!("{error:#}")),
-                }
-                changed = true;
+        if self.sort_job.is_none()
+            && self.sorting()
+            && let Some(sort) = self.sort_requested
+        {
+            let source = match &self.rows {
+                Rows::Generator(g) => super::sort::Source::Generator(g.clone()),
+                Rows::Signals {
+                    histories,
+                    axis,
+                    _axis_reservation,
+                } => super::sort::Source::Signals {
+                    histories: histories.clone(),
+                    axis: axis.clone(),
+                    _reservation: _axis_reservation.clone(),
+                },
+                Rows::None => return changed,
+            };
+            match super::sort::Job::start(source, self.len(), sort, self.budget.clone()) {
+                Ok(job) => self.sort_job = Some((self.sort_revision, job)),
+                Err(error) => self.sort_error = Some(format!("{error:#}")),
             }
+            changed = true;
         }
         changed
     }
