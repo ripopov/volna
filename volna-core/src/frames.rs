@@ -1,6 +1,7 @@
 //! Whole-window frame timing for the status bar and its details popup.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt::Write as _;
 
 pub const TICK_SECONDS: f64 = 0.5;
 pub const RECENT_FRAMES: u64 = 120;
@@ -30,10 +31,12 @@ impl Distribution {
         }
     }
 
+    #[must_use]
     pub fn count(&self) -> u64 {
         self.counts.values().sum()
     }
 
+    #[must_use]
     pub fn quantile_ms(&self, q: f64) -> Option<f64> {
         let total = self.count();
         let rank = ((q * total as f64).ceil() as u64).clamp(1, total.max(1));
@@ -44,10 +47,12 @@ impl Distribution {
         })
     }
 
+    #[must_use]
     pub fn max_ms(&self) -> Option<f64> {
         self.counts.keys().next_back().map(|&nanos| ms(nanos))
     }
 
+    #[must_use]
     pub fn summary(&self) -> Option<Summary> {
         Some(Summary {
             median: self.quantile_ms(0.5)?,
@@ -58,6 +63,7 @@ impl Distribution {
         })
     }
 
+    #[must_use]
     pub fn buckets(&self) -> [u64; BUCKETS] {
         let mut out = [0; BUCKETS];
         for (&nanos, &count) in &self.counts {
@@ -72,6 +78,7 @@ impl Distribution {
     }
 }
 
+#[must_use]
 pub fn bucket_position(value_ms: f64) -> f64 {
     let first = BUCKET_EDGES_MS[0];
     if value_ms < first {
@@ -93,6 +100,7 @@ pub struct FrameSample {
 }
 
 impl FrameSample {
+    #[must_use]
     pub fn frames(&self) -> u64 {
         self.draw.count()
     }
@@ -195,13 +203,14 @@ impl FrameStats {
         self.total = FrameSample::default();
     }
 
+    #[must_use]
     pub fn status(&self) -> Option<FrameStatus> {
         let recent = self.recent_sample();
         let draw = recent.draw.summary()?;
         let latency = recent.latency.summary();
         let mut text = format!("draw {}", format_ms(draw.median));
         if let Some(latency) = latency {
-            text += &format!(" · lat {}", format_ms(latency.median));
+            write!(text, " · lat {}", format_ms(latency.median)).unwrap();
         }
         text += " ms";
         let level = Level::of(draw.p99, DRAW_BUDGET_MS)
@@ -213,6 +222,7 @@ impl FrameStats {
         })
     }
 
+    #[must_use]
     pub fn details(&self) -> FrameDetails {
         let recent = self.recent_sample();
         let row = |title, hint, pick: fn(&FrameSample) -> &Distribution, budget_ms| FrameRow {
@@ -249,6 +259,7 @@ impl FrameStats {
         }
     }
 
+    #[must_use]
     pub fn debug_state(&self) -> String {
         let status = self.status();
         format!(
@@ -275,6 +286,7 @@ impl FrameStats {
     }
 }
 
+#[must_use]
 pub fn format_ms(value: f64) -> String {
     if value < 10.0 {
         format!("{value:.1}")

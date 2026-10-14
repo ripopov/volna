@@ -149,7 +149,7 @@ impl<Tag: Copy> RemoteClient<Tag> {
                 });
             }
             request @ (LoadRequest::Track { .. } | LoadRequest::BuildActivity { .. }) => {
-                self.queued.push_back(Queued::new(request))
+                self.queued.push_back(Queued::new(request));
             }
         }
         Ok(())
@@ -392,7 +392,9 @@ impl<Tag: Copy> RemoteClient<Tag> {
                     Err(e) => *error = Some(format!("{e:#}")),
                 }
             }
-            let finished = transfer.as_ref().is_some_and(|t| t.is_complete());
+            let finished = transfer
+                .as_ref()
+                .is_some_and(super::signals::SignalTransfer::is_complete);
             if finished {
                 transfer.take().unwrap().finish()?;
                 if *next == signals.len() || error.is_some() {
@@ -445,8 +447,7 @@ impl<Tag: Copy> RemoteClient<Tag> {
             Some(Active::Signals { transfer, .. }) => transfer.is_complete(),
             Some(Active::Track { transfer, .. }) => transfer.is_complete(),
             Some(Active::Activity { transfer }) => transfer.is_complete(),
-            Some(Active::Resolve { .. }) => false,
-            None => false,
+            Some(Active::Resolve { .. }) | None => false,
         };
         if complete {
             match self.active.take().unwrap() {

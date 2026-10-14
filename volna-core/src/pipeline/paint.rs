@@ -246,7 +246,7 @@ pub fn paint(
                                 (0.0, Color::TRANSPARENT)
                             };
                             p.scene.clipped(cells, |scene| {
-                                scene.quad(rect, style.fill, 0.0, border_w, border_c)
+                                scene.quad(rect, style.fill, 0.0, border_w, border_c);
                             });
                         }
                         last_right = Some(last_right.map_or(xb, |r: f32| r.max(xb)));
@@ -282,7 +282,7 @@ pub fn paint(
                             (0.0, Color::TRANSPARENT)
                         };
                         p.scene.clipped(cells, |scene| {
-                            scene.quad(rect, style.fill, 0.0, border_w, border_c)
+                            scene.quad(rect, style.fill, 0.0, border_w, border_c);
                         });
                         last_right = Some(xb);
                     }

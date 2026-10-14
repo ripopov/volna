@@ -2,6 +2,7 @@
 //! cells area, the visible row range, and the small interactive rectangles (label divider,
 //! Markers lane chips, retry).
 
+use crate::pipeline::Activity;
 use std::ops::Range;
 
 use super::rows::RowView;
@@ -56,6 +57,7 @@ pub struct LayoutInput<'a> {
 }
 
 impl PipelineLayout {
+    #[must_use]
     pub fn compute(input: LayoutInput<'_>) -> Self {
         let bounds = input.bounds;
         let zoom = if input.zoom.is_finite() && input.zoom > 0.0 {
@@ -121,7 +123,7 @@ impl PipelineLayout {
         );
         Self {
             activity_controls: Vec::new(),
-            activity: Default::default(),
+            activity: Activity::default(),
             bounds,
             header,
             rulers,
@@ -138,6 +140,7 @@ impl PipelineLayout {
         }
     }
 
+    #[must_use]
     pub fn row_at(&self, y: f32) -> Option<usize> {
         if y < self.cells.top() || y >= self.cells.bottom() {
             return None;
@@ -146,22 +149,27 @@ impl PipelineLayout {
         (row >= 0.0 && (row as usize) < self.row_count).then_some(row as usize)
     }
 
+    #[must_use]
     pub fn is_overview(&self) -> bool {
         f64::from(self.rows.row_px) * self.device_scale < OVERVIEW_PX
     }
 
+    #[must_use]
     pub fn row_y(&self, ix: usize) -> f32 {
         self.cells.top() + self.rows.y_of(ix as f64)
     }
 
+    #[must_use]
     pub fn cells_width_f64(&self) -> f64 {
         f64::from(self.cells.width()).max(1.0)
     }
 
+    #[must_use]
     pub fn ruler_at(&self, p: Point, count: usize) -> Option<usize> {
         crate::wave::layout::ruler_row(self.rulers, p, count)
     }
 
+    #[must_use]
     pub fn time_at(&self, viewport: &Viewport, x: f32) -> f64 {
         viewport.time_at(f64::from(x - self.cells.left()), self.cells_width_f64())
     }

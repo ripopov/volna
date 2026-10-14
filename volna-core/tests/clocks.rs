@@ -782,7 +782,10 @@ fn spans_between_markers_count_cycles_and_zoom_on_a_double_click() {
     assert!(texts(&mut app).contains(&span.labels[0]));
 
     let (x0, x1) = lane.shown(span);
-    let mid = point((x0 + x1) / 2.0, lane.band.top() + lane.band.height() / 2.0);
+    let mid = point(
+        f32::midpoint(x0, x1),
+        lane.band.top() + lane.band.height() / 2.0,
+    );
     assert_eq!(lane.hit(mid), Some(LaneHit::Span(0)));
     app.handle(Command::Pointer(
         panel,

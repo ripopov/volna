@@ -1,6 +1,7 @@
 //! `PipelineModel`: the state of a pipeline panel (the track it shows, its navigation, the
 //! row axis, the label column, hover and drags) and every input rule that mutates it.
 
+use std::fmt::Write as _;
 use web_time::Instant;
 
 use super::layout::{LABEL_W_DEFAULT, LABEL_W_MAX, LABEL_W_MIN, LayoutInput, PipelineLayout};
@@ -42,12 +43,14 @@ pub enum TrackSource {
 }
 
 impl TrackSource {
+    #[must_use]
     pub fn path(&self) -> &[String] {
         match self {
             Self::Resolved { path, .. } | Self::Unresolved { path, .. } => path,
         }
     }
 
+    #[must_use]
     pub fn track(&self) -> Option<Traced<TrackRef>> {
         match self {
             Self::Resolved { track, .. } => Some(*track),
@@ -55,6 +58,7 @@ impl TrackSource {
         }
     }
 
+    #[must_use]
     pub fn trace(&self) -> TraceId {
         match self {
             Self::Resolved { track, .. } => track.trace,
@@ -125,6 +129,7 @@ pub struct PipelineModel {
 }
 
 impl PipelineModel {
+    #[must_use]
     pub fn new(track: TrackSource, link: Link) -> Self {
         let mut nav = NavState::new();
         nav.link = link;
@@ -145,6 +150,7 @@ impl PipelineModel {
         }
     }
 
+    #[must_use]
     pub fn clone_view(&self) -> Self {
         Self {
             track: self.track.clone(),
@@ -180,6 +186,7 @@ impl PipelineModel {
         self.attached = false;
     }
 
+    #[must_use]
     pub fn is_attached(&self) -> bool {
         self.attached
     }
@@ -196,10 +203,12 @@ impl PipelineModel {
             .is_some_and(|track| doc.retry_track(track))
     }
 
+    #[must_use]
     pub fn palette(&self) -> &StagePalette {
         &self.palette
     }
 
+    #[must_use]
     pub fn rows<'a>(&self, doc: &'a Document) -> Rows<'a> {
         let Some(track) = self.track.track() else {
             return Rows::Unresolved;
@@ -215,6 +224,7 @@ impl PipelineModel {
         }
     }
 
+    #[must_use]
     pub fn row_count(&self, doc: &Document) -> usize {
         match self.rows(doc) {
             Rows::Ready(set) => set.len(),
@@ -222,6 +232,7 @@ impl PipelineModel {
         }
     }
 
+    #[must_use]
     pub fn label(tx: &Transaction) -> String {
         tx.attributes
             .iter()
@@ -232,14 +243,17 @@ impl PipelineModel {
             .unwrap_or_default()
     }
 
+    #[must_use]
     pub fn stage_end(tx: &Transaction, stage: &TransactionStage) -> u64 {
         stage.end.unwrap_or(tx.end).max(stage.begin)
     }
 
+    #[must_use]
     pub fn last_layout(&self) -> &PipelineLayout {
         &self.layout
     }
 
+    #[must_use]
     pub fn is_animating(&self) -> bool {
         self.nav.is_animating() || self.rows.is_animating()
     }
@@ -250,6 +264,7 @@ impl PipelineModel {
         nav || rows
     }
 
+    #[must_use]
     pub fn selected_row(&self, doc: &Document) -> Option<usize> {
         let selection = doc.selection()?;
         if selection.track.trace != self.track.trace() {
@@ -261,6 +276,7 @@ impl PipelineModel {
         set.row_of(selection.track.item, selection.id)
     }
 
+    #[must_use]
     pub fn label_row_at(&self, doc: &Document, p: Point) -> Option<usize> {
         if !self.layout.labels.contains(p) || self.layout.is_overview() {
             return None;
@@ -394,6 +410,7 @@ impl PipelineModel {
         self.rows.set(rows.unzoomed(zoom));
     }
 
+    #[must_use]
     pub fn hover_text(&self, doc: &Document) -> Option<String> {
         if self.hover == Some(Hit::Overview) {
             return Some("Pipeline presence · zoom in to inspect records".into());
@@ -416,16 +433,18 @@ impl PipelineModel {
         }
         match stage.and_then(|s| tx.stages.get(s)) {
             Some(s) => {
-                text.push_str(&format!(
+                write!(
+                    text,
                     " · {} {}",
                     s.name,
                     self.span_text(doc, s.begin, Self::stage_end(tx, s))
-                ));
+                )
+                .unwrap();
                 if s.lane != self.palette.primary_lane() {
-                    text.push_str(&format!(" lane {}", s.lane));
+                    write!(text, " lane {}", s.lane).unwrap();
                 }
             }
-            None => text.push_str(&format!(" · {}", self.span_text(doc, tx.begin, tx.end))),
+            None => write!(text, " · {}", self.span_text(doc, tx.begin, tx.end)).unwrap(),
         }
         let label = Self::label(tx);
         if !label.is_empty() {
@@ -482,13 +501,13 @@ impl PipelineModel {
             self.follow_activity(doc)
         };
         let rows_before = self.rows.target();
-        let layout = if self.rows.value != input.rows {
+        let layout = if self.rows.value == input.rows {
+            self.layout.clone()
+        } else {
             PipelineLayout::compute(LayoutInput {
                 rows: self.rows.value,
                 ..input
             })
-        } else {
-            self.layout.clone()
         };
         if !self.rows.is_animating() {
             self.rows.set(layout.rows.unzoomed(layout.zoom));
@@ -663,6 +682,7 @@ impl PipelineModel {
             .unwrap_or(1.0)
     }
 
+    #[must_use]
     pub fn zoom_box(&self, doc: &Document, viewport: &Viewport) -> ZoomBox {
         let z = f64::from(self.layout.zoom);
         let w = self.cells_w();
@@ -970,6 +990,7 @@ impl PipelineModel {
         }
     }
 
+    #[must_use]
     pub fn clock<'a>(&self, doc: &'a Document) -> Option<&'a crate::clock::Clock> {
         doc.clocks.linked(self.track.track()?)
     }

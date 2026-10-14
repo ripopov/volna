@@ -10,6 +10,7 @@ pub struct TimeBase<'a> {
 }
 
 impl<'a> TimeBase<'a> {
+    #[must_use]
     pub fn of(info: &'a TraceInfo) -> Self {
         Self {
             timescale: info.timescale,
@@ -17,6 +18,7 @@ impl<'a> TimeBase<'a> {
         }
     }
 
+    #[must_use]
     pub fn si(timescale: i8) -> Self {
         Self {
             timescale,
@@ -47,26 +49,27 @@ fn choose_unit(units: f64, timescale: i8) -> (i32, &'static str) {
         return UNITS
             .iter()
             .copied()
-            .find(|(e, _)| *e == timescale as i32)
+            .find(|(e, _)| *e == i32::from(timescale))
             .unwrap_or((-9, "ns"));
     }
-    let seconds_exp = units.log10() + timescale as f64;
+    let seconds_exp = units.log10() + f64::from(timescale);
     let mut best = UNITS[0];
     for u in UNITS {
-        if seconds_exp >= u.0 as f64 {
+        if seconds_exp >= f64::from(u.0) {
             best = u;
         }
     }
-    if best.0 < timescale as i32 {
+    if best.0 < i32::from(timescale) {
         best = UNITS
             .iter()
             .copied()
-            .find(|(e, _)| *e >= timescale as i32)
+            .find(|(e, _)| *e >= i32::from(timescale))
             .unwrap_or(best);
     }
     best
 }
 
+#[must_use]
 pub fn unit_label(timescale: i8) -> String {
     let exp = i32::from(timescale);
     match UNITS.iter().rev().find(|(e, _)| *e <= exp) {
@@ -77,7 +80,7 @@ pub fn unit_label(timescale: i8) -> String {
 }
 
 fn trim_float(v: f64, max_decimals: usize) -> String {
-    let s = format!("{v:.*}", max_decimals);
+    let s = format!("{v:.max_decimals$}");
     if s.contains('.') {
         let s = s.trim_end_matches('0');
         s.trim_end_matches('.').to_string()
@@ -86,13 +89,14 @@ fn trim_float(v: f64, max_decimals: usize) -> String {
     }
 }
 
+#[must_use]
 pub fn format_time(t: f64, base: TimeBase<'_>) -> String {
     if let Some(unit) = base.unit {
         return format!("{} {unit}", trim_float(t, 3));
     }
     let timescale = base.timescale;
     let (exp, suffix) = choose_unit(t.abs().max(1.0), timescale);
-    let v = t * 10f64.powi(timescale as i32 - exp);
+    let v = t * 10f64.powi(i32::from(timescale) - exp);
     let decimals = if v.abs() >= 100.0 {
         1
     } else if v.abs() >= 10.0 {
@@ -104,7 +108,7 @@ pub fn format_time(t: f64, base: TimeBase<'_>) -> String {
 }
 
 fn format_in_unit(t: f64, timescale: i8, exp: i32, decimals: usize) -> String {
-    let v = t * 10f64.powi(timescale as i32 - exp);
+    let v = t * 10f64.powi(i32::from(timescale) - exp);
     trim_float(v, decimals)
 }
 
@@ -121,6 +125,7 @@ fn tick_step(viewport: &Viewport, width_px: f64, min_spacing_px: f64) -> f64 {
     10.0 * mag
 }
 
+#[must_use]
 pub fn ticks<'a>(
     viewport: &Viewport,
     width_px: f64,
@@ -133,10 +138,10 @@ pub fn ticks<'a>(
     let step = tick_step(viewport, width_px, min_spacing_px);
     let timescale = base.timescale;
     let (exp, suffix) = match base.unit {
-        Some(unit) => (timescale as i32, unit),
+        Some(unit) => (i32::from(timescale), unit),
         None => choose_unit(step, timescale),
     };
-    let step_in_unit = step * 10f64.powi(timescale as i32 - exp);
+    let step_in_unit = step * 10f64.powi(i32::from(timescale) - exp);
     let decimals = if step_in_unit >= 1.0 {
         0
     } else {
@@ -177,7 +182,7 @@ mod tests {
     #[test]
     fn formats() {
         assert_eq!(format_time(1250.0, TimeBase::si(-9)), "1.25 µs");
-        assert_eq!(format_time(958189.0, TimeBase::si(-9)), "958.2 µs");
+        assert_eq!(format_time(958_189.0, TimeBase::si(-9)), "958.2 µs");
         assert_eq!(format_time(0.0, TimeBase::si(-9)), "0 ns");
         assert_eq!(format_time(5.0, TimeBase::si(-12)), "5 ps");
         assert_eq!(format_time(3_000_000.0, TimeBase::si(-9)), "3 ms");

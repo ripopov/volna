@@ -203,7 +203,7 @@ fn the_measure_lane_appears_with_a_reference_and_joins_it_to_the_cursor() {
     assert!(live.x0 >= m.tag.right() && (live.x1 - x_of(&l, &app, 1700)).abs() <= 1.0);
     assert!(!live.labels.is_empty());
     let mid = point(
-        (live.x0 + live.x1) / 2.0,
+        f32::midpoint(live.x0, live.x1),
         m.band.top() + m.band.height() / 2.0,
     );
     assert_eq!(l.hit(mid), Some(volna_core::marker::LaneHit::Live));
@@ -234,7 +234,7 @@ fn a_press_on_the_live_span_keeps_the_cursor_and_elsewhere_moves_it() {
     let y = m.band.top() + m.band.height() / 2.0;
     press(
         &mut app,
-        point((live.x0 + live.x1) / 2.0, y),
+        point(f32::midpoint(live.x0, live.x1), y),
         MouseButton::Left,
         false,
     );
@@ -413,7 +413,7 @@ fn the_measure_lanes_close_button_clears_the_reference_and_names_the_key() {
     );
     assert!(texts.iter().any(|t| t == "Marker 1"), "{texts:?}");
     let live = m.live.clone().unwrap();
-    let on_live = point((live.x0 + live.x1) / 2.0, centre(m.band).y);
+    let on_live = point(f32::midpoint(live.x0, live.x1), centre(m.band).y);
     let texts = tip(&mut app, on_live);
     assert!(
         texts

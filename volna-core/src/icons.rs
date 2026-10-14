@@ -141,6 +141,7 @@ icons!(
 );
 
 impl IconName {
+    #[must_use]
     pub fn from_path(path: &str) -> Option<IconName> {
         IconName::ALL.iter().copied().find(|i| i.path() == path)
     }

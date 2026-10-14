@@ -50,10 +50,12 @@ pub fn choices() -> impl Iterator<Item = (&'static str, &'static str)> {
         .chain(BUILTIN.iter().map(|b| (b.id, b.label)))
 }
 
+#[must_use]
 pub fn is_builtin(id: &str) -> bool {
     choices().any(|(known, _)| known == id)
 }
 
+#[must_use]
 pub fn resolve(id: &str, system_dark: bool) -> Option<Themes> {
     let volna = Theme::volna;
     Some(match id {
@@ -74,6 +76,7 @@ pub fn resolve(id: &str, system_dark: bool) -> Option<Themes> {
 }
 
 impl Theme {
+    #[must_use]
     pub fn builtin(id: &str) -> Option<Self> {
         resolve(id, true).map(|themes| themes.chrome)
     }

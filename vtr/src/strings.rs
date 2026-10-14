@@ -17,6 +17,7 @@ pub struct Interner {
 }
 
 impl Interner {
+    #[must_use]
     pub fn new() -> Self {
         let mut i = Interner {
             map: HashMap::new(),
@@ -40,22 +41,27 @@ impl Interner {
         StrId(id)
     }
 
+    #[must_use]
     pub fn get(&self, id: StrId) -> &str {
         &self.strings[id.0 as usize]
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.strings.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.strings.is_empty()
     }
 
+    #[must_use]
     pub fn has_pending(&self) -> bool {
         self.flushed < self.strings.len()
     }
 
+    #[must_use]
     pub fn pending_bytes(&self) -> usize {
         self.bytes_pending
     }
@@ -88,6 +94,7 @@ pub struct StringTable {
 }
 
 impl StringTable {
+    #[must_use]
     pub fn new() -> Self {
         StringTable {
             data: Vec::new(),
@@ -112,23 +119,28 @@ impl StringTable {
         Ok(())
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[must_use]
     pub fn get(&self, id: StrId) -> &str {
         let i = id.0 as usize;
         if i + 1 >= self.offsets.len() {
             return "";
         }
         let s = &self.data[self.offsets[i] as usize..self.offsets[i + 1] as usize];
+        // SAFETY: add_chunk validates every entry as UTF-8 and records its complete byte boundaries.
         unsafe { std::str::from_utf8_unchecked(s) }
     }
 
+    #[must_use]
     pub fn try_get(&self, id: StrId) -> Option<&str> {
         if (id.0 as usize) < self.len() {
             Some(self.get(id))
@@ -137,10 +149,12 @@ impl StringTable {
         }
     }
 
+    #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         (self.data.capacity() + 4 * self.offsets.capacity()) as u64
     }
 
+    #[must_use]
     pub fn find(&self, s: &str) -> Option<StrId> {
         (0..self.len())
             .map(|i| StrId(i as u32))
@@ -151,6 +165,20 @@ impl StringTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_chunk_preserves_valid_utf8_entries() {
+        let mut table = StringTable::new();
+        let mut payload = Vec::new();
+        crate::varint::put_u64(&mut payload, 0);
+        crate::varint::put_u64(&mut payload, 2);
+        crate::varint::put_blob(&mut payload, "λ".as_bytes());
+        crate::varint::put_blob(&mut payload, &[0xff]);
+        assert!(table.add_chunk(&payload).is_err());
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.get(StrId(0)), "λ");
+        assert_eq!(table.try_get(StrId(1)), None);
+    }
 
     #[test]
     fn intern_and_chunks() {

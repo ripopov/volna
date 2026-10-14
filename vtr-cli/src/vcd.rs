@@ -1,6 +1,6 @@
 //! Streaming VCD conversion with checked identifiers, aliases, and time ordering.
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::Path;
@@ -163,7 +163,7 @@ pub fn convert_vcd(input: impl AsRef<Path>, w: &mut Writer) -> Result<()> {
                 }
                 Command::ChangeReal(code, value) => w.emit_real(signal(code)?.id, value)?,
                 Command::ChangeString(code, value) => {
-                    w.emit_varlen(signal(code)?.id, value.as_bytes())?
+                    w.emit_varlen(signal(code)?.id, value.as_bytes())?;
                 }
                 Command::Begin(kind) => {
                     ensure!(simulation.is_none(), "nested VCD dump command");

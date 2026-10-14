@@ -226,7 +226,7 @@ mod presence_tests {
     #[test]
     fn fragmented_output_is_one_mask_and_solid_output_is_bounded_runs() {
         let rect = Rect::from_xywh(0.0, 0.0, 128.0, 32.0);
-        let color = Color::rgb(0x123456);
+        let color = Color::rgb(0x0012_3456);
         let mut scene = Scene::default();
         let mut mask = PresenceMask::new(256, 64);
         mask.fill(0..256, 0..64);

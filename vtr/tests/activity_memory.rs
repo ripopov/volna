@@ -1,7 +1,7 @@
 //! The activity index builder runs in bounded memory: building a run eight times longer
 //! peaks at the same heap, within 24 bytes per signal plus the scans in flight.
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use vtr::activity::{self, BuildOptions};
@@ -17,26 +17,39 @@ fn grew(n: usize) {
     PEAK.fetch_max(now, Ordering::Relaxed);
 }
 
+// SAFETY: Allocation and deallocation preserve System layouts and pointers; counters are atomic or thread-local.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        grew(l.size());
-        System.alloc(l)
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
+        unsafe {
+            grew(l.size());
+            System.alloc(l)
+        }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
-        CURRENT.fetch_sub(l.size(), Ordering::Relaxed);
-        System.dealloc(p, l)
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
+        unsafe {
+            CURRENT.fetch_sub(l.size(), Ordering::Relaxed);
+            System.dealloc(p, l);
+        }
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
-        grew(l.size());
-        System.alloc_zeroed(l)
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
+        unsafe {
+            grew(l.size());
+            System.alloc_zeroed(l)
+        }
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
-        if new > l.size() {
-            grew(new - l.size());
-        } else {
-            CURRENT.fetch_sub(l.size() - new, Ordering::Relaxed);
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
+        unsafe {
+            if new > l.size() {
+                grew(new - l.size());
+            } else {
+                CURRENT.fetch_sub(l.size() - new, Ordering::Relaxed);
+            }
+            System.realloc(p, l, new)
         }
-        System.realloc(p, l, new)
     }
 }
 
@@ -75,7 +88,7 @@ fn write_trace(path: &std::path::Path, steps: usize) {
         let phase = (step / 50) % 10;
         for &s in sigs[phase..].iter().step_by(10) {
             if rng.gen_ratio(1, 4) {
-                w.emit_u64(s, rng.gen()).unwrap();
+                w.emit_u64(s, rng.r#gen()).unwrap();
             }
         }
         t += rng.gen_range(1..20);

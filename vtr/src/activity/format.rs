@@ -54,8 +54,8 @@ impl Header {
             },
             signals: le32(p, 16),
             budget: Budget {
-                disk: le32(p, 20) as f64 / 1e6,
-                memory: le32(p, 24) as f64 / 1e6,
+                disk: f64::from(le32(p, 20)) / 1e6,
+                memory: f64::from(le32(p, 24)) / 1e6,
             },
             t_min: le64(p, 32),
         })

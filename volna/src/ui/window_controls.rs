@@ -31,7 +31,7 @@ pub fn render_window_controls(side: Side, window: &Window, cx: &App) -> Option<A
     if WINDOWS {
         return (side == Side::Right).then(|| {
             WindowsControls {
-                buttons: visible_buttons(&linux_default().right, &window.window_controls()),
+                buttons: visible_buttons(&linux_default().right, window.window_controls()),
             }
             .into_any_element()
         });
@@ -42,7 +42,7 @@ pub fn render_window_controls(side: Side, window: &Window, cx: &App) -> Option<A
             Side::Left => &layout.left,
             Side::Right => &layout.right,
         },
-        &window.window_controls(),
+        window.window_controls(),
     );
     (!buttons.is_empty()).then(|| {
         LinuxControls {
@@ -67,7 +67,7 @@ fn linux_default() -> WindowButtonLayout {
     }
 }
 
-fn visible_buttons(side: &[Option<WindowButton>], supported: &WindowControls) -> Vec<WindowButton> {
+fn visible_buttons(side: &[Option<WindowButton>], supported: WindowControls) -> Vec<WindowButton> {
     side.iter()
         .flatten()
         .copied()
@@ -256,9 +256,9 @@ mod tests {
     #[test]
     fn default_layout_puts_every_control_on_the_right() {
         let layout = linux_default();
-        assert!(visible_buttons(&layout.left, &all()).is_empty());
+        assert!(visible_buttons(&layout.left, all()).is_empty());
         assert_eq!(
-            visible_buttons(&layout.right, &all()),
+            visible_buttons(&layout.right, all()),
             [
                 WindowButton::Minimize,
                 WindowButton::Maximize,
@@ -276,7 +276,7 @@ mod tests {
             window_menu: false,
         };
         let layout = linux_default();
-        assert_eq!(visible_buttons(&layout.right, &none), [WindowButton::Close]);
+        assert_eq!(visible_buttons(&layout.right, none), [WindowButton::Close]);
     }
 
     #[test]
@@ -290,11 +290,11 @@ mod tests {
             right: [Some(WindowButton::Maximize), None, None],
         };
         assert_eq!(
-            visible_buttons(&layout.left, &all()),
+            visible_buttons(&layout.left, all()),
             [WindowButton::Close, WindowButton::Minimize]
         );
         assert_eq!(
-            visible_buttons(&layout.right, &all()),
+            visible_buttons(&layout.right, all()),
             [WindowButton::Maximize]
         );
     }

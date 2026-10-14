@@ -63,9 +63,11 @@ impl Header {
             server: session.activity_host().unwrap_or("remote server").into(),
         })
     }
+    #[must_use]
     pub fn scope_pages(&self) -> u32 {
         self.scopes.div_ceil(PAGE_ENTRIES as u32)
     }
+    #[must_use]
     pub fn var_pages(&self) -> u32 {
         self.vars.div_ceil(PAGE_ENTRIES as u32)
     }
@@ -82,18 +84,20 @@ pub struct Page {
     pub sizes: Vec<ScopeSize>,
 }
 impl Page {
+    #[must_use]
     pub fn scopes(h: &Hierarchy, sizes: &ScopeSizes, page: u32) -> Self {
         scope_pages(h, sizes)
             .nth(page as usize)
             .expect("scope page")
     }
+    #[must_use]
     pub fn vars(h: &Hierarchy, page: u32) -> Self {
         var_pages(h).nth(page as usize).expect("variable page")
     }
     fn name(&self, id: u32) -> &str {
         let bytes =
             &self.names[self.offsets[id as usize] as usize..self.offsets[id as usize + 1] as usize];
-        unsafe { std::str::from_utf8_unchecked(bytes) }
+        std::str::from_utf8(bytes).expect("validated hierarchy name")
     }
     fn rows(&self) -> usize {
         self.columns[0].len()
@@ -513,10 +517,10 @@ impl Assembly {
     ) -> anyhow::Result<()> {
         reservation.shrink(SCRATCH)?;
         if scopes {
-            self.scopes.push(page)
+            self.scopes.push(page);
         } else {
-            self.vars.push(page)
-        };
+            self.vars.push(page);
+        }
         self.reservations.push(reservation);
         Ok(())
     }
@@ -561,7 +565,7 @@ impl Assembly {
                         );
                         scope_positions[id] = p.start + i as u32;
                         if parent == NONE {
-                            links.roots.push(id as u32)
+                            links.roots.push(id as u32);
                         } else {
                             links.child_offsets[parent as usize + 1] += 1;
                         }

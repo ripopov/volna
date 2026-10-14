@@ -92,23 +92,22 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         "local cursor must exist exactly when unlinked"
     );
     let trace = saved.trace;
-    let track = match ctx
+    let track = if let Some(t) = ctx
         .traces
         .tracks(trace)
         .iter()
         .find(|t| t.path == saved.track)
     {
-        Some(t) => TrackSource::Resolved {
+        TrackSource::Resolved {
             track: Traced::new(trace, t.id),
             path: saved.track,
-        },
-        None => {
-            ctx.report
-                .push(format!("Missing pipeline track: {:?}", saved.track));
-            TrackSource::Unresolved {
-                trace,
-                path: saved.track,
-            }
+        }
+    } else {
+        ctx.report
+            .push(format!("Missing pipeline track: {:?}", saved.track));
+        TrackSource::Unresolved {
+            trace,
+            path: saved.track,
         }
     };
     let mut p = PipelineModel::new(track, saved.link);

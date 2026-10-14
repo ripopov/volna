@@ -19,6 +19,7 @@ pub struct LogSite<'a> {
     pub function: Option<&'a str>,
 }
 
+#[must_use]
 pub fn log_site(h: &Hierarchy, member: Member) -> Option<LogSite<'_>> {
     use volna_trace::data::transactions::AttributeValue;
     let Member::Generator(id) = member else {
@@ -52,6 +53,7 @@ pub fn log_site(h: &Hierarchy, member: Member) -> Option<LogSite<'_>> {
     })
 }
 
+#[must_use]
 pub fn member_detail(h: &Hierarchy, member: Member) -> String {
     match member {
         Member::Var(id) => {
@@ -81,6 +83,7 @@ pub fn member_detail(h: &Hierarchy, member: Member) -> String {
     }
 }
 
+#[must_use]
 pub fn describe(h: &Hierarchy, member: Member) -> String {
     let detail = match member {
         Member::Var(id) => {
@@ -232,7 +235,7 @@ impl MemberListModel {
 
     pub fn set_filter(&mut self, traces: &TraceSet, text: &str) {
         if self.filter != text {
-            self.filter = text.to_owned();
+            text.clone_into(&mut self.filter);
             self.rebuild(traces);
         }
     }
@@ -241,10 +244,12 @@ impl MemberListModel {
         !self.filter.is_empty()
     }
 
+    #[must_use]
     pub fn show_scope(&self) -> bool {
         (self.scope.is_none() || self.search_everywhere) && self.is_searching()
     }
 
+    #[must_use]
     pub fn show_direction(&self, traces: &TraceSet) -> bool {
         self.rows.iter().any(|m| {
             m.item.var().is_some_and(|v| {
@@ -255,6 +260,7 @@ impl MemberListModel {
         })
     }
 
+    #[must_use]
     pub fn selected_or_all(&self) -> Vec<Traced<Member>> {
         if self.selected.is_empty() {
             self.rows
@@ -267,6 +273,7 @@ impl MemberListModel {
         }
     }
 
+    #[must_use]
     pub fn listed_vars(&self) -> Vec<Traced<VarId>> {
         self.rows
             .iter()
@@ -279,6 +286,7 @@ impl MemberListModel {
         Some((traces.session(scope.trace)?.hierarchy(), scope.item))
     }
 
+    #[must_use]
     pub fn title(&self, traces: &TraceSet) -> &'static str {
         if self.search_everywhere || self.show_scope() {
             return "Results";
@@ -296,6 +304,7 @@ impl MemberListModel {
         }
     }
 
+    #[must_use]
     pub fn breadcrumb(&self, traces: &TraceSet) -> String {
         if self.search_everywhere || self.show_scope() {
             let whole = if traces.is_combined() {
@@ -331,6 +340,7 @@ impl MemberListModel {
         }
     }
 
+    #[must_use]
     pub fn placeholder(&self, traces: &TraceSet) -> Option<&'static str> {
         if traces.first_loaded().is_none() {
             Some("Open a trace to browse variables")
@@ -401,6 +411,7 @@ impl MemberListModel {
     }
 }
 
+#[must_use]
 pub fn shape_icon(shape: SignalShape) -> IconName {
     match shape {
         SignalShape::Bit => IconName::Activity,
@@ -411,6 +422,7 @@ pub fn shape_icon(shape: SignalShape) -> IconName {
     }
 }
 
+#[must_use]
 pub fn direction_label(d: Direction) -> &'static str {
     match d {
         Direction::None => "",

@@ -248,7 +248,7 @@ impl RowIndex {
         if i >= self.leaves {
             raster_source(&records[rows.start..end], offset + rows.start, map, mask);
         } else {
-            let mid = (rows.start + rows.end) / 2;
+            let mid = usize::midpoint(rows.start, rows.end);
             self.visit_pixels(i * 2, rows.start..mid, records, offset, map, mask);
             self.visit_pixels(i * 2 + 1, mid..rows.end, records, offset, map, mask);
         }
@@ -298,7 +298,7 @@ impl RowIndex {
                 }
             }
         } else {
-            let mid = (rows.start + rows.end) / 2;
+            let mid = usize::midpoint(rows.start, rows.end);
             self.visit_aborted(i * 2, rows.start..mid, records, offset, map, mask);
             self.visit_aborted(i * 2 + 1, mid..rows.end, records, offset, map, mask);
         }
@@ -390,7 +390,7 @@ impl RowIndex {
                 }
             }
         } else {
-            let mid = (rows.start + rows.end) / 2;
+            let mid = usize::midpoint(rows.start, rows.end);
             self.count_activity(i * 2, rows.start..mid, query, out);
             self.count_activity(i * 2 + 1, mid..rows.end, query, out);
         }
@@ -442,7 +442,7 @@ impl RowIndex {
                 }
             }
         } else {
-            let mid = (rows.start + rows.end) / 2;
+            let mid = usize::midpoint(rows.start, rows.end);
             let children = if center < (offset + mid) as f64 {
                 [(i * 2, rows.start..mid), (i * 2 + 1, mid..rows.end)]
             } else {
@@ -578,12 +578,12 @@ mod tests {
             &mut std::task::Context::from_waker(std::task::Waker::noop()),
         ) {
             std::task::Poll::Ready(index) => index,
-            _ => unreachable!(),
+            std::task::Poll::Pending => unreachable!(),
         }
     }
     #[test]
     fn hierarchy_and_source_match_inverse_footprints_across_scales_clips_and_phases() {
-        let mut seed = 0x37abcdefu64;
+        let mut seed = 0x37ab_cdef_u64;
         let mut random = || {
             seed ^= seed << 13;
             seed ^= seed >> 7;
@@ -718,10 +718,10 @@ mod tests {
         let index = build(&records, None).unwrap();
         for case in 0..200 {
             let view = Viewport {
-                start: (case * 13) as f64 + 0.25,
-                end: (case * 13 + case % 53) as f64 + 0.75,
+                start: f64::from(case * 13) + 0.25,
+                end: f64::from(case * 13 + case % 53) + 0.75,
             };
-            let visible = (case * 7) as f64 + 0.13..(case * 7 + 70) as f64 + 0.87;
+            let visible = f64::from(case * 7) + 0.13..f64::from(case * 7 + 70) + 0.87;
             let anchor = view.start + view.width() * 0.5;
             let center = (visible.start + visible.end) * 0.5;
             let actual = index.activity(&records, 11, view, visible.clone(), anchor, center);

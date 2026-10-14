@@ -61,7 +61,7 @@ impl SettingsPanelView {
         let subscription = cx.subscribe_in(&search, window, |this, input, event, window, cx| {
             if let InputEvent::Change = event {
                 let text = input.read(cx).value().to_string();
-                this.synced_query = text.clone();
+                this.synced_query.clone_from(&text);
                 this.dispatch(SettingsCommand::Query(text), window, cx);
             }
         });
@@ -94,7 +94,7 @@ impl SettingsPanelView {
         let Some(ws) = self.ws.upgrade() else { return };
         let query = ws.read(cx).app.settings_view.query.clone();
         if query != self.synced_query {
-            self.synced_query = query.clone();
+            self.synced_query.clone_from(&query);
             self.search
                 .update(cx, |input, cx| input.set_value(query, window, cx));
         }
@@ -206,7 +206,7 @@ impl SettingsPanelView {
                     .xsmall()
                     .tooltip("Toggle the JSON view (⌘⇧,)")
                     .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch(SettingsCommand::ToggleJson, window, cx)
+                        this.dispatch(SettingsCommand::ToggleJson, window, cx);
                     })),
             )
             .into_any_element()
@@ -474,9 +474,9 @@ fn dispatch(
     window: &mut Window,
     cx: &mut App,
 ) {
-    _ = ws.update(cx, |ws, cx| {
-        ws.dispatch(Command::Settings(command), Some(window), cx)
-    });
+    drop(ws.update(cx, |ws, cx| {
+        ws.dispatch(Command::Settings(command), Some(window), cx);
+    }));
 }
 
 fn set(
@@ -595,7 +595,7 @@ fn render_number(
                         });
                         state.shown = next;
                         input.update(cx, |input, cx| {
-                            input.set_value(bounds.text(next), window, cx)
+                            input.set_value(bounds.text(next), window, cx);
                         });
                         set(&ws_step, id, bounds.value(next), window, cx);
                     },
@@ -609,14 +609,14 @@ fn render_number(
                             let Ok(parsed) = text.trim().parse::<f64>() else {
                                 let shown = state.shown;
                                 input.update(cx, |input, cx| {
-                                    input.set_value(bounds.text(shown), window, cx)
+                                    input.set_value(bounds.text(shown), window, cx);
                                 });
                                 return;
                             };
                             let next = bounds.clamp(parsed);
                             if bounds.text(next) != text.trim() {
                                 input.update(cx, |input, cx| {
-                                    input.set_value(bounds.text(next), window, cx)
+                                    input.set_value(bounds.text(next), window, cx);
                                 });
                             }
                             if next != state.shown {
@@ -639,7 +639,7 @@ fn render_number(
             state.shown = current;
             let input = state.input.clone();
             input.update(cx, |input, cx| {
-                input.set_value(bounds.text(current), window, cx)
+                input.set_value(bounds.text(current), window, cx);
             });
         }
     });
@@ -661,7 +661,10 @@ struct TextState {
     _subscriptions: Vec<Subscription>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The editor needs the setting identity, value, bounds, and UI contexts."
+)]
 fn render_control(
     ws: &WeakEntity<Workspace>,
     spec: &'static Spec,
@@ -712,7 +715,7 @@ fn render_control(
                             if let InputEvent::PressEnter { .. } | InputEvent::Blur = event {
                                 let text = input.read(cx).value().to_string();
                                 if text != state.shown {
-                                    state.shown = text.clone();
+                                    state.shown.clone_from(&text);
                                     set(&ws, id, Value::Text(text), window, cx);
                                 }
                             }
@@ -727,7 +730,7 @@ fn render_control(
             );
             state.update(cx, |state, cx| {
                 if state.shown != current {
-                    state.shown = current.clone();
+                    state.shown.clone_from(&current);
                     let input = state.input.clone();
                     input.update(cx, |input, cx| input.set_value(current.clone(), window, cx));
                 }
@@ -755,8 +758,7 @@ fn render_control(
             let label = choices
                 .iter()
                 .find(|(v, _)| *v == current)
-                .map(|(_, l)| l.clone())
-                .unwrap_or_else(|| current.clone());
+                .map_or_else(|| current.clone(), |(_, l)| l.clone());
             let ws = ws.clone();
             Button::new(SharedString::from(format!("setting-enum-{id}")))
                 .label(label)
@@ -881,7 +883,7 @@ impl Render for SettingsPanelView {
             .on_action(cx.listener(Self::toggle_json))
             .on_action(cx.listener(Self::apply_json))
             .on_action(cx.listener(|this, _: &FocusSettingsSearch, window, cx| {
-                this.focus_search(window, cx)
+                this.focus_search(window, cx);
             }))
             .size_full()
             .flex()

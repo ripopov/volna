@@ -47,7 +47,7 @@ fn sample() -> (Vec<u8>, SignalId) {
         )
         .unwrap();
     let stream = w.add_stream(Some(top), "bus", "TRANSACTOR").unwrap();
-    let gen = w.add_generator(stream, "read").unwrap();
+    let r#gen = w.add_generator(stream, "read").unwrap();
     let log = w.add_stream(None, "log", LOG_STREAM_KIND).unwrap();
     let site = w
         .add_log_site(&LogSiteSpec::new(
@@ -67,7 +67,7 @@ fn sample() -> (Vec<u8>, SignalId) {
                 .unwrap();
         }
         if t % 10 == 0 {
-            let tx = w.begin_tx(gen, t).unwrap();
+            let tx = w.begin_tx(r#gen, t).unwrap();
             w.tx_attr(tx, key, &Value::U64(t)).unwrap();
             w.end_tx(tx, t + 4, TxStatus::Ok).unwrap();
             w.log(site, t, &[LogArg::U64(t)]).unwrap();
@@ -106,7 +106,7 @@ fn contents(rd: &Reader, a: SignalId) -> Contents {
         .iter()
         .map(|t| t.id)
         .collect();
-    txs.sort();
+    txs.sort_unstable();
     let mut logs = Vec::new();
     rd.visit_log(&LogQuery::default(), |r| {
         logs.push(r.id);

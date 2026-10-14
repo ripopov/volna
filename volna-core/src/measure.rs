@@ -33,6 +33,7 @@ pub struct Position {
     pub fraction: f64,
 }
 
+#[must_use]
 pub fn position(timeline: &ClockTimeline, t: u64) -> Position {
     match timeline.cycle_at(t) {
         None => Position {
@@ -46,6 +47,7 @@ pub fn position(timeline: &ClockTimeline, t: u64) -> Position {
     }
 }
 
+#[must_use]
 pub fn cycles(timeline: &ClockTimeline, from: u64, to: u64) -> Cycles {
     let (a, b) = (position(timeline, from), position(timeline, to));
     let whole = b.edges as i64 - a.edges as i64;
@@ -70,11 +72,13 @@ pub struct Measurement {
 }
 
 impl Measurement {
+    #[must_use]
     pub fn dt(&self) -> i128 {
         i128::from(self.to) - i128::from(self.from)
     }
 }
 
+#[must_use]
 pub fn measure(clocks: &[&Clock], from: u64, to: u64) -> Measurement {
     Measurement {
         from,
@@ -139,15 +143,15 @@ mod tests {
         let mut seed = 11u64;
         let mut rnd = |n: u64| {
             seed = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             (seed >> 33) % n.max(1)
         };
         for trial in 0..500 {
             let mut raw = Vec::new();
             let mut at = rnd(50);
-            for _ in 0..1 + rnd(5) {
-                let period = [0, 1 + rnd(20)][(rnd(5) != 0) as usize];
+            for _ in 0..=rnd(5) {
+                let period = [0, 1 + rnd(20)][usize::from(rnd(5) != 0)];
                 let n = if period == 0 { 0 } else { rnd(30) };
                 raw.push((at, at + n * period, period));
                 at += n * period + 1 + [rnd(5), 50 + rnd(500)][rnd(2) as usize];

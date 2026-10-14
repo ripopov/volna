@@ -1,7 +1,10 @@
 //! Resolve VTR's interned names at the adapter boundary.
 
 use super::loaded_tracks::{LoadedGenerator, LoadedRelation, LoadedTrack, TransactionLocation};
-use super::transactions::*;
+use super::transactions::{
+    AttributeValue, Attributes, Relation, Track, TrackKind, TrackRef, Transaction,
+    TransactionAttribute, TransactionEvent, TransactionRef, TransactionStage,
+};
 use super::vtr_source::LocalSession;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -77,7 +80,7 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
         .zip(session.reader.transaction_generators(&external)?)
     {
         let generator =
-            generator.ok_or_else(|| anyhow::anyhow!("missing referenced transaction {}", id))?;
+            generator.ok_or_else(|| anyhow::anyhow!("missing referenced transaction {id}"))?;
         owners.insert(TransactionRef(*id), TrackRef(generator.0));
     }
     let mut edges: HashMap<_, Vec<LoadedRelation>> =

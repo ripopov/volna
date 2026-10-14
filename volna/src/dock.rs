@@ -95,7 +95,7 @@ pub(crate) fn tab_title(
     let close = {
         let ws = ws.clone();
         move |window: &mut Window, cx: &mut App| {
-            _ = ws.update(cx, |ws, cx| {
+            drop(ws.update(cx, |ws, cx| {
                 let generation = generation.unwrap_or(ws.app.doc.generation());
                 ws.dispatch_if_current(
                     generation,
@@ -103,7 +103,7 @@ pub(crate) fn tab_title(
                     Some(window),
                     cx,
                 );
-            });
+            }));
         }
     };
     let middle = close.clone();
@@ -306,7 +306,7 @@ impl DockHost {
                 && (bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0))
             {
                 window.on_next_frame(move |_, cx| {
-                    _ = ws.update(cx, |_, cx| cx.notify());
+                    drop(ws.update(cx, |_, cx| cx.notify()));
                 });
                 return;
             }
@@ -458,7 +458,7 @@ fn from_area(state: &base::DockAreaState, zoom: f32) -> Result<DockLayout> {
 }
 
 /// Panel placement is a core command so menu moves share history and persistence
-/// with drag-and-drop proposals from DockArea.
+/// with drag-and-drop proposals from `DockArea`.
 pub(crate) fn placement_menu(
     menu: PopupMenu,
     ws: &WeakEntity<Workspace>,
@@ -476,7 +476,7 @@ pub(crate) fn placement_menu(
     };
     let ws = ws.clone();
     menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-        _ = ws.update(cx, |ws, cx| {
+        drop(ws.update(cx, |ws, cx| {
             ws.dispatch_if_current(
                 generation,
                 Command::Panels(PanelsCommand::Move {
@@ -486,7 +486,7 @@ pub(crate) fn placement_menu(
                 Some(window),
                 cx,
             );
-        });
+        }));
     }))
 }
 
@@ -506,7 +506,7 @@ pub(crate) fn close_menu(
         let ws = ws.clone();
         menu = menu.item(
             PopupMenuItem::new("Hide sidebar").on_click(move |_, window, cx| {
-                _ = ws.update(cx, |ws, cx| {
+                drop(ws.update(cx, |ws, cx| {
                     let layout = ws.app.panels.layout();
                     if layout.placement(id) == Some(Placement::Right)
                         && layout.right.as_ref().is_some_and(|dock| dock.open)
@@ -518,7 +518,7 @@ pub(crate) fn close_menu(
                             cx,
                         );
                     }
-                });
+                }));
             }),
         );
     }
@@ -530,14 +530,14 @@ pub(crate) fn close_menu(
             "Close panel"
         })
         .on_click(move |_, window, cx| {
-            _ = ws.update(cx, |ws, cx| {
+            drop(ws.update(cx, |ws, cx| {
                 ws.dispatch_if_current(
                     generation,
                     Command::Panels(PanelsCommand::Close(id)),
                     Some(window),
                     cx,
                 );
-            });
+            }));
         }),
     )
 }
@@ -635,7 +635,7 @@ fn panel_id(state: &base::PanelState) -> Result<PanelId> {
     match &state.info {
         base::PanelInfo::Panel(value) => value
             .get("id")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .map(PanelId)
             .ok_or_else(|| anyhow::anyhow!("missing panel ID")),
         _ => bail!("expected panel payload"),
@@ -705,7 +705,7 @@ impl CanvasPanelView {
                             Command::Panels(PanelsCommand::Rename(id, Some(title))),
                             Some(window),
                             cx,
-                        )
+                        );
                     });
                     true
                 })
@@ -713,9 +713,9 @@ impl CanvasPanelView {
         window.focus(&input_focus, cx);
     }
     fn dispatch(&self, command: PanelsCommand, window: &mut Window, cx: &mut Context<Self>) {
-        _ = self.ws.update(cx, |ws, cx| {
-            ws.dispatch_if_current(self.generation, Command::Panels(command), Some(window), cx)
-        });
+        drop(self.ws.update(cx, |ws, cx| {
+            ws.dispatch_if_current(self.generation, Command::Panels(command), Some(window), cx);
+        }));
     }
     fn new(
         ws: WeakEntity<Workspace>,
@@ -795,7 +795,7 @@ impl Panel for CanvasPanelView {
                         },
                         window,
                         cx,
-                    )
+                    );
                 }))
         };
         let mut buttons = vec![
@@ -819,7 +819,7 @@ impl Panel for CanvasPanelView {
                 .xsmall()
                 .tooltip("New waveform tab")
                 .on_click(cx.listener(|view, _, window, cx| {
-                    view.dispatch(PanelsCommand::NewTab { group_of: view.id }, window, cx)
+                    view.dispatch(PanelsCommand::NewTab { group_of: view.id }, window, cx);
                 })),
         ];
         if let Some((follow, activity)) = self.ws.upgrade().and_then(|owner| {
@@ -863,7 +863,7 @@ impl Panel for CanvasPanelView {
                         .ghost()
                         .when(
                             name == "follow-activity" && follow == FollowActivity::Suspended,
-                            |button| button.warning(),
+                            gpui_kit::component::button::ButtonVariants::warning,
                         )
                         .xsmall()
                         .selected(name == "follow-activity" && follow == FollowActivity::Following)
@@ -873,14 +873,14 @@ impl Panel for CanvasPanelView {
                             "Reveal relevant rows without enabling follow"
                         })
                         .on_click(move |_, window, cx| {
-                            _ = owner.update(cx, |ws, cx| {
+                            drop(owner.update(cx, |ws, cx| {
                                 ws.dispatch_if_current(
                                     generation,
                                     Command::PipelineActivity(panel, command),
                                     Some(window),
                                     cx,
                                 );
-                            });
+                            }));
                         }),
                 );
             }
@@ -904,7 +904,7 @@ impl Panel for CanvasPanelView {
                     .xsmall()
                     .tooltip("Find a marker by name or number (')")
                     .on_click(move |_, window, cx| {
-                        _ = owner.update(cx, |ws, cx| {
+                        drop(owner.update(cx, |ws, cx| {
                             ws.dispatch_if_current(
                                 generation,
                                 Command::Panels(PanelsCommand::Focus(id)),
@@ -917,7 +917,7 @@ impl Panel for CanvasPanelView {
                                 Some(window),
                                 cx,
                             );
-                        });
+                        }));
                     }),
             );
         }
@@ -942,14 +942,14 @@ impl Panel for CanvasPanelView {
                     .xsmall()
                     .tooltip("Show the selected record in a Transaction panel (⏎)")
                     .on_click(move |_, window, cx| {
-                        _ = owner.update(cx, |ws, cx| {
+                        drop(owner.update(cx, |ws, cx| {
                             ws.dispatch_if_current(
                                 generation,
                                 Command::ShowTransaction { from: id },
                                 Some(window),
                                 cx,
-                            )
-                        });
+                            );
+                        }));
                     }),
             );
         }
@@ -993,7 +993,7 @@ impl Panel for CanvasPanelView {
                     .xsmall()
                     .tooltip("Open this generator in a table")
                     .on_click(move |_, window, cx| {
-                        _ = owner.update(cx, |ws, cx| {
+                        drop(owner.update(cx, |ws, cx| {
                             ws.dispatch_if_current(
                                 generation,
                                 Command::OpenTableFromPanel {
@@ -1002,8 +1002,8 @@ impl Panel for CanvasPanelView {
                                 },
                                 Some(window),
                                 cx,
-                            )
-                        });
+                            );
+                        }));
                     }),
             );
         }

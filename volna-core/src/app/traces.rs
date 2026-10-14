@@ -1,6 +1,7 @@
 //! The trace set seen from the app: adding a trace beside the open ones, closing one of
 //! several, naming them, and what the panels and the sidebar do when the set changes.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -26,6 +27,7 @@ pub struct TraceChip {
 }
 
 impl TraceChip {
+    #[must_use]
     pub fn detail(&self) -> String {
         match (self.format, &self.unit) {
             (Some(format), Some(unit)) => format!("{format} · {unit}"),
@@ -33,6 +35,7 @@ impl TraceChip {
         }
     }
 
+    #[must_use]
     pub fn row_detail(&self) -> String {
         if self.loading {
             return self.detail();
@@ -41,12 +44,14 @@ impl TraceChip {
         format!("{} · {} signal{s}", self.detail(), self.signals)
     }
 
+    #[must_use]
     pub fn tooltip(&self) -> String {
         format!("Trace {} · {} — {}", self.trace, self.name, self.source)
     }
 }
 
 impl App {
+    #[must_use]
     pub fn trace_chips(&self) -> Vec<TraceChip> {
         let traces = self.doc.traces();
         let others = traces.len() > 1;
@@ -66,12 +71,13 @@ impl App {
             .collect()
     }
 
+    #[must_use]
     pub fn rows_revision(&self) -> (u64, u64) {
         let rows = self
             .panels
             .iter()
             .filter_map(|p| p.kind.waves())
-            .map(|w| w.revision())
+            .map(super::super::wave::model::WaveModel::revision)
             .sum();
         (self.panels.revision(), rows)
     }
@@ -99,6 +105,7 @@ impl App {
         shown
     }
 
+    #[must_use]
     pub fn trace_chip(&self, trace: TraceId) -> Option<TraceChip> {
         self.trace_chips().into_iter().find(|c| c.trace == trace)
     }
@@ -178,7 +185,7 @@ impl App {
             }
             if let Some(table) = panel.kind.table_mut() {
                 table.detach(doc);
-                if let Err(error) = table.attach(doc, &Default::default()) {
+                if let Err(error) = table.attach(doc, &HashMap::default()) {
                     table.state = crate::table::TableState::Failed(error.to_string());
                 }
             }

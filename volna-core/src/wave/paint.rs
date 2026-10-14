@@ -117,7 +117,7 @@ fn fit_width(
 
 fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     match (a, b) {
-        (None, None) | (Some(_), None) => 0,
+        (None | Some(_), None) => 0,
         (None, Some(j)) => j + 1,
         (Some(i), Some(j)) => j.saturating_sub(i),
     }
@@ -402,9 +402,7 @@ pub fn paint(
                 .iter()
                 .find(|(i, _)| *i == ix)
                 .map(|(_, b)| *b);
-            let text_right = badge
-                .map(|b| b.left() - pad)
-                .unwrap_or(layout.values.right() - pad);
+            let text_right = badge.map_or(layout.values.right() - pad, |b| b.left() - pad);
             let avail = text_right - layout.values.left() - pad;
             let (value_text, color) = match (&item.history, cursor) {
                 _ if cells.left_out.is_some() => {
@@ -494,18 +492,18 @@ pub fn paint(
                     && let Some(kind) = item.translator.numeric_kind() =>
             {
                 let series = Series::of(doc, item.source.signal(), h, kind);
-                paint_analog_row(item, a, &series, &viewport, wave_row, waves, row_h, &mut p)
+                paint_analog_row(item, a, &series, &viewport, wave_row, waves, row_h, &mut p);
             }
             (Some(h), _) => match item.shape {
                 SignalShape::Event => {
                     let mut counts = Vec::new();
                     p.scene.clipped(waves, |scene| {
-                        counts = paint_event_row(h.as_ref(), &viewport, wave_row, t, scene)
+                        counts = paint_event_row(h.as_ref(), &viewport, wave_row, t, scene);
                     });
                     paint_event_counts(&counts, wave_row, waves, &mut p);
                 }
                 SignalShape::Bit => p.scene.clipped(waves, |scene| {
-                    paint_bit_row(h.as_ref(), &viewport, wave_row, t, scene)
+                    paint_bit_row(h.as_ref(), &viewport, wave_row, t, scene);
                 }),
                 _ => paint_bus_row(
                     h.as_ref(),
@@ -545,7 +543,7 @@ pub fn paint(
                         FontRole::Ui,
                         t.ui_size_small,
                         colors.text_placeholder,
-                    )
+                    );
                 });
             }
             (None, None) => {
@@ -881,14 +879,16 @@ fn analog_label(item: &DisplayedSignal, v: f64) -> String {
     item.translator
         .numeric_kind()
         .and_then(|k| k.value_of(v, item.shape))
-        .map(|value| item.translator.translate(&value).text)
-        .unwrap_or_else(|| {
-            if v.fract() == 0.0 && v.abs() < 1e15 {
-                format!("{v:.0}")
-            } else {
-                format!("{v:.4}")
-            }
-        })
+        .map_or_else(
+            || {
+                if v.fract() == 0.0 && v.abs() < 1e15 {
+                    format!("{v:.0}")
+                } else {
+                    format!("{v:.4}")
+                }
+            },
+            |value| item.translator.translate(&value).text,
+        )
 }
 
 fn intersect(a: Rect, b: Rect) -> Rect {
@@ -897,7 +897,10 @@ fn intersect(a: Rect, b: Rect) -> Rect {
     Rect::from_xywh(l, t, (r - l).max(0.0), (bt - t).max(0.0))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Rendering and transfer inputs are independent dimensions of the operation."
+)]
 fn paint_analog_row(
     item: &DisplayedSignal,
     a: &Analog,
@@ -1176,12 +1179,12 @@ pub fn paint_event_row(
     let pad = trace_pad(area.height(), t);
     let (mut plain, mut coalesced) = (Vec::new(), Vec::new());
     while i < h.len() && h.time(i) as f64 <= vp.end {
-        let x = vp.x_of(h.time(i) as f64, area.width() as f64).floor();
+        let x = vp.x_of(h.time(i) as f64, f64::from(area.width())).floor();
         let screen_x = area.left() + x as f32;
         let top = area.top() + pad;
         let bottom = (area.bottom() - pad).max(top);
         let head_height = (bottom - top) * 0.2;
-        let next = vp.time_at(x + 1.0, area.width() as f64).ceil();
+        let next = vp.time_at(x + 1.0, f64::from(area.width())).ceil();
         let last_time = ((next as u64).saturating_sub(1)).min(vp.end.floor() as u64);
         let end = h
             .index_at(last_time)
@@ -1245,7 +1248,7 @@ fn paint_event_counts(
                     FontRole::Mono,
                     t.ui_size_small,
                     t.wave_event_coalesced,
-                )
+                );
             });
         }
     }
@@ -1351,10 +1354,10 @@ fn paint_bits(
         if n == 1 && bit != Bit::Unavailable && new_bit != Bit::Unavailable {
             let (ya, yb) = (y_of(bit), y_of(new_bit));
             let (lo, hi) = if ya <= yb { (ya, yb) } else { (yb, ya) };
-            let color = t.value_color(if new_bit.kind() != ValueKind::Normal {
-                new_bit.kind()
-            } else {
+            let color = t.value_color(if new_bit.kind() == ValueKind::Normal {
                 bit.kind()
+            } else {
+                new_bit.kind()
             });
             scene.fill(
                 Rect::new(
@@ -1476,7 +1479,10 @@ fn label_runs(label: &str, t: &Theme, text: Color) -> Vec<(usize, String, Color)
     runs
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Rendering and transfer inputs are independent dimensions of the operation."
+)]
 fn fill_hexagon(
     scene: &mut Scene,
     xa: f32,
@@ -1581,7 +1587,7 @@ fn paint_bus_row(
             dense: false,
         });
     }
-    for seg in segments.iter_mut() {
+    for seg in &mut segments {
         if !seg.dense
             && seg.x_end - seg.x_start < MIN_SEGMENT_PX
             && seg.x_start != 0
@@ -1594,7 +1600,7 @@ fn paint_bus_row(
     for seg in segments {
         match merged.last_mut() {
             Some(last) if last.dense && seg.dense && last.x_end == seg.x_start => {
-                last.x_end = seg.x_end
+                last.x_end = seg.x_end;
             }
             _ => merged.push(seg),
         }
@@ -1642,12 +1648,11 @@ fn paint_bus_row(
                 _ if matches!(kind, ValueKind::Undef | ValueKind::HighImp) => t.wave_signal,
                 _ => t.value_color(kind),
             };
-            let lines = match slants.iter_mut().find(|(c, _)| *c == color) {
-                Some((_, b)) => b,
-                None => {
-                    slants.push((color, Vec::new()));
-                    &mut slants.last_mut().unwrap().1
-                }
+            let lines = if let Some((_, b)) = slants.iter_mut().find(|(c, _)| *c == color) {
+                b
+            } else {
+                slants.push((color, Vec::new()));
+                &mut slants.last_mut().unwrap().1
             };
             match look {
                 BusLook::Floating => {
@@ -1858,7 +1863,6 @@ fn paint_clock_row(
 const CLOCK_BAND_HALF_PX: f64 = 3.0;
 const GATED_LABEL_PX: f32 = 52.0;
 
-#[allow(clippy::too_many_arguments)]
 fn paint_clock_wave(
     timeline: &std::sync::Arc<vtr::clock::ClockTimeline>,
     vp: &Viewport,
@@ -1991,7 +1995,7 @@ fn paint_clock_wave(
                     FontRole::Mono,
                     t.ui_size_small,
                     color,
-                )
+                );
             });
         }
     }
@@ -2466,7 +2470,6 @@ impl Band {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn paint_stack_row(
     layers: &[stack::Layer],
     colors: &[Color],
@@ -2542,7 +2545,8 @@ fn paint_stack_row(
         Some(stack::TotalLoad::Ready(s)) => Some(s.as_ref()),
         _ => None,
     };
-    let (lo, hi) = stack::clean_range(total.map_or_else(|| frame.extent(), |s| s.range()));
+    let (lo, hi) =
+        stack::clean_range(total.map_or_else(|| frame.extent(), super::stack::TotalSummary::range));
     let peaks = match (peak && !frame.exact, total) {
         (false, _) => Vec::new(),
         _ if stack::visible_changes(layers, vp) <= stack::WALK_MAX => {
@@ -2614,25 +2618,22 @@ fn paint_stack_row(
                 bottom: from.max(to),
                 up: true,
             };
-            match peaks.get(s).copied().flatten().filter(|_| !c.undefined) {
-                Some((low, high)) => {
-                    let (top, bottom) = (plot.y_of(c.top).round(), plot.y_of(c.bottom).round());
-                    let (above, below) = (plot.y_of(high).round(), plot.y_of(low).round());
-                    for (run, from, to, grows) in [
-                        (&mut burst_up, above, top, above < top),
-                        (&mut burst_down, bottom, below, below > bottom),
-                    ] {
-                        if grows {
-                            Band::push(run, rest(from, to), &mut bursts);
-                        } else {
-                            bursts.extend(run.take());
-                        }
+            if let Some((low, high)) = peaks.get(s).copied().flatten().filter(|_| !c.undefined) {
+                let (top, bottom) = (plot.y_of(c.top).round(), plot.y_of(c.bottom).round());
+                let (above, below) = (plot.y_of(high).round(), plot.y_of(low).round());
+                for (run, from, to, grows) in [
+                    (&mut burst_up, above, top, above < top),
+                    (&mut burst_down, bottom, below, below > bottom),
+                ] {
+                    if grows {
+                        Band::push(run, rest(from, to), &mut bursts);
+                    } else {
+                        bursts.extend(run.take());
                     }
                 }
-                None => {
-                    bursts.extend(burst_up.take());
-                    bursts.extend(burst_down.take());
-                }
+            } else {
+                bursts.extend(burst_up.take());
+                bursts.extend(burst_down.take());
             }
             if c.undefined {
                 Band::push(
@@ -3069,8 +3070,8 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
         LaneData::Unresolved => Some(("not in trace".to_owned(), cells.muted)),
         LaneData::Unavailable => Some(("records unavailable".to_owned(), cells.muted)),
     };
-    match status {
-        Some((label, color)) => p.scene.clipped(waves, |scene| {
+    if let Some((label, color)) = status {
+        p.scene.clipped(waves, |scene| {
             scene.text(
                 point(waves.left() + z(8.0), y),
                 row_h,
@@ -3078,15 +3079,14 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
                 FontRole::Ui,
                 t.ui_size_small,
                 color,
-            )
-        }),
-        None => {
-            let bar = Rect::new(
-                point(waves.left() + z(8.0), y + full_h / 2.0),
-                size(z(96.0), 1.0),
             );
-            p.scene.clipped(waves, |scene| scene.fill(bar, t.border));
-        }
+        });
+    } else {
+        let bar = Rect::new(
+            point(waves.left() + z(8.0), y + full_h / 2.0),
+            size(z(96.0), 1.0),
+        );
+        p.scene.clipped(waves, |scene| scene.fill(bar, t.border));
     }
 }
 
@@ -3117,10 +3117,10 @@ fn paint_lane_bars(
         .map(|s| s.id);
     let (start, end) = lane::window(viewport);
     let mut raw = Vec::new();
-    _ = generator.visit_window_ordinals(start, end, |ordinal, tx| {
+    drop(generator.visit_window_ordinals(start, end, |ordinal, tx| {
         raw.push((ordinal, tx));
         true
-    });
+    }));
     let mut bars = Vec::with_capacity(raw.len());
     for (ordinal, tx) in raw {
         let sub = lane::shown_sub_row(generator.sub_row(ordinal), lane.height);

@@ -3,7 +3,7 @@ name = "volna-trace"
 version.workspace = true
 license.workspace = true
 repository.workspace = true
-edition = "2024"
+edition.workspace = true
 rust-version.workspace = true
 readme = "README.md"
 description = "Standalone immutable trace access and complete-object remote loading"
@@ -25,4 +25,7 @@ testing = []
 
 [dev-dependencies]
 serde_json = "1"
-volna-trace = { path = ".", features = ["testing"] }
+volna-trace = { version = "0.1.0", path = ".", features = ["testing"] }
+
+[lints]
+workspace = true

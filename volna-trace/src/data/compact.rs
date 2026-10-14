@@ -284,7 +284,7 @@ impl CompactBuilder {
         buf.resize(bytes, 0);
         for i in 0..self.times.len() {
             let old = entry(&self.data, slot, i);
-            buf.iter_mut().for_each(|b| *b = 0);
+            buf.fill(0);
             for k in 0..width as usize {
                 vtr::signal::set_code(&mut buf, to, k, get_code(old, states, k));
             }

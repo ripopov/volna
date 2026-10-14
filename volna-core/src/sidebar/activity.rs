@@ -72,6 +72,7 @@ pub struct ActivityBuildView {
 }
 
 impl ActivityBuildView {
+    #[must_use]
     pub fn message(&self) -> String {
         match &self.state {
             ActivityBuildState::Offer { estimated_seconds } => {
@@ -117,6 +118,7 @@ enum Counter {
     Failed,
 }
 
+#[must_use]
 pub fn trace_window(viewport: Viewport, placement: Placement) -> (u64, u64) {
     let scale = placement.scale() as f64;
     let t0 = (viewport.start.max(0.0) / scale).ceil();
@@ -417,6 +419,7 @@ impl ActivityModel {
         });
     }
 
+    #[must_use]
     pub fn builds(&self, traces: &TraceSet, policy: ActivityIndexPolicy) -> Vec<ActivityBuildView> {
         traces
             .iter()
@@ -439,7 +442,7 @@ impl ActivityModel {
                         cancelling: *cancelling,
                     },
                     Build::Queued => ActivityBuildState::Building {
-                        progress: Default::default(),
+                        progress: vtr::activity::BuildProgress::default(),
                         cancelling: false,
                     },
                     Build::Offered if policy != ActivityIndexPolicy::Never => {
@@ -465,10 +468,12 @@ impl ActivityModel {
             .collect()
     }
 
+    #[must_use]
     pub fn counts(&self, trace: TraceId) -> Option<&Arc<ActivityCounts>> {
         self.traces.get(&trace)?.shown.as_ref()
     }
 
+    #[must_use]
     pub fn get(
         &self,
         trace: TraceId,

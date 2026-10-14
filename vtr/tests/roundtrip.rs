@@ -90,7 +90,7 @@ fn shared_signal_histories_preserve_order_and_lifetimes() {
     }
     match (loaded[1].get(17), loaded[4].get(17)) {
         (SignalValue::Bits { data: a, .. }, SignalValue::Bits { data: b, .. }) => {
-            assert!(std::ptr::eq(a, b))
+            assert!(std::ptr::eq(a, b));
         }
         _ => panic!("expected packed bit values"),
     }
@@ -255,14 +255,13 @@ fn signals_roundtrip_multi_block() {
             if i % 3 == 0 {
                 let v = (i * 7) & 0xff;
                 w.emit_u64(cnt, v).unwrap();
-                exp_cnt.push((t, format!("{:08b}", v)));
+                exp_cnt.push((t, format!("{v:08b}")));
             }
             if i % 7 == 0 {
                 let mut sv = String::new();
                 for b in 0..100 {
                     sv.push(match (b + i) % 5 {
                         0 => '0',
-                        1 => '1',
                         2 => 'x',
                         3 => 'z',
                         _ => '1',
@@ -370,7 +369,7 @@ fn signals_roundtrip_multi_block() {
         assert_eq!(d.len(), 1);
         assert_eq!(d.get(0).to_ascii(), "uwlh-1");
         let d = rd.load_signal(two).unwrap();
-        assert_eq!(d.get(1).as_u64(), Some(17 | (0xff << 32)));
+        assert_eq!(d.get(1).as_u64(), Some(0x11 | (0xff << 32)));
         assert_eq!(rd.value_at(cnt, 0).unwrap().to_ascii(), "00000000");
         assert_eq!(rd.value_at(cnt, 14).unwrap().to_ascii(), "00000000");
         assert_eq!(
@@ -542,11 +541,12 @@ fn writer_rejects_duplicate_attribute_keys_per_item() {
     let tx = w.begin_tx(generator, 0).unwrap();
     w.tx_attr(tx, key, &Value::U64(1)).unwrap();
     assert!(w.tx_attr(tx, key, &Value::U64(2)).is_err());
-    assert!(w
-        .tx_event(tx, 0, event, &[(key, Value::U64(1)), (key, Value::U64(2))])
-        .is_err());
-    assert!(w
-        .tx_stage(
+    assert!(
+        w.tx_event(tx, 0, event, &[(key, Value::U64(1)), (key, Value::U64(2))])
+            .is_err()
+    );
+    assert!(
+        w.tx_stage(
             tx,
             stage,
             lane,
@@ -554,23 +554,25 @@ fn writer_rejects_duplicate_attribute_keys_per_item() {
             1,
             &[(key, Value::U64(1)), (key, Value::U64(2))]
         )
-        .is_err());
+        .is_err()
+    );
     w.tx_stage_begin(tx, stage, lane, 0).unwrap();
     w.tx_stage_attr(tx, key, &Value::U64(1)).unwrap();
     assert!(w.tx_stage_attr(tx, key, &Value::U64(2)).is_err());
-    assert!(w
-        .relate(
+    assert!(
+        w.relate(
             relation,
             tx,
             tx,
             &[(key, Value::U64(1)), (key, Value::U64(2))]
         )
-        .is_err());
+        .is_err()
+    );
     w.end_tx(tx, 1, TxStatus::Ok).unwrap();
 
     let log = w.add_stream(None, "log", vtr::LOG_STREAM_KIND).unwrap();
-    assert!(w
-        .add_log_site(
+    assert!(
+        w.add_log_site(
             &LogSiteSpec::new(
                 log,
                 Severity::Info,
@@ -579,9 +581,10 @@ fn writer_rejects_duplicate_attribute_keys_per_item() {
             )
             .names(&["same", "same"]),
         )
-        .is_err());
-    assert!(w
-        .add_log_site(
+        .is_err()
+    );
+    assert!(
+        w.add_log_site(
             &LogSiteSpec::new(
                 log,
                 Severity::Info,
@@ -590,7 +593,8 @@ fn writer_rejects_duplicate_attribute_keys_per_item() {
             )
             .names(&["1"]),
         )
-        .is_err());
+        .is_err()
+    );
     w.close().unwrap();
 
     let r = Reader::open(&path).unwrap();
@@ -838,7 +842,7 @@ fn stream_delivers_same_step_repeats_in_order() {
         let rd = Reader::open(&path).unwrap();
         let mut got: Vec<(u64, u32, u64)> = Vec::new();
         rd.for_each_change(0, u64::MAX, |t, s, v| {
-            got.push((t, s.0, v.as_u64().unwrap()))
+            got.push((t, s.0, v.as_u64().unwrap()));
         })
         .unwrap();
         assert_eq!(got.len(), expected.len(), "n_sigs {n_sigs}");
@@ -869,8 +873,8 @@ fn dictionary_coded_columns_roundtrip() {
     for i in 0..40_000u64 {
         w.set_time(i * 5).unwrap();
         lcg = lcg
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         let s = states[((lcg >> 50) % 5) as usize];
         let o = 0xdead_0000 + (lcg >> 60);
         let t = ((lcg >> 40) % 9) * 0x0101_0101;
@@ -1067,9 +1071,10 @@ fn logs_roundtrip() {
         }
     }
     assert!(w.log(s_fetch, 0, &[LogArg::U64(1)]).is_err());
-    assert!(w
-        .log(s_fetch, 0, &[LogArg::I64(1), LogArg::U64(1)])
-        .is_err());
+    assert!(
+        w.log(s_fetch, 0, &[LogArg::I64(1), LogArg::U64(1)])
+            .is_err()
+    );
     assert!(w.log(LogSiteId(99), 0, &[]).is_err());
     let st = w.stats();
     assert_eq!(st.log_records, expect.len() as u64);
@@ -1273,7 +1278,7 @@ fn log_raw_matches_log() {
                 put(&mut row, ((z << 1) ^ (z >> 63)) as u64);
                 put(&mut row, i << 40);
                 row.extend_from_slice(&(i as f64 * 0.25).to_le_bytes());
-                row.push((i % 2 == 0) as u8);
+                row.push(u8::from(i % 2 == 0));
                 put(&mut row, 2);
                 row.extend_from_slice(&[i as u8, 7]);
                 w.log_raw(site, i * 3, if i == 5 { Some(2) } else { None }, &row)
@@ -1347,19 +1352,21 @@ fn events_bypass_dedup_in_all_payload_paths() {
             alias,
         )
         .unwrap();
-        assert!(w
-            .add_alias(
+        assert!(
+            w.add_alias(
                 None,
                 "wire_alias",
                 VarType::Wire,
                 Direction::Implicit,
                 events[0]
             )
-            .is_err());
+            .is_err()
+        );
         let (_, wire) = wire(&mut w, "wire", 1, 2);
-        assert!(w
-            .add_alias(None, "bad_event", VarType::Event, Direction::Implicit, wire)
-            .is_err());
+        assert!(
+            w.add_alias(None, "bad_event", VarType::Event, Direction::Implicit, wire)
+                .is_err()
+        );
         for time in [0, 0, 5, 5, 10] {
             w.set_time(time).unwrap();
             w.emit_bit(events[0], vtr::Logic::One).unwrap();

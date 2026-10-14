@@ -111,7 +111,10 @@ fn every_ending_round_trips() {
 
 #[test]
 fn text_of_each_ending() {
-    let text: Vec<String> = ENDINGS.iter().map(|e| e.to_string()).collect();
+    let text: Vec<String> = ENDINGS
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     assert_eq!(
         text,
         [

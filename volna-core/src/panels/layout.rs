@@ -32,6 +32,7 @@ pub enum Layout {
 }
 
 impl Layout {
+    #[must_use]
     pub fn single(id: PanelId) -> Self {
         Self::Tabs {
             tabs: vec![id],
@@ -39,12 +40,14 @@ impl Layout {
         }
     }
 
+    #[must_use]
     pub fn panels(&self) -> Vec<PanelId> {
         let mut ids = Vec::new();
         self.collect(false, &mut ids);
         ids
     }
 
+    #[must_use]
     pub fn visible(&self) -> Vec<PanelId> {
         let mut ids = Vec::new();
         self.collect(true, &mut ids);
@@ -118,6 +121,7 @@ impl Layout {
         Ok(())
     }
 
+    #[must_use]
     pub fn same_shape(&self, other: &Layout) -> bool {
         match (self, other) {
             (Self::Tabs { tabs: a, .. }, Self::Tabs { tabs: b, .. }) => a == b,
@@ -137,6 +141,7 @@ impl Layout {
         }
     }
 
+    #[must_use]
     pub fn active_for(&self, id: PanelId) -> Option<PanelId> {
         match self {
             Self::Tabs { tabs, active } => tabs.contains(&id).then_some(*active),
@@ -148,7 +153,7 @@ impl Layout {
         match self {
             Self::Tabs { tabs, .. } if tabs.contains(&id) => Some(self),
             Self::Split { children, .. } => children.iter_mut().find_map(|c| c.group_mut(id)),
-            _ => None,
+            Self::Tabs { .. } => None,
         }
     }
 

@@ -29,7 +29,10 @@ pub enum ValueTag {
 
 impl ValueTag {
     pub fn from_u8(v: u8) -> Result<ValueTag> {
-        use ValueTag::*;
+        use ValueTag::{
+            Bits, Bool, Bytes, Enum, F64, Fixed, I64, List, Logic, Logic9, Map, Null, Pointer, Str,
+            Text, Time, U64, UFixed,
+        };
         Ok(match v {
             0 => Null,
             1 => Bool,
@@ -77,6 +80,7 @@ pub enum Value {
 }
 
 impl Value {
+    #[must_use]
     pub fn tag(&self) -> ValueTag {
         match self {
             Value::Null => ValueTag::Null,
@@ -108,29 +112,29 @@ impl Value {
     pub fn encode_payload(&self, out: &mut Vec<u8>) {
         match self {
             Value::Null => {}
-            Value::Bool(b) => out.push(*b as u8),
+            Value::Bool(b) => out.push(u8::from(*b)),
             Value::I64(v) => varint::put_i64(out, *v),
             Value::U64(v) | Value::Time(v) | Value::Pointer(v) => varint::put_u64(out, *v),
             Value::F64(v) => out.extend_from_slice(&v.to_le_bytes()),
-            Value::Str(s) => varint::put_u64(out, s.0 as u64),
+            Value::Str(s) => varint::put_u64(out, u64::from(s.0)),
             Value::Bytes(b) => varint::put_blob(out, b),
             Value::Bits { width, data }
             | Value::Logic { width, data }
             | Value::Logic9 { width, data } => {
-                varint::put_u64(out, *width as u64);
+                varint::put_u64(out, u64::from(*width));
                 out.extend_from_slice(data);
             }
             Value::Enum { value, name } => {
                 varint::put_i64(out, *value);
-                varint::put_u64(out, name.0 as u64);
+                varint::put_u64(out, u64::from(name.0));
             }
             Value::Fixed { raw, scale } => {
                 varint::put_i64(out, *raw);
-                varint::put_i64(out, *scale as i64);
+                varint::put_i64(out, i64::from(*scale));
             }
             Value::UFixed { raw, scale } => {
                 varint::put_u64(out, *raw);
-                varint::put_i64(out, *scale as i64);
+                varint::put_i64(out, i64::from(*scale));
             }
             Value::List(items) => {
                 varint::put_u64(out, items.len() as u64);
@@ -141,7 +145,7 @@ impl Value {
             Value::Map(items) => {
                 varint::put_u64(out, items.len() as u64);
                 for (k, v) in items {
-                    varint::put_u64(out, k.0 as u64);
+                    varint::put_u64(out, u64::from(k.0));
                     v.encode(out);
                 }
             }
@@ -234,6 +238,7 @@ fn states_of(tag: ValueTag) -> u8 {
 }
 
 #[inline]
+#[must_use]
 pub fn packed_len(width: u32, states: u8) -> usize {
     let w = width as usize;
     match states {
@@ -246,7 +251,7 @@ pub fn packed_len(width: u32, states: u8) -> usize {
 pub fn encode_attrs(attrs: &[(StrId, Value)], out: &mut Vec<u8>) {
     varint::put_u64(out, attrs.len() as u64);
     for (k, v) in attrs {
-        varint::put_u64(out, k.0 as u64);
+        varint::put_u64(out, u64::from(k.0));
         v.encode(out);
     }
 }

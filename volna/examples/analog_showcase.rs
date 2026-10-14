@@ -246,9 +246,10 @@ fn generate(path: &std::path::Path) -> vtr::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args_os().skip(1);
-    let path = args.next().map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/analog_showcase.vtr")
-    });
+    let path = args.next().map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/analog_showcase.vtr"),
+        PathBuf::from,
+    );
     anyhow::ensure!(args.next().is_none(), "usage: analog_showcase [OUTPUT.vtr]");
     generate(&path)?;
     let reader = Reader::open_with(

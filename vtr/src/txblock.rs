@@ -22,6 +22,7 @@ pub enum TxStatus {
 }
 
 impl TxStatus {
+    #[must_use]
     pub fn from_u8(v: u8) -> TxStatus {
         match v {
             1 => TxStatus::Ok,
@@ -31,6 +32,7 @@ impl TxStatus {
             _ => TxStatus::Unset,
         }
     }
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             TxStatus::Unset => "unset",
@@ -55,6 +57,7 @@ pub enum TxKind {
 }
 
 impl TxKind {
+    #[must_use]
     pub fn from_u8(v: u8) -> TxKind {
         match v {
             1 => TxKind::Internal,
@@ -114,36 +117,36 @@ pub struct Relation {
 pub fn row_attrs(out: &mut Vec<u8>, attrs: &[(StrId, Value)]) {
     varint::put_u64(out, attrs.len() as u64);
     for (k, v) in attrs {
-        varint::put_u64(out, k.0 as u64);
+        varint::put_u64(out, u64::from(k.0));
         v.encode(out);
     }
 }
 
 pub fn encode_tx_row(tx: &Transaction, out: &mut Vec<u8>) {
     varint::put_u64(out, tx.id);
-    varint::put_u64(out, tx.generator.0 as u64);
+    varint::put_u64(out, u64::from(tx.generator.0));
     varint::put_u64(out, tx.begin);
     varint::put_u64(out, tx.end.wrapping_sub(tx.begin));
     out.push(tx.status as u8);
     out.push(tx.kind as u8);
-    varint::put_u64(out, tx.parent.map(|p| p + 1).unwrap_or(0));
+    varint::put_u64(out, tx.parent.map_or(0, |p| p + 1));
     varint::put_u64(out, tx.attrs.len() as u64);
     for a in &tx.attrs {
-        varint::put_u64(out, a.key.0 as u64);
+        varint::put_u64(out, u64::from(a.key.0));
         a.value.encode(out);
     }
     varint::put_u64(out, tx.events.len() as u64);
     for e in &tx.events {
         varint::put_u64(out, e.time);
-        varint::put_u64(out, e.name.0 as u64);
+        varint::put_u64(out, u64::from(e.name.0));
         row_attrs(out, &e.attrs);
     }
     varint::put_u64(out, tx.stages.len() as u64);
     for s in &tx.stages {
-        varint::put_u64(out, s.name.0 as u64);
-        varint::put_u64(out, s.lane.0 as u64);
+        varint::put_u64(out, u64::from(s.name.0));
+        varint::put_u64(out, u64::from(s.lane.0));
         varint::put_u64(out, s.begin);
-        varint::put_u64(out, s.end.map(|e| e.wrapping_sub(s.begin) + 1).unwrap_or(0));
+        varint::put_u64(out, s.end.map_or(0, |e| e.wrapping_sub(s.begin) + 1));
         row_attrs(out, &s.attrs);
     }
 }
@@ -229,7 +232,7 @@ pub fn decode_tx_row(r: &mut Reader) -> Result<Transaction> {
 }
 
 pub fn encode_rel_row(rel: &Relation, out: &mut Vec<u8>) {
-    varint::put_u64(out, rel.kind.0 as u64);
+    varint::put_u64(out, u64::from(rel.kind.0));
     varint::put_u64(out, rel.from);
     varint::put_u64(out, rel.to);
     row_attrs(out, &rel.attrs);
@@ -292,9 +295,11 @@ impl TxBlockHeader {
         }
         Ok(h)
     }
+    #[must_use]
     pub fn gens_off(&self) -> usize {
         TX_HEADER_LEN
     }
+    #[must_use]
     pub fn blob_off(&self) -> usize {
         TX_HEADER_LEN + self.n_gens as usize * 4
     }
@@ -318,7 +323,10 @@ impl TxBlockHeader {
     }
 }
 
-pub fn block_generators<'a>(p: &'a [u8], h: &TxBlockHeader) -> impl Iterator<Item = u32> + 'a {
+pub fn block_generators<'a>(
+    p: &'a [u8],
+    h: &TxBlockHeader,
+) -> impl Iterator<Item = u32> + 'a + use<'a> {
     let base = h.gens_off();
     (0..h.n_gens as usize)
         .map(move |i| u32::from_le_bytes(p[base + i * 4..base + i * 4 + 4].try_into().unwrap()))
@@ -367,55 +375,13 @@ impl Columns {
         }
     }
 
-    fn put_attr_value(&mut self, key: StrId, v: &Value) {
-        varint::put_u64(&mut self.c[C_AKEY], key.0 as u64);
-        self.c[C_ATAG].push(v.tag() as u8);
-        match v {
-            Value::Null => {}
-            Value::Bool(b) => self.c[C_ANUM].push(*b as u8),
-            Value::I64(x) => varint::put_i64(&mut self.c[C_ANUM], *x),
-            Value::U64(x) | Value::Time(x) | Value::Pointer(x) => {
-                varint::put_u64(&mut self.c[C_ANUM], *x)
-            }
-            Value::F64(f) => self.c[C_AF64].extend_from_slice(&f.to_le_bytes()),
-            Value::Str(s) => varint::put_u64(&mut self.c[C_ASTR], s.0 as u64),
-            Value::Enum { value, name } => {
-                varint::put_i64(&mut self.c[C_ANUM], *value);
-                varint::put_u64(&mut self.c[C_ASTR], name.0 as u64);
-            }
-            Value::Fixed { raw, scale } => {
-                varint::put_i64(&mut self.c[C_ANUM], *raw);
-                varint::put_i64(&mut self.c[C_ANUM], *scale as i64);
-            }
-            Value::UFixed { raw, scale } => {
-                varint::put_u64(&mut self.c[C_ANUM], *raw);
-                varint::put_i64(&mut self.c[C_ANUM], *scale as i64);
-            }
-            other => other.encode_payload(&mut self.c[C_AMISC]),
-        }
-    }
-
-    fn put_attrs(&mut self, attrs: &[TxAttr]) {
-        varint::put_u64(&mut self.c[C_ACOUNT], attrs.len() as u64);
-        for a in attrs {
-            self.put_attr_value(a.key, &a.value);
-        }
-    }
-
-    fn put_kv(&mut self, attrs: &[(StrId, Value)]) {
-        varint::put_u64(&mut self.c[C_ACOUNT], attrs.len() as u64);
-        for (k, v) in attrs {
-            self.put_attr_value(*k, v);
-        }
-    }
-
     fn put_row_attrs(&mut self, r: &mut Reader) -> Result<()> {
         let n = r.usize()?;
         varint::put_u64(&mut self.c[C_ACOUNT], n as u64);
         for _ in 0..n {
             let key = StrId(r.u32()?);
             let tag = ValueTag::from_u8(r.u8()?)?;
-            varint::put_u64(&mut self.c[C_AKEY], key.0 as u64);
+            varint::put_u64(&mut self.c[C_AKEY], u64::from(key.0));
             self.c[C_ATAG].push(tag as u8);
             match tag {
                 ValueTag::Null => {}
@@ -462,7 +428,7 @@ impl Columns {
 
     fn put_tx_row(&mut self, r: &mut Reader) -> Result<(u64, u32, u64, u64)> {
         let id = r.u64()?;
-        let gen = r.u32()?;
+        let r#gen = r.u32()?;
         let begin = r.u64()?;
         let end = begin.wrapping_add(r.u64()?);
         let status = r.u8()?;
@@ -470,7 +436,7 @@ impl Columns {
         let parent = r.u64()?;
         varint::put_i64(&mut self.c[C_ID], id.wrapping_sub(self.prev_id) as i64);
         self.prev_id = id;
-        varint::put_u64(&mut self.c[C_GEN], gen as u64);
+        varint::put_u64(&mut self.c[C_GEN], u64::from(r#gen));
         varint::put_i64(
             &mut self.c[C_BEGIN],
             begin.wrapping_sub(self.prev_begin) as i64,
@@ -509,7 +475,7 @@ impl Columns {
             varint::put_u64(&mut self.c[C_SEND], send);
             self.put_row_attrs(r)?;
         }
-        Ok((id, gen, begin, end))
+        Ok((id, r#gen, begin, end))
     }
 
     fn put_rel_row(&mut self, r: &mut Reader) -> Result<(u64, u64)> {
@@ -525,57 +491,6 @@ impl Columns {
         varint::put_i64(&mut self.c[C_RTO], to.wrapping_sub(from) as i64);
         self.put_row_attrs(r)?;
         Ok((from, to))
-    }
-
-    #[allow(dead_code)]
-    fn put_tx(&mut self, tx: &Transaction) {
-        varint::put_i64(&mut self.c[C_ID], tx.id.wrapping_sub(self.prev_id) as i64);
-        self.prev_id = tx.id;
-        varint::put_u64(&mut self.c[C_GEN], tx.generator.0 as u64);
-        varint::put_i64(
-            &mut self.c[C_BEGIN],
-            tx.begin.wrapping_sub(self.prev_begin) as i64,
-        );
-        self.prev_begin = tx.begin;
-        varint::put_u64(&mut self.c[C_DUR], tx.end.wrapping_sub(tx.begin));
-        self.c[C_STATUS].push((tx.kind as u8) << 4 | tx.status as u8);
-        match tx.parent {
-            None => varint::put_u64(&mut self.c[C_PARENT], 0),
-            Some(p) => varint::put_u64(
-                &mut self.c[C_PARENT],
-                (varint::zigzag(tx.id.wrapping_sub(p) as i64) << 1) | 1,
-            ),
-        }
-        self.put_attrs(&tx.attrs);
-        varint::put_u64(&mut self.c[C_ECOUNT], tx.events.len() as u64);
-        for e in &tx.events {
-            varint::put_i64(&mut self.c[C_ETIME], e.time.wrapping_sub(tx.begin) as i64);
-            varint::put_u64(&mut self.c[C_ENAME], e.name.0 as u64);
-            self.put_kv(&e.attrs);
-        }
-        varint::put_u64(&mut self.c[C_SCOUNT], tx.stages.len() as u64);
-        for s in &tx.stages {
-            varint::put_u64(&mut self.c[C_SNAME], s.name.0 as u64);
-            varint::put_u64(&mut self.c[C_SLANE], s.lane.0 as u64);
-            varint::put_i64(&mut self.c[C_SBEGIN], s.begin.wrapping_sub(tx.begin) as i64);
-            varint::put_u64(
-                &mut self.c[C_SEND],
-                s.end.map(|e| e.wrapping_sub(s.begin) + 1).unwrap_or(0),
-            );
-            self.put_kv(&s.attrs);
-        }
-    }
-
-    #[allow(dead_code)]
-    fn put_rel(&mut self, r: &Relation) {
-        varint::put_u64(&mut self.c[C_RKIND], r.kind.0 as u64);
-        varint::put_i64(
-            &mut self.c[C_RFROM],
-            r.from.wrapping_sub(self.prev_from) as i64,
-        );
-        self.prev_from = r.from;
-        varint::put_i64(&mut self.c[C_RTO], r.to.wrapping_sub(r.from) as i64);
-        self.put_kv(&r.attrs);
     }
 
     fn serialize(&self, out: &mut Vec<u8>) {
@@ -621,15 +536,15 @@ pub fn encode_tx_block(
     let mut last_gen = u32::MAX;
     let mut r = Reader::new(&input.tx_rows);
     for _ in 0..input.n_tx {
-        let (id, gen, begin, end) = cols.put_tx_row(&mut r)?;
+        let (id, r#gen, begin, end) = cols.put_tx_row(&mut r)?;
         h.min_id = h.min_id.min(id);
         h.max_id = h.max_id.max(id);
         h.t_min = h.t_min.min(begin);
         h.t_max = h.t_max.max(end);
-        if gen != last_gen {
-            last_gen = gen;
-            if !gens.contains(&gen) {
-                gens.push(gen);
+        if r#gen != last_gen {
+            last_gen = r#gen;
+            if !gens.contains(&r#gen) {
+                gens.push(r#gen);
             }
         }
     }
@@ -674,7 +589,7 @@ struct ColReaders<'a> {
     r: Vec<Reader<'a>>,
 }
 
-impl<'a> ColReaders<'a> {
+impl ColReaders<'_> {
     fn attr_value(&mut self, tagbyte: u8) -> Result<Value> {
         if tagbyte & 0xe0 != 0 {
             return Err(Error::Corrupt("reserved attribute tag bits are nonzero"));

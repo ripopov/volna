@@ -10,13 +10,20 @@ struct Counting;
 
 static BYTES: AtomicUsize = AtomicUsize::new(0);
 
+// SAFETY: Allocation and deallocation preserve System layouts and pointers; counters are atomic or thread-local.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        BYTES.fetch_add(layout.size(), Ordering::Relaxed);
-        System.alloc(layout)
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
+        unsafe {
+            BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            System.alloc(layout)
+        }
     }
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-        System.dealloc(p, layout)
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
+        unsafe {
+            System.dealloc(p, layout);
+        }
     }
 }
 

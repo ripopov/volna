@@ -1,6 +1,7 @@
 //! The open traces and everything every view over them must agree on: the trace set, shared
 //! navigation, markers, translators and load bookkeeping.
 
+use crate::history::Journaled;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -143,6 +144,7 @@ impl Default for Document {
 }
 
 impl Document {
+    #[must_use]
     pub fn new() -> Self {
         Document {
             traces: TraceSet::default(),
@@ -150,7 +152,7 @@ impl Document {
             generations: 0,
             shared: Shared::default(),
             navigation: Navigation::default(),
-            markers: Default::default(),
+            markers: Journaled::default(),
             reference: None,
             detached: None,
             trace_edits: Vec::new(),
@@ -169,6 +171,7 @@ impl Document {
         }
     }
 
+    #[must_use]
     pub fn selection(&self) -> Option<TxSelection> {
         self.selection
     }
@@ -179,10 +182,12 @@ impl Document {
         changed
     }
 
+    #[must_use]
     pub fn traces(&self) -> &TraceSet {
         &self.traces
     }
 
+    #[must_use]
     pub fn state(&self) -> TraceState {
         if let Some((_, session)) = self.traces.first_loaded() {
             return TraceState::Loaded(Arc::clone(session));
@@ -198,6 +203,7 @@ impl Document {
         }
     }
 
+    #[must_use]
     pub fn generation(&self) -> u64 {
         self.epoch
     }
@@ -207,22 +213,27 @@ impl Document {
         self.generations
     }
 
+    #[must_use]
     pub fn session(&self, trace: TraceId) -> Option<&Arc<dyn Session>> {
         self.traces.session(trace)
     }
 
+    #[must_use]
     pub fn hierarchy(&self, trace: TraceId) -> Option<&Hierarchy> {
         self.session(trace).map(|s| s.hierarchy())
     }
 
+    #[must_use]
     pub fn is_loaded(&self) -> bool {
         self.traces.first_loaded().is_some()
     }
 
+    #[must_use]
     pub fn trace_name(&self, trace: TraceId) -> Option<String> {
         self.traces.name(trace)
     }
 
+    #[must_use]
     pub fn name(&self) -> Option<String> {
         let names: Vec<String> = self
             .traces
@@ -232,14 +243,17 @@ impl Document {
         (!names.is_empty()).then(|| names.join(" + "))
     }
 
+    #[must_use]
     pub fn limits(&self) -> (u64, u64) {
         self.traces.limits().unwrap_or((0, 1000))
     }
 
+    #[must_use]
     pub fn timescale(&self) -> i8 {
         self.traces.unit().map_or(-9, |u| u.timescale)
     }
 
+    #[must_use]
     pub fn time_base(&self) -> TimeBase<'_> {
         match self.traces.unit() {
             Some(unit) => TimeBase {
@@ -426,7 +440,7 @@ impl Document {
             .clocks
             .iter()
             .filter(|c| c.trace == trace)
-            .map(|c| c.stream())
+            .map(super::clock::Clock::stream)
             .collect();
         for stream in streams {
             if let Err(error) = self.retain_track(stream) {
@@ -582,6 +596,7 @@ impl Document {
         Ok(std::mem::replace(&mut slot.rename, name))
     }
 
+    #[must_use]
     pub fn analog_summary(
         &self,
         signal: Traced<SignalRef>,
@@ -626,6 +641,7 @@ impl Document {
         }
     }
 
+    #[must_use]
     pub fn group_summary(&self, key: &[usize]) -> Option<&crate::wave::group::SummaryLoad> {
         self.group_summaries.get(key)
     }
@@ -652,6 +668,7 @@ impl Document {
         }
     }
 
+    #[must_use]
     pub fn stack_total(
         &self,
         key: &crate::wave::stack::Key,
@@ -827,6 +844,7 @@ impl Document {
             .filter(move |g| seen.insert(g.generator()))
     }
 
+    #[must_use]
     pub fn resident_generator(&self, id: Traced<TrackRef>) -> Option<Arc<LoadedGenerator>> {
         self.tracks
             .iter()
@@ -847,6 +865,7 @@ impl Document {
         Some(id)
     }
 
+    #[must_use]
     pub fn track(&self, track: Traced<TrackRef>) -> Option<&TrackLoadState> {
         self.tracks.get(&track).map(|load| &load.state)
     }
@@ -926,6 +945,7 @@ impl Document {
         true
     }
 
+    #[must_use]
     pub fn is_pending(&self, signal: Traced<SignalRef>) -> bool {
         self.pending.contains(&signal)
     }
@@ -974,6 +994,7 @@ impl Document {
                 })
     }
 
+    #[must_use]
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
@@ -1177,10 +1198,12 @@ impl Document {
         self.markers.restore(markers);
     }
 
+    #[must_use]
     pub fn reference(&self) -> Option<Reference> {
         self.reference
     }
 
+    #[must_use]
     pub fn reference_time(&self) -> Option<u64> {
         match self.reference? {
             Reference::Time(t) => Some(t),
@@ -1222,6 +1245,7 @@ impl Document {
         }
     }
 
+    #[must_use]
     pub fn markers(&self) -> &[Marker] {
         &self.markers
     }
@@ -1247,7 +1271,7 @@ impl Document {
                     time,
                     label: None,
                 },
-            )
+            );
         })
     }
 
@@ -1271,7 +1295,7 @@ impl Document {
             return false;
         };
         let removed = [self.markers[ix].clone()];
-        let changed = self.markers.update(|markers| _ = markers.remove(ix));
+        let changed = self.markers.update(|markers| drop(markers.remove(ix)));
         self.detached = self.detach_reference(&removed).or(self.detached);
         changed
     }

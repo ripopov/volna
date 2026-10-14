@@ -3,7 +3,7 @@ name = "volna"
 version.workspace = true
 license.workspace = true
 repository.workspace = true
-edition = "2024"
+edition.workspace = true
 rust-version.workspace = true
 autoexamples = false
 default-run = "volna"
@@ -28,9 +28,9 @@ path = "examples/gpu_transaction_trace.rs"
 default = []
 
 [dependencies]
-volna-trace = { path = "../volna-trace" }
+volna-trace = { version = "0.1.0", path = "../volna-trace" }
 gpui-kit = { version = "=0.7.3", features = ["profiler"] }
-volna-core = { path = "../volna-core" }
+volna-core = { version = "0.1.0", path = "../volna-core" }
 anyhow = "1"
 futures = "0.3"
 hdrhistogram = { version = "7", default-features = false }
@@ -56,13 +56,16 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 embed-resource = "3"
 
 [dev-dependencies]
-volna-core = { path = "../volna-core", features = ["testing"] }
+volna-core = { version = "0.1.0", path = "../volna-core", features = ["testing"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 gpui-kit = { version = "=0.7.3", features = ["test-support"] }
-vtr = { path = "../vtr" }
+vtr = { version = "0.1.0", path = "../vtr" }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 console_error_panic_hook = "0.1.7"
 wasm-bindgen = "0.2"
 js-sys = "0.3"
+
+[lints]
+workspace = true

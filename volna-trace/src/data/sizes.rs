@@ -50,6 +50,7 @@ impl ScopeSizes {
         }
     }
 
+    #[must_use]
     pub fn get(&self, scope: ScopeId) -> Option<ScopeSize> {
         self.sizes.get(scope).copied()
     }

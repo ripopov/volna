@@ -169,38 +169,38 @@ fn main() -> vtr::Result<()> {
             )?;
             open_xfer = Some((tx, ch, t));
         }
-        if let Some((tx, ch, t0)) = open_xfer {
-            if t - t0 >= 3000 {
-                if ch == 3 {
-                    let caption = format!("DMA channel {ch} error");
-                    w.log_with_parent(
-                        s_dma_err,
-                        t,
-                        Some(tx),
-                        &[
-                            ch.into(),
-                            0x1000_0800u64.into(),
-                            "SLVERR".into(),
-                            caption.as_str().into(),
-                        ],
-                    )?;
-                    w.end_tx(tx, t, TxStatus::Error)?;
-                } else {
-                    let caption = format!("DMA channel {ch} complete");
-                    w.log_with_parent(
-                        s_dma_done,
-                        t,
-                        Some(tx),
-                        &[
-                            ch.into(),
-                            ((t - t0) as f64 / 1000.0).into(),
-                            caption.as_str().into(),
-                        ],
-                    )?;
-                    w.end_tx(tx, t, TxStatus::Ok)?;
-                }
-                open_xfer = None;
+        if let Some((tx, ch, t0)) = open_xfer
+            && t - t0 >= 3000
+        {
+            if ch == 3 {
+                let caption = format!("DMA channel {ch} error");
+                w.log_with_parent(
+                    s_dma_err,
+                    t,
+                    Some(tx),
+                    &[
+                        ch.into(),
+                        0x1000_0800u64.into(),
+                        "SLVERR".into(),
+                        caption.as_str().into(),
+                    ],
+                )?;
+                w.end_tx(tx, t, TxStatus::Error)?;
+            } else {
+                let caption = format!("DMA channel {ch} complete");
+                w.log_with_parent(
+                    s_dma_done,
+                    t,
+                    Some(tx),
+                    &[
+                        ch.into(),
+                        ((t - t0) as f64 / 1000.0).into(),
+                        caption.as_str().into(),
+                    ],
+                )?;
+                w.end_tx(tx, t, TxStatus::Ok)?;
             }
+            open_xfer = None;
         }
     }
     let stats = w.stats();

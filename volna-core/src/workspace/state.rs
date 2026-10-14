@@ -15,6 +15,7 @@ pub struct State {
 }
 
 impl State {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             version: VERSION,
@@ -36,6 +37,7 @@ impl State {
         Ok(serde_json::from_slice(bytes)?)
     }
 
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         serde_json::to_vec_pretty(self).expect("state serializes")
     }

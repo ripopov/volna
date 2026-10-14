@@ -34,7 +34,7 @@ fn fixture() -> Arc<dyn Session> {
     let table = w
         .add_enum_table(Some(root), "state_t", &[("IDLE", "0"), ("BUSY", "1")])
         .unwrap();
-    w.node_attr(var, "enum_table", vtr::Value::U64(table.0 as u64))
+    w.node_attr(var, "enum_table", vtr::Value::U64(u64::from(table.0)))
         .unwrap();
     let cpu = w
         .add_scope(Some(root), "cpu", vtr::ScopeType::Core, "")

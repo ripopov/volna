@@ -223,10 +223,10 @@ pub(crate) fn wave_row_node(
         node.set_expanded(expanded);
     }
     node.set_bounds(Rect::new(
-        row.bounds.left() as f64 * scale,
-        row.bounds.top() as f64 * scale,
-        row.bounds.right() as f64 * scale,
-        row.bounds.bottom() as f64 * scale,
+        f64::from(row.bounds.left()) * scale,
+        f64::from(row.bounds.top()) * scale,
+        f64::from(row.bounds.right()) * scale,
+        f64::from(row.bounds.bottom()) * scale,
     ));
     node
 }
@@ -303,7 +303,7 @@ fn resize_table_column(
         },
     );
     owner.update(cx, |ws, cx| {
-        ws.dispatch_if_current(generation, command, Some(window), cx)
+        ws.dispatch_if_current(generation, command, Some(window), cx);
     });
 }
 
@@ -424,7 +424,7 @@ fn paint_prims(
                     bounds: gbounds(*rect),
                 };
                 window.with_content_mask(Some(mask), |window| {
-                    paint_prims(prims, i, t, shaped, images, window, cx)
+                    paint_prims(prims, i, t, shaped, images, window, cx);
                 });
             }
             Prim::PopClip => return,
@@ -482,10 +482,10 @@ impl Element for PanelCanvas {
             node.set_selected(row.selected);
             node.set_row_index_text(row.ordinal.saturating_add(1).to_string());
             node.set_bounds(Rect::new(
-                row.bounds.left() as f64 * prepaint.scale,
-                row.bounds.top() as f64 * prepaint.scale,
-                row.bounds.right() as f64 * prepaint.scale,
-                row.bounds.bottom() as f64 * prepaint.scale,
+                f64::from(row.bounds.left()) * prepaint.scale,
+                f64::from(row.bounds.top()) * prepaint.scale,
+                f64::from(row.bounds.right()) * prepaint.scale,
+                f64::from(row.bounds.bottom()) * prepaint.scale,
             ));
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
@@ -519,7 +519,7 @@ impl Element for PanelCanvas {
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut (),
+        (): &mut (),
         window: &mut Window,
         cx: &mut App,
     ) -> CanvasPrepaint {
@@ -545,8 +545,7 @@ impl Element for PanelCanvas {
                     rects.extend(layout.activity_controls.iter().map(|(_, rect, _)| *rect));
                     rects
                 }
-                Some(PanelLayout::Table(_)) => Vec::new(),
-                None => Vec::new(),
+                Some(PanelLayout::Table(_)) | None => Vec::new(),
             }
         });
         let regions = rects
@@ -594,7 +593,7 @@ impl Element for PanelCanvas {
             } else {
                 Vec::new()
             },
-            scale: window.scale_factor() as f64,
+            scale: f64::from(window.scale_factor()),
         }
     }
 
@@ -603,7 +602,7 @@ impl Element for PanelCanvas {
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
-        _: &mut (),
+        (): &mut (),
         prepaint: &mut CanvasPrepaint,
         window: &mut Window,
         cx: &mut App,
@@ -630,7 +629,7 @@ impl Element for PanelCanvas {
                                 ),
                                 Some(window),
                                 cx,
-                            )
+                            );
                         });
                         window.focus(&focus, cx);
                     });
@@ -734,7 +733,7 @@ impl PanelCanvas {
                 div()
                     .id(("table-sort", source_index))
                     .occlude()
-                    .when(enabled, |style| style.cursor_pointer())
+                    .when(enabled, gpui_kit::Styled::cursor_pointer)
                     .role(gpui_kit::accesskit::Role::Button)
                     .tab_index((source_index * 2) as isize)
                     .tab_stop(enabled)
@@ -767,7 +766,7 @@ impl PanelCanvas {
                                 ),
                                 Some(window),
                                 cx,
-                            )
+                            );
                         });
                     })
                     .on_click(move |_, window, cx| {
@@ -780,7 +779,7 @@ impl PanelCanvas {
                                 ),
                                 Some(window),
                                 cx,
-                            )
+                            );
                         });
                     }),
             );
@@ -823,9 +822,9 @@ impl PanelCanvas {
                         "Left and Right resize the column. Enter fits its header and visible rows.",
                     )
                     .aria_orientation(gpui_kit::accesskit::Orientation::Vertical)
-                    .aria_numeric_value(width as f64)
-                    .aria_min_numeric_value(volna_core::table::layout::MIN_COLUMN_WIDTH as f64)
-                    .aria_max_numeric_value(volna_core::table::layout::MAX_COLUMN_WIDTH as f64)
+                    .aria_numeric_value(f64::from(width))
+                    .aria_min_numeric_value(f64::from(volna_core::table::layout::MIN_COLUMN_WIDTH))
+                    .aria_max_numeric_value(f64::from(volna_core::table::layout::MAX_COLUMN_WIDTH))
                     .aria_numeric_value_step(8.0)
                     .tab_index((source_index * 2 + 1) as isize)
                     .focus(move |style| style.bg(t.hover.bg))
@@ -859,7 +858,7 @@ impl PanelCanvas {
                             fit_table_column(&fit_owner, panel, source_index, window, cx)
                         {
                             fit_owner.update(cx, |ws, cx| {
-                                ws.dispatch_if_current(generation, command, Some(window), cx)
+                                ws.dispatch_if_current(generation, command, Some(window), cx);
                             });
                         }
                     })
@@ -889,7 +888,7 @@ impl PanelCanvas {
                             )
                         };
                         owner.update(cx, |ws, cx| {
-                            ws.dispatch_if_current(generation, command, Some(window), cx)
+                            ws.dispatch_if_current(generation, command, Some(window), cx);
                         });
                     }),
             );
@@ -908,7 +907,7 @@ impl PanelCanvas {
                          window: &mut Window,
                          cx: &mut App| {
             ws.update(cx, |ws, cx| {
-                ws.dispatch_if_current(generation, Command::Pointer(panel, ev), Some(window), cx)
+                ws.dispatch_if_current(generation, Command::Pointer(panel, ev), Some(window), cx);
             });
         };
 
@@ -923,7 +922,7 @@ impl PanelCanvas {
                     MouseButton::Left => volna_core::geometry::MouseButton::Left,
                     MouseButton::Middle => volna_core::geometry::MouseButton::Middle,
                     MouseButton::Right => volna_core::geometry::MouseButton::Right,
-                    _ => return,
+                    MouseButton::Navigate(_) => return,
                 };
                 if ws.read(cx).app.doc.generation() != generation {
                     return;
@@ -1000,7 +999,7 @@ impl PanelCanvas {
                             Command::Action(volna_core::app::Action::AddOrRenameMarker),
                             Some(window),
                             cx,
-                        )
+                        );
                     });
                     window.prevent_default();
                 } else if ev.click_count >= 2
@@ -1013,7 +1012,7 @@ impl PanelCanvas {
                             Command::Action(volna_core::app::Action::ZoomToMeasurement),
                             Some(window),
                             cx,
-                        )
+                        );
                     });
                 } else if ev.click_count >= 2
                     && button == volna_core::geometry::MouseButton::Left
@@ -1025,7 +1024,7 @@ impl PanelCanvas {
                             Command::ZoomToSpan(panel, from, to),
                             Some(window),
                             cx,
-                        )
+                        );
                     });
                 } else if ev.click_count >= 2
                     && button == volna_core::geometry::MouseButton::Left
@@ -1037,7 +1036,7 @@ impl PanelCanvas {
                             Command::RenameMarker(panel, id),
                             Some(window),
                             cx,
-                        )
+                        );
                     });
                     window.prevent_default();
                 } else if ev.click_count >= 2
@@ -1050,7 +1049,7 @@ impl PanelCanvas {
                             Command::Action(volna_core::app::Action::RenameGroup),
                             Some(window),
                             cx,
-                        )
+                        );
                     });
                     window.prevent_default();
                 } else if ev.click_count >= 2
@@ -1063,7 +1062,7 @@ impl PanelCanvas {
                             Command::PanToTransactionStart { panel, row },
                             Some(window),
                             cx,
-                        )
+                        );
                     });
                 } else if ev.click_count >= 2
                     && button == volna_core::geometry::MouseButton::Left
@@ -1075,7 +1074,7 @@ impl PanelCanvas {
                             Command::ShowTransaction { from: panel },
                             Some(window),
                             cx,
-                        )
+                        );
                     });
                 }
             }
@@ -1109,7 +1108,7 @@ impl PanelCanvas {
                     .app
                     .panels
                     .get(panel)
-                    .is_some_and(|p| p.dragging())
+                    .is_some_and(volna_core::panels::Panel::dragging)
                 {
                     send(&ws, PointerEvent::Up, window, cx);
                 }
@@ -1168,7 +1167,7 @@ mod presence_tests {
             3,
             2,
             [(0, 1..3), (1, 0..1)].into_iter(),
-            volna_core::Color::rgb(0x123456),
+            volna_core::Color::rgb(0x0012_3456),
         );
         assert_eq!(image.size(0).width.0, 3);
         assert_eq!(image.size(0).height.0, 2);
@@ -1234,7 +1233,7 @@ mod presence_atlas_tests {
         for frame in 0..4 {
             host.update(&mut vcx, |ws, _, cx| {
                 let end = ws.app.doc.limits().1 as f64;
-                let phase = frame as f64 * 0.125 * end / 2000.0;
+                let phase = f64::from(frame) * 0.125 * end / 2000.0;
                 ws.app.doc.shared.viewport.set(Viewport {
                     start: phase,
                     end: end + phase,

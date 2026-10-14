@@ -11,18 +11,22 @@ use crate::panels::content::Prop;
 use crate::panels::{Panel, PanelId, Panels};
 
 impl App {
+    #[must_use]
     pub fn undo_label(&self) -> Option<&str> {
         self.history.undo_label()
     }
 
+    #[must_use]
     pub fn redo_label(&self) -> Option<&str> {
         self.history.redo_label()
     }
 
+    #[must_use]
     pub fn can_undo(&self) -> bool {
         self.history.can_undo() || self.gesture_open()
     }
 
+    #[must_use]
     pub fn can_redo(&self) -> bool {
         self.history.can_redo()
     }

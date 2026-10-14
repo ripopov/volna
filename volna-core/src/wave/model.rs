@@ -53,26 +53,30 @@ pub enum RowSource {
 }
 
 impl RowSource {
+    #[must_use]
     pub fn trace(&self) -> TraceId {
         match self {
             Self::Resolved { trace, .. } | Self::Unresolved { trace, .. } => *trace,
         }
     }
 
+    #[must_use]
     pub fn signal(&self) -> Option<Traced<SignalRef>> {
         match self {
             Self::Resolved { trace, signal, .. } => Some(Traced::new(*trace, *signal)),
-            _ => None,
+            Self::Unresolved { .. } => None,
         }
     }
 
+    #[must_use]
     pub fn var(&self) -> Option<Traced<VarId>> {
         match self {
             Self::Resolved { trace, var, .. } => Some(Traced::new(*trace, *var)),
-            _ => None,
+            Self::Unresolved { .. } => None,
         }
     }
 
+    #[must_use]
     pub fn locator(&self, doc: &Document) -> (Vec<String>, Option<usize>) {
         match self {
             Self::Resolved { trace, var, .. } => doc
@@ -98,10 +102,12 @@ impl RowHeight {
     pub const DEFAULT: RowHeight = RowHeight(1);
     pub const ANALOG: RowHeight = RowHeight(3);
 
+    #[must_use]
     pub fn multiple(self) -> u8 {
         self.0
     }
 
+    #[must_use]
     pub fn is_default(&self) -> bool {
         *self == Self::DEFAULT
     }
@@ -110,6 +116,7 @@ impl RowHeight {
         Self::PRESETS.iter().position(|p| *p == self).unwrap_or(0)
     }
 
+    #[must_use]
     pub fn step(self, delta: isize) -> Self {
         let ix = self.preset_index() as isize + delta;
         Self::PRESETS[ix.clamp(0, Self::PRESETS.len() as isize - 1) as usize]
@@ -155,10 +162,12 @@ pub struct DisplayedSignal {
 }
 
 impl DisplayedSignal {
+    #[must_use]
     pub fn numeric_kind(&self) -> Option<crate::data::NumericKind> {
         analog::numeric_kind(self.shape, self.translator.as_ref())
     }
 
+    #[must_use]
     pub fn format_id(&self) -> String {
         self.requested_format
             .clone()
@@ -175,6 +184,7 @@ pub struct ClockRow {
 }
 
 impl ClockRow {
+    #[must_use]
     pub fn new(key: ClockKey) -> Self {
         let path = &key.item;
         Self {
@@ -185,6 +195,7 @@ impl ClockRow {
         }
     }
 
+    #[must_use]
     pub fn timeline<'a>(&self, doc: &'a Document) -> Option<&'a Arc<crate::clock::ClockTimeline>> {
         doc.clocks.find(&self.key)?.timeline()
     }
@@ -225,18 +236,22 @@ impl GroupRow {
         }
     }
 
+    #[must_use]
     pub fn is_stacked(&self) -> bool {
         matches!(self.style, GroupStyle::Stack { .. })
     }
 
+    #[must_use]
     pub fn is_overlaid(&self) -> bool {
         matches!(self.style, GroupStyle::Overlaid { .. })
     }
 
+    #[must_use]
     pub fn is_plot(&self) -> bool {
         self.is_stacked() || self.is_overlaid()
     }
 
+    #[must_use]
     pub fn shows_peak(&self) -> bool {
         self.style == GroupStyle::Stack { peak: true }
     }
@@ -251,6 +266,7 @@ pub enum WaveRow {
 }
 
 impl WaveRow {
+    #[must_use]
     pub fn name(&self) -> &str {
         match self {
             Self::Signal(s) => &s.name,
@@ -260,6 +276,7 @@ impl WaveRow {
         }
     }
 
+    #[must_use]
     pub fn height(&self) -> RowHeight {
         match self {
             Self::Signal(s) => s.height,
@@ -289,6 +306,7 @@ impl WaveRow {
         }
     }
 
+    #[must_use]
     pub fn tint(&self) -> Option<Tint> {
         match self {
             Self::Signal(s) => s.tint,
@@ -307,6 +325,7 @@ impl WaveRow {
         }
     }
 
+    #[must_use]
     pub fn signal(&self) -> Option<&DisplayedSignal> {
         match self {
             Self::Signal(s) => Some(s),
@@ -321,6 +340,7 @@ impl WaveRow {
         }
     }
 
+    #[must_use]
     pub fn lane(&self) -> Option<&TxLane> {
         match self {
             Self::Lane(l) => Some(l),
@@ -328,6 +348,7 @@ impl WaveRow {
         }
     }
 
+    #[must_use]
     pub fn clock(&self) -> Option<&ClockRow> {
         match self {
             Self::Clock(c) => Some(c),
@@ -335,6 +356,7 @@ impl WaveRow {
         }
     }
 
+    #[must_use]
     pub fn group(&self) -> Option<&GroupRow> {
         match self {
             Self::Group(g) => Some(g),
@@ -342,14 +364,17 @@ impl WaveRow {
         }
     }
 
+    #[must_use]
     pub fn signal_ref(&self) -> Option<Traced<SignalRef>> {
         self.signal()?.source.signal()
     }
 
+    #[must_use]
     pub fn lane_track(&self) -> Option<Traced<TrackRef>> {
         self.lane()?.track()
     }
 
+    #[must_use]
     pub fn trace(&self) -> Option<TraceId> {
         match self {
             Self::Signal(s) => Some(s.source.trace()),
@@ -359,6 +384,7 @@ impl WaveRow {
         }
     }
 
+    #[must_use]
     pub fn detached(&self) -> Self {
         let mut row = self.clone();
         if let Self::Signal(item) = &mut row {
@@ -370,6 +396,7 @@ impl WaveRow {
         row
     }
 
+    #[must_use]
     pub fn same(&self, other: &Self) -> bool {
         let analog = |a: &Option<Analog>| a.as_ref().map(|a| (a.draw, a.range));
         if self.tint() != other.tint() {
@@ -628,10 +655,12 @@ impl Default for WaveModel {
 }
 
 impl WaveModel {
+    #[must_use]
     pub fn viewport(&self, doc: &Document) -> Viewport {
         self.nav.viewport(doc)
     }
 
+    #[must_use]
     pub fn cursor(&self, doc: &Document) -> Option<u64> {
         self.nav.cursor(doc)
     }
@@ -640,6 +669,7 @@ impl WaveModel {
         self.nav.set_cursor(doc, cursor)
     }
 
+    #[must_use]
     pub fn clone_view(&self, with_rows: bool) -> Self {
         Self {
             items: if with_rows {
@@ -661,6 +691,7 @@ impl WaveModel {
         }
     }
 
+    #[must_use]
     pub fn new() -> Self {
         WaveModel {
             items: Vec::new(),
@@ -684,7 +715,7 @@ impl WaveModel {
             pressed_record: false,
             rename: None,
             analog_eased_at: None,
-            overlaid_ranges: Default::default(),
+            overlaid_ranges: HashMap::default(),
             layout: WaveLayout::default(),
             revision: 0,
         }
@@ -704,10 +735,12 @@ impl WaveModel {
         self.badge_hover = None;
     }
 
+    #[must_use]
     pub fn last_layout(&self) -> &WaveLayout {
         &self.layout
     }
 
+    #[must_use]
     pub fn is_animating(&self) -> bool {
         self.nav.is_animating()
             || self.row_drag_scroll_speed() != 0.0
@@ -787,6 +820,7 @@ impl WaveModel {
         moving
     }
 
+    #[must_use]
     pub fn loaded_count(&self) -> usize {
         self.items
             .iter()
@@ -794,6 +828,7 @@ impl WaveModel {
             .count()
     }
 
+    #[must_use]
     pub fn row_trace(&self, ix: usize) -> Option<TraceId> {
         let entry = self.items.get(ix)?;
         if !entry.is_group() {
@@ -804,14 +839,17 @@ impl WaveModel {
         traces.all(|t| t == first).then_some(first)
     }
 
+    #[must_use]
     pub fn signal(&self, row: usize) -> Option<&DisplayedSignal> {
         self.items.get(row)?.signal()
     }
 
+    #[must_use]
     pub fn visible(&self) -> Arc<[u32]> {
         tree::visible(&self.items)
     }
 
+    #[must_use]
     pub fn items(&self) -> &[Entry] {
         &self.items
     }
@@ -1104,6 +1142,7 @@ impl WaveModel {
         layout.entry_at(y).filter(|&row| row < self.items.len())
     }
 
+    #[must_use]
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -1294,7 +1333,7 @@ impl WaveModel {
     }
 
     fn fresh_group_name(&self) -> String {
-        (1..)
+        (1..=self.items.len() + 1)
             .map(|n| format!("Group {n}"))
             .find(|name| {
                 !self
@@ -1302,7 +1341,7 @@ impl WaveModel {
                     .iter()
                     .any(|e| e.group().is_some_and(|g| g.name == *name))
             })
-            .expect("unbounded")
+            .expect("more candidate names than existing rows")
     }
 
     pub fn group_selected(&mut self) -> bool {
@@ -1379,7 +1418,7 @@ impl WaveModel {
             [g],
             |e| match &mut e.row {
                 WaveRow::Group(group) if group.name != name => {
-                    group.name = name.to_owned();
+                    name.clone_into(&mut group.name);
                     true
                 }
                 _ => false,
@@ -1451,6 +1490,7 @@ impl WaveModel {
         tree::selected_leaves(&self.items, &set)
     }
 
+    #[must_use]
     pub fn ink(&self, ix: usize) -> Option<Tint> {
         tint::ink(&self.items, ix)
     }
@@ -1534,6 +1574,7 @@ impl WaveModel {
         }
     }
 
+    #[must_use]
     pub fn can_plot(&self, row: usize) -> bool {
         self.signal(row)
             .is_some_and(|s| analog::supports(s.shape, s.translator.as_ref()))
@@ -1644,6 +1685,7 @@ impl WaveModel {
             .is_some_and(GroupRow::is_stacked)
     }
 
+    #[must_use]
     pub fn stack_layers(&self, group: usize) -> Vec<stack::Layer> {
         tree::leaves(&self.items, group)
             .filter_map(|entry| {
@@ -1719,6 +1761,7 @@ impl WaveModel {
             .is_some_and(GroupRow::is_overlaid)
     }
 
+    #[must_use]
     pub fn numeric_members(&self, group: usize) -> Vec<usize> {
         tree::leaves(&self.items, group)
             .filter(|&i| self.signal(i).is_some_and(|s| s.numeric_kind().is_some()))
@@ -2437,6 +2480,7 @@ impl WaveModel {
         }
     }
 
+    #[must_use]
     pub fn group_histories(&self, group: usize) -> Vec<Arc<dyn SignalHistory>> {
         tree::leaves(&self.items, group)
             .filter_map(|j| self.items[j].signal()?.history.clone())
@@ -2619,6 +2663,7 @@ impl WaveModel {
         }
     }
 
+    #[must_use]
     pub fn rename_rect(&self) -> Option<crate::geometry::Rect> {
         let g = self.rename?;
         let (y, _) = self.layout.entry_span(g)?;
@@ -2630,6 +2675,7 @@ impl WaveModel {
             .then(|| crate::geometry::Rect::from_xywh(x, y, right - x, layout.row_h))
     }
 
+    #[must_use]
     pub fn group_name_at(&self, p: Point) -> Option<usize> {
         if !self.layout.names.contains(p) || self.chevron_at(p).is_some() {
             return None;
@@ -2778,6 +2824,7 @@ impl WaveModel {
         self.scroll_y != before || dt == 0.0
     }
 
+    #[must_use]
     pub fn lane_hit(
         &self,
         doc: &Document,
@@ -2806,6 +2853,7 @@ impl WaveModel {
         Some((Traced::new(lane.source.trace(), tx.generator), tx.id))
     }
 
+    #[must_use]
     pub fn row_edge_at(&self, p: Point) -> Option<usize> {
         let layout = &self.layout;
         if !layout.names.contains(p) {

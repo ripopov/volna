@@ -87,6 +87,7 @@ pub enum LoadRequest {
 }
 
 impl LoadRequest {
+    #[must_use]
     pub fn remote_id(&self) -> Option<u64> {
         match self {
             Self::Signals { session, .. }
@@ -104,6 +105,7 @@ impl LoadRequest {
         }
     }
 
+    #[must_use]
     pub fn fail(self, error: anyhow::Error) -> LoadResult {
         match self {
             Self::BuildActivity {

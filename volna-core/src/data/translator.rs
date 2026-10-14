@@ -1,5 +1,6 @@
 //! Value translators turn a [`WaveValue`] into display text.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use volna_trace::data::value::{SignalShape, ValueKind, WaveValue, kind_of_bits};
@@ -46,6 +47,7 @@ pub enum NumericKind {
 }
 
 impl NumericKind {
+    #[must_use]
     pub fn read(self, value: &ValueView<'_>) -> Option<f64> {
         let bits = match (self, value) {
             (Self::Real, ValueView::Real(v)) => return v.is_finite().then_some(*v),
@@ -65,22 +67,20 @@ impl NumericKind {
                 acc = acc * 2.0 + bit(i)? as f64;
             }
             let v = match self {
-                Self::Unsigned => acc,
                 Self::Signed if bits.bit(0) == b'1' => acc - 2f64.powi(w as i32),
-                Self::Signed => acc,
+                Self::Unsigned | Self::Signed => acc,
                 _ => return None,
             };
             return v.is_finite().then_some(v);
         }
         let raw = bits.to_u64()?;
         let v = match self {
-            Self::Unsigned => raw as f64,
             Self::Signed if w == 64 => raw as i64 as f64,
             Self::Signed if (raw >> (w - 1)) & 1 == 1 => raw as f64 - 2f64.powi(w as i32),
-            Self::Signed => raw as f64,
+            Self::Unsigned | Self::Signed => raw as f64,
             Self::Float => match w {
                 16 => half_to_f64(raw as u16),
-                32 => f32::from_bits(raw as u32) as f64,
+                32 => f64::from(f32::from_bits(raw as u32)),
                 64 => f64::from_bits(raw),
                 _ => return None,
             },
@@ -89,6 +89,7 @@ impl NumericKind {
         v.is_finite().then_some(v)
     }
 
+    #[must_use]
     pub fn limits(self, shape: SignalShape) -> Option<(f64, f64)> {
         let width = match shape {
             SignalShape::Bit => 1,
@@ -106,6 +107,7 @@ impl NumericKind {
         (lo.is_finite() && hi.is_finite()).then_some((lo, hi))
     }
 
+    #[must_use]
     pub fn value_of(self, v: f64, shape: SignalShape) -> Option<WaveValue> {
         match (self, shape) {
             (Self::Real, SignalShape::Real) => Some(WaveValue::Real(v)),
@@ -135,6 +137,7 @@ pub struct Translators {
 }
 
 impl Translators {
+    #[must_use]
     pub fn builtin() -> Self {
         let mut t = Translators { all: Vec::new() };
         t.register(Arc::new(BitTranslator));
@@ -153,10 +156,12 @@ impl Translators {
         self.all.push(translator);
     }
 
+    #[must_use]
     pub fn get(&self, id: &str) -> Option<Arc<dyn Translator>> {
         self.all.iter().find(|t| t.id() == id).cloned()
     }
 
+    #[must_use]
     pub fn applicable(&self, shape: SignalShape) -> Vec<Arc<dyn Translator>> {
         self.all
             .iter()
@@ -165,6 +170,7 @@ impl Translators {
             .collect()
     }
 
+    #[must_use]
     pub fn default_for(&self, shape: SignalShape) -> Arc<dyn Translator> {
         let id = match shape {
             SignalShape::Bit | SignalShape::Event => "bit",
@@ -293,7 +299,7 @@ impl Translator for HexTranslator {
                     other => {
                         let c = other.to_ascii_lowercase();
                         special = Some(match (special, c) {
-                            (Some(b'x'), _) | (_, b'x') | (_, b'u') | (_, b'w') => b'x',
+                            (Some(b'x'), _) | (_, b'x' | b'u' | b'w') => b'x',
                             (Some(b'z'), _) | (_, b'z') => b'z',
                             (_, c) => c,
                         });
@@ -302,7 +308,7 @@ impl Translator for HexTranslator {
             }
             match special {
                 Some(c) => out.push(c as char),
-                None => out.push(char::from_digit(v as u32, 16).unwrap()),
+                None => out.push(char::from_digit(u32::from(v), 16).unwrap()),
             }
         }
         Translated {
@@ -315,10 +321,10 @@ impl Translator for HexTranslator {
 fn binary_to_decimal(bits: &[u8]) -> String {
     let mut limbs: Vec<u32> = vec![0];
     for &c in bits {
-        let bit = (c == b'1') as u64;
+        let bit = u64::from(c == b'1');
         let mut carry = bit;
-        for limb in limbs.iter_mut() {
-            let v = (*limb as u64) * 2 + carry;
+        for limb in &mut limbs {
+            let v = u64::from(*limb) * 2 + carry;
             *limb = (v % 1_000_000_000) as u32;
             carry = v / 1_000_000_000;
         }
@@ -331,7 +337,7 @@ fn binary_to_decimal(bits: &[u8]) -> String {
         if i == 0 {
             s.push_str(&limb.to_string());
         } else {
-            s.push_str(&format!("{limb:09}"));
+            write!(s, "{limb:09}").unwrap();
         }
     }
     s
@@ -410,8 +416,8 @@ impl Translator for SignedTranslator {
 
 fn half_to_f64(h: u16) -> f64 {
     let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
-    let exp = ((h >> 10) & 0x1f) as i32;
-    let frac = (h & 0x3ff) as f64;
+    let exp = i32::from((h >> 10) & 0x1f);
+    let frac = f64::from(h & 0x3ff);
     match exp {
         0 => sign * frac * 2f64.powi(-24),
         0x1f => {
@@ -481,10 +487,10 @@ impl Translator for FloatTranslator {
         }
         let raw = bytes
             .iter()
-            .fold(0u64, |acc, &c| (acc << 1) | (c == b'1') as u64);
+            .fold(0u64, |acc, &c| (acc << 1) | u64::from(c == b'1'));
         let v = match bytes.len() {
             16 => half_to_f64(raw as u16),
-            32 => f32::from_bits(raw as u32) as f64,
+            32 => f64::from(f32::from_bits(raw as u32)),
             64 => f64::from_bits(raw),
             _ => return not_applicable(),
         };
@@ -551,7 +557,7 @@ mod tests {
         assert_eq!(two.to_u64(), Some(0xa34));
         assert_eq!(
             NumericKind::Signed.read(&ValueView::Logic(two)),
-            Some(0xa34 as f64 - 4096.0)
+            Some(f64::from(0xa34) - 4096.0)
         );
         let four = LogicView::packed_lsb(4, 4, &[0b01_00_01_01]);
         assert_eq!(four.to_u64(), Some(0b1011));

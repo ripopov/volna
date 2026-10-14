@@ -3,6 +3,10 @@
 mod traces;
 mod undo;
 
+use crate::frames::FrameStats;
+use crate::history::History;
+use crate::sidebar::ActivityModel;
+use std::collections::HashSet;
 pub use traces::TraceChip;
 
 use std::sync::Arc;
@@ -95,6 +99,7 @@ pub enum Action {
 }
 
 impl Command {
+    #[must_use]
     pub fn named(name: &str) -> Option<Self> {
         let action = match name {
             "openWorkspace" => return Some(Self::RequestOpenWorkspace),
@@ -159,6 +164,7 @@ pub enum EditTarget {
 }
 
 impl EditTarget {
+    #[must_use]
     pub fn panel(self) -> PanelId {
         match self {
             Self::Group { panel, .. } | Self::Marker { panel, .. } => panel,
@@ -376,6 +382,7 @@ pub struct MemoryStatus {
 impl MemoryStatus {
     pub const NEARLY_FULL: f32 = 0.9;
 
+    #[must_use]
     pub fn fraction(self) -> f32 {
         if self.limit == 0 {
             return 1.0;
@@ -383,10 +390,12 @@ impl MemoryStatus {
         (self.used as f64 / self.limit as f64).clamp(0.0, 1.0) as f32
     }
 
+    #[must_use]
     pub fn nearly_full(self) -> bool {
         self.fraction() >= Self::NEARLY_FULL
     }
 
+    #[must_use]
     pub fn label(self) -> String {
         let (unit, scale) = byte_unit(self.limit);
         format!(
@@ -396,6 +405,7 @@ impl MemoryStatus {
         )
     }
 
+    #[must_use]
     pub fn detail(self) -> String {
         let (unit, scale) = byte_unit(self.limit);
         format!(
@@ -417,6 +427,7 @@ pub struct MemoryChoice {
 }
 
 impl MemoryChoice {
+    #[must_use]
     pub fn command(&self) -> Command {
         Command::Settings(SettingsCommand::Set {
             id: self.id.into(),
@@ -438,6 +449,7 @@ pub struct MemoryMenu {
 pub const BUDGET_PRESETS_MIB: [u64; 8] = [256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
 pub const OBJECT_PRESETS_MIB: [u64; 7] = [64, 128, 256, 512, 1024, 2048, 4096];
 
+#[must_use]
 pub fn format_mib(mib: u64) -> String {
     if mib >= 1024 {
         format!("{} GiB", short_amount(mib as f64 / 1024.0))
@@ -531,6 +543,7 @@ impl Default for App {
 }
 
 impl App {
+    #[must_use]
     pub fn new() -> Self {
         App {
             doc: Document::new(),
@@ -538,19 +551,19 @@ impl App {
             panels: Panels::new(),
             scopes: ScopeTreeModel::default(),
             variables: MemberListModel::default(),
-            activity: Default::default(),
+            activity: ActivityModel::default(),
             sidebar_width: 280.0,
             sidebar_visible: true,
             scopes_fraction: 0.42,
             drag: None,
             settings: settings::Store::new(settings::Host::Native),
             settings_view: SettingsView::default(),
-            history: Default::default(),
+            history: History::default(),
             announcement: None,
             marker_edit: None,
             transient_menu: None,
             transient_menus: 0,
-            frames: Default::default(),
+            frames: FrameStats::default(),
             events: Vec::new(),
             text: TextCache::default(),
             scene: Scene::default(),
@@ -605,7 +618,7 @@ impl App {
     }
 
     fn on_session_changed(&mut self) {
-        self.activity = Default::default();
+        self.activity = ActivityModel::default();
         self.reset_recent_view();
         self.history.clear();
         self.announcement = None;
@@ -687,6 +700,7 @@ impl App {
             .collect()
     }
 
+    #[must_use]
     pub fn activity_viewport(&self) -> crate::wave::Viewport {
         self.panels
             .focused()
@@ -697,6 +711,7 @@ impl App {
             })
     }
 
+    #[must_use]
     pub fn scope_activity(
         &self,
         node: crate::sidebar::TreeNode,
@@ -924,7 +939,7 @@ impl App {
                 if start(&self.panels, panel) =>
             {
                 let waves = self.fresh_waves();
-                _ = self.replace_panel(panel, waves, Some("New waves panel".into()));
+                drop(self.replace_panel(panel, waves, Some("New waves panel".into())));
                 return;
             }
             PanelsCommand::Split { panel, axis } => {
@@ -1515,7 +1530,7 @@ impl App {
                 self.panels
                     .iter()
                     .filter_map(|panel| panel.kind.table())
-                    .flat_map(|table| table.histories()),
+                    .flat_map(super::table::model::TableModel::histories),
             )
             .collect()
     }
@@ -1524,6 +1539,7 @@ impl App {
         volna_trace::session::account_local_session(session, self.table_budget.clone())
     }
 
+    #[must_use]
     pub fn memory_menu(&self) -> MemoryMenu {
         let memory = &self.settings.resolved().memory;
         let locked = ["memory.budgetMiB", "memory.objectMiB"]
@@ -1809,6 +1825,7 @@ impl App {
         self.changed();
     }
 
+    #[must_use]
     pub fn member_clock(&self, member: Traced<Member>) -> Option<ClockKey> {
         let session = self.doc.session(member.trace)?;
         let track = session.hierarchy().member_track(member.item)?;
@@ -1928,7 +1945,7 @@ impl App {
     pub(crate) fn sync_lane_tracks(&mut self) {
         let generation = self.doc.generation();
         if self.lane_tracks.0 != generation {
-            self.lane_tracks = (generation, Default::default());
+            self.lane_tracks = (generation, HashSet::default());
         }
         let wanted: std::collections::HashSet<Traced<TrackRef>> = self
             .panels
@@ -1992,6 +2009,7 @@ impl App {
         self.changed();
     }
 
+    #[must_use]
     pub fn clock_choices(&self) -> Option<ClockChoices> {
         let clocks = &self.doc.clocks;
         if clocks.is_empty() {
@@ -2080,17 +2098,14 @@ impl App {
                 | Action::RemoveMarkerAtCursor
                 | Action::RemoveAllMarkers
         ) {
-            let cursor = self
-                .panels
-                .focused()
-                .kind
-                .nav()
-                .map(|n| n.cursor(&self.doc))
-                .unwrap_or_else(|| {
+            let cursor = self.panels.focused().kind.nav().map_or_else(
+                || {
                     matches!(action, Action::SetMarker(_))
                         .then_some(self.doc.shared.cursor)
                         .flatten()
-                });
+                },
+                |n| n.cursor(&self.doc),
+            );
             let changed = match (action, cursor) {
                 (Action::RemoveAllMarkers, _) => self.doc.remove_all_markers(),
                 (Action::SetMarker(id), Some(c)) => {
@@ -2115,12 +2130,11 @@ impl App {
                     }
                 }
                 (Action::RemoveMarkerAtCursor, Some(c)) => {
-                    match crate::marker::at(self.doc.markers(), c).map(|m| m.id) {
-                        Some(id) => self.doc.remove_marker(id),
-                        None => {
-                            self.announce("No marker at the cursor".into());
-                            false
-                        }
+                    if let Some(id) = crate::marker::at(self.doc.markers(), c).map(|m| m.id) {
+                        self.doc.remove_marker(id)
+                    } else {
+                        self.announce("No marker at the cursor".into());
+                        false
                     }
                 }
                 _ => false,
@@ -2155,10 +2169,10 @@ impl App {
                 Action::PrevMarker => crate::marker::Walk::Prev,
                 Action::GoToMarker(id) => crate::marker::Walk::To(id),
                 _ => {
-                    if !nav.back(doc, now) {
-                        self.announce("No jump to return from".into());
-                    } else {
+                    if nav.back(doc, now) {
                         self.changed();
+                    } else {
+                        self.announce("No jump to return from".into());
                     }
                     return;
                 }
@@ -2509,10 +2523,12 @@ impl App {
         }
     }
 
+    #[must_use]
     pub fn scene(&self) -> &Scene {
         &self.scene
     }
 
+    #[must_use]
     pub fn pipeline_streams(&self) -> Vec<(String, Traced<TrackRef>)> {
         use volna_trace::data::transactions::TrackKind;
         let traces = self.doc.traces();
@@ -2546,6 +2562,7 @@ impl App {
         )
     }
 
+    #[must_use]
     pub fn start_summary(&self) -> Option<StartSummary> {
         let traces = self.doc.traces();
         traces.first_loaded()?;
@@ -2559,6 +2576,7 @@ impl App {
         })
     }
 
+    #[must_use]
     pub fn text_edit(&self) -> Option<TextEdit> {
         let panel = self.panels.focused_id();
         if let Some((p, id)) = self.marker_edit.filter(|(p, _)| *p == panel) {
@@ -2649,6 +2667,7 @@ impl App {
         self.changed();
     }
 
+    #[must_use]
     pub fn navigator_rows(&self, query: &str) -> Vec<crate::marker::NavigatorRow> {
         let selected = self
             .panels
@@ -2659,6 +2678,7 @@ impl App {
         crate::marker::navigator_rows(&self.doc, query, selected)
     }
 
+    #[must_use]
     pub fn menu(&self) -> Option<&WaveMenu> {
         let panel = self.panels.focused_id();
         match &self.transient_menu {
@@ -2667,6 +2687,7 @@ impl App {
         }
     }
 
+    #[must_use]
     pub fn adds_marker_at(&self, panel: PanelId, p: Point) -> bool {
         let Some(panel) = self.panels.get(panel) else {
             return false;
@@ -2717,7 +2738,7 @@ impl App {
                 ));
                 true
             }
-            (MouseButton::Middle, LaneHit::Chip(ix)) | (MouseButton::Left, LaneHit::Chip(ix))
+            (MouseButton::Middle | MouseButton::Left, LaneHit::Chip(ix))
                 if button == MouseButton::Middle || modifiers.alt =>
             {
                 match self.doc.markers().get(ix).map(|m| m.id) {
@@ -2949,10 +2970,12 @@ impl App {
         s
     }
 
+    #[must_use]
     pub fn trace_state(&self) -> TraceState {
         self.doc.state()
     }
 
+    #[must_use]
     pub fn debug_state(&self) -> String {
         self.panels.layout().panels().into_iter().map(|id| {
         let panel = self.panels.get(id).unwrap();

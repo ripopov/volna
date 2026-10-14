@@ -3,13 +3,13 @@ name = "volna-server"
 version.workspace = true
 license.workspace = true
 repository.workspace = true
-edition = "2024"
+edition.workspace = true
 rust-version.workspace = true
 readme = "README.md"
 description = "Headless complete-object trace loader for Volna"
 
 [dependencies]
-volna-trace = { path = "../volna-trace" }
+volna-trace = { version = "0.1.0", path = "../volna-trace" }
 anyhow = "1"
 vtr.workspace = true
 getrandom = "=0.4.3"
@@ -17,7 +17,10 @@ gethostname = "=1.1.0"
 serde = "1"
 
 [dev-dependencies]
-volna-trace = { path = "../volna-trace", features = ["testing"] }
+volna-trace = { version = "0.1.0", path = "../volna-trace", features = ["testing"] }
 tempfile = "3"
 bincode = "=1.3.3"
 serde_json = "1"
+
+[lints]
+workspace = true

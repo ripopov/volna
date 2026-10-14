@@ -24,6 +24,7 @@ pub enum Member {
 }
 
 impl Member {
+    #[must_use]
     pub fn var(self) -> Option<VarId> {
         if let Self::Var(id) = self {
             Some(id)
@@ -182,6 +183,7 @@ impl Default for Ids<'_> {
     }
 }
 impl<'a> Ids<'a> {
+    #[must_use]
     pub fn from_slice(ids: &'a [u32]) -> Self {
         Self {
             storage: IdStorage::Slice(ids),
@@ -198,15 +200,18 @@ impl<'a> Ids<'a> {
         self.gap = gap;
         self
     }
+    #[must_use]
     pub fn len(self) -> usize {
         match self.storage {
             IdStorage::Slice(ids) => ids.len(),
             IdStorage::Reader(ids) => ids.len(),
         }
     }
+    #[must_use]
     pub fn is_empty(self) -> bool {
         self.iter().next().is_none()
     }
+    #[must_use]
     pub fn iter(self) -> IdsIter<'a> {
         IdsIter {
             storage: match self.storage {
@@ -216,6 +221,7 @@ impl<'a> Ids<'a> {
             gap: self.gap,
         }
     }
+    #[must_use]
     pub fn first(self) -> Option<usize> {
         self.iter().next()
     }
@@ -287,45 +293,59 @@ impl Default for Hierarchy {
     }
 }
 impl Hierarchy {
+    #[must_use]
     pub fn generators(&self) -> &[Generator] {
         &self.generators
     }
+    #[must_use]
     pub fn scope_count(&self) -> usize {
         self.source.scope_count()
     }
+    #[must_use]
     pub fn var_count(&self) -> usize {
         self.source.var_count()
     }
+    #[must_use]
     pub fn signal(&self, id: VarId) -> SignalRef {
         self.source.signal(id)
     }
+    #[must_use]
     pub fn roots(&self) -> Ids<'_> {
         self.source.roots()
     }
+    #[must_use]
     pub fn scope(&self, id: ScopeId) -> ScopeView<'_> {
         self.source.scope(id)
     }
+    #[must_use]
     pub fn var(&self, id: VarId) -> VariableView<'_> {
         self.source.var(id)
     }
+    #[must_use]
     pub fn var_name(&self, id: VarId) -> &str {
         self.source.var_name(id)
     }
+    #[must_use]
     pub fn get_scope(&self, id: ScopeId) -> Option<ScopeView<'_>> {
         (id < self.scope_count()).then(|| self.scope(id))
     }
+    #[must_use]
     pub fn get_var(&self, id: VarId) -> Option<VariableView<'_>> {
         (id < self.var_count()).then(|| self.var(id))
     }
+    #[must_use]
     pub fn scopes(&self) -> impl ExactSizeIterator<Item = ScopeView<'_>> {
         (0..self.scope_count()).map(|id| self.scope(id))
     }
+    #[must_use]
     pub fn vars(&self) -> impl ExactSizeIterator<Item = VariableView<'_>> {
         (0..self.var_count()).map(|id| self.var(id))
     }
+    #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         self.source.resident_bytes()
     }
+    #[must_use]
     pub fn to_builder(&self) -> HierarchyBuilder {
         HierarchyBuilder {
             scopes: self
@@ -373,6 +393,7 @@ impl Hierarchy {
         }
     }
 
+    #[must_use]
     pub fn member_name(&self, member: Member) -> &str {
         match member {
             Member::Var(id) => self.var_name(id),
@@ -381,6 +402,7 @@ impl Hierarchy {
         }
     }
 
+    #[must_use]
     pub fn member_path(&self, member: Member) -> String {
         match member {
             Member::Var(id) => self.full_name(id),
@@ -392,6 +414,7 @@ impl Hierarchy {
         }
     }
 
+    #[must_use]
     pub fn member_track(&self, member: Member) -> Option<TrackRef> {
         match member {
             Member::Generator(id) => Some(self.generators.get(id)?.track),
@@ -403,6 +426,7 @@ impl Hierarchy {
         }
     }
 
+    #[must_use]
     pub fn is_log(&self, member: Member) -> bool {
         let scope = match member {
             Member::Generator(id) => self.scope(self.generators[id].stream),
@@ -412,6 +436,7 @@ impl Hierarchy {
         matches!(scope.role, ScopeRole::Stream { .. }) && scope.kind == "LOG"
     }
 
+    #[must_use]
     pub fn has_vars(&self, scope: ScopeId) -> bool {
         if self.get_scope(scope).is_none() {
             return false;
@@ -473,7 +498,7 @@ impl Hierarchy {
             .collect();
         path.push(v.name.to_owned());
         let (mut before, mut total, mut seen) = (0, 0, false);
-        for id in self.scope(v.scope).vars.iter() {
+        for id in self.scope(v.scope).vars {
             seen |= id == var;
             if self.var_name(id) == v.name {
                 total += 1;
@@ -484,6 +509,7 @@ impl Hierarchy {
         (path, nth)
     }
 
+    #[must_use]
     pub fn scope_path(&self, mut id: ScopeId) -> Vec<&str> {
         let mut parts = vec![self.scope(id).name];
         while let Some(p) = self.scope(id).parent {
@@ -494,6 +520,7 @@ impl Hierarchy {
         parts
     }
 
+    #[must_use]
     pub fn full_name(&self, var: VarId) -> String {
         let v = self.var(var);
         let mut s = self.scope_path(v.scope).join(".");

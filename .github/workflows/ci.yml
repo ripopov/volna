@@ -119,3 +119,35 @@ jobs:
           toolchain: "1.97.1"
       - uses: Swatinem/rust-cache@v2
       - run: cargo +1.97.1 test --locked -p vtr
+
+  dependencies:
+    name: Dependency hygiene and advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install --locked cargo-machete --version 0.9.2
+      - run: cargo install --locked cargo-deny --version 0.20.2
+      - run: cargo machete
+      - run: cargo deny --workspace --locked check
+
+  miri:
+    name: Miri core memory safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-29
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +nightly-2026-09-29 miri setup
+      # These tests exercise Rust-owned memory without invoking native codecs or mmap.
+      - run: cargo +nightly-2026-09-29 miri test -p vtr --lib --locked strings::tests
+      - run: cargo +nightly-2026-09-29 miri test -p vtr --lib --locked varint::tests
+      - run: cargo +nightly-2026-09-29 miri test -p vtr --lib --locked allocator_

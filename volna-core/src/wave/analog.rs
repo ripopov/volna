@@ -26,6 +26,7 @@ pub enum AnalogRange {
 }
 
 impl AnalogDraw {
+    #[must_use]
     pub fn default_for(shape: SignalShape) -> Self {
         if shape == SignalShape::Real {
             Self::Linear
@@ -34,6 +35,7 @@ impl AnalogDraw {
         }
     }
 
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Step => "step",
@@ -43,6 +45,7 @@ impl AnalogDraw {
 }
 
 impl AnalogRange {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Trace => "whole trace",
@@ -82,6 +85,7 @@ impl PartialEq for Analog {
 }
 
 impl Analog {
+    #[must_use]
     pub fn new(draw: AnalogDraw, range: AnalogRange) -> Self {
         Self {
             draw,
@@ -110,6 +114,10 @@ impl Analog {
         }
     }
 
+    #[expect(
+        clippy::option_option,
+        reason = "Outer None means data is pending; inner None means no finite samples."
+    )]
     pub(crate) fn raw_target(
         &mut self,
         series: &Series<'_>,
@@ -138,6 +146,10 @@ impl Analog {
         Some(range)
     }
 
+    #[expect(
+        clippy::option_option,
+        reason = "Outer None means data is pending; inner None means no finite samples."
+    )]
     fn trace_range(&mut self, series: &Series<'_>) -> Option<Option<(f64, f64)>> {
         if let Some(summary) = series.summary {
             return Some(summary.root().range());
@@ -178,6 +190,7 @@ impl Analog {
         next != target
     }
 
+    #[must_use]
     pub fn is_settled(&self) -> bool {
         self.shown == self.target
     }
@@ -196,7 +209,7 @@ pub fn supports(shape: SignalShape, tr: &dyn Translator) -> bool {
 }
 
 pub fn history_identity(h: &Arc<dyn SignalHistory>) -> usize {
-    Arc::as_ptr(h) as *const () as usize
+    Arc::as_ptr(h).cast::<()>() as usize
 }
 
 pub(crate) fn padded((lo, hi): (f64, f64), shape: SignalShape) -> (f64, f64) {
@@ -273,6 +286,7 @@ impl Extent {
         self.undefined |= other.undefined;
     }
 
+    #[must_use]
     pub fn range(&self) -> Option<(f64, f64)> {
         (self.lo <= self.hi).then_some((self.lo, self.hi))
     }
@@ -292,7 +306,7 @@ impl std::fmt::Debug for AnalogSummary {
             .field("kind", &self.kind)
             .field("len", &self.len)
             .field("bytes", &self.resident_bytes())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -346,10 +360,12 @@ impl AnalogSummary {
             + self.levels.capacity() * std::mem::size_of::<Vec<Extent>>()) as u64
     }
 
+    #[must_use]
     pub fn kind(&self) -> NumericKind {
         self.kind
     }
 
+    #[must_use]
     pub fn identity(&self) -> usize {
         self.history
     }
@@ -443,14 +459,17 @@ impl<'a> Series<'a> {
         series
     }
 
+    #[must_use]
     pub fn waiting(&self, changes: usize) -> bool {
         self.building && self.summary.is_none() && changes >= SUMMARY_MIN_CHANGES
     }
 
+    #[must_use]
     pub fn sample(&self, i: Option<usize>) -> Sample {
         sample(self.history, self.kind, i)
     }
 
+    #[must_use]
     pub fn extent(&self, from: Option<usize>, to: Option<usize>) -> Extent {
         let mut e = Extent::EMPTY;
         let Some(to) = to else {
@@ -472,10 +491,12 @@ impl<'a> Series<'a> {
         e
     }
 
+    #[must_use]
     pub fn range(&self, from: Option<usize>, to: Option<usize>) -> Option<(f64, f64)> {
         self.extent(from, to).range()
     }
 
+    #[must_use]
     pub fn window_range(&self, vp: &Viewport) -> Option<(f64, f64)> {
         self.range(
             index_at(self.history, vp.start),
@@ -539,6 +560,7 @@ pub struct Plot {
 }
 
 impl Plot {
+    #[must_use]
     pub fn y_of(&self, v: f64) -> f32 {
         let f = (v - self.lo) / (self.hi - self.lo);
         self.bottom - (f as f32) * (self.bottom - self.top)
@@ -548,6 +570,7 @@ impl Plot {
         self.left + vp.x_of(t, f64::from(self.width)) as f32
     }
 
+    #[must_use]
     pub fn baseline(&self) -> f32 {
         if self.lo <= 0.0 && self.hi >= 0.0 {
             self.y_of(0.0)
@@ -575,6 +598,7 @@ impl Geometry {
     }
 }
 
+#[must_use]
 pub fn geometry(
     series: &Series<'_>,
     draw: AnalogDraw,
@@ -627,7 +651,7 @@ fn exact(
     let spacing = plot.width / (visible_changes(h, vp).max(1) as f32);
     let mark = draw == AnalogDraw::Linear && spacing >= DOT_SPACING * zoom;
     let indices = std::iter::once(first)
-        .filter(|f| f.is_none())
+        .filter(std::option::Option::is_none)
         .chain((first.unwrap_or(0)..=last).map(Some));
     let mut run: Option<Vec<Point>> = None;
     for i in indices {
@@ -728,6 +752,7 @@ fn envelope(series: &Series<'_>, vp: &Viewport, plot: &Plot, g: &mut Geometry) {
     g.runs.extend(run);
 }
 
+#[must_use]
 pub fn y_at(
     series: &Series<'_>,
     draw: AnalogDraw,
@@ -770,6 +795,7 @@ pub enum Readout {
     },
 }
 
+#[must_use]
 pub fn readout(
     series: &Series<'_>,
     draw: AnalogDraw,
@@ -824,6 +850,7 @@ pub fn readout(
     })
 }
 
+#[must_use]
 pub fn fill_columns(runs: &[Vec<Point>], left: f32, width: f32) -> Vec<(f32, f32, f32)> {
     let n = width.max(0.0).ceil() as usize;
     let mut ys: Vec<Option<f32>> = vec![None; n];

@@ -27,21 +27,21 @@ impl Store {
                 .map(PathBuf::from)
                 .context("HOME is unavailable")
         };
-        let config_dir =
-            match config_dir.or_else(|| std::env::var_os("VOLNA_CONFIG_DIR").map(PathBuf::from)) {
-                Some(path) => path,
-                None => {
-                    #[cfg(target_os = "windows")]
-                    let root = std::env::var_os("APPDATA")
-                        .map(PathBuf::from)
-                        .context("APPDATA is unavailable")?;
-                    #[cfg(not(target_os = "windows"))]
-                    let root = std::env::var_os("XDG_CONFIG_HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or(home()?.join(".config"));
-                    root.join("volna")
-                }
-            };
+        let config_dir = if let Some(path) =
+            config_dir.or_else(|| std::env::var_os("VOLNA_CONFIG_DIR").map(PathBuf::from))
+        {
+            path
+        } else {
+            #[cfg(target_os = "windows")]
+            let root = std::env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .context("APPDATA is unavailable")?;
+            #[cfg(not(target_os = "windows"))]
+            let root = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or(home()?.join(".config"));
+            root.join("volna")
+        };
         #[cfg(target_os = "macos")]
         let data_dir = home()?.join("Library/Application Support/volna/workspaces");
         #[cfg(target_os = "windows")]
@@ -206,7 +206,7 @@ impl Store {
         Ok((side, back))
     }
 
-    fn write(&self, ticket: &SaveTicket, bytes: &[u8]) -> Result<()> {
+    fn write(ticket: &SaveTicket, bytes: &[u8]) -> Result<()> {
         ensure!(bytes.len() <= MAX_BYTES, "workspace exceeds size limit");
         let path = path_from_uri(ticket.target.location())?;
         if matches!(ticket.target, Target::FallbackFile { .. }) {
@@ -265,12 +265,12 @@ pub(crate) fn file_uri(path: &Path) -> Result<String> {
     };
     url::Url::from_file_path(absolute)
         .map(Into::into)
-        .map_err(|_| anyhow::anyhow!("invalid file path"))
+        .map_err(|()| anyhow::anyhow!("invalid file path"))
 }
 pub fn path_from_uri(uri: &str) -> Result<PathBuf> {
     url::Url::parse(uri)?
         .to_file_path()
-        .map_err(|_| anyhow::anyhow!("not a local file URI: {uri}"))
+        .map_err(|()| anyhow::anyhow!("not a local file URI: {uri}"))
 }
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
@@ -468,7 +468,7 @@ impl crate::Workspace {
             .native_store
             .as_ref()
             .context("workspace storage not configured")
-            .and_then(|store| store.write(&ticket, &bytes));
+            .and_then(|_| Store::write(&ticket, &bytes));
         self.app.workspace_saved(
             ticket,
             result.err().map(|e| format!("{e:#}")),
@@ -612,7 +612,7 @@ impl Options {
                 }
                 "--config-dir" => {
                     options.config_dir =
-                        Some(args.next().context("--config-dir requires a path")?.into())
+                        Some(args.next().context("--config-dir requires a path")?.into());
                 }
                 "-h" | "--help" => options.help = true,
                 "--" => {
@@ -715,9 +715,9 @@ mod tests {
         .unwrap();
         std::fs::write(store.themes_dir().join("notes.txt"), b"").unwrap();
         assert_eq!(store.theme_names(), vec!["paper"]);
-        assert!(
-            store.theme("paper", true).unwrap().chrome.appearance
-                == volna_core::theme::Appearance::Light
+        assert_eq!(
+            store.theme("paper", true).unwrap().chrome.appearance,
+            volna_core::theme::Appearance::Light
         );
         assert!(store.theme("missing", true).is_err());
         store.write_settings(b"{}").unwrap();
@@ -747,7 +747,7 @@ mod tests {
         assert!(!store.data_dir.exists());
         let mut state = store.state();
         state.recent.push(Recent {
-            uri: uri.clone(),
+            uri,
             kind: RecentKind::Trace,
             trace: None,
             opened: 1,

@@ -65,7 +65,7 @@ fn accept(
                 assert_eq!(generation, 11);
                 return result.map(Some);
             }
-            _ => panic!("Open result"),
+            ClientStep::Complete { .. } => panic!("Open result"),
         }
     }
 }

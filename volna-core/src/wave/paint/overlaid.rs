@@ -1,6 +1,10 @@
 //! Shared-scale line painting and exact-value probes for numeric groups.
 
-use super::*;
+use super::{
+    CHEVRON_W, Color, Document, FontRole, LaneCells, Plot, Point, Rect, STACK_READOUT_LAYERS,
+    SWATCH_W, Series, TextPainter, Viewport, WaveLayout, WaveModel, analog, analog_plot,
+    format_time, intersect, paint_member_swatch, point, snap, stack,
+};
 use crate::wave::model::GroupStyle;
 use crate::wave::overlaid;
 
@@ -12,7 +16,6 @@ pub(super) struct OverlaidRow {
     probe: Option<(Point, u64, Option<usize>)>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn paint_row(
     entries: &[usize],
     colors: &[Color],
@@ -267,18 +270,17 @@ pub(super) fn paint_probes(
             .enumerate()
             .map(|(k, &entry)| {
                 let s = model.signal(entry).unwrap();
-                let value = s
-                    .history
-                    .as_ref()
-                    .map(|h| s.translator.translate(&h.value(h.index_at(time))).text)
-                    .unwrap_or_else(|| {
+                let value = s.history.as_ref().map_or_else(
+                    || {
                         if s.error.is_some() {
                             "load failed"
                         } else {
                             "loading…"
                         }
                         .into()
-                    });
+                    },
+                    |h| s.translator.translate(&h.value(h.index_at(time))).text,
+                );
                 (
                     k,
                     format!(

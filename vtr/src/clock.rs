@@ -28,6 +28,7 @@ pub struct Stretch {
 }
 
 impl Stretch {
+    #[must_use]
     pub fn edges(&self) -> u64 {
         (self.end - self.begin)
             .checked_div(self.period)
@@ -88,14 +89,17 @@ impl ClockTimeline {
         })
     }
 
+    #[must_use]
     pub fn stretches(&self) -> &[Stretch] {
         &self.stretches
     }
 
+    #[must_use]
     pub fn is_open(&self) -> bool {
         self.open
     }
 
+    #[must_use]
     pub fn edge_count(&self) -> u64 {
         self.stretches
             .last()
@@ -123,6 +127,7 @@ impl ClockTimeline {
         }
     }
 
+    #[must_use]
     pub fn cycle_at(&self, t: u64) -> Option<CycleAt> {
         let i = self.stretch_at(t)?;
         let s = &self.stretches[i];
@@ -153,6 +158,7 @@ impl ClockTimeline {
         })
     }
 
+    #[must_use]
     pub fn edge(&self, cycle: u64) -> Option<u64> {
         let i = self
             .stretches
@@ -163,6 +169,7 @@ impl ClockTimeline {
         (k < s.edges()).then(|| s.edge(k))
     }
 
+    #[must_use]
     pub fn next_edge(&self, t: u64) -> Option<u64> {
         match self.stretch_at(t) {
             None => self.stretches.first().map(|s| s.begin),
@@ -170,6 +177,7 @@ impl ClockTimeline {
         }
     }
 
+    #[must_use]
     pub fn prev_edge(&self, t: u64) -> Option<u64> {
         self.cycle_at(t.checked_sub(1)?).map(|c| c.edge)
     }
@@ -193,7 +201,7 @@ mod tests {
                 (20272, 49772, 500),
                 (400, 19772, 334),
                 (50772, 99772, 1000),
-                (120000, 120000, 0),
+                (120_000, 120_000, 0),
             ],
             false,
         )
@@ -204,7 +212,7 @@ mod tests {
             assert_eq!(tl.edge(c as u64), Some(e));
         }
         assert_eq!(tl.edge(all.len() as u64), None);
-        for t in (0..121000).step_by(37) {
+        for t in (0..121_000).step_by(37) {
             let last = all.iter().rposition(|&e| e <= t);
             match tl.cycle_at(t) {
                 None => assert!(last.is_none()),

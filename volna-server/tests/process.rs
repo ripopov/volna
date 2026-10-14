@@ -30,8 +30,8 @@ impl Drop for Server {
             watchdog.join().unwrap();
         }
         let mut child = self.child.lock().unwrap();
-        let _ = child.kill();
-        let _ = child.wait();
+        drop(child.kill());
+        drop(child.wait());
         if !std::thread::panicking() {
             assert!(
                 !self.timed_out.load(std::sync::atomic::Ordering::Acquire),
@@ -86,11 +86,11 @@ impl Server {
         let expired = timed_out.clone();
         let watchdog = Some(std::thread::spawn(move || {
             if matches!(
-                stop.recv_timeout(std::time::Duration::from_secs(60)),
+                stop.recv_timeout(std::time::Duration::from_mins(1)),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout)
             ) {
                 expired.store(true, std::sync::atomic::Ordering::Release);
-                let _ = owned_child.lock().unwrap().kill();
+                drop(owned_child.lock().unwrap().kill());
             }
         }));
         Self {

@@ -20,6 +20,7 @@ pub enum Timescale {
 }
 
 impl Timescale {
+    #[must_use]
     pub const fn exponent(self) -> i8 {
         match self {
             Self::Seconds => 0,
@@ -47,6 +48,7 @@ pub enum FileType {
 }
 
 impl FileType {
+    #[must_use]
     pub fn from_u8(v: u8) -> FileType {
         match v {
             0 => FileType::Verilog,
@@ -90,13 +92,13 @@ impl Default for Meta {
 impl Meta {
     pub fn encode(&self, out: &mut Vec<u8>) {
         varint::put_u64(out, 1);
-        varint::put_i64(out, self.timescale as i64);
+        varint::put_i64(out, i64::from(self.timescale));
         varint::put_i64(out, self.time_zero);
         out.push(self.file_type as u8);
         varint::put_blob(out, self.writer.as_bytes());
         varint::put_blob(out, self.date.as_bytes());
         varint::put_blob(out, self.comment.as_bytes());
-        varint::put_u64(out, self.group_size as u64);
+        varint::put_u64(out, u64::from(self.group_size));
         value::encode_attrs(&self.attrs, out);
     }
 
@@ -134,7 +136,7 @@ pub fn encode_blackout(list: &[Blackout], out: &mut Vec<u8>) {
     varint::put_u64(out, list.len() as u64);
     let mut prev = 0u64;
     for b in list {
-        out.push(b.active as u8);
+        out.push(u8::from(b.active));
         varint::put_u64(out, b.time.wrapping_sub(prev));
         prev = b.time;
     }
@@ -153,12 +155,12 @@ pub fn decode_blackout(p: &[u8]) -> Result<Vec<Blackout>> {
     Ok(out)
 }
 
+#[must_use]
 pub fn recover_aux(kind: u32, payload: &[u8]) -> (u64, u64) {
     match SectionKind::from_u32(kind) {
-        Some(SectionKind::Strings) | Some(SectionKind::Hierarchy) => {
-            let raw = match crate::codec::Decompressor::new().decompress(payload) {
-                Ok(r) => r,
-                Err(_) => return (0, 0),
+        Some(SectionKind::Strings | SectionKind::Hierarchy) => {
+            let Ok(raw) = crate::codec::Decompressor::new().decompress(payload) else {
+                return (0, 0);
             };
             let mut r = Reader::new(&raw);
             let first = r.u64().unwrap_or(0);

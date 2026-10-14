@@ -9,6 +9,7 @@ pub struct NodeIndex {
     rank: Vec<u32>,
 }
 impl NodeIndex {
+    #[must_use]
     pub fn new(h: &Hierarchy, kinds: &[NodeKind]) -> Self {
         let count = h.ids().filter(|&id| kinds.contains(&h.kind(id))).count();
         if count == 0 {
@@ -32,15 +33,19 @@ impl NodeIndex {
         }
         out
     }
+    #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
+    #[must_use]
     pub fn node(&self, id: usize) -> NodeId {
         self.nodes[id]
     }
+    #[must_use]
     pub fn ordinal(&self, node: NodeId) -> Option<usize> {
         let word = node.0 as usize / 64;
         let offset = node.0 % 64;
@@ -48,9 +53,11 @@ impl NodeIndex {
         (bits & (1 << offset) != 0)
             .then(|| (self.rank[word] + (bits & ((1u64 << offset) - 1)).count_ones()) as usize)
     }
+    #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         (self.nodes.capacity() * 4 + self.bits.capacity() * 8 + self.rank.capacity() * 4) as u64
     }
+    #[must_use]
     pub fn children<'a>(&'a self, h: &'a Hierarchy, node: NodeId) -> IndexedNodes<'a> {
         IndexedNodes {
             index: self,
@@ -65,6 +72,7 @@ pub struct IndexedNodes<'a> {
     nodes: &'a [u32],
 }
 impl<'a> IndexedNodes<'a> {
+    #[must_use]
     pub fn iter(self) -> IndexedIter<'a> {
         IndexedIter {
             index: self.index,
@@ -73,9 +81,11 @@ impl<'a> IndexedNodes<'a> {
             back: self.nodes.len(),
         }
     }
+    #[must_use]
     pub fn len(self) -> usize {
         self.iter().count()
     }
+    #[must_use]
     pub fn is_empty(self) -> bool {
         self.iter().next().is_none()
     }

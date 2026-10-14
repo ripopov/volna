@@ -65,32 +65,42 @@ pub struct Compressor {
 
 struct ZstdContext(std::ptr::NonNull<zstd_sys::ZSTD_CCtx>);
 
+// SAFETY: The context has a single owner and zstd permits moving it between threads.
 unsafe impl Send for ZstdContext {}
 
 const ZSTD_HEADER: usize = 16;
 
 unsafe extern "C" fn zstd_alloc(_: *mut std::ffi::c_void, size: usize) -> *mut std::ffi::c_void {
-    let Ok(layout) = std::alloc::Layout::from_size_align(size + ZSTD_HEADER, ZSTD_HEADER) else {
-        return std::ptr::null_mut();
-    };
-    let p = std::alloc::alloc(layout);
-    if p.is_null() {
-        return p.cast();
+    // SAFETY: The layout reserves an aligned header before the returned allocation.
+    unsafe {
+        let Some(total) = size.checked_add(ZSTD_HEADER) else {
+            return std::ptr::null_mut();
+        };
+        let Ok(layout) = std::alloc::Layout::from_size_align(total, ZSTD_HEADER) else {
+            return std::ptr::null_mut();
+        };
+        let p = std::alloc::alloc(layout);
+        if p.is_null() {
+            return p.cast();
+        }
+        p.cast::<usize>().write_unaligned(size);
+        p.add(ZSTD_HEADER).cast()
     }
-    p.cast::<usize>().write(size);
-    p.add(ZSTD_HEADER).cast()
 }
 
 unsafe extern "C" fn zstd_free(_: *mut std::ffi::c_void, p: *mut std::ffi::c_void) {
-    if p.is_null() {
-        return;
+    // SAFETY: Zstd returns only pointers allocated by zstd_alloc, exactly once.
+    unsafe {
+        if p.is_null() {
+            return;
+        }
+        let base = p.cast::<u8>().sub(ZSTD_HEADER);
+        let size = base.cast::<usize>().read_unaligned();
+        std::alloc::dealloc(
+            base,
+            std::alloc::Layout::from_size_align_unchecked(size + ZSTD_HEADER, ZSTD_HEADER),
+        );
     }
-    let base = p.cast::<u8>().sub(ZSTD_HEADER);
-    let size = base.cast::<usize>().read();
-    std::alloc::dealloc(
-        base,
-        std::alloc::Layout::from_size_align_unchecked(size + ZSTD_HEADER, ZSTD_HEADER),
-    );
 }
 
 impl ZstdContext {
@@ -100,6 +110,7 @@ impl ZstdContext {
             customFree: Some(zstd_free),
             opaque: std::ptr::null_mut(),
         };
+        // SAFETY: Both callbacks implement zstd allocation semantics and require no opaque state.
         let ctx = std::ptr::NonNull::new(unsafe { zstd_sys::ZSTD_createCCtx_advanced(mem) })
             .ok_or_else(|| Error::Codec("cannot create a zstd context".into()))?;
         let c = ZstdContext(ctx);
@@ -110,12 +121,15 @@ impl ZstdContext {
     }
 
     fn set(&self, p: zstd_sys::ZSTD_cParameter, v: i32) -> Result<()> {
+        // SAFETY: The owned context is live and this private method does not overlap compression.
         Self::check(unsafe { zstd_sys::ZSTD_CCtx_setParameter(self.0.as_ptr(), p, v) })?;
         Ok(())
     }
 
     fn check(code: usize) -> Result<usize> {
+        // SAFETY: Zstd accepts any size_t result code here.
         if unsafe { zstd_sys::ZSTD_isError(code) } != 0 {
+            // SAFETY: Zstd returns a static, NUL-terminated error string.
             let name = unsafe { std::ffi::CStr::from_ptr(zstd_sys::ZSTD_getErrorName(code)) };
             return Err(Error::Codec(name.to_string_lossy().into_owned()));
         }
@@ -123,6 +137,7 @@ impl ZstdContext {
     }
 
     fn compress_to_buffer(&mut self, src: &[u8], dst: &mut [u8]) -> Result<usize> {
+        // SAFETY: The context is exclusively borrowed; source and destination are disjoint live slices.
         Self::check(unsafe {
             zstd_sys::ZSTD_compress2(
                 self.0.as_ptr(),
@@ -137,11 +152,13 @@ impl ZstdContext {
 
 impl Drop for ZstdContext {
     fn drop(&mut self) {
+        // SAFETY: This is the sole owner of the context and no operation can outlive it.
         unsafe { zstd_sys::ZSTD_freeCCtx(self.0.as_ptr()) };
     }
 }
 
 impl Compressor {
+    #[must_use]
     pub fn new() -> Self {
         Compressor {
             zstd: None,
@@ -189,6 +206,7 @@ impl Compressor {
         }
     }
 
+    #[must_use]
     pub fn sample_incompressible(compressed: usize, raw: usize) -> bool {
         compressed * 100 >= raw * 96
     }
@@ -266,6 +284,7 @@ pub struct Decompressor {
 }
 
 impl Decompressor {
+    #[must_use]
     pub fn new() -> Self {
         Decompressor { zstd: None }
     }
@@ -332,6 +351,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn allocator_preserves_payload_and_frees_matching_layouts() {
+        for size in [0, 1, 15, 16, 17, 4096] {
+            // SAFETY: Each pointer comes from zstd_alloc, stays within size bytes, and is freed once.
+            unsafe {
+                let p = zstd_alloc(std::ptr::null_mut(), size).cast::<u8>();
+                assert!(!p.is_null());
+                assert_eq!(p.addr() % ZSTD_HEADER, 0);
+                for i in 0..size {
+                    p.add(i).write((i % 251) as u8);
+                }
+                for i in 0..size {
+                    assert_eq!(p.add(i).read(), (i % 251) as u8);
+                }
+                zstd_free(std::ptr::null_mut(), p.cast());
+            }
+        }
+    }
+
+    #[test]
+    fn allocator_rejects_overflow_and_accepts_null_free() {
+        // SAFETY: Rejected sizes return null; zstd_free explicitly accepts null.
+        unsafe {
+            assert!(zstd_alloc(std::ptr::null_mut(), usize::MAX).is_null());
+            assert!(zstd_alloc(std::ptr::null_mut(), isize::MAX as usize).is_null());
+            zstd_free(std::ptr::null_mut(), std::ptr::null_mut());
+        }
+    }
+
+    #[test]
     fn roundtrip_all_codecs() {
         let data: Vec<u8> = (0..100_000u32).map(|i| ((i / 7) % 13) as u8).collect();
         let mut c = Compressor::new();
@@ -345,12 +393,12 @@ mod tests {
             let mut out = Vec::new();
             c.compress_into(comp, &data, &mut out).unwrap();
             if comp.codec != Codec::None {
-                assert!(out.len() < data.len() / 4, "{:?} did not compress", comp);
+                assert!(out.len() < data.len() / 4, "{comp:?} did not compress");
             }
             let back = d.decompress(&out).unwrap();
             assert_eq!(back, data);
         }
-        let mut x = 0x9E3779B97F4A7C15u64;
+        let mut x = 0x9E37_79B9_7F4A_7C15_u64;
         let noise: Vec<u8> = (0..4096u32)
             .map(|_| {
                 x ^= x << 13;

@@ -231,7 +231,7 @@ mod tests {
         assert!(!transfer.is_complete());
         let completed = loop {
             match transfer.step().unwrap() {
-                ClientStep::Yield => continue,
+                ClientStep::Yield => {}
                 ClientStep::Complete { ack, result } => {
                     assert_eq!(ack, acknowledgement(&packet(sequence, Body::End)));
                     break result;

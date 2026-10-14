@@ -1,7 +1,7 @@
 //! A loaded sidecar: every signal's busy stretches in one flat table.
 
 use super::format::{
-    self, BlockHead, Header, BLOCK_COLUMNS, BLOCK_HEAD_LEN, KIND_BLOCK, KIND_HEADER, KIND_TAIL,
+    self, BLOCK_COLUMNS, BLOCK_HEAD_LEN, BlockHead, Header, KIND_BLOCK, KIND_HEADER, KIND_TAIL,
     TAIL_COLUMNS, TAIL_HEAD_LEN,
 };
 use super::{Budget, Identity, MAGIC, STRETCH_BYTES, VERSION};
@@ -190,8 +190,14 @@ impl Index {
             let p = payload(e)?;
             let head = BlockHead::decode(p)?;
             let c = format::unpack::<BLOCK_COLUMNS>(&p[BLOCK_HEAD_LEN..], &mut d, &mut raw)?;
-            let [mut sigs, mut heads, mut firsts, mut lens, mut sils, mut gaps] =
-                c.map(|r| col(&raw, r));
+            let [
+                mut sigs,
+                mut heads,
+                mut firsts,
+                mut lens,
+                mut sils,
+                mut gaps,
+            ] = c.map(|r| col(&raw, r));
             let mut s = 0usize;
             let mut closed_total = 0u64;
             for _ in 0..head.rows {
@@ -226,13 +232,13 @@ impl Index {
                         return corrupt("activity index stretch out of order");
                     };
                     end[i] = a;
-                    gap[i] = gaps.u64()?.min(GAP_SATURATED as u64) as u32;
+                    gap[i] = gaps.u64()?.min(u64::from(GAP_SATURATED)) as u32;
                     start[i + 1] = b;
                 }
                 cursor[s] += (h >> 1) as u32;
                 closed_total += h >> 1;
             }
-            if closed_total != head.closed as u64
+            if closed_total != u64::from(head.closed)
                 || !(sigs.is_empty()
                     && heads.is_empty()
                     && firsts.is_empty()
@@ -256,7 +262,7 @@ impl Index {
             end[i] = start[i]
                 .checked_add(lens.u64()?)
                 .ok_or(Error::Corrupt("activity index time overflow"))?;
-            gap[i] = gaps.u64()?.min(GAP_SATURATED as u64) as u32;
+            gap[i] = gaps.u64()?.min(u64::from(GAP_SATURATED)) as u32;
             cursor[s] += 1;
         }
         for s in 0..n {
@@ -275,52 +281,62 @@ impl Index {
         })
     }
 
+    #[must_use]
     pub fn identity(&self) -> Identity {
         self.header.identity
     }
 
+    #[must_use]
     pub fn budget(&self) -> Budget {
         self.header.budget
     }
 
+    #[must_use]
     pub fn t_min(&self) -> u64 {
         self.header.t_min
     }
 
+    #[must_use]
     pub fn signal_count(&self) -> u32 {
         self.header.signals
     }
 
+    #[must_use]
     pub fn blocks(&self) -> &[IndexBlock] {
         &self.blocks
     }
 
+    #[must_use]
     pub fn stretch_count(&self) -> u64 {
         self.start.len() as u64
     }
 
+    #[must_use]
     pub fn memory_bytes(&self) -> u64 {
         self.start.len() as u64 * STRETCH_BYTES
             + self.off.len() as u64 * 4
             + (self.blocks.len() * std::mem::size_of::<IndexBlock>()) as u64
     }
 
+    #[must_use]
     pub fn exact_width(&self, t0: u64, t1: u64) -> u64 {
         let cell = |t: u64| {
             self.blocks
                 .partition_point(|b| b.end < t)
                 .min(self.blocks.len().saturating_sub(1))
         };
-        match self.blocks.is_empty() {
-            true => u64::MAX,
-            false => self.blocks[cell(t0)..=cell(t1.max(t0))]
+        if self.blocks.is_empty() {
+            u64::MAX
+        } else {
+            self.blocks[cell(t0)..=cell(t1.max(t0))]
                 .iter()
                 .map(|b| b.delta)
                 .min()
-                .unwrap(),
+                .unwrap()
         }
     }
 
+    #[must_use]
     pub fn classify(&self, t0: u64, t1: u64) -> Classification {
         let mut out = Classification::default();
         self.classify_range(0..self.header.signals, t0, t1, &mut out);
@@ -351,7 +367,7 @@ impl Index {
             let decided = exact
                 || self.start[j] >= t0
                 || self.end[j] <= t1
-                || (self.gap[j] != GAP_SATURATED && self.gap[j] as u64 <= width);
+                || (self.gap[j] != GAP_SATURATED && u64::from(self.gap[j]) <= width);
             if decided {
                 &mut out.active
             } else {
@@ -361,6 +377,7 @@ impl Index {
         }
     }
 
+    #[must_use]
     pub fn stretches(&self, signal: SignalId) -> impl ExactSizeIterator<Item = Stretch> + '_ {
         let s = signal.0 as usize;
         (self.off[s] as usize..self.off[s + 1] as usize).map(move |i| Stretch {
@@ -369,7 +386,7 @@ impl Index {
             gap: if self.gap[i] == GAP_SATURATED {
                 u64::MAX
             } else {
-                self.gap[i] as u64
+                u64::from(self.gap[i])
             },
         })
     }

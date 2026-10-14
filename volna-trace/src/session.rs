@@ -295,6 +295,7 @@ pub enum OpenSpec {
 }
 
 impl OpenSpec {
+    #[must_use]
     pub fn name(&self) -> String {
         match self {
             OpenSpec::Remote { name, .. } => name.clone(),
@@ -307,6 +308,7 @@ impl OpenSpec {
         }
     }
 
+    #[must_use]
     pub fn source(&self) -> String {
         match self {
             OpenSpec::Remote { name, .. } | OpenSpec::Bytes { name, .. } => name.clone(),

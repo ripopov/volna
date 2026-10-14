@@ -3,6 +3,7 @@
 pub const APP_ID: &str = "io.github.ripopov.volna";
 
 #[cfg(target_os = "linux")]
+#[must_use]
 pub fn window_icon() -> std::sync::Arc<image::RgbaImage> {
     std::sync::Arc::new(
         image::load_from_memory(include_bytes!("../assets/app-icon/volna-256.png"))
@@ -21,6 +22,7 @@ pub fn set_dock_icon() {
     let data = NSData::with_bytes(include_bytes!("../assets/app-icon/volna.icns"));
     let icon = NSImage::initWithData(NSImage::alloc(), &data)
         .expect("bundled Volna icon must be a valid ICNS");
+    // SAFETY: MainThreadMarker proves AppKit runs on the main thread; icon is a live NSImage.
     unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&icon)) };
 }
 

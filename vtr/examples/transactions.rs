@@ -4,10 +4,10 @@ use vtr::{Reader, ScopeType, TxQuery, TxStatus, Value, Writer};
 
 fn main() -> vtr::Result<()> {
     let temporary = tempfile::tempdir()?;
-    let path = std::env::args_os()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| temporary.path().join("transactions.vtr"));
+    let path = std::env::args_os().nth(1).map_or_else(
+        || temporary.path().join("transactions.vtr"),
+        std::path::PathBuf::from,
+    );
     let mut w = Writer::create(&path)?;
     let core = w.add_scope(None, "cpu", ScopeType::Core, "")?;
     let pipe = w.add_stream(Some(core), "pipe", "PIPELINE")?;

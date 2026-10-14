@@ -16,10 +16,12 @@ impl Color {
         a: 0.0,
     };
 
+    #[must_use]
     pub fn rgb(hex: u32) -> Color {
         Color::rgba_u32((hex << 8) | 0xff)
     }
 
+    #[must_use]
     pub fn rgba_u32(hex: u32) -> Color {
         let r = ((hex >> 24) & 0xff) as f32 / 255.0;
         let g = ((hex >> 16) & 0xff) as f32 / 255.0;
@@ -28,11 +30,12 @@ impl Color {
         Color::from_rgba(r, g, b, a)
     }
 
+    #[must_use]
     pub fn from_rgba(r: f32, g: f32, b: f32, a: f32) -> Color {
         let max = r.max(g.max(b));
         let min = r.min(g.min(b));
         let delta = max - min;
-        let l = (max + min) / 2.0;
+        let l = f32::midpoint(max, min);
         let s = if l == 0.0 || l == 1.0 {
             0.0
         } else if l < 0.5 {
@@ -52,6 +55,7 @@ impl Color {
         Color { h, s, l, a }
     }
 
+    #[must_use]
     pub fn to_rgba(self) -> [f32; 4] {
         let c = (1.0 - (2.0 * self.l - 1.0).abs()) * self.s;
         let x = c * (1.0 - ((self.h * 6.0) % 2.0 - 1.0).abs());
@@ -69,16 +73,19 @@ impl Color {
         [r, g, b, self.a]
     }
 
+    #[must_use]
     pub fn to_rgba8(self) -> [u8; 4] {
         self.to_rgba()
             .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
     }
 
+    #[must_use]
     pub fn with_alpha(mut self, a: f32) -> Color {
         self.a = a;
         self
     }
 
+    #[must_use]
     pub fn oklch(l: f32, c: f32, h: f32) -> Color {
         let (sin, cos) = h.to_radians().sin_cos();
         let at = |c: f32| oklab_to_linear([l, c * cos, c * sin]);
@@ -87,7 +94,7 @@ impl Color {
         if !fits(v) {
             let (mut lo, mut hi) = (0.0, c);
             for _ in 0..24 {
-                let mid = (lo + hi) / 2.0;
+                let mid = f32::midpoint(lo, hi);
                 if fits(at(mid)) {
                     lo = mid;
                 } else {
@@ -148,7 +155,13 @@ mod tests {
     #[test]
     fn rgb_round_trips_through_hsla() {
         for hex in [
-            0x000000, 0xffffff, 0x282c33, 0xa1c181, 0x74ade8, 0xd07277, 0x123456,
+            0x0000_0000,
+            0x00ff_ffff,
+            0x0028_2c33,
+            0x00a1_c181,
+            0x0074_ade8,
+            0x00d0_7277,
+            0x0012_3456,
         ] {
             let c = Color::rgb(hex);
             let [r, g, b, a] = c.to_rgba();
@@ -159,7 +172,7 @@ mod tests {
             assert_eq!(a, 1.0);
         }
         assert_eq!(
-            Color::rgba_u32(0x11223366).to_rgba8(),
+            Color::rgba_u32(0x1122_3366).to_rgba8(),
             [0x11, 0x22, 0x33, 0x66]
         );
     }

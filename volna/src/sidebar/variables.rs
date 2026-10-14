@@ -142,7 +142,7 @@ impl Workspace {
                         .disabled(!vars.rows.iter().any(|m| m.item.var().is_some()))
                         .tooltip("Add all listed variables (⏎)")
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.dispatch(Command::AddAllVars, Some(window), cx)
+                            this.dispatch(Command::AddAllVars, Some(window), cx);
                         })),
                 ),
         );
@@ -294,7 +294,7 @@ impl Workspace {
                                      command: fn(Vec<Traced<Member>>) -> Command| {
                                         let owner = owner.clone();
                                         PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                                            _ = owner.update(cx, |workspace, cx| {
+                                            drop(owner.update(cx, |workspace, cx| {
                                                 let list = &workspace.app.variables;
                                                 let members = if list.selected.contains(&ix) {
                                                     list.selected
@@ -309,7 +309,7 @@ impl Workspace {
                                                     Some(window),
                                                     cx,
                                                 );
-                                            });
+                                            }));
                                         })
                                     };
                                 let menu = if clock {
@@ -322,7 +322,7 @@ impl Workspace {
                                 };
                                 menu.item(PopupMenuItem::new("Open in table").on_click(
                                     move |_, window, cx| {
-                                        _ = owner.update(cx, |workspace, cx| {
+                                        drop(owner.update(cx, |workspace, cx| {
                                             let selected = workspace
                                                 .app
                                                 .variables
@@ -340,7 +340,7 @@ impl Workspace {
                                                 Some(window),
                                                 cx,
                                             );
-                                        });
+                                        }));
                                     },
                                 ))
                             });

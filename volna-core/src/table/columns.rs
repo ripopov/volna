@@ -30,6 +30,7 @@ impl TransactionColumn {
         Self::Attributes,
     ];
 
+    #[must_use]
     pub fn key(self) -> &'static str {
         match self {
             Self::Label => "label",
@@ -41,6 +42,7 @@ impl TransactionColumn {
             Self::Attributes => "attributes",
         }
     }
+    #[must_use]
     pub fn title(self) -> &'static str {
         match self {
             Self::Label => "Label · vtr.label",
@@ -52,6 +54,7 @@ impl TransactionColumn {
             Self::Attributes => "Attributes · preview",
         }
     }
+    #[must_use]
     pub fn width(self) -> f32 {
         match self {
             Self::Label => 210.0,
@@ -71,15 +74,18 @@ pub enum ColumnSet {
 }
 
 impl ColumnSet {
+    #[must_use]
     pub fn transactions_default() -> Self {
         Self::Transactions(TransactionColumn::DEFAULT.to_vec())
     }
+    #[must_use]
     pub fn signals(count: usize) -> Self {
         Self::Signals {
             time: true,
             visible: vec![true; count],
         }
     }
+    #[must_use]
     pub fn transaction_visible(&self, column: TransactionColumn) -> bool {
         matches!(self, Self::Transactions(v) if v.contains(&column))
     }

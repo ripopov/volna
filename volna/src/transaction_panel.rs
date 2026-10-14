@@ -75,7 +75,7 @@ impl TransactionPanelView {
         let subscription = cx.subscribe_in(&filter, window, |view, input, event, window, cx| {
             if let InputEvent::Change = event {
                 let text = input.read(cx).value().to_string();
-                view.synced_filter = text.clone();
+                view.synced_filter.clone_from(&text);
                 view.dispatch(TransactionCommand::Filter(text), window, cx);
             }
         });
@@ -99,9 +99,9 @@ impl TransactionPanelView {
     }
 
     fn send(&self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
-        _ = self.ws.update(cx, |ws, cx| {
-            ws.dispatch_if_current(self.generation, command, Some(window), cx)
-        });
+        drop(self.ws.update(cx, |ws, cx| {
+            ws.dispatch_if_current(self.generation, command, Some(window), cx);
+        }));
     }
 
     fn copy(&self, cx: &mut Context<Self>) {
@@ -129,7 +129,7 @@ impl TransactionPanelView {
                         Command::Notice(error.to_string()),
                         None,
                         cx,
-                    )
+                    );
                 });
             }
             None => {}
@@ -148,7 +148,7 @@ impl TransactionPanelView {
             return;
         };
         if text != self.synced_filter {
-            self.synced_filter = text.clone();
+            self.synced_filter.clone_from(&text);
             self.filter
                 .update(cx, |input, cx| input.set_value(text, window, cx));
         }
@@ -209,7 +209,7 @@ impl Panel for TransactionPanelView {
                     "Pin this record; the next one opens another panel"
                 })
                 .on_click(cx.listener(move |view, _, window, cx| {
-                    view.dispatch(TransactionCommand::Pin(!pinned), window, cx)
+                    view.dispatch(TransactionCommand::Pin(!pinned), window, cx);
                 })),
         ])
     }
@@ -454,7 +454,7 @@ impl TransactionPanelView {
             ("End", timing.end_text.clone(), timing.end),
             ("Duration", timing.duration_text.clone(), None),
         ] {
-            tiles = tiles.child(self.tile(&t, label, text, time, cx));
+            tiles = tiles.child(Self::tile(&t, label, text, time, cx));
         }
 
         let mut actions = div().flex().items_center().gap_1().flex_wrap();
@@ -470,7 +470,7 @@ impl TransactionPanelView {
                     .ghost()
                     .small()
                     .on_click(cx.listener(|view, _, window, cx| {
-                        view.send(Command::RevealTransaction { panel: view.id }, window, cx)
+                        view.send(Command::RevealTransaction { panel: view.id }, window, cx);
                     })),
             )
             .child(
@@ -480,7 +480,7 @@ impl TransactionPanelView {
                     .small()
                     .tooltip("Fit the shared viewport to this record")
                     .on_click(cx.listener(|view, _, window, cx| {
-                        view.dispatch(TransactionCommand::FitLifetime, window, cx)
+                        view.dispatch(TransactionCommand::FitLifetime, window, cx);
                     })),
             )
             .child(
@@ -506,14 +506,14 @@ impl TransactionPanelView {
                     .child(breadcrumb)
                     .child(title)
                     .child(tiles)
-                    .child(self.lifeline(&t, &view, cx))
+                    .child(Self::lifeline(&t, &view, cx))
                     .child(actions),
             );
 
         body = body.child(self.attributes(&t, &view, cx));
-        body = body.child(self.section(&t, &view.stages, cx, stage_row));
-        body = body.child(self.section(&t, &view.events, cx, event_row));
-        body = body.child(self.related(&t, &view.related, cx));
+        body = body.child(Self::section(&t, &view.stages, cx, stage_row));
+        body = body.child(Self::section(&t, &view.events, cx, event_row));
+        body = body.child(Self::related(&t, &view.related, cx));
         body = body.child(self.parents(&t, cx));
         if view.truncated_bytes {
             body = body.child(
@@ -558,7 +558,7 @@ impl TransactionPanelView {
                 ))
                 .tooltip("Load the full parent chain and show its graph")
                 .on_click(cx.listener(|view, _, window, cx| {
-                    view.dispatch(TransactionCommand::TraceParents, window, cx)
+                    view.dispatch(TransactionCommand::TraceParents, window, cx);
                 })),
         );
         if state != ParentTraceState::Idle {
@@ -572,7 +572,7 @@ impl TransactionPanelView {
                     .ghost()
                     .small()
                     .on_click(cx.listener(|view, _, window, cx| {
-                        view.dispatch(TransactionCommand::ClearParents, window, cx)
+                        view.dispatch(TransactionCommand::ClearParents, window, cx);
                     })),
             );
         }
@@ -736,7 +736,7 @@ impl TransactionPanelView {
                         .tooltip(format!("{} · #{} · {}", node.path, id.0, node.label))
                         .on_click(cx.listener(move |view, _, window, cx| {
                             window.focus(&view.focus, cx);
-                            view.dispatch(TransactionCommand::Jump { track, id }, window, cx)
+                            view.dispatch(TransactionCommand::Jump { track, id }, window, cx);
                         })),
                 );
                 Some(row.into_any_element())
@@ -745,7 +745,6 @@ impl TransactionPanelView {
     }
 
     fn tile(
-        &self,
         t: &crate::theme::Theme,
         label: &'static str,
         text: String,
@@ -779,19 +778,14 @@ impl TransactionPanelView {
                 .cursor_pointer()
                 .hover(|style| style.bg(t.hover.bg))
                 .on_click(cx.listener(move |view, _, window, cx| {
-                    view.dispatch(TransactionCommand::Cursor(time), window, cx)
+                    view.dispatch(TransactionCommand::Cursor(time), window, cx);
                 }))
                 .into_any_element(),
             None => tile.into_any_element(),
         }
     }
 
-    fn lifeline(
-        &self,
-        t: &crate::theme::Theme,
-        view: &TxView,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn lifeline(t: &crate::theme::Theme, view: &TxView, cx: &mut Context<Self>) -> AnyElement {
         let mut lanes = div().flex().flex_col().gap_0p5().relative();
         for (index, lane) in view.lifeline.iter().enumerate() {
             let mut row = div()
@@ -824,7 +818,7 @@ impl TransactionPanelView {
                         .font_family(t.mono_font)
                         .child(SharedString::from(cell.name.clone()))
                         .on_click(cx.listener(move |view, _, window, cx| {
-                            view.dispatch(TransactionCommand::Cursor(begin), window, cx)
+                            view.dispatch(TransactionCommand::Cursor(begin), window, cx);
                         })),
                 );
             }
@@ -843,7 +837,7 @@ impl TransactionPanelView {
                     .bg(t.wave_event_coalesced)
                     .cursor_pointer()
                     .on_click(cx.listener(move |view, _, window, cx| {
-                        view.dispatch(TransactionCommand::Cursor(time), window, cx)
+                        view.dispatch(TransactionCommand::Cursor(time), window, cx);
                     })),
             );
         }
@@ -862,7 +856,6 @@ impl TransactionPanelView {
     }
 
     fn heading<T>(
-        &self,
         t: &crate::theme::Theme,
         section: &Section<T>,
         cx: &mut Context<Self>,
@@ -896,12 +889,12 @@ impl TransactionPanelView {
                 section.total
             )))
             .on_click(cx.listener(move |view, _, window, cx| {
-                view.dispatch(TransactionCommand::Collapse(key, !collapsed), window, cx)
+                view.dispatch(TransactionCommand::Collapse(key, !collapsed), window, cx);
             }))
             .into_any_element()
     }
 
-    fn cut_note<T>(&self, t: &crate::theme::Theme, section: &Section<T>) -> Option<AnyElement> {
+    fn cut_note<T>(t: &crate::theme::Theme, section: &Section<T>) -> Option<AnyElement> {
         section.cut().then(|| {
             div()
                 .px_3()
@@ -918,7 +911,6 @@ impl TransactionPanelView {
     }
 
     fn section<T>(
-        &self,
         t: &crate::theme::Theme,
         section: &Section<T>,
         cx: &mut Context<Self>,
@@ -929,12 +921,12 @@ impl TransactionPanelView {
             .flex_col()
             .border_t_1()
             .border_color(t.border_variant)
-            .child(self.heading(t, section, cx));
+            .child(Self::heading(t, section, cx));
         if !section.collapsed {
             for (index, entry) in section.rows.iter().enumerate() {
                 element = element.child(row(t, index, entry, cx));
             }
-            if let Some(note) = self.cut_note(t, section) {
+            if let Some(note) = Self::cut_note(t, section) {
                 element = element.child(note);
             }
         }
@@ -953,7 +945,7 @@ impl TransactionPanelView {
             .flex_col()
             .border_t_1()
             .border_color(t.border_variant)
-            .child(self.heading(t, section, cx));
+            .child(Self::heading(t, section, cx));
         if section.collapsed {
             return element.into_any_element();
         }
@@ -961,16 +953,15 @@ impl TransactionPanelView {
             element = element.child(div().px_3().pb_1().child(Input::new(&self.filter).small()));
         }
         for row in &section.rows {
-            element = element.child(self.attribute_row(t, row, view.identity.id, cx));
+            element = element.child(Self::attribute_row(t, row, view.identity.id, cx));
         }
-        if let Some(note) = self.cut_note(t, section) {
+        if let Some(note) = Self::cut_note(t, section) {
             element = element.child(note);
         }
         element.into_any_element()
     }
 
     fn attribute_row(
-        &self,
         t: &crate::theme::Theme,
         row: &AttrRow,
         record: volna_trace::data::transactions::TransactionRef,
@@ -1029,7 +1020,6 @@ impl TransactionPanelView {
     }
 
     fn related(
-        &self,
         t: &crate::theme::Theme,
         section: &Section<RefRow>,
         cx: &mut Context<Self>,
@@ -1039,14 +1029,14 @@ impl TransactionPanelView {
             .flex_col()
             .border_t_1()
             .border_color(t.border_variant)
-            .child(self.heading(t, section, cx));
+            .child(Self::heading(t, section, cx));
         if section.collapsed {
             return element.into_any_element();
         }
         let mut group = String::new();
         for (index, row) in section.rows.iter().enumerate() {
             if row.group != group {
-                group = row.group.clone();
+                group.clone_from(&row.group);
                 element = element.child(
                     div()
                         .px_3()
@@ -1056,16 +1046,15 @@ impl TransactionPanelView {
                         .child(SharedString::from(group.clone())),
                 );
             }
-            element = element.child(self.reference(t, index, row, cx));
+            element = element.child(Self::reference(t, index, row, cx));
         }
-        if let Some(note) = self.cut_note(t, section) {
+        if let Some(note) = Self::cut_note(t, section) {
             element = element.child(note);
         }
         element.into_any_element()
     }
 
     fn reference(
-        &self,
         t: &crate::theme::Theme,
         index: usize,
         row: &RefRow,
@@ -1094,7 +1083,7 @@ impl TransactionPanelView {
             .hover(|style| style.bg(t.hover.bg))
             .on_click(cx.listener(move |view, _, window, cx| {
                 window.focus(&view.focus, cx);
-                view.dispatch(TransactionCommand::Jump { track, id }, window, cx)
+                view.dispatch(TransactionCommand::Jump { track, id }, window, cx);
             }))
             .child(
                 div()
@@ -1190,7 +1179,7 @@ fn status_badge(
         .border_color(color)
         .text_size(px(t.ui_size_small))
         .text_color(color)
-        .when(status == TxStatus::Open, |element| element.border_dashed())
+        .when(status == TxStatus::Open, gpui_kit::Styled::border_dashed)
         .tooltip(move |w, cx| Tooltip::new(raw).build(w, cx))
         .child(SharedString::from(text.to_owned()))
         .into_any_element()
@@ -1239,7 +1228,7 @@ fn stage_row(
         .cursor_pointer()
         .hover(|style| style.bg(t.hover.bg))
         .on_click(cx.listener(move |view, _, window, cx| {
-            view.dispatch(TransactionCommand::Cursor(begin), window, cx)
+            view.dispatch(TransactionCommand::Cursor(begin), window, cx);
         }))
         .child(
             div()
@@ -1313,7 +1302,7 @@ fn event_row(
         .cursor_pointer()
         .hover(|style| style.bg(t.hover.bg))
         .on_click(cx.listener(move |view, _, window, cx| {
-            view.dispatch(TransactionCommand::Cursor(time), window, cx)
+            view.dispatch(TransactionCommand::Cursor(time), window, cx);
         }))
         .child(
             div()

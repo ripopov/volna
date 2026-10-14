@@ -20,10 +20,12 @@ pub struct Census {
 const NEGATIVE: u32 = 1 << 31;
 
 impl Census {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn recording() -> Self {
         Census {
             record: Some(Vec::new()),
@@ -83,10 +85,12 @@ impl Census {
         }
     }
 
+    #[must_use]
     pub fn depth(&self) -> usize {
         self.open.len()
     }
 
+    #[must_use]
     pub fn finish_recorded(mut self) -> (ScopeSizes, Contributions) {
         let record = self.record.take().unwrap_or_default();
         let signals = record
@@ -116,6 +120,7 @@ impl Census {
         (sizes, contributions)
     }
 
+    #[must_use]
     pub fn finish(mut self) -> ScopeSizes {
         while !self.open.is_empty() {
             self.leave();
@@ -161,14 +166,17 @@ pub struct Contributions {
 }
 
 impl Contributions {
+    #[must_use]
     pub fn len(&self) -> usize {
         self.parent.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.parent.is_empty()
     }
 
+    #[must_use]
     pub fn memory_bytes(&self) -> u64 {
         ((self.parent.len() + self.off.len() + self.weights.len()) * 4) as u64
     }
@@ -209,26 +217,32 @@ pub struct ScopeSizes {
 }
 
 impl ScopeSizes {
+    #[must_use]
     pub fn len(&self) -> usize {
         self.parent.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.parent.is_empty()
     }
 
+    #[must_use]
     pub fn parent(&self, scope: u32) -> Option<u32> {
         Some(self.parent[scope as usize]).filter(|&p| p != NONE)
     }
 
+    #[must_use]
     pub fn signals(&self, scope: u32) -> u32 {
         self.signals[scope as usize]
     }
 
+    #[must_use]
     pub fn variables(&self, scope: u32) -> u32 {
         self.variables[scope as usize]
     }
 
+    #[must_use]
     pub fn scopes(&self, scope: u32) -> u32 {
         self.scopes[scope as usize]
     }

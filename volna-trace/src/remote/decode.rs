@@ -148,7 +148,7 @@ impl Reader {
                 Poll::Ready(())
             }
         })
-        .await
+        .await;
     }
 
     pub async fn yield_now(&self) {
@@ -162,7 +162,7 @@ impl Reader {
                 Poll::Pending
             }
         })
-        .await
+        .await;
     }
 
     pub fn charge(&self, bytes: usize) -> anyhow::Result<()> {

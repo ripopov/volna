@@ -15,7 +15,7 @@ use crate::sections::{self, Blackout, Meta};
 use crate::signal::{self, OwnedSignalValue, SignalValue};
 use crate::strings::{StrId, StringTable};
 use crate::txblock::{self, Relation, Transaction, TxBlockData, TxBlockHeader, TxId};
-use crate::value::{packed_len, Value};
+use crate::value::{Value, packed_len};
 use crate::varint;
 use crate::xform::Xform;
 use std::path::Path;
@@ -246,10 +246,12 @@ struct SignalDataInner {
 }
 
 impl SignalData {
+    #[must_use]
     pub fn kind(&self) -> SignalKind {
         self.inner.kind
     }
 
+    #[must_use]
     pub fn times(&self) -> &[u64] {
         &self.inner.times
     }
@@ -258,14 +260,17 @@ impl SignalData {
         self.inner.kind.packed_len().unwrap_or(0)
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.inner.times.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.times.is_empty()
     }
 
+    #[must_use]
     pub fn get(&self, i: usize) -> SignalValue<'_> {
         match self.inner.kind {
             SignalKind::VarLen => SignalValue::VarLen(
@@ -279,19 +284,18 @@ impl SignalData {
         }
     }
 
+    #[must_use]
     pub fn initial(&self) -> SignalValue<'_> {
         block::frame_value(self.inner.kind, &self.inner.initial)
     }
 
+    #[must_use]
     pub fn index_at(&self, t: u64) -> Option<usize> {
         let n = self.inner.times.partition_point(|&x| x <= t);
-        if n == 0 {
-            None
-        } else {
-            Some(n - 1)
-        }
+        if n == 0 { None } else { Some(n - 1) }
     }
 
+    #[must_use]
     pub fn value_at(&self, t: u64) -> SignalValue<'_> {
         match self.index_at(t) {
             Some(i) => self.get(i),
@@ -424,9 +428,10 @@ impl Reader {
 
     pub fn open_with(path: impl AsRef<Path>, opts: ReadOptions) -> Result<Reader> {
         let file = std::fs::File::open(path)?;
+        // SAFETY: Trace files must remain immutable while readers hold mappings; the mapping owns its lifetime.
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
         #[cfg(unix)]
-        let _ = mmap.advise(memmap2::Advice::Random);
+        drop(mmap.advise(memmap2::Advice::Random));
         Self::from_data(Data::Mmap(mmap), opts)
     }
 
@@ -454,19 +459,16 @@ impl Reader {
             }
         }
         for e in &container.entries {
-            let kind = match SectionKind::from_u32(e.kind) {
-                Some(k) => k,
-                None => {
-                    if e.flags & crate::container::SECTION_FLAG_OPTIONAL != 0 {
-                        continue;
-                    }
-                    return Err(Error::Corrupt("unknown required section kind"));
+            let Some(kind) = SectionKind::from_u32(e.kind) else {
+                if e.flags & crate::container::SECTION_FLAG_OPTIONAL != 0 {
+                    continue;
                 }
+                return Err(Error::Corrupt("unknown required section kind"));
             };
             match kind {
                 SectionKind::Strings | SectionKind::Directory => {}
                 SectionKind::Meta => {
-                    meta = Some(Meta::decode(Container::payload(bytes, e, verify)?)?)
+                    meta = Some(Meta::decode(Container::payload(bytes, e, verify)?)?);
                 }
                 SectionKind::Hierarchy => {
                     let raw = dec.decompress(Container::payload(bytes, e, verify)?)?;
@@ -502,7 +504,7 @@ impl Reader {
                     });
                 }
                 SectionKind::Blackout => {
-                    blackout = sections::decode_blackout(Container::payload(bytes, e, verify)?)?
+                    blackout = sections::decode_blackout(Container::payload(bytes, e, verify)?)?;
                 }
             }
         }
@@ -531,9 +533,9 @@ impl Reader {
         if !keys[1].is_empty() {
             for n in hier.nodes_of_kind(NodeKind::Generator) {
                 let attrs = hier.attrs(n);
-                let types = match attrs.iter().find(|(k, _)| keys[1].contains(k)) {
-                    Some((_, Value::List(t))) => t,
-                    _ => continue,
+                let Some((_, Value::List(types))) = attrs.iter().find(|(k, _)| keys[1].contains(k))
+                else {
+                    continue;
                 };
                 let mut args = Vec::with_capacity(types.len());
                 for t in types {
@@ -661,7 +663,7 @@ impl Reader {
                 let d = self.log_block(i)?;
                 for rec in d.recs.iter().rev() {
                     let Some(site) = self
-                        .log_site(NodeId(rec.gen))
+                        .log_site(NodeId(rec.r#gen))
                         .filter(|s| streams.contains(&s.stream))
                     else {
                         continue;
@@ -833,7 +835,7 @@ impl Reader {
             &b.header,
             &mut Decompressor::new(),
         )?);
-        let _ = b.times.set(t.clone());
+        drop(b.times.set(t));
         Ok(b.times.get().unwrap().clone())
     }
 
@@ -845,14 +847,14 @@ impl Reader {
         for i in 0..self.sig_blocks.len() {
             let t = self.block_times(i)?;
             let mut s = 0;
-            if let (Some(&last), Some(&first)) = (all.last(), t.first()) {
-                if first == last {
-                    s = 1;
-                }
+            if let (Some(&last), Some(&first)) = (all.last(), t.first())
+                && first == last
+            {
+                s = 1;
             }
             all.extend_from_slice(&t[s..]);
         }
-        let _ = self.global_times.set(all);
+        drop(self.global_times.set(all));
         Ok(self.global_times.get().unwrap())
     }
 
@@ -860,11 +862,7 @@ impl Reader {
         let n = self
             .sig_blocks
             .partition_point(|b| b.header.start_time <= t);
-        if n == 0 {
-            None
-        } else {
-            Some(n - 1)
-        }
+        if n == 0 { None } else { Some(n - 1) }
     }
 
     fn group_of(&self, s: SignalId) -> u32 {
@@ -883,9 +881,8 @@ impl Reader {
     fn group_view(&self, bi: usize, g: u32) -> Result<Option<GroupView<'_>>> {
         let b = &self.sig_blocks[bi];
         let p = self.block_payload(b)?;
-        let (clen, off) = match block::find_group(p, &b.header, g) {
-            Some(x) => x,
-            None => return Ok(None),
+        let Some((clen, off)) = block::find_group(p, &b.header, g) else {
+            return Ok(None);
         };
         let c = block::group_container(p, &b.header, clen, off)?;
         Ok(Some(GroupView::parse(
@@ -1002,13 +999,11 @@ impl Reader {
             signal::default_value(kind, &mut v);
             block::frame_value(kind, &v).to_owned()
         };
-        let bi = match self.block_at(t) {
-            Some(bi) => bi,
-            None => return Ok(default()),
+        let Some(bi) = self.block_at(t) else {
+            return Ok(default());
         };
-        let dbi = match self.dirty_block_at_or_before(bi, g)? {
-            Some(x) => x,
-            None => return Ok(default()),
+        let Some(dbi) = self.dirty_block_at_or_before(bi, g)? else {
+            return Ok(default());
         };
         let view = self.group_view(dbi, g)?.unwrap();
         if !view.holds(sig.0) {
@@ -1034,12 +1029,11 @@ impl Reader {
             let index = cp.column_index(local, kind)?;
             it.seek(&index, max_tidx);
         }
-        match it.last_at_or_before(max_tidx)? {
-            Some(c) => Ok(it.value(&c).to_owned()),
-            None => {
-                let (fp, fr) = self.frame(dbi, g, &view, sig.0)?;
-                Ok(block::frame_value(kind, &fp.data[fr.0 as usize..fr.1 as usize]).to_owned())
-            }
+        if let Some(c) = it.last_at_or_before(max_tidx)? {
+            Ok(it.value(&c).to_owned())
+        } else {
+            let (fp, fr) = self.frame(dbi, g, &view, sig.0)?;
+            Ok(block::frame_value(kind, &fp.data[fr.0 as usize..fr.1 as usize]).to_owned())
         }
     }
 
@@ -1101,9 +1095,10 @@ impl Reader {
             while i < sigs.len() {
                 let g = self.group_of(sigs[i]);
                 let j = i + sigs[i..].partition_point(|&s| self.group_of(s) == g);
-                let view = match hit[i..j].contains(&false) {
-                    true => self.group_view(bi, g)?,
-                    false => None,
+                let view = if hit[i..j].contains(&false) {
+                    self.group_view(bi, g)?
+                } else {
+                    None
                 };
                 for k in i..j {
                     let Some(view) = view.as_ref().filter(|v| !hit[k] && v.holds(sigs[k].0)) else {
@@ -1410,7 +1405,7 @@ impl Reader {
                             }
                             match cur.it.next_raw()? {
                                 Some(pending) if pending.tidx as usize == ti => {
-                                    cur.pending = pending
+                                    cur.pending = pending;
                                 }
                                 Some(pending) => {
                                     if pending.tidx >= h.n_times || (pending.tidx as usize) < ti {
@@ -1454,7 +1449,7 @@ impl Reader {
                         SignalKind::Bits { width: 1, .. } => {
                             drain(cur, w1 as u32, next, &mut entries, |c| {
                                 c.inline as u32 | (TAG_CODE << TAG_SHIFT)
-                            })?
+                            })?;
                         }
                         SignalKind::Bits { states, .. } => {
                             drain(cur, w1 as u32, next, &mut entries, |c| {
@@ -1464,7 +1459,7 @@ impl Reader {
                                     TAG_FULL
                                 };
                                 (base + c.start) | (tag << TAG_SHIFT)
-                            })?
+                            })?;
                         }
                         SignalKind::Real => drain(cur, w1 as u32, next, &mut entries, |c| {
                             reals.push(c.inline);
@@ -1507,29 +1502,26 @@ impl Reader {
                         TAG_CODE => SignalValue::Bits {
                             width: 1,
                             states: if a <= 1 { 2 } else { kind.states() },
-                            data: &block::CODE_BYTES[a..a + 1],
+                            data: &block::CODE_BYTES[a..=a],
                         },
                         TAG_REAL => SignalValue::Real(f64::from_bits(reals[a])),
                         _ => {
                             let data = &pieces[sig_piece[sig as usize] as usize].1;
-                            match kind {
-                                SignalKind::Bits { width, states } => {
-                                    let (st, len) = if tag == TAG_COMPACT {
-                                        (2, (width as usize).div_ceil(8))
-                                    } else {
-                                        (states, packed_len(width, states))
-                                    };
-                                    SignalValue::Bits {
-                                        width,
-                                        states: st,
-                                        data: &data[a..a + len],
-                                    }
+                            if let SignalKind::Bits { width, states } = kind {
+                                let (st, len) = if tag == TAG_COMPACT {
+                                    (2, (width as usize).div_ceil(8))
+                                } else {
+                                    (states, packed_len(width, states))
+                                };
+                                SignalValue::Bits {
+                                    width,
+                                    states: st,
+                                    data: &data[a..a + len],
                                 }
-                                _ => {
-                                    let mut r = varint::Reader::new(data);
-                                    r.pos = a;
-                                    SignalValue::VarLen(r.blob()?)
-                                }
+                            } else {
+                                let mut r = varint::Reader::new(data);
+                                r.pos = a;
+                                SignalValue::VarLen(r.blob()?)
                             }
                         }
                     };
@@ -1552,12 +1544,12 @@ impl Reader {
         }
         let p = Container::payload(self.bytes(), &b.entry, self.verify_crc)?;
         let d = Arc::new(txblock::decode_tx_block(p, &mut Decompressor::new())?);
-        let _ = b.data.set(d);
+        drop(b.data.set(d));
         Ok(b.data.get().unwrap().clone())
     }
 
-    pub fn generator_stream(&self, gen: NodeId) -> Option<NodeId> {
-        self.hier.parent(gen)
+    pub fn generator_stream(&self, r#gen: NodeId) -> Option<NodeId> {
+        self.hier.parent(r#gen)
     }
 
     pub fn visit_transactions(
@@ -1577,10 +1569,10 @@ impl Reader {
             if h.n_tx == 0 {
                 continue;
             }
-            if let Some((t0, t1)) = q.window {
-                if h.t_max < t0 || h.t_min > t1 {
-                    continue;
-                }
+            if let Some((t0, t1)) = q.window
+                && (h.t_max < t0 || h.t_min > t1)
+            {
+                continue;
             }
             if let Some(g) = q.generator {
                 let p = Container::payload(self.bytes(), &self.tx_blocks[i].entry, false)?;
@@ -1590,20 +1582,20 @@ impl Reader {
             }
             let d = self.tx_block(i)?;
             for tx in &d.transactions {
-                if let Some(g) = q.generator {
-                    if tx.generator != g {
-                        continue;
-                    }
+                if let Some(g) = q.generator
+                    && tx.generator != g
+                {
+                    continue;
                 }
-                if let Some(s) = q.stream {
-                    if self.generator_stream(tx.generator) != Some(s) {
-                        continue;
-                    }
+                if let Some(s) = q.stream
+                    && self.generator_stream(tx.generator) != Some(s)
+                {
+                    continue;
                 }
-                if let Some((t0, t1)) = q.window {
-                    if tx.end < t0 || tx.begin > t1 {
-                        continue;
-                    }
+                if let Some((t0, t1)) = q.window
+                    && (tx.end < t0 || tx.begin > t1)
+                {
+                    continue;
                 }
                 if !f(tx) {
                     return Ok(());
@@ -1639,13 +1631,13 @@ impl Reader {
                 continue;
             }
             let d = self.log_block(i)?;
-            if let Some(rec) = d.recs.iter().find(|r| r.id == id) {
-                if let Some(site) = self.log_site(NodeId(rec.gen)) {
-                    return Ok(Some(
-                        LogRecord::new(site, &self.log_fmts[site.index as usize], rec, &d)
-                            .to_transaction(),
-                    ));
-                }
+            if let Some(rec) = d.recs.iter().find(|r| r.id == id)
+                && let Some(site) = self.log_site(NodeId(rec.r#gen))
+            {
+                return Ok(Some(
+                    LogRecord::new(site, &self.log_fmts[site.index as usize], rec, &d)
+                        .to_transaction(),
+                ));
             }
         }
         Ok(None)
@@ -1669,7 +1661,7 @@ impl Reader {
             }
             let d = self.log_block(i)?;
             if let Some(rec) = d.recs.iter().find(|r| r.id == id) {
-                return Ok(Some(NodeId(rec.gen)));
+                return Ok(Some(NodeId(rec.r#gen)));
             }
         }
         Ok(None)
@@ -1712,7 +1704,7 @@ impl Reader {
             }
             for record in &self.log_block(i)?.recs {
                 if let Some(owner) = owners.get_mut(&record.id).filter(|owner| owner.is_none()) {
-                    *owner = Some(NodeId(record.gen));
+                    *owner = Some(NodeId(record.r#gen));
                     remaining -= 1;
                 }
             }
@@ -1783,8 +1775,8 @@ impl Reader {
         &self.log_sites
     }
 
-    pub fn log_site(&self, gen: NodeId) -> Option<&LogSite> {
-        match self.site_index.get(gen.0 as usize) {
+    pub fn log_site(&self, r#gen: NodeId) -> Option<&LogSite> {
+        match self.site_index.get(r#gen.0 as usize) {
             Some(&i) if i != u32::MAX => Some(&self.log_sites[i as usize]),
             _ => None,
         }
@@ -1809,7 +1801,7 @@ impl Reader {
             &mut Decompressor::new(),
             |g| self.log_site(NodeId(g)).map(|s| s.args.as_slice()),
         )?);
-        let _ = b.data.set(d);
+        drop(b.data.set(d));
         Ok(b.data.get().unwrap().clone())
     }
 
@@ -1823,7 +1815,7 @@ impl Reader {
         let b = &self.log_blocks[i];
         let p = Container::payload(self.bytes(), &b.entry, false)?;
         for g in logblock::block_generators(p, &b.header) {
-            if generator.is_some_and(|gen| g != gen.0) {
+            if generator.is_some_and(|r#gen| g != r#gen.0) {
                 continue;
             }
             if let Some(s) = self.log_site(NodeId(g)) {
@@ -1843,30 +1835,29 @@ impl Reader {
             if h.n_rec == 0 {
                 continue;
             }
-            if let Some((t0, t1)) = q.window {
-                if h.t_max < t0 || h.t_min > t1 {
-                    continue;
-                }
+            if let Some((t0, t1)) = q.window
+                && (h.t_max < t0 || h.t_min > t1)
+            {
+                continue;
             }
             if !self.log_block_may_match(i, q.generator, q.stream, q.min_severity)? {
                 continue;
             }
             let d = self.log_block(i)?;
             for rec in &d.recs {
-                if q.generator.is_some_and(|g| rec.gen != g.0) {
+                if q.generator.is_some_and(|g| rec.r#gen != g.0) {
                     continue;
                 }
-                let site = match self.log_site(NodeId(rec.gen)) {
-                    Some(s) => s,
-                    None => continue,
+                let Some(site) = self.log_site(NodeId(rec.r#gen)) else {
+                    continue;
                 };
                 if site.severity < q.min_severity || q.stream.is_some_and(|st| site.stream != st) {
                     continue;
                 }
-                if let Some((t0, t1)) = q.window {
-                    if rec.time < t0 || rec.time > t1 {
-                        continue;
-                    }
+                if let Some((t0, t1)) = q.window
+                    && (rec.time < t0 || rec.time > t1)
+                {
+                    continue;
                 }
                 if !f(&LogRecord::new(
                     site,
@@ -1891,30 +1882,29 @@ impl Reader {
         if h.n_rec == 0 {
             return Ok(true);
         }
-        if let Some((t0, t1)) = q.window {
-            if h.t_max < t0 || h.t_min > t1 {
-                return Ok(true);
-            }
+        if let Some((t0, t1)) = q.window
+            && (h.t_max < t0 || h.t_min > t1)
+        {
+            return Ok(true);
         }
         if !self.log_block_may_match(i, q.generator, q.stream, Severity::Trace)? {
             return Ok(true);
         }
         let d = self.log_block(i)?;
         for rec in &d.recs {
-            if q.generator.is_some_and(|g| rec.gen != g.0) {
+            if q.generator.is_some_and(|g| rec.r#gen != g.0) {
                 continue;
             }
-            let site = match self.log_site(NodeId(rec.gen)) {
-                Some(s) => s,
-                None => continue,
+            let Some(site) = self.log_site(NodeId(rec.r#gen)) else {
+                continue;
             };
             if q.stream.is_some_and(|st| site.stream != st) {
                 continue;
             }
-            if let Some((t0, t1)) = q.window {
-                if rec.time < t0 || rec.time > t1 {
-                    continue;
-                }
+            if let Some((t0, t1)) = q.window
+                && (rec.time < t0 || rec.time > t1)
+            {
+                continue;
             }
             if !f(
                 &LogRecord::new(site, &self.log_fmts[site.index as usize], rec, &d)

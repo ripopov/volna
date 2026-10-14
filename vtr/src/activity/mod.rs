@@ -12,10 +12,10 @@ mod vtr_source;
 
 pub use builder::Builder;
 pub use control::{BuildControl, BuildProgress};
-pub use driver::{build_from, Source};
+pub use driver::{Source, build_from};
 pub use index::{Classification, Index, IndexBlock, Stretch};
 pub use scan::BlockScan;
-pub use sidecar::{default_cache_dir, Sidecar};
+pub use sidecar::{Sidecar, default_cache_dir};
 pub use vtr_source::{build, resolve};
 
 use crate::container::Container;
@@ -68,6 +68,7 @@ impl SourceFormat {
         }
     }
 
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             SourceFormat::Vtr => "vtr",
@@ -146,7 +147,7 @@ impl Default for BuildOptions {
 impl BuildOptions {
     pub(crate) fn worker_threads(&self) -> usize {
         match self.threads {
-            0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+            0 => std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
             n => n,
         }
     }

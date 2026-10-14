@@ -1,5 +1,6 @@
 //! Tolerant JSONC parsing and edits that preserve untouched settings text.
 
+use std::fmt::Write as _;
 use std::ops::Range;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -18,6 +19,7 @@ pub struct Document {
 }
 
 impl Document {
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&Entry> {
         self.entries.iter().rev().find(|e| e.key == key)
     }
@@ -60,7 +62,7 @@ struct Parser<'a> {
 
 const MAX_DEPTH: usize = 64;
 
-impl<'a> Parser<'a> {
+impl Parser<'_> {
     fn error(&self, message: impl Into<String>, at: usize) -> SyntaxError {
         SyntaxError {
             message: message.into(),
@@ -374,6 +376,7 @@ fn indent(text: &str, doc: &Document) -> String {
     "  ".into()
 }
 
+#[must_use]
 pub fn set(
     text: &str,
     doc: &Document,
@@ -393,9 +396,9 @@ pub fn set(
     let Some((_, close)) = doc.braces else {
         let mut out = String::from("{");
         for (k, v) in seed {
-            out.push_str(&format!("{nl}  \"{k}\": {v},"));
+            write!(out, "{nl}  \"{k}\": {v},").unwrap();
         }
-        out.push_str(&format!("{nl}  \"{key}\": {json}{nl}}}{nl}"));
+        write!(out, "{nl}  \"{key}\": {json}{nl}}}{nl}").unwrap();
         return out;
     };
     let mut out = text.to_owned();
@@ -413,11 +416,12 @@ pub fn set(
     if !result.ends_with('\n') {
         result.push_str(nl);
     }
-    result.push_str(&format!("{ind}\"{key}\": {json}{nl}"));
+    write!(result, "{ind}\"{key}\": {json}{nl}").unwrap();
     result.push_str(after);
     result
 }
 
+#[must_use]
 pub fn remove(text: &str, doc: &Document, key: &str) -> String {
     let Some(entry) = doc.get(key) else {
         return text.to_owned();
@@ -642,7 +646,7 @@ mod tests {
         let keys = ["a.b", "c.d", "e.f", "g.h"];
         let mut text = SAMPLE.to_owned();
         let mut expected: std::collections::BTreeMap<&str, serde_json::Value> = Default::default();
-        let mut seed = 0x9e3779b97f4a7c15u64;
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
         for _ in 0..200 {
             seed ^= seed << 13;
             seed ^= seed >> 7;

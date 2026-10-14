@@ -18,10 +18,12 @@ impl Placement {
         Self { scale }
     }
 
+    #[must_use]
     pub fn scale(self) -> u64 {
         self.scale
     }
 
+    #[must_use]
     pub fn is_identity(self) -> bool {
         self.scale == 1
     }
@@ -34,10 +36,12 @@ impl Placement {
         t.checked_mul(self.scale).is_some()
     }
 
+    #[must_use]
     pub fn to_session(self, t: u64) -> u64 {
         t.saturating_mul(self.scale)
     }
 
+    #[must_use]
     pub fn to_trace(self, t: u64) -> u64 {
         t / self.scale
     }

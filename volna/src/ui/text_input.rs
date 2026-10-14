@@ -115,7 +115,7 @@ impl TextInput {
     }
 
     pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
-        if text.is_empty() || text.chars().any(|c| c.is_control()) {
+        if text.is_empty() || text.chars().any(char::is_control) {
             return;
         }
         self.edit(EditKind::Type, |t| t.push_str(text), cx);
@@ -181,7 +181,7 @@ impl TextInput {
                     |text| {
                         if word {
                             let trimmed = text.trim_end().len();
-                            let cut = text[..trimmed].rfind(' ').map(|i| i + 1).unwrap_or(0);
+                            let cut = text[..trimmed].rfind(' ').map_or(0, |i| i + 1);
                             text.truncate(cut);
                         } else {
                             text.pop();
@@ -203,7 +203,7 @@ impl TextInput {
                     return;
                 }
                 if let Some(c) = ks.key_char.as_deref()
-                    && !c.chars().any(|ch| ch.is_control())
+                    && !c.chars().any(char::is_control)
                 {
                     let kind = if selected {
                         EditKind::Other
@@ -247,7 +247,7 @@ impl Render for TextInput {
             .flex()
             .items_center()
             .gap_2()
-            .when(self.plain, |el| el.size_full())
+            .when(self.plain, gpui_kit::Styled::size_full)
             .when(!self.plain, |el| el.h(t.px(24.0)))
             .px_2()
             .bg(t.input.bg)

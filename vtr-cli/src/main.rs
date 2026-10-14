@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 use vtr::{Reader, Writer};
@@ -140,6 +140,10 @@ fn output_file<T>(output: &Path, write: impl FnOnce(&Path) -> Result<T>) -> Resu
         .with_context(|| format!("cannot publish {}", output.display()))?;
     Ok(result)
 }
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "The filename is lowercased before matching compound extensions."
+)]
 fn format_of(path: &Path) -> Result<Format> {
     let name = path
         .file_name()
@@ -245,7 +249,7 @@ fn run(cli: Cli) -> Result<u8> {
             output,
             format,
         } => {
-            let format = format.map(Ok).unwrap_or_else(|| format_of(&input))?;
+            let format = format.map_or_else(|| format_of(&input), Ok)?;
             output_file(&output, |path| {
                 let mut writer = Writer::create_with(
                     path,

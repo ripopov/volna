@@ -25,6 +25,7 @@ impl<'a> LogicView<'a> {
             storage: LogicStorage::Ascii(data),
         }
     }
+    #[must_use]
     pub fn packed_lsb(width: u32, states: u8, data: &'a [u8]) -> Self {
         Self {
             width: width as usize,
@@ -37,6 +38,7 @@ impl<'a> LogicView<'a> {
             storage: LogicStorage::NibblesMsb(data),
         }
     }
+    #[must_use]
     pub fn to_u64(&self) -> Option<u64> {
         let w = self.width;
         if w == 0 || w > 64 {
@@ -78,6 +80,7 @@ impl<'a> LogicView<'a> {
         }
     }
 
+    #[must_use]
     pub fn kind(&self) -> super::ValueKind {
         match &self.storage {
             LogicStorage::Ascii(data) => super::value::kind_of_bits(data),
@@ -96,7 +99,9 @@ impl<'a> LogicView<'a> {
                     super::value::kind_of_codes((0..self.width).map(|i| self.bit(i)))
                 }
             }
-            _ => super::value::kind_of_codes((0..self.width).map(|i| self.bit(i))),
+            LogicStorage::NibblesMsb(_) => {
+                super::value::kind_of_codes((0..self.width).map(|i| self.bit(i)))
+            }
         }
     }
 
@@ -136,6 +141,7 @@ impl<'a> LogicView<'a> {
         Some(())
     }
 
+    #[must_use]
     pub fn bit(&self, index: usize) -> u8 {
         assert!(index < self.width);
         match &self.storage {
@@ -166,6 +172,7 @@ pub enum ValueView<'a> {
 }
 
 impl<'a> ValueView<'a> {
+    #[must_use]
     pub fn borrowed(value: &'a WaveValue) -> Self {
         match value {
             WaveValue::Unavailable => Self::Unavailable,
@@ -175,6 +182,7 @@ impl<'a> ValueView<'a> {
             WaveValue::Bytes(value) => Self::Bytes(Cow::Borrowed(value)),
         }
     }
+    #[must_use]
     pub fn kind(&self) -> super::ValueKind {
         match self {
             Self::Unavailable => super::ValueKind::Undef,
@@ -183,6 +191,7 @@ impl<'a> ValueView<'a> {
         }
     }
 
+    #[must_use]
     pub fn owned(value: WaveValue) -> Self {
         match value {
             WaveValue::Unavailable => Self::Unavailable,

@@ -271,6 +271,7 @@ impl<C: Copy> Theme<C> {
         }
     }
 
+    #[must_use]
     pub fn zoomed(&self, factor: f32) -> Self
     where
         C: Copy,
@@ -302,6 +303,7 @@ impl<C: Copy> Theme<C> {
 }
 
 impl Theme<Color> {
+    #[must_use]
     pub fn inked(&self, tint: Option<Tint>) -> Self {
         self.with_signal_ink(self.ink(tint))
     }
@@ -314,6 +316,7 @@ impl Theme<Color> {
         t
     }
 
+    #[must_use]
     pub fn tint_backgrounds(&self) -> [Color; 6] {
         [
             self.editor.bg,
@@ -333,83 +336,89 @@ impl Theme<Color> {
     pub fn one_dark() -> Self {
         let surface = |bg| Surface {
             bg: c(bg),
-            text: c(0xdce0e5),
-            text_muted: c(0xa9afbc),
-            text_placeholder: c(0x878a98),
-            icon: c(0xdce0e5),
-            icon_muted: c(0xa9afbc),
-            icon_accent: c(0x74ade8),
-            error: c(0xd07277),
-            warning: c(0xdec184),
+            text: c(0x00dc_e0e5),
+            text_muted: c(0x00a9_afbc),
+            text_placeholder: c(0x0087_8a98),
+            icon: c(0x00dc_e0e5),
+            icon_muted: c(0x00a9_afbc),
+            icon_accent: c(0x0074_ade8),
+            error: c(0x00d0_7277),
+            warning: c(0x00de_c184),
             values: [
-                c(0xdce0e5),
-                c(0xd07277),
-                c(0xdec184),
-                c(0x74ade8),
-                c(0x878a98),
+                c(0x00dc_e0e5),
+                c(0x00d0_7277),
+                c(0x00de_c184),
+                c(0x0074_ade8),
+                c(0x0087_8a98),
             ],
         };
         let mut t = Self {
             appearance: Appearance::Dark,
-            editor: surface(0x282c33),
-            panel: surface(0x2f343e),
-            bar: surface(0x3b414d),
-            bar_hover: surface(0x363c46),
-            elevated: surface(0x2f343e),
-            tooltip: surface(0x2f343e),
-            input: surface(0x282c33),
-            selection: surface(0x454a56),
-            hover: surface(0x363c46),
-            menu_hover: surface(0x363c46),
+            editor: surface(0x0028_2c33),
+            panel: surface(0x002f_343e),
+            bar: surface(0x003b_414d),
+            bar_hover: surface(0x0036_3c46),
+            elevated: surface(0x002f_343e),
+            tooltip: surface(0x002f_343e),
+            input: surface(0x0028_2c33),
+            selection: surface(0x0045_4a56),
+            hover: surface(0x0036_3c46),
+            menu_hover: surface(0x0036_3c46),
             button: Surface {
-                text: c(0x282c33),
-                ..surface(0x74ade8)
+                text: c(0x0028_2c33),
+                ..surface(0x0074_ade8)
             },
             button_hover: Surface {
-                text: c(0x282c33),
-                ..surface(0x74ade8)
+                text: c(0x0028_2c33),
+                ..surface(0x0074_ade8)
             },
-            badge: surface(0x282c33),
-            badge_hover: surface(0x454a56),
-            border: c(0x464b57),
-            border_variant: c(0x363c46),
-            border_focused: c(0x47679e),
-            input_border: c(0x464b57),
-            scrollbar_thumb: ca(0xc8ccd4, 0.30),
-            scrollbar_thumb_hover: ca(0xc8ccd4, 0.50),
-            sidebar_tints: [c(0xa1c181), c(0xe5c07b), c(0x61afef)],
-            wave_signal: c(0xa1c181),
-            wave_high_fill: ca(0xa1c181, 0.10),
-            wave_undef: c(0xd07277),
-            wave_undef_fill: ca(0xd07277, 0.14),
-            wave_highimp: c(0xdec184),
-            wave_dontcare: c(0x74ade8),
-            wave_weak: c(0x878a98),
-            wave_dense: ca(0xa1c181, 0.55),
-            wave_event_coalesced: c(0xe5c07b),
-            wave_bus_text: c(0xdce0e5),
-            wave_tick: ca(0xc8ccd4, 0.08),
-            wave_tick_text: c(0xa9afbc),
-            wave_row_selected: ca(0x74ade8, 0.10),
-            wave_row_hover: ca(0xc8ccd4, 0.04),
-            wave_outside: ca(0x000000, 0.22),
-            wave_cursor: c(0x74ade8),
-            wave_cursor_inactive: c(0x74ade8).with_alpha(0.45),
-            wave_cursor_text: c(0x282c33),
+            badge: surface(0x0028_2c33),
+            badge_hover: surface(0x0045_4a56),
+            border: c(0x0046_4b57),
+            border_variant: c(0x0036_3c46),
+            border_focused: c(0x0047_679e),
+            input_border: c(0x0046_4b57),
+            scrollbar_thumb: ca(0x00c8_ccd4, 0.30),
+            scrollbar_thumb_hover: ca(0x00c8_ccd4, 0.50),
+            sidebar_tints: [c(0x00a1_c181), c(0x00e5_c07b), c(0x0061_afef)],
+            wave_signal: c(0x00a1_c181),
+            wave_high_fill: ca(0x00a1_c181, 0.10),
+            wave_undef: c(0x00d0_7277),
+            wave_undef_fill: ca(0x00d0_7277, 0.14),
+            wave_highimp: c(0x00de_c184),
+            wave_dontcare: c(0x0074_ade8),
+            wave_weak: c(0x0087_8a98),
+            wave_dense: ca(0x00a1_c181, 0.55),
+            wave_event_coalesced: c(0x00e5_c07b),
+            wave_bus_text: c(0x00dc_e0e5),
+            wave_tick: ca(0x00c8_ccd4, 0.08),
+            wave_tick_text: c(0x00a9_afbc),
+            wave_row_selected: ca(0x0074_ade8, 0.10),
+            wave_row_hover: ca(0x00c8_ccd4, 0.04),
+            wave_outside: ca(0x0000_0000, 0.22),
+            wave_cursor: c(0x0074_ade8),
+            wave_cursor_inactive: c(0x0074_ade8).with_alpha(0.45),
+            wave_cursor_text: c(0x0028_2c33),
             wave_tints: [c(0); 5],
-            tx_relation_in: c(0x74ade8),
-            tx_relation_out: c(0x5ec9b0),
-            wave_flush: ca(0xd07277, 0.16),
-            stage_text: c(0x101820),
+            tx_relation_in: c(0x0074_ade8),
+            tx_relation_out: c(0x005e_c9b0),
+            wave_flush: ca(0x00d0_7277, 0.16),
+            stage_text: c(0x0010_1820),
             stages: StageLadder::Hsl,
-            markers: [0xbf956a, 0xb477cf, 0x6eb4bf, 0xd07277, 0xdec184, 0xa1c181].map(|hex| {
-                MarkerColors {
-                    stroke: c(hex),
-                    background: ca(hex, 0.85),
-                    hover: c(hex),
-                    text: c(0x282c33),
-                    hover_text: c(0x282c33),
-                }
+            markers: [
+                0x00bf_956a,
+                0x00b4_77cf,
+                0x006e_b4bf,
+                0x00d0_7277,
+                0x00de_c184,
+                0x00a1_c181,
+            ]
+            .map(|hex| MarkerColors {
+                stroke: c(hex),
+                background: ca(hex, 0.85),
+                hover: c(hex),
+                text: c(0x0028_2c33),
+                hover_text: c(0x0028_2c33),
             }),
             ui_font: "Inter",
             mono_font: "JetBrains Mono",
@@ -429,28 +438,52 @@ impl Theme<Color> {
             analog_wave_width: 1.25,
             wave_spacing: 5.0,
         };
-        t.resolve_tints([0x74ade8, 0x6eb4bf, 0xb477cf, 0xf07fbf, 0xa9afbc].map(c));
+        t.resolve_tints(
+            [
+                0x0074_ade8,
+                0x006e_b4bf,
+                0x00b4_77cf,
+                0x00f0_7fbf,
+                0x00a9_afbc,
+            ]
+            .map(c),
+        );
         t
     }
 
+    #[must_use]
     pub fn from_host(p: &HostPalette) -> Self {
         let mut t = Self::one_dark();
         let dark = p.appearance.is_dark();
         let hc = p.appearance.is_high_contrast();
         let bg = if dark {
-            if hc { c(0) } else { c(0x1e1e1e) }
+            if hc { c(0) } else { c(0x001e_1e1e) }
         } else {
-            c(0xffffff)
+            c(0x00ff_ffff)
         };
-        let fg = if dark { c(0xcccccc) } else { c(0x333333) };
-        let accent = p
-            .accent
-            .or(p.focus)
-            .unwrap_or(if dark { c(0x75beff) } else { c(0x005fb8) });
+        let fg = if dark { c(0x00cc_cccc) } else { c(0x0033_3333) };
+        let accent =
+            p.accent
+                .or(p.focus)
+                .unwrap_or(if dark { c(0x0075_beff) } else { c(0x0000_5fb8) });
         let fallback = if dark {
-            [0x89d185, 0xf48771, 0xcca700, 0x75beff, 0xd18616, 0xb180d7]
+            [
+                0x0089_d185,
+                0x00f4_8771,
+                0x00cc_a700,
+                0x0075_beff,
+                0x00d1_8616,
+                0x00b1_80d7,
+            ]
         } else {
-            [0x287b38, 0xa1260d, 0x895503, 0x005fb8, 0xb05b00, 0x8040a0]
+            [
+                0x0028_7b38,
+                0x00a1_260d,
+                0x0089_5503,
+                0x0000_5fb8,
+                0x00b0_5b00,
+                0x0080_40a0,
+            ]
         };
         let charts: [Color; 6] = std::array::from_fn(|i| opaque(p.charts[i], c(fallback[i])));
         let resolve = |pair, bg, fg| Surface::resolve(pair, bg, fg, p, accent, charts);
@@ -485,7 +518,7 @@ impl Theme<Color> {
             t.elevated.bg,
             t.elevated.text,
         );
-        t.button = resolve(with_bg(p.button, accent), t.panel.bg, c(0xffffff));
+        t.button = resolve(with_bg(p.button, accent), t.panel.bg, c(0x00ff_ffff));
         t.button_hover = resolve(
             ColorPair {
                 background: p.button_hover,
@@ -641,7 +674,7 @@ impl Surface<Color> {
 }
 
 fn value_index(kind: ValueKind) -> usize {
-    use ValueKind::*;
+    use ValueKind::{DontCare, HighImp, Normal, Undef, Weak};
     match kind {
         Normal => 0,
         Undef => 1,
@@ -665,13 +698,14 @@ fn fallback_text(color: Color, bg: Color) -> Color {
     if contrast(over(color, bg), bg) >= 4.5 {
         return color;
     }
-    if contrast(c(0), bg) > contrast(c(0xffffff), bg) {
+    if contrast(c(0), bg) > contrast(c(0x00ff_ffff), bg) {
         c(0)
     } else {
-        c(0xffffff)
+        c(0x00ff_ffff)
     }
 }
 
+#[must_use]
 pub fn over(fg: Color, bg: Color) -> Color {
     if fg.a == 1.0 {
         return fg;
@@ -696,6 +730,7 @@ pub(crate) fn luminance(color: Color) -> f32 {
     };
     0.2126 * linear(c[0]) + 0.7152 * linear(c[1]) + 0.0722 * linear(c[2])
 }
+#[must_use]
 pub fn contrast(a: Color, b: Color) -> f32 {
     let a = luminance(a);
     let b = luminance(b);
@@ -716,7 +751,7 @@ fn stroke(color: Color, backgrounds: &[Color]) -> Color {
             }
             let (mut lo, mut hi) = (0.0, 1.0);
             for _ in 0..16 {
-                let mid = (lo + hi) / 2.0;
+                let mid = f32::midpoint(lo, hi);
                 target.l = color.l + (end - color.l) * mid;
                 if passes(target) {
                     hi = mid;

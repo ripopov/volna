@@ -25,6 +25,7 @@ pub struct ShownRecord {
 }
 
 impl ShownRecord {
+    #[must_use]
     pub fn selection(&self, origin: crate::panels::PanelId) -> Option<TxSelection> {
         Some(TxSelection {
             track: self.track.track()?,
@@ -72,11 +73,12 @@ pub struct TransactionModel {
     attached: bool,
     refused: Option<String>,
     budget: MemoryBudget,
-    _reservation: Option<Reservation>,
+    reservation: Option<Reservation>,
     parents: ParentTrace,
 }
 
 impl TransactionModel {
+    #[must_use]
     pub fn new(budget: MemoryBudget, detail_items: usize) -> Self {
         Self {
             history: Vec::new(),
@@ -92,11 +94,12 @@ impl TransactionModel {
             attached: false,
             refused: None,
             budget,
-            _reservation: None,
+            reservation: None,
             parents: ParentTrace::default(),
         }
     }
 
+    #[must_use]
     pub fn clone_view(&self) -> Self {
         let mut clone = Self::new(self.budget.clone(), self.prefs.detail_items);
         clone.prefs = self.prefs.clone();
@@ -107,10 +110,12 @@ impl TransactionModel {
         clone
     }
 
+    #[must_use]
     pub fn shown(&self) -> Option<&ShownRecord> {
         self.history.get(self.cursor)
     }
 
+    #[must_use]
     pub fn parents(&self) -> &ParentTrace {
         &self.parents
     }
@@ -119,6 +124,7 @@ impl TransactionModel {
         self.parents.refresh(doc, &self.budget);
     }
 
+    #[must_use]
     pub fn attribute_key(
         &self,
         doc: &Document,
@@ -154,6 +160,7 @@ impl TransactionModel {
         }
     }
 
+    #[must_use]
     pub fn pinned(&self) -> bool {
         self.pinned
     }
@@ -179,6 +186,7 @@ impl TransactionModel {
         std::mem::replace(&mut self.prefs.radix, radix)
     }
 
+    #[must_use]
     pub fn prefs(&self) -> &ViewPrefs {
         &self.prefs
     }
@@ -221,10 +229,12 @@ impl TransactionModel {
         }
     }
 
+    #[must_use]
     pub fn can_go_back(&self) -> bool {
         self.cursor > 0
     }
 
+    #[must_use]
     pub fn can_go_forward(&self) -> bool {
         self.cursor + 1 < self.history.len()
     }
@@ -248,6 +258,7 @@ impl TransactionModel {
         };
     }
 
+    #[must_use]
     pub fn is_attached(&self) -> bool {
         self.attached
     }
@@ -257,10 +268,10 @@ impl TransactionModel {
             return Ok(());
         }
         self.attached = true;
-        if self._reservation.is_none() {
+        if self.reservation.is_none() {
             match self.budget.reserve(PANEL_BYTES) {
                 Ok(reservation) => {
-                    self._reservation = Some(reservation);
+                    self.reservation = Some(reservation);
                     self.refused = None;
                 }
                 Err(error) => {
@@ -293,7 +304,7 @@ impl TransactionModel {
 
     pub(crate) fn park(&mut self, doc: &mut Document) {
         self.detach(doc);
-        self._reservation = None;
+        self.reservation = None;
     }
 
     fn hold(&mut self, doc: &mut Document, track: Option<Traced<TrackRef>>) -> bool {
@@ -363,6 +374,7 @@ impl TransactionModel {
         )
     }
 
+    #[must_use]
     pub fn state(&self, doc: &Document) -> TxPanelState {
         if let Some(refusal) = &self.refused {
             return TxPanelState::Refused(refusal.clone());
@@ -396,6 +408,7 @@ impl TransactionModel {
         super::view::copy_tsv(doc, track, shown.id, COPY_BYTES)
     }
 
+    #[must_use]
     pub fn lifetime(&self, doc: &Document) -> Option<(u64, u64)> {
         let shown = self.shown()?;
         let generator = doc.resident_generator(shown.track.track()?)?;

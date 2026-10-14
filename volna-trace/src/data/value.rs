@@ -12,6 +12,7 @@ pub enum Bit {
 }
 
 impl Bit {
+    #[must_use]
     pub fn from_ascii(c: u8) -> Bit {
         match c {
             b'0' => Bit::Zero,
@@ -23,6 +24,7 @@ impl Bit {
         }
     }
 
+    #[must_use]
     pub fn kind(self) -> ValueKind {
         match self {
             Bit::Zero | Bit::One => ValueKind::Normal,
@@ -53,6 +55,7 @@ pub enum SignalShape {
 }
 
 impl SignalShape {
+    #[must_use]
     pub fn dims(self) -> String {
         match self {
             Self::Vector { width } => format!("[{}:0]", width - 1),
@@ -63,6 +66,7 @@ impl SignalShape {
         }
     }
 
+    #[must_use]
     pub fn width(self) -> u32 {
         match self {
             SignalShape::Bit => 1,
@@ -72,6 +76,7 @@ impl SignalShape {
         }
     }
 
+    #[must_use]
     pub fn is_digital(self) -> bool {
         matches!(self, SignalShape::Bit | SignalShape::Vector { .. })
     }
@@ -87,6 +92,7 @@ pub enum WaveValue {
 }
 
 impl WaveValue {
+    #[must_use]
     pub fn kind(&self) -> ValueKind {
         match self {
             WaveValue::Unavailable => ValueKind::Undef,
@@ -96,6 +102,7 @@ impl WaveValue {
     }
 }
 
+#[must_use]
 pub fn kind_of_bits(bits: &[u8]) -> ValueKind {
     kind_of_codes(bits.iter().copied())
 }
@@ -111,8 +118,7 @@ pub fn kind_of_codes(bits: impl IntoIterator<Item = u8>) -> ValueKind {
             _ => ValueKind::Weak,
         };
         kind = match (kind, k) {
-            (ValueKind::HighImp, _) => ValueKind::HighImp,
-            (_, ValueKind::HighImp) => ValueKind::HighImp,
+            (ValueKind::HighImp, _) | (_, ValueKind::HighImp) => ValueKind::HighImp,
             (ValueKind::DontCare, _) => ValueKind::DontCare,
             (_, k) => k,
         };

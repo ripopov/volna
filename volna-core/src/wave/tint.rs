@@ -15,10 +15,12 @@ pub enum Tint {
 impl Tint {
     pub const ALL: [Tint; 5] = [Tint::Blue, Tint::Cyan, Tint::Violet, Tint::Pink, Tint::Grey];
 
+    #[must_use]
     pub fn index(self) -> usize {
         self as usize
     }
 
+    #[must_use]
     pub fn id(self) -> &'static str {
         match self {
             Tint::Blue => "blue",
@@ -29,10 +31,12 @@ impl Tint {
         }
     }
 
+    #[must_use]
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.id() == id)
     }
 
+    #[must_use]
     pub fn label(tint: Option<Self>) -> &'static str {
         match tint {
             None => "Default",
@@ -45,6 +49,7 @@ impl Tint {
     }
 }
 
+#[must_use]
 pub fn ink(items: &[Entry], i: usize) -> Option<Tint> {
     let mut at = i;
     loop {
@@ -59,6 +64,11 @@ pub(crate) mod serde_name {
     use super::Tint;
     use serde::{Deserialize, Deserializer, Serializer};
 
+    #[expect(
+        clippy::ref_option,
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Serde requires this callback to borrow the field."
+    )]
     pub fn serialize<S: Serializer>(tint: &Option<Tint>, s: S) -> Result<S::Ok, S::Error> {
         match tint {
             Some(t) => s.serialize_str(t.id()),

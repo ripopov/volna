@@ -195,6 +195,7 @@ impl GroupSummary {
         })
     }
 
+    #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         (self.key.capacity() * std::mem::size_of::<usize>()
             + self.levels.capacity() * std::mem::size_of::<SummaryLevel>()) as u64
@@ -205,10 +206,12 @@ impl GroupSummary {
                 .sum::<u64>()
     }
 
+    #[must_use]
     pub fn key(&self) -> &[usize] {
         &self.key
     }
 
+    #[must_use]
     pub fn columns(&self, vp: &Viewport, width: usize) -> Option<Vec<Column>> {
         if width == 0 || vp.width() <= 0.0 {
             return Some(vec![Column::default(); width]);
@@ -274,6 +277,7 @@ impl Reading {
         reading
     }
 
+    #[must_use]
     pub fn text(&self) -> String {
         if self.changed > 0 {
             format!("{} of {} changed", self.changed, self.members)

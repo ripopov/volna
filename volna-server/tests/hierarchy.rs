@@ -134,7 +134,7 @@ fn production_in_process_transport_matches_local_over_multiple_pages() {
                     write_packet(&mut client_socket, &ack).unwrap();
                     break 'opened result.unwrap();
                 }
-                _ => panic!("Open"),
+                ClientStep::Complete { .. } => panic!("Open"),
             }
         }
     };

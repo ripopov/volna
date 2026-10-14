@@ -34,6 +34,7 @@ impl NodeKind {
     }
 }
 
+#[must_use]
 pub fn parent_allowed(child: NodeKind, parent: Option<NodeKind>) -> bool {
     match child {
         NodeKind::Generator => parent == Some(NodeKind::Stream),
@@ -76,6 +77,7 @@ pub enum ScopeType {
 }
 
 impl ScopeType {
+    #[must_use]
     pub fn code(self) -> u16 {
         match self {
             ScopeType::Other(c) => c,
@@ -115,8 +117,14 @@ impl ScopeType {
             ScopeType::Other(c) => c,
         }
     }
+    #[must_use]
     pub fn from_code(c: u16) -> ScopeType {
-        use ScopeType::*;
+        use ScopeType::{
+            Begin, Class, Core, Fork, Function, Generate, Generic, InstrumentationScope, Interface,
+            Module, Other, Package, Program, Resource, ScModule, Struct, SvArray, Task, Union,
+            VhdlArchitecture, VhdlBlock, VhdlForGenerate, VhdlFunction, VhdlGenerate,
+            VhdlIfGenerate, VhdlPackage, VhdlProcedure, VhdlProcess, VhdlRecord,
+        };
         match c {
             0 => Module,
             1 => Task,
@@ -149,8 +157,14 @@ impl ScopeType {
             c => Other(c),
         }
     }
+    #[must_use]
     pub fn name(self) -> &'static str {
-        use ScopeType::*;
+        use ScopeType::{
+            Begin, Class, Core, Fork, Function, Generate, Generic, InstrumentationScope, Interface,
+            Module, Other, Package, Program, Resource, ScModule, Struct, SvArray, Task, Union,
+            VhdlArchitecture, VhdlBlock, VhdlForGenerate, VhdlFunction, VhdlGenerate,
+            VhdlIfGenerate, VhdlPackage, VhdlProcedure, VhdlProcess, VhdlRecord,
+        };
         match self {
             Module => "module",
             Task => "task",
@@ -223,8 +237,13 @@ pub enum VarType {
 }
 
 impl VarType {
+    #[must_use]
     pub fn code(self) -> u16 {
-        use VarType::*;
+        use VarType::{
+            Bit, Bits, Byte, Bytes, Enum, Event, Int, Integer, Logic, LongInt, Other, Parameter,
+            Port, Real, RealParameter, RealTime, Reg, ShortInt, ShortReal, SparseArray, String,
+            Supply0, Supply1, Time, Tri, Tri0, Tri1, TriAnd, TriOr, TriReg, WAnd, WOr, Wire,
+        };
         match self {
             Event => 0,
             Integer => 1,
@@ -261,8 +280,13 @@ impl VarType {
             Other(c) => c,
         }
     }
+    #[must_use]
     pub fn from_code(c: u16) -> VarType {
-        use VarType::*;
+        use VarType::{
+            Bit, Bits, Byte, Bytes, Enum, Event, Int, Integer, Logic, LongInt, Other, Parameter,
+            Port, Real, RealParameter, RealTime, Reg, ShortInt, ShortReal, SparseArray, String,
+            Supply0, Supply1, Time, Tri, Tri0, Tri1, TriAnd, TriOr, TriReg, WAnd, WOr, Wire,
+        };
         match c {
             0 => Event,
             1 => Integer,
@@ -299,8 +323,13 @@ impl VarType {
             c => Other(c),
         }
     }
+    #[must_use]
     pub fn name(self) -> &'static str {
-        use VarType::*;
+        use VarType::{
+            Bit, Bits, Byte, Bytes, Enum, Event, Int, Integer, Logic, LongInt, Other, Parameter,
+            Port, Real, RealParameter, RealTime, Reg, ShortInt, ShortReal, SparseArray, String,
+            Supply0, Supply1, Time, Tri, Tri0, Tri1, TriAnd, TriOr, TriReg, WAnd, WOr, Wire,
+        };
         match self {
             Event => "event",
             Integer => "integer",
@@ -351,6 +380,7 @@ pub enum Direction {
 }
 
 impl Direction {
+    #[must_use]
     pub fn from_u8(v: u8) -> Direction {
         match v {
             1 => Direction::Input,
@@ -361,6 +391,7 @@ impl Direction {
             _ => Direction::Implicit,
         }
     }
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Direction::Implicit => "implicit",
@@ -381,6 +412,7 @@ pub enum SignalKind {
 }
 
 impl SignalKind {
+    #[must_use]
     pub const fn bits(width: u32, states: crate::signal::LogicStates) -> Self {
         Self::Bits {
             width,
@@ -388,6 +420,7 @@ impl SignalKind {
         }
     }
 
+    #[must_use]
     pub fn packed_len(self) -> Option<usize> {
         match self {
             SignalKind::Bits { width, states } => Some(value::packed_len(width, states)),
@@ -395,6 +428,7 @@ impl SignalKind {
             SignalKind::VarLen => None,
         }
     }
+    #[must_use]
     pub fn width(self) -> u32 {
         match self {
             SignalKind::Bits { width, .. } => width,
@@ -402,6 +436,7 @@ impl SignalKind {
             SignalKind::VarLen => 0,
         }
     }
+    #[must_use]
     pub fn states(self) -> u8 {
         match self {
             SignalKind::Bits { states, .. } => states,
@@ -416,7 +451,7 @@ impl SignalKind {
                     4 => 1,
                     _ => 2,
                 });
-                varint::put_u64(out, width as u64);
+                varint::put_u64(out, u64::from(width));
             }
             SignalKind::Real => out.push(3),
             SignalKind::VarLen => out.push(4),
@@ -465,6 +500,7 @@ pub enum NodeData {
 }
 
 impl NodeData {
+    #[must_use]
     pub fn kind(&self) -> NodeKind {
         match self {
             NodeData::Scope { .. } => NodeKind::Scope,
@@ -485,10 +521,12 @@ pub struct Node {
 }
 
 impl Node {
+    #[must_use]
     pub fn kind(&self) -> NodeKind {
         self.data.kind()
     }
 
+    #[must_use]
     pub fn declares_signal(&self) -> bool {
         matches!(
             self.data,
@@ -501,15 +539,15 @@ impl Node {
 
     pub fn encode(&self, index: u32, next_signal: u32, out: &mut Vec<u8>) {
         out.push(self.kind() as u8);
-        varint::put_u64(out, self.parent.map(|p| (index - p.0) as u64).unwrap_or(0));
-        varint::put_u64(out, self.name.0 as u64);
+        varint::put_u64(out, self.parent.map_or(0, |p| u64::from(index - p.0)));
+        varint::put_u64(out, u64::from(self.name.0));
         match &self.data {
             NodeData::Scope {
                 scope_type,
                 component,
             } => {
-                varint::put_u64(out, scope_type.code() as u64);
-                varint::put_u64(out, component.0 as u64);
+                varint::put_u64(out, u64::from(scope_type.code()));
+                varint::put_u64(out, u64::from(component.0));
             }
             NodeData::Var {
                 var_type,
@@ -517,9 +555,9 @@ impl Node {
                 signal,
                 declares,
             } => {
-                varint::put_u64(out, var_type.code() as u64);
+                varint::put_u64(out, u64::from(var_type.code()));
                 out.push(*direction as u8);
-                varint::put_u64(out, (next_signal - signal.0) as u64);
+                varint::put_u64(out, u64::from(next_signal - signal.0));
                 match declares {
                     Some(k) => {
                         out.push(1);
@@ -528,13 +566,13 @@ impl Node {
                     None => out.push(0),
                 }
             }
-            NodeData::Stream { kind } => varint::put_u64(out, kind.0 as u64),
+            NodeData::Stream { kind } => varint::put_u64(out, u64::from(kind.0)),
             NodeData::Generator => {}
             NodeData::EnumTable { entries } => {
                 varint::put_u64(out, entries.len() as u64);
                 for (l, v) in entries {
-                    varint::put_u64(out, l.0 as u64);
-                    varint::put_u64(out, v.0 as u64);
+                    varint::put_u64(out, u64::from(l.0));
+                    varint::put_u64(out, u64::from(v.0));
                 }
             }
         }
@@ -629,6 +667,7 @@ pub struct Hierarchy {
 }
 
 impl Hierarchy {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -677,14 +716,13 @@ impl Hierarchy {
     pub fn push(&mut self, node: Node) -> NodeId {
         let id = NodeId(self.len() as u32);
         self.kind.push(node.kind() as u8);
-        self.parent
-            .push(node.parent.map(|p| p.0).unwrap_or(NO_NODE));
+        self.parent.push(node.parent.map_or(NO_NODE, |p| p.0));
         self.name.push(node.name.0);
         let (w0, w1) = match node.data {
             NodeData::Scope {
                 scope_type,
                 component,
-            } => (scope_type.code() as u32, component.0),
+            } => (u32::from(scope_type.code()), component.0),
             NodeData::Var {
                 var_type,
                 direction,
@@ -696,9 +734,9 @@ impl Hierarchy {
                     self.signal_var.push(id);
                 }
                 (
-                    var_type.code() as u32
+                    u32::from(var_type.code())
                         | (direction as u32) << 16
-                        | (declares.is_some() as u32) << 24,
+                        | u32::from(declares.is_some()) << 24,
                     signal.0,
                 )
             }
@@ -754,6 +792,7 @@ impl Hierarchy {
         self.indexed = true;
     }
 
+    #[must_use]
     pub fn node_data(&self, id: NodeId) -> NodeData {
         let i = id.0 as usize;
         let (w0, w1) = (self.w0[i], self.w1[i]);
@@ -780,6 +819,7 @@ impl Hierarchy {
         }
     }
 
+    #[must_use]
     pub fn node(&self, id: NodeId) -> Node {
         Node {
             parent: self.parent(id),
@@ -789,10 +829,12 @@ impl Hierarchy {
         }
     }
 
+    #[must_use]
     pub fn kind(&self, id: NodeId) -> NodeKind {
         NodeKind::from_u8(self.kind[id.0 as usize]).expect("stored node kind is valid")
     }
 
+    #[must_use]
     pub fn parent(&self, id: NodeId) -> Option<NodeId> {
         match self.parent[id.0 as usize] {
             NO_NODE => None,
@@ -800,6 +842,7 @@ impl Hierarchy {
         }
     }
 
+    #[must_use]
     pub fn name(&self, id: NodeId) -> StrId {
         StrId(self.name[id.0 as usize])
     }
@@ -809,21 +852,25 @@ impl Hierarchy {
         &self.children[self.child_start[i] as usize..self.child_start[i + 1] as usize]
     }
 
+    #[must_use]
     pub fn signal_of(&self, id: NodeId) -> Option<SignalId> {
         (self.kind(id) == NodeKind::Var).then(|| SignalId(self.w1[id.0 as usize]))
     }
 
+    #[must_use]
     pub fn enum_entries(&self, id: NodeId) -> Option<&[(StrId, StrId)]> {
         (self.kind(id) == NodeKind::EnumTable)
             .then(|| self.enum_tables[self.w0[id.0 as usize] as usize].as_slice())
     }
 
+    #[must_use]
     pub fn attrs(&self, id: NodeId) -> &[(StrId, Value)] {
         let a = self.attr_node.partition_point(|&n| n < id.0);
         let b = self.attr_node.partition_point(|&n| n <= id.0);
         &self.attr_kv[a..b]
     }
 
+    #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         use std::mem::size_of;
         (self.kind.capacity()
@@ -851,14 +898,17 @@ impl Hierarchy {
                 .sum::<usize>()) as u64
     }
 
+    #[must_use]
     pub fn attr_count(&self) -> usize {
         self.attr_kv.len()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.kind.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.kind.is_empty()
     }
@@ -880,16 +930,18 @@ impl Hierarchy {
         self.children[a..b].iter().map(|&c| NodeId(c))
     }
 
+    #[must_use]
     pub fn signal_kind(&self, s: SignalId) -> Option<SignalKind> {
         self.signals.get(s.0 as usize).copied()
     }
 
+    #[must_use]
     pub fn signal_var_type(&self, s: SignalId) -> Option<VarType> {
         let node = self.signal_var.get(s.0 as usize)?;
         Some(VarType::from_code(self.w0[node.0 as usize] as u16))
     }
 
-    pub fn ids(&self) -> impl Iterator<Item = NodeId> {
+    pub fn ids(&self) -> impl Iterator<Item = NodeId> + use<> {
         (0..self.len() as u32).map(NodeId)
     }
 
@@ -897,7 +949,7 @@ impl Hierarchy {
         self.kind
             .iter()
             .enumerate()
-            .filter(move |(_, &k)| k == kind as u8)
+            .filter(move |&(_, &k)| k == kind as u8)
             .map(|(i, _)| NodeId(i as u32))
     }
 }

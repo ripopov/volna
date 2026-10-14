@@ -19,6 +19,7 @@ pub struct Kinds(u8);
 impl Kinds {
     pub const NONE: Kinds = Kinds(0);
 
+    #[must_use]
     pub fn of(kind: ValueKind) -> Self {
         Kinds(match kind {
             ValueKind::Normal => 1,
@@ -29,18 +30,22 @@ impl Kinds {
         })
     }
 
+    #[must_use]
     pub fn with(self, kind: ValueKind) -> Self {
         Kinds(self.0 | Self::of(kind).0)
     }
 
+    #[must_use]
     pub fn union(self, other: Kinds) -> Self {
         Kinds(self.0 | other.0)
     }
 
+    #[must_use]
     pub fn has(self, kind: ValueKind) -> bool {
         self.0 & Self::of(kind).0 != 0
     }
 
+    #[must_use]
     pub fn only_undef(self) -> bool {
         self == Self::of(ValueKind::Undef)
     }
@@ -106,6 +111,7 @@ impl<'a> KindReader<'a> {
     }
 }
 
+#[must_use]
 pub fn activity_alpha(changes: usize) -> f32 {
     let n = changes.max(2) as f32;
     0.30 + 0.45 * (n.log2() / 6.0).min(1.0)
@@ -255,7 +261,7 @@ mod tests {
         let k = read.column(Some(3), 8);
         assert!(k.has(ValueKind::Normal) && !k.has(ValueKind::Undef));
         assert!(read.column(Some(46), 53).has(ValueKind::Undef));
-        assert!(read.column(None, 0) == Kinds::of(ValueKind::Normal));
+        assert_eq!(read.column(None, 0), Kinds::of(ValueKind::Normal));
         assert!(read.column(Some(10), 50).has(ValueKind::Undef));
         assert!(Kinds::of(ValueKind::Undef).only_undef());
         assert!(

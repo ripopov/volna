@@ -31,7 +31,7 @@ impl Source {
             } => axis
                 .as_ref()
                 .map_or_else(|| histories[0].time(row as usize), |a| a[row as usize]),
-            _ => unreachable!(),
+            Self::Generator(_) => unreachable!(),
         }
     }
 
@@ -165,7 +165,10 @@ fn values(a: ValueView<'_>, b: ValueView<'_>) -> (Ordering, bool) {
 }
 
 fn attributes(a: &AttributeValue, b: &AttributeValue) -> (Ordering, bool) {
-    use AttributeValue::*;
+    use AttributeValue::{
+        Bool, Bytes, Enum, F64, Fixed, I64, List, Logic, Map, Null, Pointer, Text, Time, U64,
+        UFixed,
+    };
     let tag = |a: &AttributeValue| match a {
         Null => 0,
         Bool(_) => 1,
@@ -214,10 +217,10 @@ fn attributes(a: &AttributeValue, b: &AttributeValue) -> (Ordering, bool) {
         }
         (Enum { value: a, name: na }, Enum { value: b, name: nb }) => a.cmp(b).then(na.cmp(nb)),
         (Fixed { raw: a, scale: sa }, Fixed { raw: b, scale: sb }) => {
-            decimal(*a as i128, *sa, *b as i128, *sb)
+            decimal(i128::from(*a), *sa, i128::from(*b), *sb)
         }
         (UFixed { raw: a, scale: sa }, UFixed { raw: b, scale: sb }) => {
-            decimal(*a as i128, *sa, *b as i128, *sb)
+            decimal(i128::from(*a), *sa, i128::from(*b), *sb)
         }
         (List(a), List(b)) => sequence(a.iter(), b.iter(), |a, b| attributes(a, b).0),
         (Map(a), Map(b)) => sequence(a.iter(), b.iter(), |a, b| {
@@ -288,7 +291,7 @@ mod tests {
         assert_eq!(decimal(3, 1, 30, 0), Ordering::Equal);
         assert_eq!(decimal(-3, 1, -29, 0), Ordering::Less);
         assert_eq!(
-            decimal(u64::MAX as i128, i32::MAX, 1, i32::MIN),
+            decimal(i128::from(u64::MAX), i32::MAX, 1, i32::MIN),
             Ordering::Greater
         );
         assert_eq!(decimal(0, 100, -1, 0), Ordering::Greater);
@@ -307,7 +310,7 @@ mod tests {
 /// Installs the host's background executor before any table sorting starts.
 /// The executor must run CPU work off the UI thread and retain detached jobs.
 pub fn set_executor(spawn: impl Fn(Box<dyn FnOnce() + Send>) + Send + Sync + 'static) {
-    let _ = EXECUTOR.set(Box::new(spawn));
+    drop(EXECUTOR.set(Box::new(spawn)));
 }
 
 type Spawn = Box<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;

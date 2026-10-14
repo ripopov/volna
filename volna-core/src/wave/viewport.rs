@@ -20,6 +20,7 @@ pub struct Viewport {
 }
 
 impl Viewport {
+    #[must_use]
     pub fn fit(range: (u64, u64)) -> Self {
         let (a, b) = (range.0 as f64, range.1 as f64);
         let width = (b - a).max(1.0).max(min_width(a.abs().max(b.abs())));
@@ -29,6 +30,7 @@ impl Viewport {
         }
     }
 
+    #[must_use]
     pub fn fit_px(range: (u64, u64), width_px: f64, margin_px: f64) -> Self {
         let fit = Self::fit(range);
         let inner = width_px - 2.0 * margin_px;
@@ -42,24 +44,29 @@ impl Viewport {
         }
     }
 
+    #[must_use]
     pub fn width(&self) -> f64 {
         self.end - self.start
     }
 
+    #[must_use]
     pub fn px_per_unit(&self, width_px: f64) -> f64 {
         width_px / self.width()
     }
 
+    #[must_use]
     pub fn x_of_tick(&self, time: u64, width_px: f64) -> f64 {
         let origin = self.start.floor() as i128;
         let relative = (i128::from(time) - origin) as f64 - (self.start - origin as f64);
         relative / self.width() * width_px
     }
 
+    #[must_use]
     pub fn time_at(&self, x_px: f64, width_px: f64) -> f64 {
         self.start + x_px / width_px * self.width()
     }
 
+    #[must_use]
     pub fn x_of(&self, t: f64, width_px: f64) -> f64 {
         (t - self.start) / self.width() * width_px
     }
@@ -208,7 +215,7 @@ mod tests {
         assert_eq!(v.end, 1200.0);
         let mut v = Viewport {
             start: 10.0,
-            end: 10.0000001,
+            end: 10.000_000_1,
         };
         v.clamp((0, 1000));
         assert!((v.width() - MIN_WIDTH).abs() < 1e-9);

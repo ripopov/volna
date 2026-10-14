@@ -14,9 +14,11 @@ pub struct RowViewport {
 }
 
 impl RowViewport {
+    #[must_use]
     pub fn visible_rows(height: f32, row_height: f32) -> u64 {
         (height.max(0.0) / row_height.max(1.0)).ceil() as u64
     }
+    #[must_use]
     pub fn full_rows(height: f32, row_height: f32) -> u64 {
         ((height.max(0.0) / row_height.max(1.0)).floor() as u64).max(1)
     }
@@ -63,6 +65,7 @@ impl RowViewport {
         self.subrow_px = 0.0;
         self.clamp(rows, height, row_height);
     }
+    #[must_use]
     pub fn row_at(&self, y: f32, rows: u64, row_height: f32) -> Option<u64> {
         if !y.is_finite() || y < 0.0 {
             return None;
@@ -70,6 +73,7 @@ impl RowViewport {
         let local = ((y + self.subrow_px) / row_height.max(1.0)).floor() as u64;
         self.top.checked_add(local).filter(|&row| row < rows)
     }
+    #[must_use]
     pub fn y_of(&self, row: u64, row_height: f32) -> f32 {
         let delta = if row >= self.top {
             (row - self.top) as f32

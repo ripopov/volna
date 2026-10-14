@@ -412,7 +412,7 @@ fn ungroup_keeps_rows_in_place_and_remove_takes_them() {
         outline(&app, id),
         ["clk", "rst_n", "awvalid", "wdata", "bvalid", "pc"]
     );
-    assert!(app.doc.pending_count() == 0);
+    assert_eq!(app.doc.pending_count(), 0);
 }
 
 #[test]
@@ -425,7 +425,7 @@ fn row_commands_take_the_subtree_and_value_commands_reach_its_signals() {
             .items()
             .iter()
             .filter_map(|e| e.signal())
-            .map(|s| s.format_id())
+            .map(volna_core::wave::DisplayedSignal::format_id)
             .collect()
     };
     let before = formats(&app);

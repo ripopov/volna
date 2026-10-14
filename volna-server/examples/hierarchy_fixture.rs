@@ -1,6 +1,6 @@
 //! Provision a deterministic multi-page recording for headless hierarchy transfer checks.
 
-use vtr::*;
+use vtr::{Direction, ScopeType, SignalKind, VarType, Writer};
 
 fn main() -> anyhow::Result<()> {
     let path = std::env::args_os()

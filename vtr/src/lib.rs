@@ -40,4 +40,4 @@ pub use signal::{Logic, LogicStates, OwnedSignalValue, SignalValue};
 pub use strings::StrId;
 pub use txblock::{Relation, Transaction, TxAttr, TxEvent, TxId, TxKind, TxStage, TxStatus};
 pub use value::Value;
-pub use writer::{recover, CrashState, Sealer, Writer, WriterBuilder, WriterOptions, WriterStats};
+pub use writer::{CrashState, Sealer, Writer, WriterBuilder, WriterOptions, WriterStats, recover};

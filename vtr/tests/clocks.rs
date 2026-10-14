@@ -70,9 +70,9 @@ fn fixed_changing_gated_and_single_edge_clocks() {
                 Call::Run(20272, 500),
                 Call::Stop(50000),
                 Call::Run(50772, 1000),
-                Call::Stop(100000),
+                Call::Stop(100_000),
             ],
-            120000,
+            120_000,
             vec![(400, 19772, 334), (20272, 49772, 500), (50772, 99772, 1000)],
             false,
         ),
@@ -211,7 +211,7 @@ fn stretches_live_in_their_own_blocks_and_survive_recovery() {
     let top = w.add_scope(None, "top", ScopeType::Module, "top").unwrap();
     let clk = w.add_clock(Some(top), "clk").unwrap();
     let pipe = w.add_stream(Some(top), "pipeline", "PIPELINE").unwrap();
-    let gen = w.add_generator(pipe, "insn").unwrap();
+    let r#gen = w.add_generator(pipe, "insn").unwrap();
     let (_, sig) = w
         .add_var(
             Some(top),
@@ -228,7 +228,7 @@ fn stretches_live_in_their_own_blocks_and_survive_recovery() {
     for t in 0..100u64 {
         w.set_time(t).unwrap();
         w.emit_u64(sig, t).unwrap();
-        let tx = w.begin_tx(gen, t).unwrap();
+        let tx = w.begin_tx(r#gen, t).unwrap();
         w.end_tx(tx, t + 1, TxStatus::Ok).unwrap();
         if t == 40 {
             w.clock_stop(clk, t).unwrap();

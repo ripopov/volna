@@ -84,7 +84,7 @@ enum Rows {
     Signals {
         histories: Vec<Arc<dyn SignalHistory>>,
         axis: Option<Arc<[u64]>>,
-        _axis_reservation: Option<Arc<Reservation>>,
+        axis_reservation: Option<Arc<Reservation>>,
     },
 }
 
@@ -155,10 +155,11 @@ pub struct TableModel {
     signal_results: HashMap<Traced<SignalRef>, Result<Arc<dyn SignalHistory>, String>>,
     attached: bool,
     budget: MemoryBudget,
-    _panel_reservation: Option<Reservation>,
+    panel_reservation: Option<Reservation>,
 }
 
 impl TableModel {
+    #[must_use]
     pub fn new(source: TableSource, link: Link, budget: MemoryBudget) -> Self {
         let columns = match &source {
             TableSource::Generator(_) => ColumnSet::transactions_default(),
@@ -193,10 +194,11 @@ impl TableModel {
             signal_results: HashMap::new(),
             attached: false,
             budget,
-            _panel_reservation: None,
+            panel_reservation: None,
         }
     }
 
+    #[must_use]
     pub fn clone_view(&self) -> Self {
         let mut clone = Self::new(self.source.clone(), self.nav.link, self.budget.clone());
         clone.columns = self.columns.clone();
@@ -213,10 +215,10 @@ impl TableModel {
         if self.attached {
             return Ok(());
         }
-        if self._panel_reservation.is_none() {
+        if self.panel_reservation.is_none() {
             match self.budget.reserve(PANEL_BYTES) {
                 Ok(reservation) => {
-                    self._panel_reservation = Some(reservation);
+                    self.panel_reservation = Some(reservation);
                     if matches!(self.state, TableState::Refused(_)) {
                         self.state = TableState::Loading;
                     }
@@ -284,19 +286,21 @@ impl TableModel {
 
     pub(crate) fn park(&mut self, doc: &mut Document) {
         self.detach(doc);
-        self._panel_reservation = None;
+        self.panel_reservation = None;
     }
 
+    #[must_use]
     pub fn signal_demand(&self) -> Box<dyn Iterator<Item = Traced<SignalRef>> + '_> {
         if !self.attached {
             return Box::new(std::iter::empty());
         }
         match &self.source {
             TableSource::Signals(sources) => Box::new(sources.iter().filter_map(|s| s.signal)),
-            _ => Box::new(std::iter::empty()),
+            TableSource::Generator(_) => Box::new(std::iter::empty()),
         }
     }
 
+    #[must_use]
     pub fn histories(&self) -> Vec<(Traced<SignalRef>, Arc<dyn SignalHistory>)> {
         self.signal_results
             .iter()
@@ -327,7 +331,7 @@ impl TableModel {
                 match doc.track(track) {
                     Some(TrackLoadState::Loading) => self.state = TableState::Loading,
                     Some(TrackLoadState::Failed(error)) => {
-                        self.state = TableState::Failed(error.clone())
+                        self.state = TableState::Failed(error.clone());
                     }
                     Some(TrackLoadState::Ready(loaded)) => {
                         let Some(generator) = loaded
@@ -432,7 +436,7 @@ impl TableModel {
             self.rows = Rows::Signals {
                 histories,
                 axis: None,
-                _axis_reservation: None,
+                axis_reservation: None,
             };
             return Ok(Some(empty));
         }
@@ -490,7 +494,7 @@ impl TableModel {
                 self.rows = Rows::Signals {
                     histories,
                     axis: Some(axis.into()),
-                    _axis_reservation: Some(Arc::new(reservation)),
+                    axis_reservation: Some(Arc::new(reservation)),
                 };
                 return Ok(Some(empty));
             };
@@ -533,6 +537,7 @@ impl TableModel {
         }
     }
 
+    #[must_use]
     pub fn is_animating(&self) -> bool {
         self.axis_build.is_some() || self.nav.is_animating() || self.sorting()
     }
@@ -549,10 +554,12 @@ impl TableModel {
         usize::try_from(ordinal).ok()
     }
 
+    #[must_use]
     pub fn applied_sort(&self) -> Option<super::sort::Sort> {
         self.sort_order.as_ref().map(|o| o.sort)
     }
 
+    #[must_use]
     pub fn sorting(&self) -> bool {
         if self.sort_job.is_some() {
             return true;
@@ -574,6 +581,7 @@ impl TableModel {
         }
     }
 
+    #[must_use]
     pub fn can_sort_column(&self, column: usize) -> bool {
         if column >= self.widths.len()
             || !matches!(self.state, TableState::Ready | TableState::Empty)
@@ -665,11 +673,11 @@ impl TableModel {
                 Rows::Signals {
                     histories,
                     axis,
-                    _axis_reservation,
+                    axis_reservation,
                 } => super::sort::Source::Signals {
                     histories: histories.clone(),
                     axis: axis.clone(),
-                    _reservation: _axis_reservation.clone(),
+                    _reservation: axis_reservation.clone(),
                 },
                 Rows::None => return changed,
             };
@@ -682,6 +690,7 @@ impl TableModel {
         changed
     }
 
+    #[must_use]
     pub fn len(&self) -> u64 {
         match &self.rows {
             Rows::None => 0,
@@ -695,10 +704,12 @@ impl TableModel {
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[must_use]
     pub fn status(&self) -> String {
         if let Some(error) = &self.sort_error {
             return format!("Sort failed: {error} · previous order retained");
@@ -716,6 +727,7 @@ impl TableModel {
         }
     }
 
+    #[must_use]
     pub fn row_time(&self, ordinal: u64) -> Option<u64> {
         let index = self.source_index(ordinal)?;
         match &self.rows {
@@ -751,15 +763,15 @@ impl TableModel {
                     histories, axis, ..
                 },
                 RowIdentity::SignalTime(time),
-            ) => axis
-                .as_ref()
-                .map(|a| a.binary_search(time).ok().map(|x| x as u64))
-                .unwrap_or_else(|| {
+            ) => axis.as_ref().map_or_else(
+                || {
                     histories.first().and_then(|h| {
                         let i = h.index_at(*time)?;
                         (h.time(i) == *time).then_some(i as u64)
                     })
-                }),
+                },
+                |a| a.binary_search(time).ok().map(|x| x as u64),
+            ),
             _ => None,
         }?;
         if let Some(order) = &self.sort_order {
@@ -768,6 +780,7 @@ impl TableModel {
         Some(source_row)
     }
 
+    #[must_use]
     pub fn selected_ordinal(&self) -> Option<u64> {
         self.selected
             .as_ref()
@@ -956,6 +969,7 @@ impl TableModel {
         })
     }
 
+    #[must_use]
     pub fn resizing_column(&self) -> Option<usize> {
         match self.drag {
             Some(TableDrag::Column { source_index, .. }) => Some(source_index),
@@ -1036,10 +1050,10 @@ impl TableModel {
     }
 
     fn retry(&mut self, doc: &mut Document) -> bool {
-        if self._panel_reservation.is_none() {
+        if self.panel_reservation.is_none() {
             match self.budget.reserve(PANEL_BYTES) {
                 Ok(reservation) => {
-                    self._panel_reservation = Some(reservation);
+                    self.panel_reservation = Some(reservation);
                     self.state = TableState::Loading;
                 }
                 Err(error) => {
@@ -1189,6 +1203,7 @@ impl TableModel {
         }
     }
 
+    #[must_use]
     pub fn dragging(&self) -> bool {
         self.drag.is_some()
     }
@@ -1384,6 +1399,7 @@ impl TableModel {
         }
     }
 
+    #[must_use]
     pub fn column_title(&self, source_index: usize) -> &str {
         match &self.source {
             TableSource::Generator(_) => TransactionColumn::ALL
@@ -1547,6 +1563,7 @@ impl TableModel {
         }
     }
 
+    #[must_use]
     pub fn prepared_row(&self, ordinal: u64) -> Option<&PreparedRow> {
         ordinal
             .checked_sub(self.window.start)
@@ -1767,10 +1784,10 @@ fn normalized_u64(offset: f32, track: f32, maximum: u64) -> u64 {
         return 0;
     }
     const UNITS_PER_PIXEL: f64 = 1024.0;
-    let denominator = ((track as f64 * UNITS_PER_PIXEL).round() as u64).max(1);
+    let denominator = ((f64::from(track) * UNITS_PER_PIXEL).round() as u64).max(1);
     let numerator =
-        ((offset.clamp(0.0, track) as f64 * UNITS_PER_PIXEL).round() as u64).min(denominator);
-    ((maximum as u128 * numerator as u128) / denominator as u128) as u64
+        ((f64::from(offset.clamp(0.0, track)) * UNITS_PER_PIXEL).round() as u64).min(denominator);
+    ((u128::from(maximum) * u128::from(numerator)) / u128::from(denominator)) as u64
 }
 
 pub(crate) enum Prop {
@@ -2270,7 +2287,7 @@ mod tests {
             let actual: Vec<_> = (0..3)
                 .map(|rank| match model.identity_and_time(rank).unwrap().0 {
                     RowIdentity::Transaction(id) => id.0,
-                    _ => unreachable!(),
+                    RowIdentity::SignalTime(_) => unreachable!(),
                 })
                 .collect();
             assert_eq!(actual, expected, "column {column}");
@@ -2525,7 +2542,7 @@ mod tests {
         assert_eq!(normalized_u64(997.0, 997.0, u64::MAX), u64::MAX);
         assert_eq!(
             normalized_u64(498.5, 997.0, u64::MAX),
-            (u64::MAX as u128 / 2) as u64
+            (u128::from(u64::MAX) / 2) as u64
         );
     }
 

@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 use vtr::{NodeData, NodeId, Reader, TxQuery, Value};
 fn fmt_value(r: &Reader, v: &Value) -> String {
@@ -9,10 +11,13 @@ fn fmt_value(r: &Reader, v: &Value) -> String {
         Value::U64(u) => u.to_string(),
         Value::F64(f) => f.to_string(),
         Value::Str(s) => format!("{:?}", r.str(*s)),
-        Value::Bytes(b) => format!(
-            "0x{}",
-            b.iter().map(|x| format!("{x:02x}")).collect::<String>()
-        ),
+        Value::Bytes(b) => {
+            let mut text = String::from("0x");
+            for byte in b {
+                write!(text, "{byte:02x}").unwrap();
+            }
+            text
+        }
         Value::Bits { width, data } => vtr::SignalValue::Bits {
             width: *width,
             states: 2,
@@ -98,10 +103,13 @@ pub fn info(path: &Path) -> Result<()> {
             vtr::NodeKind::Var => vars += 1,
             vtr::NodeKind::Stream => streams += 1,
             vtr::NodeKind::Generator => gens += 1,
-            _ => {}
+            vtr::NodeKind::EnumTable => {}
         }
     }
-    println!("hierarchy:   {scopes} scopes, {vars} vars ({} signals), {streams} streams, {gens} generators", r.signal_count());
+    println!(
+        "hierarchy:   {scopes} scopes, {vars} vars ({} signals), {streams} streams, {gens} generators",
+        r.signal_count()
+    );
     println!("strings:     {}", r.strings().len());
     println!("signal blocks: {}", r.block_count());
     {
@@ -128,7 +136,7 @@ pub fn info(path: &Path) -> Result<()> {
         r.log_sites().len()
     );
     println!("blackout:    {} transitions", r.blackout().len());
-    let mut by_kind: std::collections::BTreeMap<u32, (usize, u64)> = Default::default();
+    let mut by_kind: std::collections::BTreeMap<u32, (usize, u64)> = BTreeMap::default();
     for e in r.sections() {
         let x = by_kind.entry(e.kind).or_default();
         x.0 += 1;
@@ -287,7 +295,7 @@ pub fn transactions(
         ..Default::default()
     };
     let show = |tx: &vtr::Transaction| {
-        let gen = r.name(tx.generator);
+        let r#gen = r.name(tx.generator);
         let stream = r
             .generator_stream(tx.generator)
             .map(|s| r.full_path(s, "."))
@@ -320,7 +328,7 @@ pub fn transactions(
                 r.str(s.name),
                 r.str(s.lane),
                 s.begin,
-                s.end.map(|e| e.to_string()).unwrap_or("open".into()),
+                s.end.map_or("open".into(), |e| e.to_string()),
                 fmt_value(&r, &Value::Map(s.attrs.clone()))
             );
         }

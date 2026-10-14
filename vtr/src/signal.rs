@@ -19,11 +19,7 @@ pub enum Logic {
 
 impl From<bool> for Logic {
     fn from(value: bool) -> Self {
-        if value {
-            Self::One
-        } else {
-            Self::Zero
-        }
+        if value { Self::One } else { Self::Zero }
     }
 }
 
@@ -48,11 +44,11 @@ pub const LDASH: u8 = 8;
 pub const CODE_ASCII: [u8; 9] = *b"01xzuwlh-";
 
 #[inline]
+#[must_use]
 pub fn code_from_ascii(c: u8) -> u8 {
     match c {
         b'0' => L0,
         b'1' => L1,
-        b'x' | b'X' => LX,
         b'z' | b'Z' => LZ,
         b'u' | b'U' => LU,
         b'w' | b'W' => LW,
@@ -64,6 +60,7 @@ pub fn code_from_ascii(c: u8) -> u8 {
 }
 
 #[inline]
+#[must_use]
 pub fn states_for_code(code: u8) -> u8 {
     match code {
         0 | 1 => 2,
@@ -73,6 +70,7 @@ pub fn states_for_code(code: u8) -> u8 {
 }
 
 #[inline]
+#[must_use]
 pub fn get_code(data: &[u8], states: u8, i: usize) -> u8 {
     match states {
         2 => (data[i >> 3] >> (i & 7)) & 1,
@@ -240,6 +238,7 @@ pub fn trim_top_bits(out: &mut [u8], width: u32) {
     }
 }
 
+#[must_use]
 pub fn is_two_state(data: &[u8], width: u32, states: u8) -> bool {
     match states {
         2 => true,
@@ -294,7 +293,8 @@ pub enum SignalValue<'a> {
     VarLen(&'a [u8]),
 }
 
-impl<'a> SignalValue<'a> {
+impl SignalValue<'_> {
+    #[must_use]
     pub fn to_ascii(&self) -> String {
         match *self {
             SignalValue::Bits {
@@ -306,11 +306,12 @@ impl<'a> SignalValue<'a> {
                 unpack_ascii(data, width, states, &mut v);
                 String::from_utf8(v).unwrap()
             }
-            SignalValue::Real(r) => format!("{}", r),
+            SignalValue::Real(r) => format!("{r}"),
             SignalValue::VarLen(b) => String::from_utf8_lossy(b).into_owned(),
         }
     }
 
+    #[must_use]
     pub fn as_u64(&self) -> Option<u64> {
         match *self {
             SignalValue::Bits {
@@ -333,6 +334,7 @@ impl<'a> SignalValue<'a> {
         }
     }
 
+    #[must_use]
     pub fn to_owned(&self) -> OwnedSignalValue {
         match *self {
             SignalValue::Bits {
@@ -362,6 +364,7 @@ pub enum OwnedSignalValue {
 }
 
 impl OwnedSignalValue {
+    #[must_use]
     pub fn borrow(&self) -> SignalValue<'_> {
         match self {
             OwnedSignalValue::Bits {
@@ -377,6 +380,7 @@ impl OwnedSignalValue {
             OwnedSignalValue::VarLen(b) => SignalValue::VarLen(b),
         }
     }
+    #[must_use]
     pub fn to_ascii(&self) -> String {
         self.borrow().to_ascii()
     }
@@ -451,15 +455,15 @@ mod tests {
         assert_eq!(n, vec![0b1011]);
 
         let mut buf = [0u8; 5];
-        pack_words32(&[0xdeadbeef, 0x1], 33, &mut buf);
+        pack_words32(&[0xdead_beef, 0x1], 33, &mut buf);
         assert_eq!(buf, [0xef, 0xbe, 0xad, 0xde, 0x01]);
-        pack_words32(&[0xffffffff], 5, &mut buf);
+        pack_words32(&[0xffff_ffff], 5, &mut buf);
         assert_eq!(buf[0], 0x1f);
         let v = SignalValue::Bits {
             width: 33,
             states: 2,
             data: &[0xef, 0xbe, 0xad, 0xde, 0x01],
         };
-        assert_eq!(v.as_u64(), Some(0x1deadbeef));
+        assert_eq!(v.as_u64(), Some(0x0001_dead_beef));
     }
 }

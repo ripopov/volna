@@ -1,6 +1,6 @@
 //! FST waveforms converted through the shared trace session API.
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use std::collections::{BTreeMap, BinaryHeap};
 use std::path::Path;
 use volna_trace::data::{Direction, SignalShape, WaveValue};

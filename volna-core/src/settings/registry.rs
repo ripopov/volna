@@ -19,6 +19,7 @@ impl Hosts {
     pub const ALL: Hosts = Hosts(7);
     pub const NATIVE_WEB: Hosts = Hosts(3);
 
+    #[must_use]
     pub fn contains(self, host: Host) -> bool {
         let bit = match host {
             Host::Native => 1,
@@ -37,6 +38,7 @@ pub enum Apply {
 }
 
 impl Apply {
+    #[must_use]
     pub fn badge(self) -> Option<&'static str> {
         match self {
             Apply::Live => None,
@@ -66,6 +68,7 @@ impl Page {
         Page::Remote,
     ];
 
+    #[must_use]
     pub fn id(self) -> &'static str {
         match self {
             Page::Appearance => "appearance",
@@ -76,6 +79,7 @@ impl Page {
             Page::Remote => "remote",
         }
     }
+    #[must_use]
     pub fn title(self) -> &'static str {
         match self {
             Page::Appearance => "Appearance",
@@ -86,6 +90,7 @@ impl Page {
             Page::Remote => "Remote",
         }
     }
+    #[must_use]
     pub fn description(self) -> &'static str {
         match self {
             Page::Appearance => "Theme and chrome.",
@@ -96,6 +101,7 @@ impl Page {
             Page::Remote => "The server for traces on a remote host.",
         }
     }
+    #[must_use]
     pub fn icon(self) -> crate::icons::IconName {
         use crate::icons::IconName;
         match self {
@@ -143,6 +149,7 @@ pub enum Literal {
 }
 
 impl Literal {
+    #[must_use]
     pub fn value(self) -> Value {
         match self {
             Literal::Bool(b) => Value::Bool(b),
@@ -168,10 +175,12 @@ pub struct Spec {
 }
 
 impl Spec {
+    #[must_use]
     pub fn available(&self, host: Host) -> bool {
         self.hosts.contains(host)
     }
 
+    #[must_use]
     pub fn choices(&self, host: Host) -> Vec<Choice> {
         match self.kind {
             Kind::Enum(choices) => choices
@@ -185,7 +194,7 @@ impl Spec {
 
     pub fn validate(&self, value: &Value, host: Host, themes: &[String]) -> Result<(), String> {
         match (self.kind, value) {
-            (Kind::Bool, Value::Bool(_)) => Ok(()),
+            (Kind::Bool, Value::Bool(_)) | (Kind::Text, Value::Text(_)) => Ok(()),
             (Kind::Bool, _) => Err("expected true or false".into()),
             (Kind::Integer { min, max, .. }, Value::Integer(v)) => {
                 if (min..=max).contains(v) {
@@ -204,8 +213,6 @@ impl Spec {
                 }
             }
             (Kind::Number { .. }, _) => Err("expected a number".into()),
-            (Kind::Text, Value::Text(_)) => Ok(()),
-            (Kind::Text, _) => Err("expected a string".into()),
             (Kind::Enum(_), Value::Text(v)) => {
                 let choices = self.choices(host);
                 if choices.iter().any(|c| c.value == v) {
@@ -221,7 +228,6 @@ impl Spec {
                     ))
                 }
             }
-            (Kind::Enum(_), _) => Err("expected a string".into()),
             (Kind::Theme, Value::Text(v)) => {
                 if crate::theme::builtin::is_builtin(v) || themes.iter().any(|t| t == v) {
                     Ok(())
@@ -229,10 +235,11 @@ impl Spec {
                     Err(format!("unknown theme \"{v}\""))
                 }
             }
-            (Kind::Theme, _) => Err("expected a string".into()),
+            (Kind::Text | Kind::Enum(_) | Kind::Theme, _) => Err("expected a string".into()),
         }
     }
 
+    #[must_use]
     pub fn schema(&self, host: Option<Host>) -> serde_json::Value {
         use serde_json::json;
         let mut out = match self.kind {
@@ -533,6 +540,7 @@ pub static REGISTRY: &[Spec] = &[
     },
 ];
 
+#[must_use]
 pub fn spec(id: &str) -> Option<&'static Spec> {
     REGISTRY.iter().find(|s| s.id == id)
 }

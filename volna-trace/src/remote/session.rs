@@ -55,7 +55,7 @@ impl Session for RemoteSession {
     fn memory_budget(&self) -> Option<super::memory::MemoryBudget> {
         self.reservations
             .first()
-            .map(|reservation| reservation.budget())
+            .map(super::memory::Reservation::budget)
     }
 
     fn remote_id(&self) -> Option<u64> {
@@ -102,7 +102,7 @@ impl Session for RemoteSession {
             index.signal_count() as usize == self.info().signal_count,
             "activity signal count mismatch"
         );
-        let _ = self.activity.set(index);
+        drop(self.activity.set(index));
         Ok(())
     }
     fn tracks(&self) -> &[Track] {

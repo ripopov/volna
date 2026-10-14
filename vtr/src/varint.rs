@@ -17,16 +17,19 @@ pub fn put_i64(out: &mut Vec<u8>, v: i64) {
 }
 
 #[inline]
+#[must_use]
 pub fn zigzag(v: i64) -> u64 {
     ((v << 1) ^ (v >> 63)) as u64
 }
 
 #[inline]
+#[must_use]
 pub fn unzigzag(v: u64) -> i64 {
     ((v >> 1) as i64) ^ -((v & 1) as i64)
 }
 
 #[inline]
+#[must_use]
 pub fn len_u64(v: u64) -> usize {
     if v == 0 {
         1
@@ -43,16 +46,19 @@ pub struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     #[inline]
+    #[must_use]
     pub fn new(buf: &'a [u8]) -> Self {
         Reader { buf, pos: 0 }
     }
 
     #[inline]
+    #[must_use]
     pub fn remaining(&self) -> usize {
         self.buf.len() - self.pos
     }
 
     #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pos >= self.buf.len()
     }
@@ -65,7 +71,7 @@ impl<'a> Reader<'a> {
             let b = buf[pos];
             if b < 0x80 {
                 self.pos = pos + 1;
-                return Ok(b as u64);
+                return Ok(u64::from(b));
             }
         }
         let mut result: u64 = 0;
@@ -79,7 +85,7 @@ impl<'a> Reader<'a> {
             if shift >= 64 {
                 return Err(Error::Corrupt("varint overflow"));
             }
-            result |= ((b & 0x7f) as u64) << shift;
+            result |= u64::from(b & 0x7f) << shift;
             if b < 0x80 {
                 break;
             }
@@ -172,7 +178,7 @@ mod tests {
             128,
             300,
             1 << 20,
-            u32::MAX as u64,
+            u64::from(u32::MAX),
             u64::MAX,
             (1 << 63) + 7,
         ];

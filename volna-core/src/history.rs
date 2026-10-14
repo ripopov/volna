@@ -158,6 +158,7 @@ pub struct Splice {
 }
 
 impl Splice {
+    #[must_use]
     pub fn in_place(&self) -> bool {
         self.remove == self.insert.len()
     }
@@ -324,10 +325,12 @@ impl Step {
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.edits.is_empty()
     }
 
+    #[must_use]
     pub fn bytes(&self) -> usize {
         self.bytes
     }
@@ -440,10 +443,12 @@ impl History {
         };
     }
 
+    #[must_use]
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
+    #[must_use]
     pub fn evicted(&self) -> u64 {
         self.evicted
     }
@@ -453,38 +458,47 @@ impl History {
         self.evict();
     }
 
+    #[must_use]
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
 
+    #[must_use]
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
 
+    #[must_use]
     pub fn undo_label(&self) -> Option<&str> {
         self.undo.back().map(|s| s.label.as_str())
     }
 
+    #[must_use]
     pub fn redo_label(&self) -> Option<&str> {
         self.redo.last().map(|s| s.label.as_str())
     }
 
+    #[must_use]
     pub fn undo_steps(&self) -> impl DoubleEndedIterator<Item = &Step> {
         self.undo.iter()
     }
 
+    #[must_use]
     pub fn redo_steps(&self) -> impl DoubleEndedIterator<Item = &Step> {
         self.redo.iter().rev()
     }
 
+    #[must_use]
     pub fn bytes(&self) -> usize {
         self.bytes
     }
 
+    #[must_use]
     pub fn max_bytes(&self) -> usize {
         self.max_bytes
     }
 
+    #[must_use]
     pub fn is_recording(&self) -> bool {
         self.open.is_some()
     }
@@ -735,7 +749,7 @@ mod tests {
         );
         step_with(
             &mut h,
-            t + Duration::from_millis(2000),
+            t + Duration::from_secs(2),
             Edit::Markers {
                 markers: markers(&[3]),
                 attached: None,
@@ -786,7 +800,7 @@ mod tests {
         h.push(step);
         step_with(
             &mut h,
-            t + Duration::from_secs(60),
+            t + Duration::from_mins(1),
             Edit::Markers {
                 markers: markers(&[2]),
                 attached: None,

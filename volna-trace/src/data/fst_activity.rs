@@ -64,7 +64,7 @@ fn varint(b: &[u8], p: &mut usize) -> Result<u64> {
         if shift == 63 && byte > 1 {
             return corrupt("FST varint overflow");
         }
-        v |= ((byte & 0x7f) as u64) << shift;
+        v |= u64::from(byte & 0x7f) << shift;
         if byte & 0x80 == 0 {
             return Ok(v);
         }
@@ -80,7 +80,7 @@ fn svarint(b: &[u8], p: &mut usize) -> Result<i64> {
         if shift == 63 && byte != 0 && byte != 0x7f {
             return corrupt("FST signed varint overflow");
         }
-        v |= ((byte & 0x7f) as u64) << shift;
+        v |= u64::from(byte & 0x7f) << shift;
         if byte & 0x80 == 0 {
             if shift + 7 < 64 && byte & 0x40 != 0 {
                 v |= u64::MAX << (shift + 7);
@@ -109,11 +109,13 @@ fn inflate(input: &[u8], len: usize, out: &mut Vec<u8>) -> Result<()> {
 impl FstTrace {
     pub fn open(path: impl AsRef<Path>) -> Result<FstTrace> {
         let file = std::fs::File::open(path.as_ref())?;
+        // SAFETY: FST recordings must remain immutable while mapped; the mapping owns its lifetime.
         let map = unsafe { Mmap::map(&file)? };
         if map.first() == Some(&BL_GZIP_WRAPPER) {
             let (unwrapped, crc) = unwrap_gzip(&map)?;
             let length = map.len() as u64;
             let copy = std::fs::File::open(&unwrapped)?;
+            // SAFETY: The completed private temporary file is retained by the parsed trace and is never modified.
             let inner = unsafe { Mmap::map(&copy)? };
             let mut t = FstTrace::parse(inner, Some(unwrapped))?;
             t.identity = Identity {
@@ -128,6 +130,7 @@ impl FstTrace {
 
     pub fn identity_of(path: impl AsRef<Path>) -> Result<Identity> {
         let file = std::fs::File::open(path.as_ref())?;
+        // SAFETY: FST recordings must remain immutable while mapped; the mapping owns its lifetime.
         let map = unsafe { Mmap::map(&file)? };
         if map.first() == Some(&BL_GZIP_WRAPPER) {
             return Ok(Identity {
@@ -214,10 +217,12 @@ impl FstTrace {
         })
     }
 
+    #[must_use]
     pub fn identity(&self) -> Identity {
         self.identity
     }
 
+    #[must_use]
     pub fn signal_count(&self) -> u32 {
         self.geometry.len() as u32
     }
@@ -258,7 +263,7 @@ impl FstTrace {
                 if hit[i] {
                     continue;
                 }
-                let Some((off, len)) = v.chain_of(&w, s.0) else {
+                let Some((off, len)) = View::chain_of(&w, s.0) else {
                     continue;
                 };
                 let chain = v.decode(off, len, &mut w.chain)?;
@@ -355,7 +360,7 @@ fn read_geometry(sec: &[u8]) -> Result<Vec<u32>> {
         inflate(data, ulen as usize, &mut buf)?;
         &buf
     };
-    if count > raw.len() as u64 || count > u32::MAX as u64 {
+    if count > raw.len() as u64 || count > u64::from(u32::MAX) {
         return corrupt("FST geometry count exceeds its data");
     }
     let mut p = 0;
@@ -472,7 +477,7 @@ struct View<'a> {
 }
 
 impl View<'_> {
-    fn chain_of(&self, w: &Scratch, signal: u32) -> Option<(u32, u32)> {
+    fn chain_of(w: &Scratch, signal: u32) -> Option<(u32, u32)> {
         let find = |s: u32| {
             w.chains
                 .binary_search_by_key(&s, |c| c.0)
@@ -665,7 +670,7 @@ impl Source for FstTrace {
 
     fn worker(&self) {}
 
-    fn scan(&self, _: &mut (), i: usize, scan: &mut BlockScan) -> Result<()> {
+    fn scan(&self, (): &mut (), i: usize, scan: &mut BlockScan) -> Result<()> {
         let mut w = Scratch::default();
         let v = self.view(i, &mut w)?;
         let (times, chains, aliases, buf) = (&w.times, &w.chains, &w.aliases, &mut w.chain);
@@ -756,6 +761,7 @@ mod tests {
     fn failed_parse_removes_the_unwrapped_temporary_file() {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), b"invalid FST").unwrap();
+        // SAFETY: FST recordings must remain immutable while mapped; the mapping owns its lifetime.
         let map = unsafe { Mmap::map(file.as_file()).unwrap() };
         let temporary = file.into_temp_path();
         let path = temporary.to_path_buf();

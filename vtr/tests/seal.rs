@@ -1,7 +1,7 @@
 //! Sealing a writer from another thread: the file keeps exactly what reached the encoder
 //! and ends complete.
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::path::{Path, PathBuf};
 use vtr::*;
 
@@ -24,7 +24,7 @@ struct Run {
     rng: StdRng,
     sigs: Vec<SignalId>,
     top: NodeId,
-    gen: NodeId,
+    r#gen: NodeId,
     site: LogSiteId,
     clk: ClockId,
     clk_running: Option<u64>,
@@ -95,7 +95,7 @@ impl Run {
             })
             .collect();
         let stream = w.add_stream(Some(top), "bus", "TRANSACTOR").unwrap();
-        let gen = w.add_generator(stream, "rd").unwrap();
+        let r#gen = w.add_generator(stream, "rd").unwrap();
         let log = w.add_stream(None, "log", LOG_STREAM_KIND).unwrap();
         let site = w
             .add_log_site(&LogSiteSpec::new(
@@ -112,7 +112,7 @@ impl Run {
             rng: StdRng::seed_from_u64(seed),
             sigs,
             top,
-            gen,
+            r#gen,
             site,
             clk,
             clk_running: None,
@@ -133,13 +133,13 @@ impl Run {
             10..=69 => {
                 let i = self.rng.gen_range(0..self.sigs.len());
                 let s = self.sigs[i];
-                let v: u64 = self.rng.gen();
+                let v: u64 = self.rng.r#gen();
                 match w.signal_kind(s).unwrap() {
                     SignalKind::Bits { states: 4, width } if v.is_multiple_of(5) => {
                         let text: String = (0..width)
                             .map(|k| b"01xz"[(v >> (k % 60)) as usize & 3] as char)
                             .collect();
-                        w.emit_logic_str(s, text.as_bytes()).unwrap()
+                        w.emit_logic_str(s, text.as_bytes()).unwrap();
                     }
                     SignalKind::Bits { width, .. } if width > 64 => w
                         .emit_words(s, &[v as u32, (v >> 32) as u32, !v as u32, 3])
@@ -152,7 +152,7 @@ impl Run {
                 }
             }
             70..=77 => {
-                let tx = w.begin_tx(self.gen, self.t).unwrap();
+                let tx = w.begin_tx(self.r#gen, self.t).unwrap();
                 w.tx_attr(tx, self.key, &Value::U64(self.t)).unwrap();
                 w.tx_event(tx, self.t, self.key, &[]).unwrap();
                 w.tx_stage(tx, self.key, StrId(0), self.t, self.t + 1, &[])
@@ -313,7 +313,7 @@ fn assert_sealed_prefix(sealed: &Reader, full: &Reader, what: &str) {
 fn seal_after_random_numbers_of_calls() {
     let mut rng = StdRng::seed_from_u64(1);
     for case in 0..40 {
-        let seed = rng.gen();
+        let seed = rng.r#gen();
         let calls = rng.gen_range(0..3000);
         let what = format!("case {case} (seed {seed}, {calls} calls)");
         let full_path = tmp(&format!("full{case}.vtr"));
@@ -376,7 +376,7 @@ fn seal_keeps_every_chunk_handed_over() {
         let r = Reader::open(&path).unwrap();
         let mut kept = Vec::new();
         r.for_each_change(0, u64::MAX, |t, s, v| {
-            kept.push((t, s, v.as_u64().unwrap()))
+            kept.push((t, s, v.as_u64().unwrap()));
         })
         .unwrap();
         kept.sort_by_key(|&(_, _, v)| v);

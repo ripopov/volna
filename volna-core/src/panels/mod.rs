@@ -69,6 +69,7 @@ pub enum PanelKind {
 }
 
 impl PanelKind {
+    #[must_use]
     pub fn waves(&self) -> Option<&WaveModel> {
         match self {
             Self::Waves(w) => Some(w),
@@ -83,6 +84,7 @@ impl PanelKind {
         }
     }
 
+    #[must_use]
     pub fn pipeline(&self) -> Option<&PipelineModel> {
         match self {
             Self::Pipeline(p) => Some(p),
@@ -97,6 +99,7 @@ impl PanelKind {
         }
     }
 
+    #[must_use]
     pub fn table(&self) -> Option<&TableModel> {
         match self {
             Self::Table(table) => Some(table),
@@ -111,6 +114,7 @@ impl PanelKind {
         }
     }
 
+    #[must_use]
     pub fn transaction(&self) -> Option<&TransactionModel> {
         match self {
             Self::Transaction(model) => Some(model),
@@ -125,26 +129,32 @@ impl PanelKind {
         }
     }
 
+    #[must_use]
     pub fn is_settings(&self) -> bool {
         matches!(self, Self::Settings)
     }
 
+    #[must_use]
     pub fn is_start(&self) -> bool {
         matches!(self, Self::Start)
     }
 
+    #[must_use]
     pub fn is_content(&self) -> bool {
         !self.is_settings()
     }
 
+    #[must_use]
     pub fn is_canvas(&self) -> bool {
         matches!(self, Self::Waves(_) | Self::Pipeline(_) | Self::Table(_))
     }
 
+    #[must_use]
     pub fn shows_rulers(&self) -> bool {
         matches!(self, Self::Waves(_) | Self::Pipeline(_))
     }
 
+    #[must_use]
     pub fn nav(&self) -> Option<&NavState> {
         match self {
             Self::Waves(w) => Some(&w.nav),
@@ -163,6 +173,7 @@ impl PanelKind {
         }
     }
 
+    #[must_use]
     pub fn trace(&self) -> Option<crate::trace::TraceId> {
         match self {
             Self::Pipeline(p) => Some(p.track.trace()),
@@ -176,6 +187,7 @@ impl PanelKind {
         }
     }
 
+    #[must_use]
     pub fn shows_trace(&self, trace: crate::trace::TraceId) -> bool {
         match self {
             Self::Pipeline(p) => p.track.trace() == trace,
@@ -187,6 +199,7 @@ impl PanelKind {
         }
     }
 
+    #[must_use]
     pub fn marker_lane(&self) -> Option<&crate::wave::overlay::MarkerLane> {
         match self {
             Self::Waves(w) => Some(&w.last_layout().marker_lane),
@@ -234,6 +247,7 @@ impl Panel {
         }
     }
 
+    #[must_use]
     pub fn title(&self) -> String {
         self.title
             .get()
@@ -271,6 +285,7 @@ impl Panel {
         }
     }
 
+    #[must_use]
     pub fn dragging(&self) -> bool {
         match &self.kind {
             PanelKind::Waves(w) => w.drag.is_some(),
@@ -327,6 +342,7 @@ impl Panel {
         }
     }
 
+    #[must_use]
     pub fn is_animating(&self) -> bool {
         match &self.kind {
             PanelKind::Waves(w) => w.is_animating(),
@@ -362,6 +378,7 @@ impl Default for Panels {
 }
 
 impl Panels {
+    #[must_use]
     pub fn new() -> Self {
         let id = PanelId(1);
         Self {
@@ -416,10 +433,12 @@ impl Panels {
         Ok(result)
     }
 
+    #[must_use]
     pub fn settings_id(&self) -> Option<PanelId> {
         self.iter().find(|p| p.kind.is_settings()).map(|p| p.id)
     }
 
+    #[must_use]
     pub fn can_close(&self, id: PanelId) -> bool {
         self.get(id)
             .is_some_and(|panel| !(panel.kind.is_start() && self.content_count() == 1))
@@ -429,10 +448,12 @@ impl Panels {
         self.iter().filter(|p| p.kind.is_content()).count()
     }
 
+    #[must_use]
     pub fn first_waves(&self) -> Option<PanelId> {
         self.first(|kind| kind.waves().is_some())
     }
 
+    #[must_use]
     pub fn first_start(&self) -> Option<PanelId> {
         self.layout
             .center
@@ -495,15 +516,19 @@ impl Panels {
         self.validate()
     }
 
+    #[must_use]
     pub fn layout(&self) -> &DockLayout {
         &self.layout
     }
+    #[must_use]
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    #[must_use]
     pub fn focused_id(&self) -> PanelId {
         self.focused
     }
+    #[must_use]
     pub fn focused(&self) -> &Panel {
         &self.panels[&self.focused]
     }
@@ -511,10 +536,12 @@ impl Panels {
         self.panels.get_mut(&self.focused).unwrap()
     }
 
+    #[must_use]
     pub fn waves(&self, id: PanelId) -> Option<&WaveModel> {
         self.get(id)?.kind.waves()
     }
 
+    #[must_use]
     pub fn focused_waves(&self) -> Option<&WaveModel> {
         self.waves(self.focused)
     }
@@ -527,6 +554,7 @@ impl Panels {
         self.get_mut(id)?.kind.waves_mut()
     }
 
+    #[must_use]
     pub fn pipeline(&self, id: PanelId) -> Option<&PipelineModel> {
         self.get(id)?.kind.pipeline()
     }
@@ -541,6 +569,7 @@ impl Panels {
             .filter_map(|p| p.kind.pipeline_mut())
     }
 
+    #[must_use]
     pub fn transaction(&self, id: PanelId) -> Option<&TransactionModel> {
         self.get(id)?.kind.transaction()
     }
@@ -555,6 +584,7 @@ impl Panels {
             .filter_map(|p| Some((p.id, p.kind.transaction_mut()?)))
     }
 
+    #[must_use]
     pub fn first_free_transaction(&self) -> Option<PanelId> {
         self.layout.panels().into_iter().find(|id| {
             self.panels[id]
@@ -564,6 +594,7 @@ impl Panels {
         })
     }
 
+    #[must_use]
     pub fn pipeline_for_track(
         &self,
         track: crate::trace::Traced<volna_trace::data::transactions::TrackRef>,
@@ -575,6 +606,7 @@ impl Panels {
                 .is_some_and(|p| p.track.track() == Some(track))
         })
     }
+    #[must_use]
     pub fn pipeline_showing(
         &self,
         doc: &Document,
@@ -590,6 +622,7 @@ impl Panels {
         })
     }
 
+    #[must_use]
     pub fn get(&self, id: PanelId) -> Option<&Panel> {
         self.panels.get(&id)
     }
@@ -602,9 +635,11 @@ impl Panels {
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Panel> {
         self.panels.values_mut()
     }
+    #[must_use]
     pub fn len(&self) -> usize {
         self.panels.len()
     }
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.panels.is_empty()
     }
@@ -966,6 +1001,7 @@ impl Panels {
         Ok(removed.into_iter().map(|(_, panel)| panel).collect())
     }
 
+    #[must_use]
     pub fn saved_view(&self) -> (DockLayout, PanelId, Vec<&Panel>) {
         let mut layout = self.layout.clone();
         for id in self.iter().filter(|p| p.kind.is_settings()).map(|p| p.id) {

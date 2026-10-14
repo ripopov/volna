@@ -152,7 +152,7 @@ impl SignalHistory for VecHistory {
         };
         match value {
             WaveValue::Unavailable => Bit::Unavailable,
-            WaveValue::Bits(s) => s.bytes().next().map(Bit::from_ascii).unwrap_or(Bit::Other),
+            WaveValue::Bits(s) => s.bytes().next().map_or(Bit::Other, Bit::from_ascii),
             _ => Bit::Other,
         }
     }

@@ -313,7 +313,7 @@ fn span_and_measure_menus_offer_their_verbs() {
     let l = lane(&mut app);
     let span = l.spans.iter().find(|s| s.first == 0).unwrap();
     let (x0, x1) = l.shown(span);
-    let on_span = point((x0 + x1) / 2.0, centre(l.band).y);
+    let on_span = point(f32::midpoint(x0, x1), centre(l.band).y);
     assert_eq!(l.hit(on_span), Some(LaneHit::Span(0)));
     right_click(&mut app, on_span);
     assert_eq!(
@@ -400,7 +400,7 @@ fn a_double_click_adds_on_the_header_and_the_empty_lane_only() {
     let l = lane(&mut app);
     let panel = app.panels.focused_id();
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();
-    let x = (l.time_left + l.band.right()) / 2.0 + 150.0;
+    let x = f32::midpoint(l.time_left, l.band.right()) + 150.0;
     assert!(app.adds_marker_at(panel, point(x, layout.header.top() + 4.0)));
     assert!(
         app.adds_marker_at(panel, point(x, centre(l.band).y)),
@@ -408,7 +408,7 @@ fn a_double_click_adds_on_the_header_and_the_empty_lane_only() {
     );
     let span = l.spans.iter().find(|s| s.first == 0).unwrap();
     let (x0, x1) = l.shown(span);
-    assert!(!app.adds_marker_at(panel, point((x0 + x1) / 2.0, centre(l.band).y)));
+    assert!(!app.adds_marker_at(panel, point(f32::midpoint(x0, x1), centre(l.band).y)));
     assert!(!app.adds_marker_at(panel, centre(l.chips[0].rect)));
     assert!(
         !app.adds_marker_at(panel, point(x, layout.waves.top() + 4.0)),

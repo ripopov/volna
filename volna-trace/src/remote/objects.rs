@@ -98,7 +98,7 @@ impl Metadata {
             checkpoint().await;
             match scope.role {
                 ScopeRole::Scope => {
-                    anyhow::ensure!(scope.generators.is_empty(), "generators outside stream")
+                    anyhow::ensure!(scope.generators.is_empty(), "generators outside stream");
                 }
                 ScopeRole::Stream { track } => {
                     anyhow::ensure!(hierarchy_tracks.insert(track), "duplicate hierarchy track");
@@ -155,6 +155,7 @@ pub struct TrackPayload {
 }
 
 impl TrackPayload {
+    #[must_use]
     pub fn from_loaded(track: &LoadedTrack) -> impl Serialize + '_ {
         #[derive(Serialize)]
         struct Generator<'a> {

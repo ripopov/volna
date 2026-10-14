@@ -101,6 +101,7 @@ impl SectionKey {
         SectionKey::Related,
     ];
 
+    #[must_use]
     pub fn key(self) -> &'static str {
         match self {
             SectionKey::Attributes => "attributes",
@@ -110,6 +111,7 @@ impl SectionKey {
         }
     }
 
+    #[must_use]
     pub fn title(self) -> &'static str {
         match self {
             SectionKey::Attributes => "Attributes",
@@ -119,6 +121,7 @@ impl SectionKey {
         }
     }
 
+    #[must_use]
     pub fn parse(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|section| section.key() == key)
     }
@@ -144,6 +147,7 @@ impl Default for ViewPrefs {
 }
 
 impl ViewPrefs {
+    #[must_use]
     pub fn radix_of(&self, key: &str) -> Radix {
         self.radix.get(key).copied().unwrap_or_default()
     }
@@ -159,6 +163,7 @@ pub struct Section<T> {
 }
 
 impl<T> Section<T> {
+    #[must_use]
     pub fn cut(&self) -> bool {
         self.rows.len() < self.matched
     }
@@ -276,6 +281,7 @@ pub struct RefRow {
 }
 
 impl RefRow {
+    #[must_use]
     pub fn target_track(&self) -> Traced<TrackRef> {
         Traced::new(self.trace, self.target.generator)
     }
@@ -296,11 +302,13 @@ pub struct TxView {
 }
 
 impl TxView {
+    #[must_use]
     pub fn filterable(&self) -> bool {
         self.attributes.total > FILTER_THRESHOLD
     }
 }
 
+#[must_use]
 pub fn view(
     doc: &Document,
     track: Traced<TrackRef>,
@@ -586,25 +594,24 @@ fn lifeline(
     let primary = palette.primary_lane();
     let mut lanes: Vec<LaneRow> = Vec::new();
     for (index, stage) in tx.stages.iter().enumerate().take(limit) {
-        let row = match lanes.iter().position(|l| {
+        let row = if let Some(row) = lanes.iter().position(|l| {
             l.cells
                 .first()
                 .and_then(|c| c.stage)
                 .is_some_and(|i| tx.stages[i].lane == stage.lane)
         }) {
-            Some(row) => row,
-            None => {
-                if !budget.slot(&mut lanes) {
-                    break;
-                }
-                let row = lanes.len();
-                lanes.push(LaneRow {
-                    lane: budget.text(&stage.lane),
-                    primary: stage.lane == primary,
-                    cells: Vec::new(),
-                });
-                row
+            row
+        } else {
+            if !budget.slot(&mut lanes) {
+                break;
             }
+            let row = lanes.len();
+            lanes.push(LaneRow {
+                lane: budget.text(&stage.lane),
+                primary: stage.lane == primary,
+                cells: Vec::new(),
+            });
+            row
         };
         if !budget.slot(&mut lanes[row].cells) {
             break;
@@ -877,7 +884,7 @@ fn related(
                 label,
             )
         }));
-    let catalog = doc.session(track.trace).map(|s| s.tracks()).unwrap_or(&[]);
+    let catalog = doc.session(track.trace).map_or(&[][..], |s| s.tracks());
     let mut rows = Vec::new();
     for (group, target, role, relation_label) in entries.take(limit) {
         if !budget.slot(&mut rows) {
@@ -943,7 +950,7 @@ pub fn copy_tsv(
     let tx = generator
         .transaction(id)
         .ok_or_else(|| anyhow::anyhow!("Record is not loaded."))?;
-    let catalog = doc.session(track.trace).map(|s| s.tracks()).unwrap_or(&[]);
+    let catalog = doc.session(track.trace).map_or(&[][..], |s| s.tracks());
     let mut truncated = false;
     let path = catalog
         .iter()

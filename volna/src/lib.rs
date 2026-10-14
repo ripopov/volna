@@ -54,7 +54,7 @@ const WINDOW_DECORATIONS_ENV: &str = "VOLNA_WINDOW_DECORATIONS";
 fn window_decorations(env: Option<&str>) -> WindowDecorations {
     match env.map(str::trim) {
         Some("server") => WindowDecorations::Server,
-        None | Some("") | Some("client") => WindowDecorations::Client,
+        None | Some("" | "client") => WindowDecorations::Client,
         Some(other) => {
             log::warn!("{WINDOW_DECORATIONS_ENV}={other:?}: expected `client` or `server`");
             WindowDecorations::Client
@@ -83,6 +83,7 @@ fn window_options(cx: &mut App) -> WindowOptions {
     }
 }
 
+#[must_use]
 pub fn application() -> Application {
     gpui_kit::application().with_assets(assets::Assets)
 }

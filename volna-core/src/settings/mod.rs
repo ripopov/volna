@@ -23,6 +23,7 @@ pub enum Value {
 }
 
 impl Value {
+    #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             Value::Bool(b) => serde_json::Value::Bool(*b),
@@ -32,22 +33,26 @@ impl Value {
         }
     }
 
+    #[must_use]
     pub fn to_json_text(&self) -> String {
         self.to_json().to_string()
     }
 
+    #[must_use]
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
             _ => None,
         }
     }
+    #[must_use]
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Integer(i) => Some(*i),
             _ => None,
         }
     }
+    #[must_use]
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Number(n) => Some(*n),
@@ -55,6 +60,7 @@ impl Value {
             _ => None,
         }
     }
+    #[must_use]
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Text(s) => Some(s),
@@ -98,6 +104,7 @@ pub enum Animation {
 }
 
 impl Animation {
+    #[must_use]
     pub fn duration(self) -> Option<std::time::Duration> {
         match self {
             Animation::On => Some(std::time::Duration::from_millis(140)),
@@ -149,6 +156,7 @@ pub enum ZoomStep {
 }
 
 impl ZoomStep {
+    #[must_use]
     pub fn apply(self, current: f64) -> f64 {
         let next = match self {
             ZoomStep::In => current + ZOOM_STEP,
@@ -266,6 +274,7 @@ impl Settings {
         }
     }
 
+    #[must_use]
     pub fn link_by_default(&self) -> crate::wave::model::Link {
         crate::wave::model::Link {
             viewport: self.panels.link_by_default,
@@ -273,6 +282,7 @@ impl Settings {
         }
     }
 
+    #[must_use]
     pub fn limits(&self) -> volna_trace::remote::limits::Limits {
         volna_trace::remote::limits::Limits {
             memory_mib: self.memory.budget_mib,

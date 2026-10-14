@@ -59,7 +59,7 @@ fn missing_and_invisible_values_fall_back_in_every_appearance() {
         Appearance::HighContrastDark,
         Appearance::HighContrastLight,
     ] {
-        for invisible in [None, Some(ca(0x808080, 0.0))] {
+        for invisible in [None, Some(ca(0x0080_8080, 0.0))] {
             let p = HostPalette {
                 appearance,
                 editor: ColorPair {
@@ -120,20 +120,20 @@ fn each_surface_resolves_against_its_own_background() {
     let p =
         HostPalette::from_json(include_str!("../../tests/fixtures/custom-palette.json")).unwrap();
     let t = Theme::from_host(&p);
-    assert_eq!(t.panel.text, c(0xf0f8ff));
-    assert_eq!(t.selection.text, c(0xffffff));
-    assert_eq!(t.hover.text, c(0x333333));
-    assert_eq!(t.bar.text, c(0xffffff));
-    assert_eq!(t.button.text, c(0xffffff));
+    assert_eq!(t.panel.text, c(0x00f0_f8ff));
+    assert_eq!(t.selection.text, c(0x00ff_ffff));
+    assert_eq!(t.hover.text, c(0x0033_3333));
+    assert_eq!(t.bar.text, c(0x00ff_ffff));
+    assert_eq!(t.button.text, c(0x00ff_ffff));
     assert_eq!(t.menu_hover.text, c(0));
-    assert_eq!(t.tooltip.text, c(0x002200));
+    assert_eq!(t.tooltip.text, c(0x0000_2200));
     assert_eq!(t.badge.text, t.input.text);
     assert!(contrast(t.bar_hover.text, t.bar_hover.bg) >= 4.49);
 }
 
 #[test]
 fn translucent_chart_strokes_and_chips_keep_rgb_not_background_tint() {
-    let color = ca(0x00b080, 0.2);
+    let color = ca(0x0000_b080, 0.2);
     let t = Theme::from_host(&HostPalette {
         charts: [Some(color); 6],
         ..Default::default()
@@ -144,7 +144,7 @@ fn translucent_chart_strokes_and_chips_keep_rgb_not_background_tint() {
         assert_eq!(marker.hover, marker.background);
         assert!(contrast(over(marker.text, marker.background), marker.background) >= 4.49);
     }
-    let bright = ca(0xffff00, 0.1);
+    let bright = ca(0x00ff_ff00, 0.1);
     let t = Theme::from_host(&HostPalette {
         appearance: Appearance::Light,
         charts: [Some(bright); 6],
@@ -159,24 +159,24 @@ fn translucent_chart_strokes_and_chips_keep_rgb_not_background_tint() {
 #[test]
 fn native_defaults_remain_one_dark() {
     let t = Theme::one_dark();
-    assert_eq!(t.editor.bg, c(0x282c33));
-    assert_eq!(t.panel.text_muted, c(0xa9afbc));
-    assert_eq!(t.wave_signal, c(0xa1c181));
+    assert_eq!(t.editor.bg, c(0x0028_2c33));
+    assert_eq!(t.panel.text_muted, c(0x00a9_afbc));
+    assert_eq!(t.wave_signal, c(0x00a1_c181));
     assert_eq!(t.marker(0).background.a, 0.85);
 }
 
 #[test]
 fn css_syntax_is_shared_and_invalid_numbers_never_reach_frontends() {
     for (css, expected) in [
-        ("#abc", 0xaabbccff),
-        ("#abcd", 0xaabbccdd),
-        (" #ABCDef ", 0xabcdefff),
-        ("#12345678", 0x12345678),
-        ("rgb(17, 34, 51)", 0x112233ff),
-        ("rgba(17, 34, 51, 0.4)", 0x11223366),
-        ("rgb(100% 0% 20% / 40%)", 0xff003366),
+        ("#abc", 0xaabb_ccff),
+        ("#abcd", 0xaabb_ccdd),
+        (" #ABCDef ", 0xabcd_efff),
+        ("#12345678", 0x1234_5678),
+        ("rgb(17, 34, 51)", 0x1122_33ff),
+        ("rgba(17, 34, 51, 0.4)", 0x1122_3366),
+        ("rgb(100% 0% 20% / 40%)", 0xff00_3366),
         ("transparent", 0),
-        ("rgb(300, -10, 0)", 0xff0000ff),
+        ("rgb(300, -10, 0)", 0xff00_00ff),
     ] {
         let actual = parse_css_color(css).unwrap().to_rgba();
         let expected = Color::rgba_u32(expected).to_rgba();
@@ -206,7 +206,7 @@ fn css_syntax_is_shared_and_invalid_numbers_never_reach_frontends() {
 fn json_interface_defaults_and_validation() {
     let p = HostPalette::from_json(r##"{"appearance":"high-contrast-light","editor":{"background":"#fff","foreground":null},"unknown":true}"##).unwrap();
     assert_eq!(p.appearance, Appearance::HighContrastLight);
-    assert_eq!(p.editor.background, Some(c(0xffffff)));
+    assert_eq!(p.editor.background, Some(c(0x00ff_ffff)));
     assert!(p.editor.foreground.is_none());
     assert_eq!(
         HostPalette::from_json("{}").unwrap().appearance,
@@ -230,10 +230,10 @@ fn vscode_precedence_fallbacks_and_appearance_are_resolved_in_rust() {
         "kind=vscode-high-contrast-light\n--vscode-editor-background=#111\n--vscode-editor-foreground=#123456\n--vscode-foreground=#fff\n--vscode-charts-green=broken\n--vscode-terminal-ansiGreen=rgb(0 50% 0)\n--vscode-focusBorder=#00f\n--vscode-contrastActiveBorder=#f00",
     );
     assert_eq!(p.appearance, Appearance::HighContrastLight);
-    assert_eq!(p.editor.foreground, Some(c(0x123456)));
-    assert_eq!(p.panel.foreground, Some(c(0xffffff)));
+    assert_eq!(p.editor.foreground, Some(c(0x0012_3456)));
+    assert_eq!(p.panel.foreground, Some(c(0x00ff_ffff)));
     assert_eq!(p.charts[0], parse_css_color("rgb(0 50% 0)"));
-    assert_eq!(p.focus, Some(c(0xff0000)));
+    assert_eq!(p.focus, Some(c(0x00ff_0000)));
     for (bg, expected) in [
         ("#fff", Appearance::Light),
         ("#111", Appearance::Dark),
@@ -309,7 +309,7 @@ fn coalesced_events_remain_distinct_with_identical_host_chart_colors() {
     ] {
         let palette = HostPalette {
             appearance,
-            charts: [Some(c(0xa1c181)); 6],
+            charts: [Some(c(0x00a1_c181)); 6],
             ..Default::default()
         };
         let theme = Theme::from_host(&palette);
@@ -347,7 +347,10 @@ fn zoomed_scales_every_metric_from_the_design_size_and_map_keeps_it() {
     assert_eq!(mapped.row_height, big.row_height);
 }
 
-#[allow(clippy::excessive_precision)]
+#[expect(
+    clippy::excessive_precision,
+    reason = "Keep the reference color transform coefficients identical to the published formula."
+)]
 fn delta_e(a: Color, b: Color) -> f32 {
     let lab = |c: Color| {
         let [r, g, b, _] = c.to_rgba();
@@ -359,13 +362,13 @@ fn delta_e(a: Color, b: Color) -> f32 {
             }
         };
         let (r, g, b) = (lin(r), lin(g), lin(b));
-        let l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b).cbrt();
-        let m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b).cbrt();
-        let s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b).cbrt();
+        let l = (0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b).cbrt();
+        let m = (0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b).cbrt();
+        let s = (0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b).cbrt();
         [
-            0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
-            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
-            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+            0.210_454_255_3 * l + 0.793_617_785_0 * m - 0.004_072_046_8 * s,
+            1.977_998_495_1 * l - 2.428_592_205_0 * m + 0.450_593_709_9 * s,
+            0.025_904_037_1 * l + 0.782_771_766_2 * m - 0.808_675_766_0 * s,
         ]
     };
     let (a, b) = (lab(a), lab(b));

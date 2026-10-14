@@ -879,7 +879,7 @@ fn issue(
         tx,
         issued,
         e.n.issued,
-        &[(e.n.resource, Value::U64(resource.0 as u64))],
+        &[(e.n.resource, Value::U64(u64::from(resource.0)))],
     )?;
     r.issue[sm][slot / SLOTS] = issued + 1;
     warp.fetch = issued;
@@ -1121,7 +1121,7 @@ fn generate(path: &Path) -> vtr::Result<()> {
             e.attr(
                 assignment,
                 e.n.destination,
-                Value::U64(h.sms[sm].workgroup.0 as u64),
+                Value::U64(u64::from(h.sms[sm].workgroup.0)),
             )?;
             e.stage(assignment, e.n.service, assigned, assigned + 4)?;
             e.end(assignment, assigned + 4)?;
@@ -1400,9 +1400,10 @@ fn readback(path: &Path) -> anyhow::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args_os().skip(1);
-    let path = args.next().map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/gpu_transaction_trace.vtr")
-    });
+    let path = args.next().map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/gpu_transaction_trace.vtr"),
+        PathBuf::from,
+    );
     ensure!(
         args.next().is_none(),
         "usage: gpu_transaction_trace [OUTPUT.vtr]"

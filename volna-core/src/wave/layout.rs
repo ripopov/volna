@@ -21,6 +21,7 @@ pub const CHEVRON_W: f32 = 16.0;
 
 pub const TRACE_GUTTER: f32 = 20.0;
 
+#[must_use]
 pub fn indent_x(left: f32, depth: u8, zoom: f32) -> f32 {
     left + (NAME_PAD + INDENT * f32::from(depth)) * zoom
 }
@@ -89,6 +90,7 @@ fn row_at_unit(tops: &[u32], unit: f32) -> usize {
 }
 
 impl WaveLayout {
+    #[must_use]
     pub fn compute(input: LayoutInput<'_>) -> WaveLayout {
         let bounds = input.bounds;
         let row_h = input.row_h;
@@ -239,6 +241,7 @@ impl WaveLayout {
         }
     }
 
+    #[must_use]
     pub fn row_at(&self, y: f32) -> Option<usize> {
         if y < self.names.top() {
             return None;
@@ -250,6 +253,7 @@ impl WaveLayout {
         (unit >= 0.0).then(|| row_at_unit(&self.tops, unit))
     }
 
+    #[must_use]
     pub fn row_y(&self, ix: usize) -> f32 {
         let count = self.tops.len().saturating_sub(1);
         let total = self.tops.last().copied().unwrap_or(0);
@@ -260,6 +264,7 @@ impl WaveLayout {
         self.names.top() + self.row_h * unit - self.scroll_y
     }
 
+    #[must_use]
     pub fn row_height(&self, ix: usize) -> f32 {
         let units = match (self.tops.get(ix), self.tops.get(ix + 1)) {
             (Some(top), Some(bottom)) => bottom - top,
@@ -268,40 +273,49 @@ impl WaveLayout {
         self.row_h * units as f32
     }
 
+    #[must_use]
     pub fn entry(&self, pos: usize) -> Option<usize> {
         self.visible.get(pos).map(|&i| i as usize)
     }
 
+    #[must_use]
     pub fn position(&self, entry: usize) -> Option<usize> {
         self.visible.binary_search(&(entry as u32)).ok()
     }
 
+    #[must_use]
     pub fn entry_at(&self, y: f32) -> Option<usize> {
         self.entry(self.row_at(y)?)
     }
 
+    #[must_use]
     pub fn entry_span(&self, entry: usize) -> Option<(f32, f32)> {
         let pos = self.position(entry)?;
         Some((self.row_y(pos), self.row_height(pos)))
     }
 
+    #[must_use]
     pub fn badge_at(&self, p: Point) -> Option<(usize, Rect)> {
         self.badges.iter().copied().find(|(_, b)| b.contains(p))
     }
 
+    #[must_use]
     pub fn near_split(&self, p: Point) -> bool {
         self.names_split.contains(p) || self.values_split.contains(p)
     }
 
+    #[must_use]
     pub fn wave_width_f64(&self) -> f64 {
         f64::from(self.waves.width()).max(1.0)
     }
 
+    #[must_use]
     pub fn ruler_at(&self, p: Point, count: usize) -> Option<usize> {
         ruler_row(self.rulers, p, count)
     }
 }
 
+#[must_use]
 pub fn ruler_row(band: Rect, p: Point, count: usize) -> Option<usize> {
     if count == 0 || !band.contains(p) {
         return None;

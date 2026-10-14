@@ -2,7 +2,9 @@
 //! `contributes.configuration` block and the read-only default document.
 
 use super::registry::{Apply, Host, REGISTRY};
+use std::fmt::Write as _;
 
+#[must_use]
 pub fn json_schema(host: Host) -> serde_json::Value {
     let mut properties = serde_json::Map::new();
     properties.insert(
@@ -22,6 +24,7 @@ pub fn json_schema(host: Host) -> serde_json::Value {
     })
 }
 
+#[must_use]
 pub fn vscode_configuration() -> serde_json::Value {
     let mut properties = serde_json::Map::new();
     for spec in REGISTRY.iter().filter(|s| s.available(Host::Vscode)) {
@@ -39,6 +42,7 @@ pub fn vscode_configuration() -> serde_json::Value {
     })
 }
 
+#[must_use]
 pub fn default_document(host: Host) -> String {
     let mut out = String::from(
         "// Default settings. This document is generated and read-only;\n// copy a key into settings.json to change it.\n{\n",
@@ -46,17 +50,19 @@ pub fn default_document(host: Host) -> String {
     let specs: Vec<_> = REGISTRY.iter().filter(|s| s.available(host)).collect();
     for (ix, spec) in specs.iter().enumerate() {
         for line in spec.description.split('\n') {
-            out.push_str(&format!("  // {line}\n"));
+            writeln!(out, "  // {line}").unwrap();
         }
         if let Some(badge) = spec.apply.badge() {
-            out.push_str(&format!("  // ({badge})\n"));
+            writeln!(out, "  // ({badge})").unwrap();
         }
         let comma = if ix + 1 < specs.len() { "," } else { "" };
-        out.push_str(&format!(
-            "  \"{}\": {}{comma}\n",
+        writeln!(
+            out,
+            "  \"{}\": {}{comma}",
             spec.id,
             spec.default.value().to_json_text()
-        ));
+        )
+        .unwrap();
         if ix + 1 < specs.len() {
             out.push('\n');
         }
@@ -75,7 +81,7 @@ mod tests {
         let properties = schema["properties"].as_object().unwrap();
         assert!(properties.contains_key("waves.snapPixels"));
         assert!(!properties.contains_key("remote.serverPath"));
-        assert_eq!(properties["memory.budgetMiB"]["maximum"], 262144);
+        assert_eq!(properties["memory.budgetMiB"]["maximum"], 262_144);
         assert_eq!(properties["waves.snapPixels"]["maximum"], 24);
         assert_eq!(
             properties["waves.animation"]["enum"]

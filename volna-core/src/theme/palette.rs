@@ -14,9 +14,11 @@ pub enum Appearance {
 }
 
 impl Appearance {
+    #[must_use]
     pub fn is_dark(self) -> bool {
         matches!(self, Self::Dark | Self::HighContrastDark)
     }
+    #[must_use]
     pub fn is_high_contrast(self) -> bool {
         matches!(self, Self::HighContrastDark | Self::HighContrastLight)
     }

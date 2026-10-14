@@ -15,6 +15,7 @@ pub struct ZoomBox {
     pub rows: (f64, f64),
 }
 
+#[must_use]
 pub fn square_zoom(from: ZoomPoint, cycle_units: f64, size: (f64, f64), step: f64) -> ZoomPoint {
     if !step.is_finite() {
         return from;

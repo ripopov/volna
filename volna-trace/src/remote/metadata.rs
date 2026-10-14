@@ -140,7 +140,10 @@ pub(super) fn attribute(
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<AttributeValue>> + Send + '_>> {
     Box::pin(async move {
         anyhow::ensure!(depth < 128, "attribute nesting exceeds client limit");
-        use AttributeValue::*;
+        use AttributeValue::{
+            Bool, Bytes, Enum, F64, Fixed, I64, List, Logic, Map, Null, Pointer, Text, Time, U64,
+            UFixed,
+        };
         Ok(match r.u32().await? {
             0 => Null,
             1 => Bool(r.boolean().await?),

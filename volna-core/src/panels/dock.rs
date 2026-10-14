@@ -39,6 +39,7 @@ impl From<Layout> for DockLayout {
 }
 
 impl DockLayout {
+    #[must_use]
     pub fn single(id: PanelId) -> Self {
         Layout::single(id).into()
     }
@@ -72,6 +73,7 @@ impl DockLayout {
             .collect()
     }
 
+    #[must_use]
     pub fn placement(&self, id: PanelId) -> Option<Placement> {
         if self
             .center
@@ -90,6 +92,7 @@ impl DockLayout {
         }
     }
 
+    #[must_use]
     pub fn active_for(&self, id: PanelId) -> Option<PanelId> {
         self.trees().find_map(|tree| tree.active_for(id))
     }
@@ -117,6 +120,7 @@ impl DockLayout {
         Ok(())
     }
 
+    #[must_use]
     pub fn same_shape(&self, other: &Self) -> bool {
         fn same(a: Option<&Layout>, b: Option<&Layout>) -> bool {
             match (a, b) {

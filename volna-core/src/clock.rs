@@ -37,6 +37,7 @@ pub struct Clock {
 }
 
 impl Clock {
+    #[must_use]
     pub fn timeline(&self) -> Option<&Arc<ClockTimeline>> {
         match &self.state {
             ClockState::Ready(t) => Some(t),
@@ -44,14 +45,17 @@ impl Clock {
         }
     }
 
+    #[must_use]
     pub fn key(&self) -> ClockKey {
         Traced::new(self.trace, self.path.clone())
     }
 
+    #[must_use]
     pub fn is(&self, key: &ClockKey) -> bool {
         self.trace == key.trace && self.path == key.item
     }
 
+    #[must_use]
     pub fn stream(&self) -> Traced<TrackRef> {
         Traced::new(self.trace, self.track)
     }
@@ -108,6 +112,7 @@ impl Clocks {
         self.defaults.retain(|key| key.trace != trace);
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.clocks.is_empty()
     }
@@ -116,10 +121,12 @@ impl Clocks {
         self.clocks.iter()
     }
 
+    #[must_use]
     pub fn get(&self, ix: usize) -> Option<&Clock> {
         self.clocks.get(ix)
     }
 
+    #[must_use]
     pub fn find(&self, key: &ClockKey) -> Option<&Clock> {
         self.clocks.iter().find(|c| c.is(key))
     }
@@ -128,6 +135,7 @@ impl Clocks {
         self.clocks.iter().find(|c| c.stream() == stream)
     }
 
+    #[must_use]
     pub fn of_track(&self, track: Traced<TrackRef>, tracks: &[Track]) -> Option<&Clock> {
         let stream = match tracks.iter().find(|t| t.id == track.item)?.kind {
             TrackKind::Generator { stream } => stream,
@@ -136,10 +144,12 @@ impl Clocks {
         self.of_stream(track.with(stream))
     }
 
+    #[must_use]
     pub fn linked(&self, track: Traced<TrackRef>) -> Option<&Clock> {
         self.of_stream(track.with(*self.links.get(&track)?))
     }
 
+    #[must_use]
     pub fn is_clock_track(&self, track: Traced<TrackRef>) -> bool {
         self.of_stream(track).is_some()
     }
@@ -197,14 +207,17 @@ pub struct ClockView {
 }
 
 impl ClockView {
+    #[must_use]
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
 
+    #[must_use]
     pub fn ruler_keys<'a>(&'a self, clocks: &'a Clocks) -> &'a [ClockKey] {
         self.rulers.as_deref().unwrap_or(&clocks.defaults)
     }
 
+    #[must_use]
     pub fn rulers<'a>(&self, clocks: &'a Clocks) -> Vec<&'a Clock> {
         self.ruler_keys(clocks)
             .iter()
@@ -212,6 +225,7 @@ impl ClockView {
             .collect()
     }
 
+    #[must_use]
     pub fn selected<'a>(&self, clocks: &'a Clocks) -> Option<&'a Clock> {
         self.selected
             .as_ref()
@@ -259,21 +273,25 @@ impl ClockView {
         rulers.len() != before
     }
 
+    #[must_use]
     pub fn origin_cycle(&self, timeline: &ClockTimeline) -> u64 {
         self.origin
             .and_then(|t| timeline.cycle_at(t))
             .map_or(0, |c| c.cycle)
     }
 
+    #[must_use]
     pub fn display_cycle(&self, timeline: &ClockTimeline, cycle: u64) -> i64 {
         cycle as i64 - self.origin_cycle(timeline) as i64
     }
 
+    #[must_use]
     pub fn absolute_cycle(&self, timeline: &ClockTimeline, shown: i64) -> Option<u64> {
         u64::try_from(shown + self.origin_cycle(timeline) as i64).ok()
     }
 }
 
+#[must_use]
 pub fn nearest_edge(timeline: &ClockTimeline, t: f64, tolerance: f64) -> Option<u64> {
     let at = t.max(0.0).floor() as u64;
     let before = timeline.cycle_at(at).map(|c| c.edge);
@@ -292,6 +310,7 @@ pub struct ClockHistory {
 }
 
 impl ClockHistory {
+    #[must_use]
     pub fn new(timeline: Arc<ClockTimeline>) -> Self {
         Self { timeline }
     }
@@ -348,6 +367,7 @@ impl volna_trace::data::SignalHistory for ClockHistory {
     }
 }
 
+#[must_use]
 pub fn format_position(view: &ClockView, timeline: &ClockTimeline, at: &CycleAt) -> String {
     let cycle = view.display_cycle(timeline, at.cycle);
     if at.stopped {
@@ -359,6 +379,7 @@ pub fn format_position(view: &ClockView, timeline: &ClockTimeline, at: &CycleAt)
     }
 }
 
+#[must_use]
 pub fn position_at(view: &ClockView, clock: &Clock, time: u64) -> String {
     match clock.timeline().and_then(|t| Some((t, t.cycle_at(time)?))) {
         Some((t, at)) => format!("{} {}", clock.name, format_position(view, t, &at)),
@@ -366,6 +387,7 @@ pub fn position_at(view: &ClockView, clock: &Clock, time: u64) -> String {
     }
 }
 
+#[must_use]
 pub fn speed_label(period: u64, base: TimeBase<'_>) -> String {
     match frequency(period as f64, base) {
         Some(f) => format!("→ {f}"),
@@ -373,11 +395,12 @@ pub fn speed_label(period: u64, base: TimeBase<'_>) -> String {
     }
 }
 
+#[must_use]
 pub fn frequency(period: f64, base: TimeBase<'_>) -> Option<String> {
     if base.unit.is_some() || period <= 0.0 {
         return None;
     }
-    let hz = 1.0 / (period * 10f64.powi(base.timescale as i32));
+    let hz = 1.0 / (period * 10f64.powi(i32::from(base.timescale)));
     let (value, suffix) = [(1e9, "GHz"), (1e6, "MHz"), (1e3, "kHz"), (1.0, "Hz")]
         .into_iter()
         .find(|(scale, _)| hz * (1.0 + 1e-9) >= *scale)
@@ -415,6 +438,7 @@ fn label_step(cycle_px: f64, min_px: f64) -> u64 {
     }
 }
 
+#[must_use]
 pub fn ruler_marks(
     view: &ClockView,
     timeline: &ClockTimeline,
@@ -492,7 +516,7 @@ pub fn ruler_marks(
         } else {
             let first = shown(k0);
             let mut k = k0
-                + (first.rem_euclid(step as i64) != 0) as u64
+                + u64::from(first.rem_euclid(step as i64) != 0)
                     * (step as i64 - first.rem_euclid(step as i64)) as u64;
             while k <= k1 && marks.ticks.len() < MAX_TICKS {
                 marks.ticks.push(RulerTick {

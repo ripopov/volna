@@ -16,14 +16,17 @@ pub struct Entry {
 }
 
 impl Entry {
+    #[must_use]
     pub fn new(depth: u8, row: WaveRow) -> Self {
         Self { depth, row }
     }
 
+    #[must_use]
     pub fn is_group(&self) -> bool {
         matches!(self.row, WaveRow::Group(_))
     }
 
+    #[must_use]
     pub fn detached(&self) -> Self {
         Self {
             depth: self.depth,
@@ -31,6 +34,7 @@ impl Entry {
         }
     }
 
+    #[must_use]
     pub fn same(&self, other: &Self) -> bool {
         self.depth == other.depth && self.row.same(&other.row)
     }
@@ -101,6 +105,7 @@ pub fn apply(items: &mut Vec<Entry>, splices: Vec<Splice>) -> Result<Vec<Splice>
     Ok(inverse)
 }
 
+#[must_use]
 pub fn subtree_end(items: &[Entry], i: usize) -> usize {
     let depth = items[i].depth;
     i + 1
@@ -110,19 +115,23 @@ pub fn subtree_end(items: &[Entry], i: usize) -> usize {
             .count()
 }
 
+#[must_use]
 pub fn subtree(items: &[Entry], i: usize) -> Range<usize> {
     i..subtree_end(items, i)
 }
 
+#[must_use]
 pub fn parent(items: &[Entry], i: usize) -> Option<usize> {
     let depth = items.get(i)?.depth;
     (0..i).rev().find(|&j| items[j].depth < depth)
 }
 
+#[must_use]
 pub fn is_within(items: &[Entry], i: usize, ancestor: usize) -> bool {
     subtree(items, ancestor).contains(&i)
 }
 
+#[must_use]
 pub fn visible(items: &[Entry]) -> Arc<[u32]> {
     let mut out = Vec::with_capacity(items.len());
     let mut hide_below: Option<u8> = None;
@@ -141,6 +150,7 @@ pub fn visible(items: &[Entry]) -> Arc<[u32]> {
     out.into()
 }
 
+#[must_use]
 pub fn roots(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
     let mut out = Vec::new();
     let mut end = 0;
@@ -154,6 +164,7 @@ pub fn roots(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
     out
 }
 
+#[must_use]
 pub fn blocks(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Range<usize>> {
     roots(items, sel)
         .into_iter()
@@ -165,6 +176,7 @@ pub fn leaves(items: &[Entry], i: usize) -> impl Iterator<Item = usize> + '_ {
     subtree(items, i).filter(|&j| !items[j].is_group())
 }
 
+#[must_use]
 pub fn selected_leaves(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
     blocks(items, sel)
         .into_iter()
@@ -173,6 +185,7 @@ pub fn selected_leaves(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
         .collect()
 }
 
+#[must_use]
 pub fn gap_depths(items: &[Entry], visible: &[u32], gap: usize) -> RangeInclusive<u8> {
     let above = gap.checked_sub(1).and_then(|g| visible.get(g));
     let below = visible.get(gap);
@@ -192,6 +205,7 @@ pub struct Place {
 }
 
 impl Place {
+    #[must_use]
     pub fn gap(items: &[Entry], visible: &[u32], gap: usize, depth: u8) -> Self {
         Self {
             at: visible.get(gap).map_or(items.len(), |&i| i as usize),
@@ -199,6 +213,7 @@ impl Place {
         }
     }
 
+    #[must_use]
     pub fn into(items: &[Entry], group: usize) -> Self {
         Self {
             at: subtree_end(items, group),
@@ -214,6 +229,7 @@ pub struct Moved {
     pub first: usize,
 }
 
+#[must_use]
 pub fn plan_move(items: &[Entry], sel: &BTreeSet<usize>, to: Place) -> Option<Moved> {
     let blocks = blocks(items, sel);
     if blocks.is_empty() || to.at > items.len() {
@@ -305,6 +321,7 @@ fn removal_of(blocks: &[Range<usize>]) -> Vec<Splice> {
         .collect()
 }
 
+#[must_use]
 pub fn group(
     items: &[Entry],
     sel: &BTreeSet<usize>,
@@ -338,6 +355,7 @@ pub fn group(
     Some((splices, first))
 }
 
+#[must_use]
 pub fn ungroup(items: &[Entry], groups: &BTreeSet<usize>) -> (Vec<Splice>, BTreeSet<usize>) {
     let groups: BTreeSet<usize> = groups
         .iter()
@@ -393,6 +411,7 @@ pub fn ungroup(items: &[Entry], groups: &BTreeSet<usize>) -> (Vec<Splice>, BTree
     (splices, children)
 }
 
+#[must_use]
 pub fn of_trace(items: &[Entry], trace: crate::trace::TraceId) -> BTreeSet<usize> {
     let of = |j: usize| items[j].row.trace() == Some(trace);
     (0..items.len())
@@ -406,10 +425,12 @@ pub fn of_trace(items: &[Entry], trace: crate::trace::TraceId) -> BTreeSet<usize
         .collect()
 }
 
+#[must_use]
 pub fn removal(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Splice> {
     removal_of(&blocks(items, sel))
 }
 
+#[must_use]
 pub fn extract(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Entry> {
     blocks(items, sel)
         .into_iter()
@@ -423,6 +444,7 @@ pub fn extract(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Entry> {
         .collect()
 }
 
+#[must_use]
 pub fn insertion(to: Place, rows: Vec<Entry>) -> Option<(Splice, BTreeSet<usize>)> {
     if rows.iter().any(|e| e.depth + to.depth >= MAX_DEPTH) {
         return None;

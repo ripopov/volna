@@ -31,8 +31,8 @@ struct Measurement {
 
 impl Drop for Measurement {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        drop(self.child.kill());
+        drop(self.child.wait());
     }
 }
 

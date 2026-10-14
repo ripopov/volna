@@ -60,14 +60,17 @@ pub struct TimeColumn {
 }
 
 impl TimeColumn {
+    #[must_use]
     pub fn width_f64(&self) -> f64 {
         f64::from(self.area.width()).max(1.0)
     }
 
+    #[must_use]
     pub fn x_of(&self, t: f64) -> f32 {
         snap(self.area.left() + self.viewport.x_of(t, self.width_f64()) as f32)
     }
 
+    #[must_use]
     pub fn ticks<'a>(&self, base: TimeBase<'a>, zoom: f32) -> (Vec<Tick>, &'a str) {
         ticks(
             &self.viewport,
@@ -286,6 +289,7 @@ pub struct MarkerChip {
 }
 
 impl MarkerChip {
+    #[must_use]
     pub fn is_cluster(&self) -> bool {
         self.markers.len() > 1
     }
@@ -299,6 +303,7 @@ pub struct SpanClocks<'a> {
 }
 
 impl<'a> SpanClocks<'a> {
+    #[must_use]
     pub fn time_only(base: TimeBase<'a>) -> Self {
         Self {
             rulers: &[],
@@ -307,6 +312,7 @@ impl<'a> SpanClocks<'a> {
         }
     }
 
+    #[must_use]
     pub fn of(
         rulers: &'a [&'a Clock],
         view: &ClockView,
@@ -354,6 +360,7 @@ fn span_forms(m: &Measurement, selected: Option<usize>, base: TimeBase<'_>) -> V
     forms
 }
 
+#[must_use]
 pub fn signed_time(dt: i128, base: TimeBase<'_>) -> String {
     let sign = if dt < 0 { "−" } else { "" };
     format!("{sign}{}", format_time(dt.unsigned_abs() as f64, base))
@@ -410,6 +417,7 @@ pub struct MarkerLane {
 }
 
 impl MarkerLane {
+    #[must_use]
     pub fn chip_at(&self, p: Point) -> Option<usize> {
         if !self.band.contains(p) || p.x < self.time_left {
             return None;
@@ -420,6 +428,7 @@ impl MarkerLane {
             .position(|c| p.x >= c.rect.left() - left && p.x <= c.rect.right() + right)
     }
 
+    #[must_use]
     pub fn name_field(&self, ix: usize, id: crate::marker::MarkerId) -> Option<Rect> {
         let chip = self.chips.iter().find(|c| c.markers.contains(&ix))?;
         let z = |v: f32| v * self.zoom;
@@ -435,10 +444,12 @@ impl MarkerLane {
         })
     }
 
+    #[must_use]
     pub fn shown(&self, span: &SpanMark) -> (f32, f32) {
         (span.x0.max(self.time_left), span.x1.min(self.band.right()))
     }
 
+    #[must_use]
     pub fn span_at(&self, p: Point) -> Option<usize> {
         if !self.band.contains(p) || p.x < self.time_left || self.chip_at(p).is_some() {
             return None;
@@ -449,6 +460,7 @@ impl MarkerLane {
         })
     }
 
+    #[must_use]
     pub fn strip(&self) -> Rect {
         match &self.measure {
             Some(m) => Rect::new(
@@ -459,10 +471,12 @@ impl MarkerLane {
         }
     }
 
+    #[must_use]
     pub fn live_shown(&self, live: &LiveSpan) -> (f32, f32) {
         (live.x0.max(self.time_left), live.x1.min(self.band.right()))
     }
 
+    #[must_use]
     pub fn live_at(&self, p: Point) -> bool {
         let Some(m) = &self.measure else {
             return false;
@@ -474,6 +488,7 @@ impl MarkerLane {
         m.band.contains(p) && x1 > x0 && p.x >= x0 && p.x <= x1
     }
 
+    #[must_use]
     pub fn hit(&self, p: Point) -> Option<LaneHit> {
         if let Some(m) = &self.measure {
             if m.clear.contains(p) && m.clear.left() >= self.band.left() {
@@ -498,7 +513,11 @@ impl MarkerLane {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Rendering and transfer inputs are independent dimensions of the operation."
+)]
+#[must_use]
 pub fn marker_lane(
     band: Rect,
     time_left: f32,
@@ -591,6 +610,7 @@ pub fn marker_lane(
     }
 }
 
+#[must_use]
 pub fn measure_lane(
     band: Rect,
     time_left: f32,
@@ -648,7 +668,10 @@ pub fn measure_lane(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Rendering and transfer inputs are independent dimensions of the operation."
+)]
 fn lane_spans(
     band: Rect,
     time_left: f32,
@@ -768,7 +791,7 @@ pub fn outside_time(
 ) -> std::ops::Range<f32> {
     let area = column.area;
     let to_x = |t: u64| {
-        let x = area.left() as f64 + column.viewport.x_of(t as f64, column.width_f64());
+        let x = f64::from(area.left()) + column.viewport.x_of(t as f64, column.width_f64());
         x.clamp(f64::from(area.left()), f64::from(area.right())) as f32
     };
     let (start, end) = (to_x(limits.0), to_x(limits.1));
@@ -796,9 +819,9 @@ pub fn header_ticks(p: &mut TextPainter<'_>, column: &TimeColumn, tick_list: &[T
     let z = |v: f32| v * t.zoom;
     let header = column.header;
     let unit_w = (!unit.is_empty()).then(|| p.width(unit, FontRole::Mono, t.ui_size_small));
-    let unit_x = unit_w
-        .map(|w| header.right() - w - z(SCROLLBAR_W + 4.0))
-        .unwrap_or(header.right());
+    let unit_x = unit_w.map_or(header.right(), |w| {
+        header.right() - w - z(SCROLLBAR_W + 4.0)
+    });
     let mut labels = Vec::new();
     for tick in tick_list {
         let x = column.x_of(tick.time);
@@ -837,7 +860,10 @@ pub fn header_ticks(p: &mut TextPainter<'_>, column: &TimeColumn, tick_list: &[T
     });
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Rendering and transfer inputs are independent dimensions of the operation."
+)]
 pub fn marker_lane_paint(
     p: &mut TextPainter<'_>,
     column: &TimeColumn,
@@ -1013,7 +1039,10 @@ pub fn marker_lane_paint(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Rendering and transfer inputs are independent dimensions of the operation."
+)]
 fn measure_lane_paint(
     p: &mut TextPainter<'_>,
     column: &TimeColumn,
@@ -1582,12 +1611,12 @@ mod tests {
         let mut seed = 7u64;
         let mut rnd = |n: u64| {
             seed = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
             (seed >> 33) % n
         };
         for trial in 0..300 {
-            let mut times: Vec<u64> = (0..1 + rnd(80)).map(|_| rnd(100_000)).collect();
+            let mut times: Vec<u64> = (0..=rnd(80)).map(|_| rnd(100_000)).collect();
             times.sort_unstable();
             times.dedup();
             let mut markers = at(&times);
@@ -1758,9 +1787,15 @@ mod tests {
         );
         let y = l.band.top() + l.band.height() / 2.0;
         let (x0, x1) = l.shown(&l.spans[1]);
-        assert_eq!(l.hit(point((x0 + x1) / 2.0, y)), Some(LaneHit::Span(1)));
+        assert_eq!(
+            l.hit(point(f32::midpoint(x0, x1), y)),
+            Some(LaneHit::Span(1))
+        );
         assert_eq!(l.hit(point(x1 + 3.0, y)), Some(LaneHit::Chip(2)));
-        assert_eq!(l.hit(point((x0 + x1) / 2.0, l.band.bottom() + 1.0)), None);
+        assert_eq!(
+            l.hit(point(f32::midpoint(x0, x1), l.band.bottom() + 1.0)),
+            None
+        );
         assert_eq!(l.hit(point(l.band.right() - 1.0, y)), None);
     }
 

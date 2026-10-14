@@ -42,10 +42,12 @@ pub struct ParentTrace {
 }
 
 impl ParentTrace {
+    #[must_use]
     pub fn state(&self) -> &ParentTraceState {
         &self.state
     }
 
+    #[must_use]
     pub fn nodes(&self) -> &[ParentNode] {
         &self.nodes
     }

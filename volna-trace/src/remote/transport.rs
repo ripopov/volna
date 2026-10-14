@@ -81,7 +81,7 @@ fn validate(packet: &Packet) -> anyhow::Result<()> {
             );
         }
         Body::Error { message, .. } => {
-            anyhow::ensure!(message.len() <= 4096, "error message too large")
+            anyhow::ensure!(message.len() <= 4096, "error message too large");
         }
         _ => {}
     }
@@ -180,7 +180,7 @@ pub fn read_packet(mut input: impl Read) -> anyhow::Result<Option<Packet>> {
         match input.read(&mut header[..1]) {
             Ok(0) => return Ok(None),
             Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(e) => return Err(e.into()),
         }
     }
@@ -284,6 +284,7 @@ impl<R: Read, W: Write> ResponseWriter<R, W> {
     }
 }
 
+#[must_use]
 pub fn acknowledgement(packet: &Packet) -> Packet {
     Packet {
         session: packet.session,
@@ -477,6 +478,7 @@ impl Receiver {
         }
     }
 
+    #[must_use]
     pub fn is_complete(&self) -> bool {
         !self.failed && self.expected.is_empty() && self.active.is_none()
     }

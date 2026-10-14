@@ -135,7 +135,7 @@ impl PackedHistory {
             ValueView::Unavailable => self.data.push(0),
             ValueView::Logic(bits) => {
                 anyhow::ensure!(
-                    bits.width as u64 == self.shape.width().max(1) as u64,
+                    bits.width as u64 == u64::from(self.shape.width().max(1)),
                     "logic width mismatch"
                 );
                 self.data.push(1);
@@ -209,7 +209,7 @@ impl PackedHistory {
                     "invalid unavailable value padding"
                 ),
                 1 => {
-                    let width = self.shape.width().max(1) as u64;
+                    let width = u64::from(self.shape.width().max(1));
                     anyhow::ensure!(
                         matches!(
                             self.shape,

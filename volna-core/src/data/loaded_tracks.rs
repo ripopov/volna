@@ -123,8 +123,8 @@ pub struct LoadedGenerator {
     palette: crate::pipeline::palette::StagePalette,
     stage_order: Vec<Vec<usize>>,
     pub(crate) row_index: Option<crate::pipeline::occupancy::RowIndex>,
-    _reservation: Option<volna_trace::remote::memory::Reservation>,
-    _placed_reservation: Option<volna_trace::remote::memory::Reservation>,
+    reservation: Option<volna_trace::remote::memory::Reservation>,
+    placed_reservation: Option<volna_trace::remote::memory::Reservation>,
 }
 impl std::ops::Deref for LoadedGenerator {
     type Target = RawGenerator;
@@ -179,13 +179,12 @@ impl LoadedGenerator {
                 open.pop();
                 free.push(std::cmp::Reverse(row));
             }
-            let row = match free.pop() {
-                Some(std::cmp::Reverse(row)) => row,
-                None => {
-                    let row = depth;
-                    depth = depth.saturating_add(1);
-                    row.min(u16::MAX - 1)
-                }
+            let row = if let Some(std::cmp::Reverse(row)) = free.pop() {
+                row
+            } else {
+                let row = depth;
+                depth = depth.saturating_add(1);
+                row.min(u16::MAX - 1)
             };
             sub_rows.push(row);
             open.push(std::cmp::Reverse((
@@ -270,19 +269,23 @@ impl LoadedGenerator {
             palette,
             stage_order,
             row_index,
-            _reservation: reservation,
-            _placed_reservation: None,
+            reservation,
+            placed_reservation: None,
         })
     }
     pub(crate) fn scale_times(&mut self, scale: u64) -> anyhow::Result<()> {
         anyhow::ensure!(scale > 0, "timeline scale must be positive");
         let raw = &self.raw;
         let budget = self
-            ._placed_reservation
+            .placed_reservation
             .as_ref()
-            .map(|r| r.budget())
+            .map(volna_trace::remote::memory::Reservation::budget)
             .or_else(|| raw.memory_budget())
-            .or_else(|| self._reservation.as_ref().map(|r| r.budget()));
+            .or_else(|| {
+                self.reservation
+                    .as_ref()
+                    .map(volna_trace::remote::memory::Reservation::budget)
+            });
         let reservation = budget
             .as_ref()
             .map(|b| b.reserve_object("the placed generator", raw.resident_bytes()))
@@ -336,7 +339,7 @@ impl LoadedGenerator {
         if let Some(index) = &mut self.row_index {
             index.scale_times(scale);
         }
-        self._placed_reservation = reservation;
+        self.placed_reservation = reservation;
         Ok(())
     }
     pub fn new(
@@ -355,24 +358,30 @@ impl LoadedGenerator {
             None,
         )
     }
+    #[must_use]
     pub fn sub_row(&self, ordinal: usize) -> u16 {
         self.sub_rows.get(ordinal).copied().unwrap_or(0)
     }
 
+    #[must_use]
     pub fn depth(&self) -> u16 {
         self.depth
     }
 
+    #[must_use]
     pub fn median_lifetime(&self) -> u64 {
         self.median_lifetime
     }
 
+    #[must_use]
     pub fn palette(&self) -> &crate::pipeline::palette::StagePalette {
         &self.palette
     }
+    #[must_use]
     pub fn stage_order(&self, ordinal: usize) -> &[usize] {
         &self.stage_order[ordinal]
     }
+    #[must_use]
     pub fn stage_census(&self) -> &StageCensus {
         &self.stage_census
     }
@@ -423,7 +432,7 @@ fn scale_attribute(
     match value {
         AttributeValue::Time(t) => *t = t.saturating_mul(scale),
         AttributeValue::U64(t) if key == crate::clock::PERIOD_ATTRIBUTE => {
-            *t = t.saturating_mul(scale)
+            *t = t.saturating_mul(scale);
         }
         _ => {}
     }
@@ -541,10 +550,10 @@ mod tests {
                 .all(|(i, _)| loaded.sub_row(i) < loaded.depth())
         );
         let mut lifetimes: Vec<_> = txs.iter().map(|t| t.end - t.begin).collect();
-        lifetimes.sort();
+        lifetimes.sort_unstable();
         assert_eq!(loaded.median_lifetime(), lifetimes[lifetimes.len() / 2]);
         let mut bounds: Vec<u64> = txs.iter().flat_map(|t| [t.begin, t.end]).collect();
-        bounds.sort();
+        bounds.sort_unstable();
         bounds.dedup();
         for time in 0..420 {
             assert_eq!(

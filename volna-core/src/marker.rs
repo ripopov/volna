@@ -2,6 +2,7 @@
 //! [`Document`] as one time-sorted list.
 
 use std::fmt;
+use std::fmt::Write as _;
 use std::num::NonZeroU32;
 use std::ops::Range;
 
@@ -25,10 +26,12 @@ impl MarkerId {
         NonZeroU32::new(n).map(Self)
     }
 
+    #[must_use]
     pub fn get(self) -> u32 {
         self.0.get()
     }
 
+    #[must_use]
     pub fn palette_index(self) -> usize {
         self.get() as usize - 1
     }
@@ -54,10 +57,12 @@ pub enum Reference {
     Marker(MarkerId),
 }
 
+#[must_use]
 pub fn reference_at(markers: &[Marker], time: u64) -> Reference {
     at(markers, time).map_or(Reference::Time(time), |m| Reference::Marker(m.id))
 }
 
+#[must_use]
 pub fn reference_near(markers: &[Marker], raw: f64, tolerance: f64, snapped: u64) -> Reference {
     let ix = markers.partition_point(|m| (m.time as f64) < raw);
     let distance = |t: u64| (t as f64 - raw).abs();
@@ -81,6 +86,7 @@ pub fn reference_near(markers: &[Marker], raw: f64, tolerance: f64, snapped: u64
 
 pub const MAX_NAME: usize = 48;
 
+#[must_use]
 pub fn clean_name(name: &str) -> Option<String> {
     let name = name.trim();
     let name = match name.char_indices().nth(MAX_NAME) {
@@ -90,6 +96,7 @@ pub fn clean_name(name: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
+#[must_use]
 pub fn free_id(markers: &[Marker]) -> Option<MarkerId> {
     let mut used: Vec<u32> = markers.iter().map(|m| m.id.get()).collect();
     used.sort_unstable();
@@ -103,6 +110,7 @@ pub fn free_id(markers: &[Marker]) -> Option<MarkerId> {
     MarkerId::new(next)
 }
 
+#[must_use]
 pub fn at(markers: &[Marker], time: u64) -> Option<&Marker> {
     let ix = markers.partition_point(|m| m.time < time);
     markers.get(ix).filter(|m| m.time == time)
@@ -115,6 +123,7 @@ pub enum Walk {
     To(MarkerId),
 }
 
+#[must_use]
 pub fn walk_target(
     markers: &[Marker],
     walk: Walk,
@@ -221,6 +230,7 @@ pub struct MarkerDrag {
 }
 
 impl MarkerDrag {
+    #[must_use]
     pub fn begin(doc: &Document, ix: usize, p: Point, marker_x: f32) -> Option<Self> {
         let m = doc.markers().get(ix)?;
         Some(Self {
@@ -277,6 +287,7 @@ fn item(verb: LaneVerb, label: impl Into<String>, badge: Option<&str>) -> MenuEn
     })
 }
 
+#[must_use]
 pub fn name(m: &Marker) -> String {
     match &m.label {
         Some(label) => format!("{} “{label}”", m.id),
@@ -284,6 +295,7 @@ pub fn name(m: &Marker) -> String {
     }
 }
 
+#[must_use]
 pub fn menu(doc: &Document, hit: &LaneHit) -> Option<Vec<MenuEntry>> {
     let markers = doc.markers();
     let measure = || {
@@ -345,10 +357,12 @@ pub fn menu(doc: &Document, hit: &LaneHit) -> Option<Vec<MenuEntry>> {
     })
 }
 
+#[must_use]
 pub fn navigator_query(query: &str) -> Option<&str> {
     query.trim_start().strip_prefix('@')
 }
 
+#[must_use]
 pub fn palette_preview(query: &str) -> Option<String> {
     let words: Vec<&str> = query.split_whitespace().collect();
     let asks = |w: &str| w.len() >= 3 && "markers".starts_with(&w.to_lowercase());
@@ -380,6 +394,7 @@ fn matches_query(m: &Marker, query: &str) -> bool {
     })
 }
 
+#[must_use]
 pub fn navigator_rows(doc: &Document, query: &str, selected: Option<&Clock>) -> Vec<NavigatorRow> {
     let base = doc.time_base();
     let reference = doc.reference_time();
@@ -418,6 +433,7 @@ pub fn navigator_rows(doc: &Document, query: &str, selected: Option<&Clock>) -> 
         .collect()
 }
 
+#[must_use]
 pub fn text(
     trace: &str,
     m: &Marker,
@@ -435,11 +451,12 @@ pub fn text(
             .iter()
             .map(|c| crate::clock::position_at(view, c, m.time))
             .collect();
-        text.push_str(&format!(" ({})", clocks.join(", ")));
+        write!(text, " ({})", clocks.join(", ")).unwrap();
     }
     text
 }
 
+#[must_use]
 pub fn span_text(
     trace: &str,
     a: &Marker,

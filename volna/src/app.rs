@@ -263,6 +263,10 @@ type MenuKey = (u64, u64, u64, u64);
 pub(crate) type OnWavesKey = (u64, u64);
 pub(crate) type OnWaves = std::collections::HashSet<Traced<volna_trace::data::Member>>;
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Host mode, theme, focus, and CLI policy are independent state flags."
+)]
 pub struct Workspace {
     pub app: CoreApp,
     system_dark: bool,
@@ -320,7 +324,7 @@ impl Focusable for Workspace {
 }
 
 pub fn init(cx: &mut App) {
-    cx.bind_keys([
+    cx.bind_keys(vec![
         KeyBinding::new("cmd-z", Undo, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-z", Undo, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-shift-z", Redo, Some("Workspace && !Embedded")),
@@ -331,7 +335,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys(crate::palette::key_bindings());
     {
         use gpui_kit::component::input::{Redo as InputRedo, Undo as InputUndo};
-        cx.bind_keys([
+        cx.bind_keys(vec![
             KeyBinding::new("cmd-z", InputUndo, Some("Input")),
             KeyBinding::new("ctrl-z", InputUndo, Some("Input")),
             KeyBinding::new("cmd-shift-z", InputRedo, Some("Input")),
@@ -341,14 +345,14 @@ pub fn init(cx: &mut App) {
     }
     for n in 1..=9 {
         for key in [n.to_string(), format!("ctrl-{n}")] {
-            cx.bind_keys([KeyBinding::new(
+            cx.bind_keys(vec![KeyBinding::new(
                 &key,
                 gpui_kit::NoAction {},
                 Some("TextInput || Input || Command || Dialog || StartPage"),
             )]);
         }
     }
-    cx.bind_keys([
+    cx.bind_keys(vec![
         KeyBinding::new("cmd-1", FocusPanel1, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-alt-1", FocusPanel1, Some("Workspace && !Embedded")),
         KeyBinding::new("cmd-2", FocusPanel2, Some("Workspace && !Embedded")),
@@ -368,7 +372,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-9", FocusPanel9, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-alt-9", FocusPanel9, Some("Workspace && !Embedded")),
     ]);
-    cx.bind_keys([
+    cx.bind_keys(vec![
         KeyBinding::new("cmd-s", SaveWorkspace, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-s", SaveWorkspace, Some("Workspace && !Embedded")),
         KeyBinding::new(
@@ -764,7 +768,7 @@ impl Workspace {
         })
         .detach();
         cx.observe_window_appearance(window, |this, window, cx| {
-            this.set_system_dark(crate::theme::is_dark(window.appearance()), cx)
+            this.set_system_dark(crate::theme::is_dark(window.appearance()), cx);
         })
         .detach();
         let waves_focus = cx.focus_handle();
@@ -804,7 +808,7 @@ impl Workspace {
             #[cfg(not(target_family = "wasm"))]
             recent_checked: None,
         };
-        workspace.start_frame_sampling(window, cx);
+        Self::start_frame_sampling(window, cx);
         workspace
     }
 
@@ -886,7 +890,7 @@ impl Workspace {
                         #[cfg(target_family = "wasm")]
                         crate::web::trace_closed(&trace_uri);
                         #[cfg(not(target_family = "wasm"))]
-                        let _ = trace_uri;
+                        drop(trace_uri);
                     }
                     Event::Quit => cx.quit(),
                     Event::Changed => {
@@ -909,7 +913,7 @@ impl Workspace {
                         #[cfg(target_family = "wasm")]
                         crate::web::announce(&text);
                     }
-                    Event::OpenFileDialog => self.open_file_dialog(cx),
+                    Event::OpenFileDialog => Self::open_file_dialog(cx),
                     Event::AddTraceDialog => self.add_trace_dialog(cx),
                     Event::RevealScopeRow(ix) => self
                         .scopes_scroll
@@ -936,7 +940,7 @@ impl Workspace {
                     Event::OpenMarkerNavigator => {
                         if let Some(window) = window.as_deref_mut() {
                             cx.defer_in(window, |ws, window, cx| {
-                                ws.open_palette_with("@", window, cx)
+                                ws.open_palette_with("@", window, cx);
                             });
                         }
                     }
@@ -992,15 +996,11 @@ impl Workspace {
             let Some(request) = self.route_remote(request, cx) else {
                 continue;
             };
-            self.spawn_request(request, cx);
+            Self::spawn_request(request, cx);
         }
     }
 
-    pub(crate) fn spawn_request(
-        &mut self,
-        request: volna_core::session::LoadRequest,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn spawn_request(request: volna_core::session::LoadRequest, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { request.perform() }).await;
             this.update(cx, |this, cx| {
@@ -1057,7 +1057,7 @@ impl Workspace {
                 let command = Command::MenuSelect(panel, id.clone());
                 workspace
                     .update(cx, |this, cx| {
-                        this.dispatch_if_current(generation, command, Some(window), cx)
+                        this.dispatch_if_current(generation, command, Some(window), cx);
                     })
                     .ok();
             })
@@ -1230,7 +1230,7 @@ impl Workspace {
         self.after(None, cx);
     }
 
-    fn open_file_dialog(&mut self, cx: &mut Context<Self>) {
+    fn open_file_dialog(cx: &mut Context<Self>) {
         #[cfg(not(target_family = "wasm"))]
         {
             let rx = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
@@ -1437,11 +1437,12 @@ impl Workspace {
         cx.notify();
     }
 
+    #[must_use]
     pub fn debug_state(&self) -> String {
         self.app.debug_state()
     }
 
-    fn render_drag_surface(&self, drag: ChromeDrag, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_drag_surface(drag: ChromeDrag, cx: &mut Context<Self>) -> impl IntoElement {
         let cursor = match drag {
             ChromeDrag::Sidebar => CursorStyle::ResizeLeftRight,
             ChromeDrag::ScopesSplit => CursorStyle::ResizeUpDown,
@@ -1522,14 +1523,14 @@ impl Workspace {
             .h(px(t.titlebar_height))
             .w_full()
             .pl(left_pad)
-            .when(right_controls.is_none(), |el| el.pr_2())
+            .when(right_controls.is_none(), gpui_kit::Styled::pr_2)
             .gap_2()
             .bg(t.bar.bg)
             .border_b_1()
             .border_color(t.border)
             .font_family(t.ui_font)
             .text_size(px(t.ui_size))
-            .when_some(left_controls, |el, controls| el.child(controls))
+            .when_some(left_controls, gpui_kit::ParentElement::child)
             .child(
                 div()
                     .id("titlebar-drag")
@@ -1554,7 +1555,7 @@ impl Workspace {
                     })
                     .when(window_menu, |el| {
                         el.on_mouse_down(MouseButton::Right, |ev, window, _| {
-                            window.show_window_menu(ev.position)
+                            window.show_window_menu(ev.position);
                         })
                     })
                     .child(
@@ -1567,7 +1568,7 @@ impl Workspace {
                         el.child(div().text_color(colors.text_placeholder).child("—"))
                             .child(div().text_color(colors.text_muted).child(name))
                     })
-                    .when_some(chips, |el, chips| el.child(chips)),
+                    .when_some(chips, gpui_kit::ParentElement::child),
             )
             .child(
                 icon_button(
@@ -1579,11 +1580,9 @@ impl Workspace {
                 )
                 .selected(self.app.sidebar_visible)
                 .tooltip("Toggle sidebar (⌘B)")
-                .on_click(
-                    cx.listener(|this, _, w, cx| {
-                        this.dispatch(Command::ToggleSidebar, Some(w), cx)
-                    }),
-                ),
+                .on_click(cx.listener(|this, _, w, cx| {
+                    this.dispatch(Command::ToggleSidebar, Some(w), cx);
+                })),
             )
             .when_some(self.app.panels.layout().right.as_ref(), |el, dock| {
                 el.child(
@@ -1610,7 +1609,7 @@ impl Workspace {
                 icon_button("open-file", IconName::FolderOpen, t.bar, t.bar_hover, cx)
                     .tooltip("Open trace (⌘O)")
                     .on_click(cx.listener(|this, _, w, cx| {
-                        this.dispatch(Command::RequestOpenDialog, Some(w), cx)
+                        this.dispatch(Command::RequestOpenDialog, Some(w), cx);
                     })),
             )
             .when(self.app.doc.is_loaded(), |el| {
@@ -1618,7 +1617,7 @@ impl Workspace {
                     icon_button("add-trace", IconName::Plus, t.bar, t.bar_hover, cx)
                         .tooltip("Add trace beside the open ones (⇧⌘O)")
                         .on_click(cx.listener(|this, _, w, cx| {
-                            this.dispatch(Command::RequestAddTraceDialog, Some(w), cx)
+                            this.dispatch(Command::RequestAddTraceDialog, Some(w), cx);
                         })),
                 )
             })
@@ -1630,7 +1629,7 @@ impl Workspace {
                         cx.listener(|this, _, w, cx| this.open_settings(&OpenSettings, w, cx)),
                     ),
             )
-            .when_some(right_controls, |el, controls| el.child(controls))
+            .when_some(right_controls, gpui_kit::ParentElement::child)
     }
 
     fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1744,7 +1743,7 @@ impl Workspace {
         let t = *theme(cx);
         let colors = t.editor;
         let error: Option<SharedString> = match self.app.trace_state() {
-            TraceState::Error(e) => Some(e.clone().into()),
+            TraceState::Error(e) => Some(e.into()),
             _ => None,
         };
         let badge = |keys: &'static str| {
@@ -1801,7 +1800,7 @@ impl Workspace {
                 .when(!selected, |el| el.hover(|s| s.bg(t.hover.bg)))
                 .tooltip(move |w, cx| Tooltip::new(path.clone()).build(w, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Command::Recent(RecentCommand::Open(ix)), Some(window), cx)
+                    this.dispatch(Command::Recent(RecentCommand::Open(ix)), Some(window), cx);
                 }))
                 .child(
                     div()
@@ -1873,7 +1872,7 @@ impl Workspace {
                                         Command::Recent(RecentCommand::Forget(ix)),
                                         Some(window),
                                         cx,
-                                    )
+                                    );
                                 })),
                         ),
                 )
@@ -1971,7 +1970,7 @@ impl Workspace {
                         .icon(gpui_kit::component::Icon::empty().path(IconName::FolderOpen.path()))
                         .primary()
                         .on_click(cx.listener(|this, _, w, cx| {
-                            this.dispatch(Command::RequestOpenDialog, Some(w), cx)
+                            this.dispatch(Command::RequestOpenDialog, Some(w), cx);
                         })),
                 ),
             )
@@ -2011,7 +2010,7 @@ impl Workspace {
                                     Command::Recent(RecentCommand::ToggleAll),
                                     Some(window),
                                     cx,
-                                )
+                                );
                             })),
                     )
                 })
@@ -2323,32 +2322,32 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open_file))
             .on_action(cx.listener(Self::add_trace))
             .on_action(cx.listener(|this, _: &OpenWorkspace, window, cx| {
-                this.dispatch(Command::RequestOpenWorkspace, Some(window), cx)
+                this.dispatch(Command::RequestOpenWorkspace, Some(window), cx);
             }))
             .on_action(cx.listener(|this, _: &SaveWorkspace, window, cx| {
-                this.dispatch(Command::SaveWorkspace, Some(window), cx)
+                this.dispatch(Command::SaveWorkspace, Some(window), cx);
             }))
             .on_action(cx.listener(|this, _: &SaveWorkspaceAs, window, cx| {
-                this.dispatch(Command::RequestSaveWorkspaceAs, Some(window), cx)
+                this.dispatch(Command::RequestSaveWorkspaceAs, Some(window), cx);
             }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
-                this.dispatch(Command::RequestQuit, Some(window), cx)
+                this.dispatch(Command::RequestQuit, Some(window), cx);
             }))
             .on_action(cx.listener(|this, _: &Undo, window, cx| {
-                this.dispatch(Command::Undo, Some(window), cx)
+                this.dispatch(Command::Undo, Some(window), cx);
             }))
             .on_action(cx.listener(|this, _: &Redo, window, cx| {
-                this.dispatch(Command::Redo, Some(window), cx)
+                this.dispatch(Command::Redo, Some(window), cx);
             }))
             .on_action(cx.listener(|this, action: &OpenRecent, window, cx| {
                 this.dispatch(
                     Command::Recent(RecentCommand::Open(action.ix)),
                     Some(window),
                     cx,
-                )
+                );
             }))
             .on_action(cx.listener(|this, _: &ClearRecent, window, cx| {
-                this.dispatch(Command::Recent(RecentCommand::Clear), Some(window), cx)
+                this.dispatch(Command::Recent(RecentCommand::Clear), Some(window), cx);
             }))
             .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(Self::close_trace))
@@ -2356,12 +2355,12 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::command_palette))
             .on_action(cx.listener(|this, action: &GoToMarker, window, cx| {
                 if let Some(id) = volna_core::marker::MarkerId::new(action.n) {
-                    this.dispatch(Command::Action(Action::GoToMarker(id)), Some(window), cx)
+                    this.dispatch(Command::Action(Action::GoToMarker(id)), Some(window), cx);
                 }
             }))
             .on_action(cx.listener(|this, action: &SetMarker, window, cx| {
                 if let Some(id) = volna_core::marker::MarkerId::new(action.n) {
-                    this.dispatch(Command::Action(Action::SetMarker(id)), Some(window), cx)
+                    this.dispatch(Command::Action(Action::SetMarker(id)), Some(window), cx);
                 }
             }))
             .on_action(cx.listener(|this, action: &SetTint, window, cx| {
@@ -2369,20 +2368,20 @@ impl Render for Workspace {
                     Command::Action(Action::SetTint(action.tint)),
                     Some(window),
                     cx,
-                )
+                );
             }))
             .on_action(cx.listener(|this, action: &ClockAction, window, cx| {
-                this.dispatch(Command::Clocks(action.command.clone()), Some(window), cx)
+                this.dispatch(Command::Clocks(action.command.clone()), Some(window), cx);
             }))
             .on_action(cx.listener(|this, action: &TraceAction, window, cx| {
                 let trace = action.trace;
                 match action.verb {
                     TraceVerb::Reveal => {
-                        this.dispatch(Command::RevealTrace(trace), Some(window), cx)
+                        this.dispatch(Command::RevealTrace(trace), Some(window), cx);
                     }
                     TraceVerb::Rename => this.start_trace_rename(trace, window, cx),
                     TraceVerb::Close => {
-                        this.dispatch(Command::RemoveTrace(trace), Some(window), cx)
+                        this.dispatch(Command::RemoveTrace(trace), Some(window), cx);
                     }
                 }
             }))
@@ -2393,7 +2392,7 @@ impl Render for Workspace {
                     },
                     Some(window),
                     cx,
-                )
+                );
             }))
             .on_action(cx.listener(
                 |this, _: &crate::settings_panel::ToggleSettingsJson, window, cx| {
@@ -2581,6 +2580,6 @@ impl Render for Workspace {
         )
         .children(self.render_frame_details(cx))
         .children(self.render_rename())
-        .children(drag.map(|d| self.render_drag_surface(d, cx)))
+        .children(drag.map(|d| Self::render_drag_surface(d, cx)))
     }
 }

@@ -37,14 +37,14 @@ pub(crate) fn init(cx: &mut gpui_kit::App) {
 
 impl CanvasPanelView {
     fn table_command(&self, command: TableCommand, window: &mut Window, cx: &mut Context<Self>) {
-        _ = self.ws.update(cx, |ws, cx| {
+        drop(self.ws.update(cx, |ws, cx| {
             ws.dispatch_if_current(
                 self.generation,
                 Command::Table(self.id, command),
                 Some(window),
                 cx,
-            )
-        });
+            );
+        }));
     }
 
     pub(crate) fn render_table(
@@ -142,8 +142,8 @@ impl CanvasPanelView {
                                 Command::Table(id, command.clone()),
                                 Some(window),
                                 cx,
-                            )
-                        })
+                            );
+                        });
                     }),
             );
         }
@@ -179,8 +179,8 @@ impl CanvasPanelView {
                                                         Command::Table(id, command.clone()),
                                                         Some(window),
                                                         cx,
-                                                    )
-                                                })
+                                                    );
+                                                });
                                             }),
                                     )
                                 },
@@ -195,8 +195,8 @@ impl CanvasPanelView {
                                                 Command::Table(id, TableCommand::ResetColumns),
                                                 Some(window),
                                                 cx,
-                                            )
-                                        })
+                                            );
+                                        });
                                     },
                                 ))
                         },
@@ -224,7 +224,7 @@ impl CanvasPanelView {
                     .ghost()
                     .small()
                     .on_click(cx.listener(move |view, _, window, cx| {
-                        view.table_command(command.clone(), window, cx)
+                        view.table_command(command.clone(), window, cx);
                     })),
             );
         }
@@ -274,14 +274,14 @@ impl CanvasPanelView {
     }
 
     fn show_transaction(&self, window: &mut Window, cx: &mut Context<Self>) {
-        _ = self.ws.update(cx, |ws, cx| {
+        drop(self.ws.update(cx, |ws, cx| {
             ws.dispatch_if_current(
                 self.generation,
                 Command::ShowTransaction { from: self.id },
                 Some(window),
                 cx,
-            )
-        });
+            );
+        }));
     }
 
     fn copy_table_row(&self, cx: &mut Context<Self>) {
@@ -294,7 +294,7 @@ impl CanvasPanelView {
             .panels
             .get(self.id)
             .and_then(|panel| panel.kind.table())
-            .map(|table| table.copy_tsv())
+            .map(volna_core::table::TableModel::copy_tsv)
         {
             Some(Ok(text)) => {
                 #[cfg(target_arch = "wasm32")]
@@ -309,7 +309,7 @@ impl CanvasPanelView {
                         Command::Notice(error.to_string()),
                         None,
                         cx,
-                    )
+                    );
                 });
             }
             None => {}
@@ -347,7 +347,7 @@ impl CanvasPanelView {
                             } else {
                                 Command::Notice("Choose a row within this table.".into())
                             };
-                            ws.dispatch_if_current(generation, command, Some(window), cx)
+                            ws.dispatch_if_current(generation, command, Some(window), cx);
                         }),
                         None => owner.update(cx, |ws, cx| {
                             ws.dispatch_if_current(
@@ -355,7 +355,7 @@ impl CanvasPanelView {
                                 Command::Notice("Choose a whole row number starting at 1.".into()),
                                 Some(window),
                                 cx,
-                            )
+                            );
                         }),
                     }
                     window.focus(&return_focus, cx);

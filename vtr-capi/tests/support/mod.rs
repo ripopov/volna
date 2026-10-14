@@ -1,12 +1,15 @@
+#![allow(
+    dead_code,
+    reason = "Integration binaries use different subsets of these shared build helpers."
+)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[allow(dead_code)]
 pub fn static_library() -> PathBuf {
     static_library_with(&[])
 }
 
-#[allow(dead_code)]
 pub fn static_library_with(features: &[&str]) -> PathBuf {
     let mut build = Command::new(env!("CARGO"));
     build.current_dir(env!("CARGO_MANIFEST_DIR")).args([

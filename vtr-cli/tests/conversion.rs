@@ -61,10 +61,13 @@ fn kanata_cycles_threads_stages_labels_relations_and_open_instructions() {
     assert!(matches!(attr(&r,a,"detail"), Value::Str(s) if r.str(*s) == "address\n0x100"));
     assert_eq!((a.stages[0].begin, a.stages[0].end), (100, Some(101)));
     assert_eq!(r.str(a.stages[1].name), "X");
-    assert!(a.stages[0]
-        .attrs
-        .iter()
-        .any(|(k, v)| r.str(*k) == "vtr.label" && matches!(v,Value::Str(s) if r.str(*s)=="fetch")));
+    assert!(
+        a.stages[0]
+            .attrs
+            .iter()
+            .any(|(k, v)| r.str(*k) == "vtr.label"
+                && matches!(v,Value::Str(s) if r.str(*s)=="fetch"))
+    );
     let relations = r.relations_from(a.id).unwrap();
     assert_eq!(relations.len(), 1);
     assert_eq!(relations[0].to, b.id);

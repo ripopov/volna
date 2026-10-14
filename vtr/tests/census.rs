@@ -2,7 +2,7 @@
 //! aliases, fed both in declaration order and with variables after subscopes, and through a
 //! written trace.
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::collections::HashSet;
 use vtr::*;
 
@@ -215,9 +215,9 @@ fn trace_hierarchy_counts_aliases_once() {
                             w.add_var(Some(me), &name, VarType::Wire, Direction::Implicit, one)
                                 .unwrap()
                                 .1,
-                        )
+                        );
                     }
-                };
+                }
             }
             ids.push(me);
         }
@@ -227,10 +227,12 @@ fn trace_hierarchy_counts_aliases_once() {
         let r = Reader::open(&path).unwrap();
         let (nodes, sizes) = r.hierarchy().scope_sizes();
         assert_eq!(nodes.len(), t.parent.len());
-        assert!(nodes
-            .iter()
-            .enumerate()
-            .all(|(i, &n)| r.name(n) == format!("s{i}")));
+        assert!(
+            nodes
+                .iter()
+                .enumerate()
+                .all(|(i, &n)| r.name(n) == format!("s{i}"))
+        );
         assert_eq!(triples(&sizes), brute(&t));
     }
 }

@@ -1,7 +1,7 @@
 //! Activity index tests for exact classification, deterministic builds, and trace
 //! validation.
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::path::{Path, PathBuf};
 use vtr::activity::{
     self, Block, BlockScan, Budget, BuildOptions, Builder, Identity, Index, Sidecar, SourceFormat,
@@ -295,7 +295,7 @@ fn windows(rng: &mut StdRng, r: &Reader, ch: &[Vec<u64>], n: usize) -> Vec<(u64,
         .collect();
     (0..n)
         .map(|k| {
-            let w = ((rng.gen::<f64>() * (span as f64).ln()).exp() as u64).clamp(1, span) - 1;
+            let w = ((rng.r#gen::<f64>() * (span as f64).ln()).exp() as u64).clamp(1, span) - 1;
             let at = |rng: &mut StdRng, v: &[u64]| {
                 if v.is_empty() {
                     lo
@@ -396,15 +396,15 @@ fn classify_and_resolve_match_every_change() {
                         "{win}: at least Δ wide but undecided"
                     );
                 }
-                if !c.undecided.is_empty() {
+                if c.undecided.is_empty() {
+                    exact_windows += 1;
+                } else {
                     undecided_windows += 1;
                     let blocks = cells(&index, t0, t1).count();
                     assert!(
                         blocks <= 2,
                         "{win}: an undecided window touches {blocks} blocks"
                     );
-                } else {
-                    exact_windows += 1;
                 }
                 let mut exact = c.active.clone();
                 exact.extend(activity::resolve(&r, &c.undecided, t0, t1).unwrap());
@@ -479,7 +479,7 @@ fn threshold_follows_each_blocks_budget() {
     let deltas: Vec<u64> = index.blocks().iter().map(|b| b.delta).collect();
     let cap = |k: usize| {
         let span = index.blocks()[k].end - index.blocks()[k - 1].end;
-        1u64 << (63 - (span / 4).leading_zeros())
+        1u64 << (span / 4).ilog2()
     };
     assert_eq!(deltas[0], 1);
     assert_eq!(deltas[1], 1 << 8);
@@ -597,7 +597,7 @@ fn sidecar_is_bound_to_its_trace() {
     let mut flipped = image.clone();
     flipped[200] ^= 0x40;
     assert!(Index::decode(&flipped, &id).is_err());
-    let mut v2 = image.clone();
+    let mut v2 = image;
     v2[8] = 2;
     assert!(matches!(
         Index::decode(&v2, &id),
@@ -673,7 +673,7 @@ fn set_read_only(dir: &Path, ro: bool) {
 
 #[test]
 fn admitted_cooperative_decode_matches_sync_and_stops_before_allocation() {
-    use std::future::{poll_fn, Future};
+    use std::future::{Future, poll_fn};
     use std::task::{Context, Poll, Waker};
     let waker = Waker::noop().clone();
     let dir = tmpdir();
@@ -682,7 +682,7 @@ fn admitted_cooperative_decode_matches_sync_and_stops_before_allocation() {
     let reader = Reader::open(&trace).unwrap();
     let identity = Identity::of(&reader).unwrap();
     let mut bytes = Vec::new();
-    activity::build(&reader, &mut bytes, &Default::default()).unwrap();
+    activity::build(&reader, &mut bytes, &BuildOptions::default()).unwrap();
     let mut peak = 0;
     let (index, yields) = {
         let future = Index::decode_with(
@@ -749,7 +749,7 @@ fn malformed_sidecar_directory_lengths_fail_without_allocation_or_overflow() {
     let reader = Reader::open(&trace).unwrap();
     let identity = Identity::of(&reader).unwrap();
     let mut bytes = Vec::new();
-    activity::build(&reader, &mut bytes, &Default::default()).unwrap();
+    activity::build(&reader, &mut bytes, &BuildOptions::default()).unwrap();
     let trailer = bytes.len() - 24;
     let directory = u64::from_le_bytes(bytes[trailer..trailer + 8].try_into().unwrap()) as usize;
     let count = directory + 24;

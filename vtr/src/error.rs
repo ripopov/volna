@@ -6,9 +6,7 @@ use std::fmt;
 pub enum Error {
     #[error("corrupt VTR file: {0}")]
     Corrupt(&'static str),
-    #[error(
-        "unsupported VTR version {major}.{minor} (this library reads up to major {supported})"
-    )]
+    #[error("unsupported VTR version {major}.{minor} (this library reads up to major {supported})")]
     UnsupportedVersion {
         major: u16,
         minor: u16,

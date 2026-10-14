@@ -24,6 +24,7 @@ impl Default for RowView {
 }
 
 impl RowView {
+    #[must_use]
     pub fn zoomed(self, zoom: f32) -> Self {
         Self {
             top: self.top,
@@ -31,6 +32,7 @@ impl RowView {
         }
     }
 
+    #[must_use]
     pub fn unzoomed(self, zoom: f32) -> Self {
         Self {
             top: self.top,
@@ -38,10 +40,12 @@ impl RowView {
         }
     }
 
+    #[must_use]
     pub fn row_at(&self, y: f32) -> f64 {
         self.top + f64::from(y) / f64::from(self.row_px)
     }
 
+    #[must_use]
     pub fn y_of(&self, row: f64) -> f32 {
         ((row - self.top) * f64::from(self.row_px)) as f32
     }

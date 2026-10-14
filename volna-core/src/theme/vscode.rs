@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use super::{Appearance, ColorPair, HostPalette, parse_css_color};
 
+#[must_use]
 pub fn host_palette(snapshot: &str) -> HostPalette {
     let vars: HashMap<_, _> = snapshot
         .lines()

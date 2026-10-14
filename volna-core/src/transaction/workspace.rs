@@ -89,18 +89,17 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 .tracks(trace)
                 .iter()
                 .find(|t| t.path == record.track);
-            let track = match found {
-                Some(t) => TrackSource::Resolved {
+            let track = if let Some(t) = found {
+                TrackSource::Resolved {
                     track: Traced::new(trace, t.id),
                     path: record.track,
-                },
-                None => {
-                    ctx.report
-                        .push(format!("Missing transaction track: {:?}", record.track));
-                    TrackSource::Unresolved {
-                        trace,
-                        path: record.track,
-                    }
+                }
+            } else {
+                ctx.report
+                    .push(format!("Missing transaction track: {:?}", record.track));
+                TrackSource::Unresolved {
+                    trace,
+                    path: record.track,
                 }
             };
             Some(ShownRecord {

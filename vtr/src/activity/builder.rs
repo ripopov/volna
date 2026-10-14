@@ -1,11 +1,11 @@
 //! The stitch: block scans, in time order, become index sections.
 
 use super::format::{
-    self, BlockHead, FileWriter, Header, BLOCK_COLUMNS, KIND_BLOCK, KIND_HEADER, KIND_TAIL,
+    self, BLOCK_COLUMNS, BlockHead, FileWriter, Header, KIND_BLOCK, KIND_HEADER, KIND_TAIL,
     TAIL_COLUMNS,
 };
 use super::scan::BlockScan;
-use super::{bucket, threshold, Budget, Identity, Summary};
+use super::{Budget, Identity, Summary, bucket, threshold};
 use crate::codec::Compressor;
 use crate::error::{Error, Result};
 use crate::varint::put_u64;
@@ -149,7 +149,7 @@ impl<W: Write> Builder<W> {
         self.minima.push((b, delta));
         self.ends.push(block.end);
         self.changes += changes;
-        self.stretches += closed as u64;
+        self.stretches += u64::from(closed);
         self.delta = Some(
             self.delta
                 .map_or((delta, delta), |(a, z)| (a.min(delta), z.max(delta))),
@@ -203,9 +203,9 @@ impl<W: Write> Builder<W> {
                 gap: gap.max(r.tail),
             });
             if first || n > 0 {
-                put_u64(&mut self.cols[0], (r.signal - prev_sig) as u64);
+                put_u64(&mut self.cols[0], u64::from(r.signal - prev_sig));
                 prev_sig = r.signal;
-                put_u64(&mut self.cols[1], ((n as u64) << 1) | first as u64);
+                put_u64(&mut self.cols[1], (u64::from(n) << 1) | u64::from(first));
                 if first {
                     put_u64(&mut self.cols[2], r.first - scan.block.start);
                 }
@@ -229,7 +229,7 @@ impl<W: Write> Builder<W> {
         let (mut prev_sig, mut rows) = (0u32, 0u32);
         for (i, s) in self.sigs.iter().enumerate() {
             if s.last != 0 {
-                put_u64(&mut self.cols[0], i as u64 - prev_sig as u64);
+                put_u64(&mut self.cols[0], i as u64 - u64::from(prev_sig));
                 prev_sig = i as u32;
                 put_u64(&mut self.cols[1], s.last - s.open);
                 put_u64(&mut self.cols[2], s.gap);
@@ -250,7 +250,7 @@ impl<W: Write> Builder<W> {
             blocks: self.ends.len() as u32,
             signals: self.header.signals,
             changes: self.changes,
-            stretches: self.stretches + rows as u64,
+            stretches: self.stretches + u64::from(rows),
             delta: self.delta,
             bytes,
             source_bytes: self.header.identity.length,

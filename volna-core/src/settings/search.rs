@@ -29,6 +29,7 @@ pub struct Query {
 }
 
 impl Query {
+    #[must_use]
     pub fn parse(query: &str) -> Self {
         let mut out = Query::default();
         for token in query.split_whitespace() {
@@ -47,6 +48,7 @@ impl Query {
         out
     }
 
+    #[must_use]
     pub fn is_active(&self) -> bool {
         self.modified || self.page.is_some() || self.id_prefix.is_some() || !self.terms.is_empty()
     }

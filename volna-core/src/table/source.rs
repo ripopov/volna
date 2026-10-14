@@ -33,18 +33,15 @@ impl SignalSource {
     }
 
     pub fn resolve(&mut self, hierarchy: &Hierarchy) -> bool {
-        match hierarchy.find_var(&self.path, self.nth) {
-            Lookup::Found(var) => {
-                self.var = Some(var);
-                self.signal = Some(Traced::new(self.trace, hierarchy.var(var).signal));
-                self.name = hierarchy.full_name(var);
-                true
-            }
-            _ => {
-                self.var = None;
-                self.signal = None;
-                false
-            }
+        if let Lookup::Found(var) = hierarchy.find_var(&self.path, self.nth) {
+            self.var = Some(var);
+            self.signal = Some(Traced::new(self.trace, hierarchy.var(var).signal));
+            self.name = hierarchy.full_name(var);
+            true
+        } else {
+            self.var = None;
+            self.signal = None;
+            false
         }
     }
 }
@@ -64,6 +61,7 @@ impl TableSource {
         generator.into_iter().chain(signals.iter().map(|s| s.trace))
     }
 
+    #[must_use]
     pub fn generator_track(&self) -> Option<Traced<TrackRef>> {
         match self {
             Self::Generator(source) => source.track(),

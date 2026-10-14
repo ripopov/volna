@@ -18,13 +18,16 @@ impl PresenceMask {
         }
     }
 
+    #[must_use]
     pub fn width(&self) -> usize {
         self.width
     }
+    #[must_use]
     pub fn height(&self) -> usize {
         self.height
     }
 
+    #[must_use]
     pub fn contains(&self, x: usize, y: usize) -> bool {
         x < self.width
             && y < self.height

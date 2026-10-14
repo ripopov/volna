@@ -5,7 +5,7 @@ use super::{Block, BlockScan, Budget, BuildOptions, Builder, Identity, Summary};
 use crate::error::{Error, Result};
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::sync::{mpsc, Condvar, Mutex};
+use std::sync::{Condvar, Mutex, mpsc};
 
 pub trait Source: Sync {
     type Worker;
@@ -98,7 +98,7 @@ pub fn build_from<S: Source>(source: &S, out: impl Write, opts: &BuildOptions) -
                         t_min,
                         budget,
                     );
-                    let scanned = source.scan(&mut worker, i, &mut scan).map(|_| scan);
+                    let scanned = source.scan(&mut worker, i, &mut scan).map(|()| scan);
                     if tx.send((i, scanned)).is_err() {
                         return;
                     }
@@ -108,7 +108,7 @@ pub fn build_from<S: Source>(source: &S, out: impl Write, opts: &BuildOptions) -
         drop(tx);
         let mut pending = BTreeMap::new();
         let mut stitch = || -> Result<()> {
-            for (i, scan) in rx.iter() {
+            for (i, scan) in &rx {
                 if let Some(control) = &opts.control {
                     control.check()?;
                 }

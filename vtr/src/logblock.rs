@@ -56,6 +56,7 @@ pub enum Severity {
 }
 
 impl Severity {
+    #[must_use]
     pub fn code(self) -> u8 {
         match self {
             Severity::Trace => 0,
@@ -67,6 +68,7 @@ impl Severity {
             Severity::Other(c) => c,
         }
     }
+    #[must_use]
     pub fn from_code(c: u8) -> Severity {
         match c {
             0 => Severity::Trace,
@@ -78,6 +80,7 @@ impl Severity {
             c => Severity::Other(c),
         }
     }
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Severity::Trace => "trace",
@@ -89,6 +92,7 @@ impl Severity {
             Severity::Other(_) => "other",
         }
     }
+    #[must_use]
     pub fn from_name(s: &str) -> Option<Severity> {
         Some(match s.to_ascii_lowercase().as_str() {
             "trace" => Severity::Trace,
@@ -142,9 +146,11 @@ impl LogArgType {
             _ => return Err(Error::Corrupt("unknown log argument type")),
         })
     }
+    #[must_use]
     pub fn tag(self) -> ValueTag {
         ValueTag::from_u8(self as u8).unwrap()
     }
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             LogArgType::Bool => "bool",
@@ -173,7 +179,8 @@ pub enum LogArg<'a> {
     Text(&'a str),
 }
 
-impl<'a> LogArg<'a> {
+impl LogArg<'_> {
+    #[must_use]
     pub fn arg_type(&self) -> LogArgType {
         match self {
             LogArg::Bool(_) => LogArgType::Bool,
@@ -187,6 +194,7 @@ impl<'a> LogArg<'a> {
             LogArg::Text(_) => LogArgType::Text,
         }
     }
+    #[must_use]
     pub fn to_value(&self) -> Value {
         match *self {
             LogArg::Bool(b) => Value::Bool(b),
@@ -213,7 +221,7 @@ macro_rules! arg_from {
 arg_from!(i8 => I64 as i64, i16 => I64 as i64, i32 => I64 as i64, i64 => I64 as i64, isize => I64 as i64,
           u8 => U64 as u64, u16 => U64 as u64, u32 => U64 as u64, u64 => U64 as u64, usize => U64 as u64,
           f32 => F64 as f64, f64 => F64 as f64);
-impl<'a> From<bool> for LogArg<'a> {
+impl From<bool> for LogArg<'_> {
     fn from(v: bool) -> Self {
         LogArg::Bool(v)
     }
@@ -233,7 +241,7 @@ impl<'a> From<&'a [u8]> for LogArg<'a> {
         LogArg::Bytes(v)
     }
 }
-impl<'a> From<StrId> for LogArg<'a> {
+impl From<StrId> for LogArg<'_> {
     fn from(v: StrId) -> Self {
         LogArg::Str(v)
     }
@@ -255,6 +263,7 @@ pub struct LogSiteSpec<'a> {
 }
 
 impl<'a> LogSiteSpec<'a> {
+    #[must_use]
     pub fn new(stream: NodeId, severity: Severity, fmt: &'a str, args: &'a [LogArgType]) -> Self {
         LogSiteSpec {
             stream,
@@ -267,15 +276,18 @@ impl<'a> LogSiteSpec<'a> {
             func: "",
         }
     }
+    #[must_use]
     pub fn names(mut self, names: &'a [&'a str]) -> Self {
         self.names = names;
         self
     }
+    #[must_use]
     pub fn location(mut self, file: &'a str, line: u32) -> Self {
         self.file = file;
         self.line = line;
         self
     }
+    #[must_use]
     pub fn func(mut self, func: &'a str) -> Self {
         self.func = func;
         self
@@ -326,14 +338,14 @@ pub(crate) fn site_attrs(
     let mut attrs: Vec<(StrId, Value)> = Vec::with_capacity(6);
     attrs.push((
         intern(KEY_SEVERITY),
-        Value::U64(spec.severity.code() as u64),
+        Value::U64(u64::from(spec.severity.code())),
     ));
     attrs.push((
         intern(KEY_ARGS),
         Value::List(
             spec.args
                 .iter()
-                .map(|t| Value::U64(*t as u8 as u64))
+                .map(|t| Value::U64(u64::from(*t as u8)))
                 .collect(),
         ),
     ));
@@ -346,7 +358,7 @@ pub(crate) fn site_attrs(
         attrs.push((intern(KEY_FILE), Value::Str(intern(spec.file))));
     }
     if spec.line != 0 {
-        attrs.push((intern(KEY_LINE), Value::U64(spec.line as u64)));
+        attrs.push((intern(KEY_LINE), Value::U64(u64::from(spec.line))));
     }
     if !spec.func.is_empty() {
         attrs.push((intern(KEY_FUNC), Value::Str(intern(spec.func))));
@@ -356,17 +368,17 @@ pub(crate) fn site_attrs(
 
 #[inline]
 pub fn encode_row(out: &mut Vec<u8>, site: u32, time: u64, id: u64, parent: u64, args: &[LogArg]) {
-    varint::put_u64(out, site as u64);
+    varint::put_u64(out, u64::from(site));
     varint::put_u64(out, time);
     varint::put_u64(out, id);
     varint::put_u64(out, parent);
     for a in args {
         match *a {
-            LogArg::Bool(b) => out.push(b as u8),
+            LogArg::Bool(b) => out.push(u8::from(b)),
             LogArg::I64(v) => varint::put_i64(out, v),
             LogArg::U64(v) | LogArg::Time(v) | LogArg::Pointer(v) => varint::put_u64(out, v),
             LogArg::F64(v) => out.extend_from_slice(&v.to_le_bytes()),
-            LogArg::Str(s) => varint::put_u64(out, s.0 as u64),
+            LogArg::Str(s) => varint::put_u64(out, u64::from(s.0)),
             LogArg::Bytes(b) => varint::put_blob(out, b),
             LogArg::Text(s) => varint::put_blob(out, s.as_bytes()),
         }
@@ -419,9 +431,11 @@ impl LogBlockHeader {
         }
         Ok(h)
     }
+    #[must_use]
     pub fn gens_off(&self) -> usize {
         LOG_HEADER_LEN
     }
+    #[must_use]
     pub fn blob_off(&self) -> usize {
         LOG_HEADER_LEN + self.n_gens as usize * 4
     }
@@ -434,7 +448,10 @@ impl LogBlockHeader {
     }
 }
 
-pub fn block_generators<'a>(p: &'a [u8], h: &LogBlockHeader) -> impl Iterator<Item = u32> + 'a {
+pub fn block_generators<'a>(
+    p: &'a [u8],
+    h: &LogBlockHeader,
+) -> impl Iterator<Item = u32> + 'a + use<'a> {
     let base = h.gens_off();
     (0..h.n_gens as usize)
         .map(move |i| u32::from_le_bytes(p[base + i * 4..base + i * 4 + 4].try_into().unwrap()))
@@ -500,7 +517,7 @@ pub fn encode_log_block(
         } else {
             li
         };
-        varint::put_u64(&mut c_gen, li as u64);
+        varint::put_u64(&mut c_gen, u64::from(li));
         varint::put_i64(&mut c_time, time.wrapping_sub(prev_t) as i64);
         prev_t = time;
         varint::put_i64(&mut c_id, id.wrapping_sub(prev_id) as i64);
@@ -542,7 +559,7 @@ pub fn encode_log_block(
                         n_dict += 1;
                         n_dict - 1
                     });
-                    varint::put_u64(&mut c_text, idx as u64);
+                    varint::put_u64(&mut c_text, u64::from(idx));
                 }
             }
         }
@@ -552,7 +569,7 @@ pub fn encode_log_block(
         h.t_min = 0;
     }
     let mut c_dict: Vec<u8> = Vec::with_capacity(dict_col.len() + 8);
-    varint::put_u64(&mut c_dict, n_dict as u64);
+    varint::put_u64(&mut c_dict, u64::from(n_dict));
     c_dict.extend_from_slice(&dict_col);
     h.n_gens = gens.len() as u32;
     let cols: [&[u8]; N_COLS] = [
@@ -582,7 +599,7 @@ pub fn encode_log_block(
 pub struct LogRec {
     pub id: u64,
     pub time: u64,
-    pub gen: u32,
+    pub r#gen: u32,
     pub parent: u64,
     first: u32,
     n_args: u32,
@@ -611,9 +628,11 @@ pub struct LogBlockData {
 }
 
 impl LogBlockData {
+    #[must_use]
     pub fn arg_count(&self, rec: &LogRec) -> usize {
         rec.n_args as usize
     }
+    #[must_use]
     pub fn arg(&self, rec: &LogRec, i: usize) -> Option<LogArg<'_>> {
         if i >= rec.n_args as usize {
             return None;
@@ -631,6 +650,7 @@ impl LogBlockData {
                     self.dict_off[d as usize] as usize,
                     self.dict_off[d as usize + 1] as usize,
                 );
+                // SAFETY: decode_log_block validates each dictionary entry as UTF-8 before storing its offsets.
                 LogArg::Text(unsafe { std::str::from_utf8_unchecked(&self.dict[a..b]) })
             }
             Cell::Bytes(off, len) => LogArg::Bytes(&self.bytes[off as usize..(off + len) as usize]),
@@ -692,7 +712,7 @@ pub fn decode_log_block<'t>(
     let (mut prev_t, mut prev_id) = (0u64, 0u64);
     for _ in 0..h.n_rec {
         let li = cols[C_GEN].usize()?;
-        let gen = *gens
+        let r#gen = *gens
             .get(li)
             .ok_or(Error::Corrupt("log generator index out of range"))?;
         let time = prev_t.wrapping_add(cols[C_TIME].i64()? as u64);
@@ -732,7 +752,7 @@ pub fn decode_log_block<'t>(
         out.recs.push(LogRec {
             id,
             time,
-            gen,
+            r#gen,
             parent,
             first,
             n_args: ts.len() as u32,
@@ -773,18 +793,22 @@ impl<'a> LogRecord<'a> {
             block,
         }
     }
+    #[must_use]
     pub fn severity(&self) -> Severity {
         self.site.severity
     }
+    #[must_use]
     pub fn arg_count(&self) -> usize {
         self.rec.n_args as usize
     }
+    #[must_use]
     pub fn arg(&self, i: usize) -> Option<LogArg<'a>> {
         self.block.arg(self.rec, i)
     }
-    pub fn args(&self) -> impl Iterator<Item = LogArg<'a>> + 'a {
+    pub fn args(&self) -> impl Iterator<Item = LogArg<'a>> + 'a + use<'a> {
         self.block.args(self.rec)
     }
+    #[must_use]
     pub fn to_transaction(&self) -> Transaction {
         let attrs = self
             .args()
@@ -911,12 +935,12 @@ mod tests {
             (
                 d.recs[0].id,
                 d.recs[0].time,
-                d.recs[0].gen,
+                d.recs[0].r#gen,
                 d.recs[0].parent
             ),
             (1, 100, 7, 0)
         );
-        assert_eq!((d.recs[1].id, d.recs[1].gen, d.recs[1].parent), (2, 3, 2));
+        assert_eq!((d.recs[1].id, d.recs[1].r#gen, d.recs[1].parent), (2, 3, 2));
         assert_eq!(
             d.args(&d.recs[0]).collect::<Vec<_>>(),
             vec![LogArg::U64(0xdead), LogArg::Text("axi0"), LogArg::I64(-5)]

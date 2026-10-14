@@ -75,6 +75,7 @@ impl Ranges {
     }
 }
 
+#[must_use]
 pub fn strokes(
     runs: &[Vec<crate::geometry::Point>],
     bounds: crate::geometry::Rect,

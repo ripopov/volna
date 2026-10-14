@@ -1,6 +1,6 @@
 //! VCD export of VTR waveforms.
 
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use std::io::{self, Write};
 use vtr::{NodeData, NodeId, Reader, ScopeType, SignalKind, SignalValue};
 
@@ -37,7 +37,6 @@ fn timescale_line(exp: i8) -> Result<String> {
 
 fn scope_keyword(t: ScopeType) -> &'static str {
     match t {
-        ScopeType::Module => "module",
         ScopeType::Task => "task",
         ScopeType::Function => "function",
         ScopeType::Begin => "begin",
@@ -151,10 +150,10 @@ pub fn write_vcd(r: &Reader, mut w: impl Write) -> Result<u64> {
     if let Some(e) = err {
         return Err(e.into());
     }
-    if let Some((_, end)) = r.time_range() {
-        if last != end {
-            writeln!(w, "#{end}")?;
-        }
+    if let Some((_, end)) = r.time_range()
+        && last != end
+    {
+        writeln!(w, "#{end}")?;
     }
     w.flush()?;
     Ok(n)

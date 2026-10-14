@@ -53,8 +53,8 @@ impl Ending {
     pub(crate) fn record(&self) -> Option<(usize, Vec<LogArg<'static>>)> {
         Some(match *self {
             Ending::Closed => return None,
-            Ending::Stopped { signal } => (0, vec![LogArg::I64(signal as i64)]),
-            Ending::Exited { status } => (1, vec![LogArg::I64(status as i64)]),
+            Ending::Stopped { signal } => (0, vec![LogArg::I64(i64::from(signal))]),
+            Ending::Exited { status } => (1, vec![LogArg::I64(i64::from(status))]),
             Ending::Crashed {
                 signal,
                 code,
@@ -64,8 +64,8 @@ impl Ending {
             } => (
                 2,
                 vec![
-                    LogArg::I64(signal as i64),
-                    LogArg::I64(code as i64),
+                    LogArg::I64(i64::from(signal)),
+                    LogArg::I64(i64::from(code)),
                     LogArg::Pointer(address),
                     LogArg::U64(thread),
                     LogArg::Bool(sealed),
@@ -86,15 +86,19 @@ impl Ending {
             0 => Ending::Stopped { signal: i(0)? },
             1 => Ending::Exited { status: i(0)? },
             2 => match args {
-                [_, _, LogArg::Pointer(address), LogArg::U64(thread), LogArg::Bool(sealed)] => {
-                    Ending::Crashed {
-                        signal: i(0)?,
-                        code: i(1)?,
-                        address: *address,
-                        thread: *thread,
-                        sealed: *sealed,
-                    }
-                }
+                [
+                    _,
+                    _,
+                    LogArg::Pointer(address),
+                    LogArg::U64(thread),
+                    LogArg::Bool(sealed),
+                ] => Ending::Crashed {
+                    signal: i(0)?,
+                    code: i(1)?,
+                    address: *address,
+                    thread: *thread,
+                    sealed: *sealed,
+                },
                 _ => return None,
             },
             3 => match args {
@@ -122,6 +126,7 @@ pub(crate) fn strings() -> impl Iterator<Item = &'static str> {
     )
 }
 
+#[must_use]
 pub fn signal_name(signal: i32) -> Option<&'static str> {
     const NAMES: [&str; 31] = [
         "SIGHUP",

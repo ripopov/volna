@@ -18,24 +18,29 @@ impl TraceId {
     pub const A: TraceId = TraceId(0);
     pub const MAX: usize = 26;
 
+    #[must_use]
     pub fn new(index: usize) -> Option<Self> {
         (index < Self::MAX).then_some(TraceId(index as u8))
     }
 
+    #[must_use]
     pub fn index(self) -> usize {
         usize::from(self.0)
     }
 
+    #[must_use]
     pub fn letter(self) -> char {
         char::from(b'A' + self.0)
     }
 
+    #[must_use]
     pub fn from_letter(letter: char) -> Option<Self> {
         letter
             .is_ascii_uppercase()
             .then(|| TraceId(letter as u8 - b'A'))
     }
 
+    #[must_use]
     pub fn is_a(&self) -> bool {
         *self == TraceId::A
     }
@@ -112,6 +117,7 @@ pub struct Unit {
 }
 
 impl Unit {
+    #[must_use]
     pub fn of(info: &TraceInfo) -> Self {
         Self {
             timescale: info.timescale,
@@ -127,6 +133,7 @@ impl Unit {
         10u64.checked_pow(steps)
     }
 
+    #[must_use]
     pub fn label(&self) -> String {
         match &self.name {
             Some(name) => name.clone(),
@@ -168,14 +175,17 @@ impl TraceSlot {
         }
     }
 
+    #[must_use]
     pub fn sizes(&self) -> Option<&volna_trace::data::ScopeSizes> {
         self.sizes.as_deref()
     }
 
+    #[must_use]
     pub fn state(&self) -> &SlotState {
         &self.state
     }
 
+    #[must_use]
     pub fn session(&self) -> Option<&Arc<dyn Session>> {
         match &self.state {
             SlotState::Loaded(s) => Some(s),
@@ -183,18 +193,22 @@ impl TraceSlot {
         }
     }
 
+    #[must_use]
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
+    #[must_use]
     pub fn placement(&self) -> Placement {
         self.placement
     }
 
+    #[must_use]
     pub fn file_name(&self) -> &str {
         names::file_name(&self.source)
     }
 
+    #[must_use]
     pub fn format(&self) -> Option<&'static str> {
         let session = self.session()?;
         Some(
@@ -208,10 +222,12 @@ impl TraceSlot {
         )
     }
 
+    #[must_use]
     pub fn unit(&self) -> Option<Unit> {
         self.session().map(|s| Unit::of(s.info()))
     }
 
+    #[must_use]
     pub fn range(&self) -> Option<(u64, u64)> {
         let (start, end) = self.session()?.info().time_range;
         Some((
@@ -233,14 +249,17 @@ impl TraceSet {
         self.slots.iter()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.slots.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
     }
 
+    #[must_use]
     pub fn is_combined(&self) -> bool {
         self.slots.len() > 1
     }
@@ -249,6 +268,7 @@ impl TraceSet {
         self.slots.iter().map(|s| s.id)
     }
 
+    #[must_use]
     pub fn get(&self, id: TraceId) -> Option<&TraceSlot> {
         self.slots.iter().find(|s| s.id == id)
     }
@@ -258,10 +278,12 @@ impl TraceSet {
         self.slots.iter_mut().find(|s| s.id == id)
     }
 
+    #[must_use]
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
+    #[must_use]
     pub fn session(&self, id: TraceId) -> Option<&Arc<dyn Session>> {
         self.get(id)?.session()
     }
@@ -272,10 +294,12 @@ impl TraceSet {
             .filter_map(|s| s.session().map(|session| (s.id, session)))
     }
 
+    #[must_use]
     pub fn first_loaded(&self) -> Option<(TraceId, &Arc<dyn Session>)> {
         self.loaded().next()
     }
 
+    #[must_use]
     pub fn unit(&self) -> Option<&Unit> {
         self.unit.as_ref()
     }
@@ -346,6 +370,7 @@ impl TraceSet {
         self.unit = Some(unit);
     }
 
+    #[must_use]
     pub fn name(&self, id: TraceId) -> Option<String> {
         let slot = self.get(id)?;
         if let Some(name) = &slot.rename {
@@ -409,7 +434,9 @@ impl<T: Retime> Retime for Option<T> {
 
 impl<T: Retime> Retime for Vec<T> {
     fn retime(&mut self, by: Rescale) {
-        self.iter_mut().for_each(|t| t.retime(by));
+        for t in self.iter_mut() {
+            t.retime(by);
+        }
     }
 }
 

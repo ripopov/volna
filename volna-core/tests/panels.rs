@@ -528,7 +528,7 @@ fn dock_moves_allow_an_empty_center_and_reject_duplicate_membership_atomically()
     assert!(panels.set_layout(invalid, revision).is_err());
     assert_eq!(panels.layout(), &before);
     assert_eq!(panels.revision(), revision);
-    let mut invalid = before.clone();
+    let mut invalid = before;
     invalid.right.as_mut().unwrap().width = f32::NAN;
     assert!(panels.set_layout(invalid, revision).is_err());
     panels.move_panel(a, Placement::Right).unwrap();

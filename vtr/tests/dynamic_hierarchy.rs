@@ -175,9 +175,7 @@ fn write_run(path: &std::path::Path, group_size: u32, background: bool) -> Vec<E
             }
         }
         match step {
-            0 => declare(&mut w, &mut sigs, t),
-            13 => declare(&mut w, &mut sigs, t),
-            50 => declare(&mut w, &mut sigs, t),
+            0 | 13 | 50 => declare(&mut w, &mut sigs, t),
             _ => {}
         }
     }
@@ -418,7 +416,7 @@ fn nodes_added_mid_run() {
                 },
             )
             .unwrap();
-        w.node_attr(state_node, "enum_table", Value::U64(table.0 as u64))
+        w.node_attr(state_node, "enum_table", Value::U64(u64::from(table.0)))
             .unwrap();
         let items = w.add_stream(Some(uvm), "items", "UVM").unwrap();
         let seqr = w.intern("seqr");
@@ -487,11 +485,14 @@ fn nodes_added_mid_run() {
         assert_eq!(attr(alias, "origin"), Some(Value::U64(1)));
         assert_eq!(
             attr(state_node, "enum_table"),
-            Some(Value::U64(table.0 as u64))
+            Some(Value::U64(u64::from(table.0)))
         );
         assert_eq!(as_str(attr(items, "uvm.sequencer")), "seqr");
         assert_eq!(as_str(attr(item, "uvm.class")), "bus_item");
-        assert_eq!(h.enum_entries(table).map(|e| e.len()), Some(2));
+        assert_eq!(
+            h.enum_entries(table).map(<[(vtr::StrId, vtr::StrId)]>::len),
+            Some(2)
+        );
         assert_eq!(rd.find_signal("uvm_test_top.clk_seen", '.'), Some(clk));
         assert_eq!(rd.find_signal("top.env.count", '.'), Some(count));
         assert_eq!(rd.value_at(count, 10).unwrap().to_ascii(), "00000000");
@@ -549,7 +550,7 @@ fn parents_are_validated() {
         )
         .unwrap();
     let stream = w.add_stream(Some(top), "s", "T").unwrap();
-    let gen = w.add_generator(stream, "g").unwrap();
+    let r#gen = w.add_generator(stream, "g").unwrap();
     let table = w.add_enum_table(Some(top), "e", &[("A", "0")]).unwrap();
     let unknown = NodeId(1000);
     let bits = SignalKind::Bits {
@@ -557,7 +558,7 @@ fn parents_are_validated() {
         states: 2,
     };
     let (nodes, signals) = (w.stats().nodes, w.signal_count());
-    for bad in [var, stream, gen, table, unknown] {
+    for bad in [var, stream, r#gen, table, unknown] {
         assert!(
             w.add_scope(Some(bad), "x", ScopeType::Module, "").is_err(),
             "scope under {bad:?}"
@@ -581,7 +582,7 @@ fn parents_are_validated() {
             "stream under {bad:?}"
         );
     }
-    for bad in [top, var, gen, table, unknown] {
+    for bad in [top, var, r#gen, table, unknown] {
         assert!(
             w.add_generator(bad, "x").is_err(),
             "generator under {bad:?}"
@@ -589,15 +590,16 @@ fn parents_are_validated() {
         let spec = LogSiteSpec::new(bad, Severity::Info, "x", &[]);
         assert!(w.add_log_site(&spec).is_err(), "log site under {bad:?}");
     }
-    assert!(w
-        .add_alias(
+    assert!(
+        w.add_alias(
             Some(top),
             "x",
             VarType::Wire,
             Direction::Implicit,
             SignalId(99)
         )
-        .is_err());
+        .is_err()
+    );
     assert!(
         w.begin_tx(stream, 0).is_err(),
         "transactions need a generator"
@@ -647,10 +649,10 @@ fn late_declaration_overhead() {
         }
         w.close().unwrap();
         let rd = Reader::open(&path).unwrap();
-        assert_eq!(rd.signal_count() as u64, N);
+        assert_eq!(u64::from(rd.signal_count()), N);
         let (mut n, mut bytes) = (0, 0);
         for e in rd.sections().iter().filter(|e| e.kind == 3 || e.kind == 2) {
-            n += (e.kind == 3) as usize;
+            n += usize::from(e.kind == 3);
             bytes += e.len + 24;
         }
         (n, bytes, std::fs::metadata(&path).unwrap().len())

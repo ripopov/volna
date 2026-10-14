@@ -2,6 +2,7 @@
 //! cursor a panel keeps while unlinked, and the commands that move the time axis.
 
 pub mod tween;
+use crate::history::Before;
 pub use tween::{Lerp, Tween};
 
 use web_time::Instant;
@@ -71,24 +72,26 @@ impl Default for NavState {
 }
 
 impl NavState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             link: Link::default(),
             local_viewport: Tween::new(Viewport::fit((0, 1000))),
             local_cursor: None,
             clocks: crate::clock::ClockView::default(),
-            clocks_before: Default::default(),
+            clocks_before: Before::default(),
             back: None,
         }
     }
 
+    #[must_use]
     pub fn clone_view(&self) -> Self {
         Self {
             link: self.link,
             local_viewport: Tween::new(self.local_viewport.value),
             local_cursor: self.local_cursor,
             clocks: self.clocks.clone(),
-            clocks_before: Default::default(),
+            clocks_before: Before::default(),
             back: None,
         }
     }
@@ -100,10 +103,12 @@ impl NavState {
         self.local_viewport.set(viewport);
     }
 
+    #[must_use]
     pub fn viewport(&self, doc: &Document) -> Viewport {
         self.viewport_state(doc).value
     }
 
+    #[must_use]
     pub fn viewport_state<'a>(&'a self, doc: &'a Document) -> &'a Tween<Viewport> {
         if self.link.viewport {
             &doc.shared.viewport
@@ -120,6 +125,7 @@ impl NavState {
         }
     }
 
+    #[must_use]
     pub fn cursor(&self, doc: &Document) -> Option<u64> {
         if self.link.cursor {
             doc.shared.cursor
@@ -156,6 +162,7 @@ impl NavState {
         !self.link.viewport && self.local_viewport.tick(now)
     }
 
+    #[must_use]
     pub fn is_animating(&self) -> bool {
         !self.link.viewport && self.local_viewport.is_animating()
     }
@@ -256,6 +263,7 @@ impl NavState {
         self.viewport_state_mut(doc).set(target);
     }
 
+    #[must_use]
     pub fn selected_clock(
         &self,
         doc: &Document,
@@ -319,6 +327,7 @@ impl NavState {
         self.clocks.selected = Some(key);
     }
 
+    #[must_use]
     pub fn clocks(&self) -> &crate::clock::ClockView {
         &self.clocks
     }
@@ -387,7 +396,7 @@ impl NavState {
         if (&rulers, &origin) == (&self.clocks.rulers, &self.clocks.origin) {
             return;
         }
-        let label = clocks_label(clocks, &rulers, origin, &self.clocks);
+        let label = clocks_label(clocks, rulers.as_deref(), origin, &self.clocks);
         history.record(
             crate::history::Edit::Prop {
                 panel,
@@ -397,6 +406,7 @@ impl NavState {
         );
     }
 
+    #[must_use]
     pub fn spot(&self, doc: &Document) -> Spot {
         Spot {
             cursor: self.cursor(doc),
@@ -404,6 +414,7 @@ impl NavState {
         }
     }
 
+    #[must_use]
     pub fn back_spot(&self) -> Option<Spot> {
         self.back
     }
@@ -454,11 +465,11 @@ impl NavState {
 
 fn clocks_label(
     clocks: &crate::clock::Clocks,
-    rulers: &Option<Vec<ClockKey>>,
+    rulers: Option<&[ClockKey]>,
     origin: Option<u64>,
     now: &crate::clock::ClockView,
 ) -> String {
-    let before = rulers.as_deref().unwrap_or(&clocks.defaults);
+    let before = rulers.unwrap_or(&clocks.defaults);
     let after = now.ruler_keys(clocks);
     let name = |key: &ClockKey| key.item.rsplit('.').next().unwrap_or(&key.item).to_owned();
     if let Some(shown) = after.iter().find(|p| !before.contains(p)) {

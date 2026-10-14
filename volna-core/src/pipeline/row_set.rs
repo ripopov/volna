@@ -26,18 +26,22 @@ impl<'a> RowSet<'a> {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.len
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    #[must_use]
     pub fn generators(&self) -> &'a [Arc<LoadedGenerator>] {
         self.generators
     }
 
+    #[must_use]
     pub fn row_of(&self, generator: TrackRef, id: TransactionRef) -> Option<usize> {
         let g = self
             .generators
@@ -46,6 +50,7 @@ impl<'a> RowSet<'a> {
         Some(self.starts[g] + self.generators[g].transaction_ordinal(id)?)
     }
 
+    #[must_use]
     pub fn get(&self, row: usize) -> Option<(usize, &'a Transaction)> {
         if row >= self.len {
             return None;

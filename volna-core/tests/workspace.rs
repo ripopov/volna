@@ -62,7 +62,12 @@ fn complete_round_trip_preserves_layout_rows_links_chrome_and_exact_times() {
     plan.commit(&mut app).unwrap();
     assert_eq!(value(&app), before);
     assert_eq!(app.doc.shared.cursor, Some(u64::MAX - 1));
-    assert_eq!(app.doc.add_marker(10).map(|id| id.get()), Some(2));
+    assert_eq!(
+        app.doc
+            .add_marker(10)
+            .map(volna_core::marker::MarkerId::get),
+        Some(2)
+    );
     assert_eq!(
         app.doc
             .markers()
@@ -886,7 +891,7 @@ fn older_workspace_versions_are_discarded_and_overwritten() {
         ),
         (
             Persistence::Explicit(file(LOCATION)),
-            Content::Bytes(old.clone()),
+            Content::Bytes(old),
             Content::Missing,
         ),
     ] {

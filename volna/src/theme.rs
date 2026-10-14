@@ -33,6 +33,7 @@ impl<C: Copy> ThemePx for volna_core::theme::Theme<C> {
     }
 }
 
+#[must_use]
 pub fn hsla(c: volna_core::Color) -> Hsla {
     Hsla {
         h: c.h,
@@ -48,10 +49,10 @@ pub fn set(core: CoreTheme, cx: &mut App) {
 
 pub fn set_themes(themes: Themes, cx: &mut App) {
     let zoom = cx.try_global::<ThemeGlobal>().map_or(1.0, |g| g.zoom);
-    set_zoomed(themes, zoom, cx);
+    set_zoomed(&themes, zoom, cx);
 }
 
-fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
+fn set_zoomed(base: &Themes, zoom: f32, cx: &mut App) {
     let core = base.chrome.zoomed(zoom);
     let canvas = base.canvas.zoomed(zoom);
     let zoom = core.zoom;
@@ -160,7 +161,7 @@ fn set_zoomed(base: Themes, zoom: f32, cx: &mut App) {
     kit.tokens = kit.colors.into();
     ComponentTheme::sync_base(cx);
     cx.set_global(ThemeGlobal {
-        base,
+        base: *base,
         zoom,
         gpui: t,
         core,
@@ -179,7 +180,7 @@ pub fn install_themes(themes: Themes, cx: &mut App) {
 
 pub fn set_zoom(zoom: f32, cx: &mut App) {
     let base = cx.global::<ThemeGlobal>().base;
-    set_zoomed(base, zoom, cx);
+    set_zoomed(&base, zoom, cx);
     cx.refresh_windows();
 }
 
@@ -195,7 +196,8 @@ pub fn canvas_theme(cx: &App) -> &CoreTheme {
     &cx.global::<ThemeGlobal>().canvas
 }
 
+#[must_use]
 pub fn is_dark(appearance: gpui_kit::WindowAppearance) -> bool {
-    use gpui_kit::WindowAppearance::*;
+    use gpui_kit::WindowAppearance::{Dark, VibrantDark};
     matches!(appearance, Dark | VibrantDark)
 }

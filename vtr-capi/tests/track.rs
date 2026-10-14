@@ -1,6 +1,8 @@
-//! C++ and SystemVerilog keyed tracker integration tests.
+//! C++ and `SystemVerilog` keyed tracker integration tests.
 
 #![cfg(target_os = "linux")]
+
+use std::fmt::Write as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,33 +27,39 @@ fn dump(path: &Path) -> String {
             .generator_stream(t.generator)
             .map(|s| r.full_path(s, "."))
             .unwrap_or_default();
-        out += &format!(
+        write!(
+            out,
             "{} {stream}/{} [{}..{}] {}",
             t.id,
             r.name(t.generator),
             t.begin,
             t.end,
             t.status.name()
-        );
+        )
+        .unwrap();
         if let Some(p) = t.parent {
-            out += &format!(" parent={p}");
+            write!(out, " parent={p}").unwrap();
         }
         out += "\n";
         for a in &t.attrs {
-            out += &format!("  {}={}\n", r.str(a.key), val(&a.value));
+            writeln!(out, "  {}={}", r.str(a.key), val(&a.value)).unwrap();
         }
         for e in &t.events {
-            out += &format!("  event {}@{}\n", r.str(e.name), e.time);
+            writeln!(out, "  event {}@{}", r.str(e.name), e.time).unwrap();
         }
         for s in &t.stages {
-            let end = s
-                .end
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "open".into());
-            out += &format!("  {}@{} {}..{end}\n", r.str(s.name), r.str(s.lane), s.begin);
+            let end = s.end.map_or_else(|| "open".into(), |e| e.to_string());
+            writeln!(
+                out,
+                "  {}@{} {}..{end}",
+                r.str(s.name),
+                r.str(s.lane),
+                s.begin
+            )
+            .unwrap();
         }
         for rel in r.relations_from(t.id).unwrap() {
-            out += &format!("  -> {} {}\n", r.str(rel.kind), rel.to);
+            writeln!(out, "  -> {} {}", r.str(rel.kind), rel.to).unwrap();
         }
     }
     out
@@ -60,12 +68,14 @@ fn dump(path: &Path) -> String {
 #[test]
 fn tracker_and_package() {
     let cxx = std::env::var("CXX").unwrap_or_else(|_| "c++".into());
-    assert!(Command::new(&cxx)
-        .arg("--version")
-        .output()
-        .expect("C++ compiler is required")
-        .status
-        .success());
+    assert!(
+        Command::new(&cxx)
+            .arg("--version")
+            .output()
+            .expect("C++ compiler is required")
+            .status
+            .success()
+    );
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib = support::static_library();
     let temporary = tempfile::tempdir().unwrap();
@@ -156,12 +166,15 @@ WARN2 vtr_trace: TOP.tb.core.u_vtr.bus: clock TOP.tb.core.u_vtr.nope is not decl
     assert_eq!(txs.len(), 1000);
     let folded: Vec<_> = txs.iter().filter(|t| t.end == 3).collect();
     assert_eq!(folded.len(), 6);
-    assert!(folded
-        .iter()
-        .all(|t| t.id <= 6 && t.stages.len() == 2 && t.attrs.len() == 1));
-    assert!(txs
-        .iter()
-        .all(|t| t.status == vtr::TxStatus::Ok && (t.end == 3 || t.end == 4)));
+    assert!(
+        folded
+            .iter()
+            .all(|t| t.id <= 6 && t.stages.len() == 2 && t.attrs.len() == 1)
+    );
+    assert!(
+        txs.iter()
+            .all(|t| t.status == vtr::TxStatus::Ok && (t.end == 3 || t.end == 4))
+    );
 
     let b1 = "\
 1 TOP.tb.core.clk/edges [50..150] open

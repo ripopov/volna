@@ -33,7 +33,7 @@ impl LocalSession {
         let activity = vtr::activity::Identity::of(&reader)
             .ok()
             .map(|id| super::activity::ActivitySource::new(path, id));
-        let mut session = Self::from_reader(name, reader, source_bytes)?;
+        let mut session = Self::from_reader(name, reader, source_bytes);
         session.activity = activity;
         Ok(session)
     }
@@ -41,10 +41,10 @@ impl LocalSession {
     pub fn from_bytes(name: impl Into<String>, bytes: Vec<u8>) -> anyhow::Result<Self> {
         let source_bytes = bytes.capacity() as u64;
         let reader = Reader::from_bytes(bytes).context("parse VTR image")?;
-        Self::from_reader(name.into(), reader, source_bytes)
+        Ok(Self::from_reader(name.into(), reader, source_bytes))
     }
 
-    fn from_reader(name: String, reader: Reader, source_bytes: u64) -> anyhow::Result<Self> {
+    fn from_reader(name: String, reader: Reader, source_bytes: u64) -> Self {
         let reader = Arc::new(reader);
         let hierarchy = build_hierarchy(Arc::clone(&reader));
         let file_text = |name: &str| {
@@ -67,14 +67,14 @@ impl LocalSession {
             change_count: None,
             time_unit: file_text("time.unit").filter(|unit| !unit.is_empty()),
         };
-        Ok(LocalSession {
+        LocalSession {
             tracks: super::vtr_transactions::tracks(&reader),
             reader,
             info,
             hierarchy,
             source_bytes,
             activity: None,
-        })
+        }
     }
 }
 
@@ -107,7 +107,7 @@ impl std::fmt::Debug for ReaderHierarchy {
         f.debug_struct("ReaderHierarchy")
             .field("scopes", &self.scopes.len())
             .field("vars", &self.vars.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 impl ReaderHierarchy {
@@ -339,13 +339,20 @@ impl Session for LocalSession {
             + self.reader.hierarchy().resident_bytes()
             + self.reader.strings().resident_bytes()
             + self.hierarchy.resident_bytes()
-            + self.activity.as_ref().map_or(0, |a| a.resident_bytes())
+            + self
+                .activity
+                .as_ref()
+                .map_or(0, super::activity::ActivitySource::resident_bytes)
     }
     fn activity(&self) -> Option<Arc<crate::data::ActivityIndex>> {
-        self.activity.as_ref().and_then(|a| a.index())
+        self.activity
+            .as_ref()
+            .and_then(super::activity::ActivitySource::index)
     }
     fn activity_build_info(&self) -> Option<super::ActivityBuildInfo> {
-        self.activity.as_ref().map(|a| a.info())
+        self.activity
+            .as_ref()
+            .map(super::activity::ActivitySource::info)
     }
     fn activity_identity(&self) -> Option<vtr::activity::Identity> {
         self.activity.as_ref().map(|a| a.identity)

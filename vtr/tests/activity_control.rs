@@ -1,6 +1,6 @@
 //! Progress, cancellation and concurrent publication of activity sidecars.
 
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 use vtr::activity::{
     self, Block, BlockScan, Budget, BuildControl, BuildOptions, Identity, Sidecar, Source,
@@ -50,16 +50,16 @@ impl Source for Trace {
         Ok(1024)
     }
     fn worker(&self) {}
-    fn scan(&self, _: &mut (), i: usize, scan: &mut BlockScan) -> Result<()> {
-        if i == 1 {
-            if let Some((entered, resume)) = &self.pause {
-                entered.send(()).unwrap();
-                resume
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(Duration::from_secs(5))
-                    .expect("resume the scan");
-            }
+    fn scan(&self, (): &mut (), i: usize, scan: &mut BlockScan) -> Result<()> {
+        if i == 1
+            && let Some((entered, resume)) = &self.pause
+        {
+            entered.send(()).unwrap();
+            resume
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .expect("resume the scan");
         }
         for t in (self.blocks[i].start + 1..self.blocks[i].end).step_by(3) {
             scan.push(0, t);

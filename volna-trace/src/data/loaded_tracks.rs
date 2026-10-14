@@ -36,8 +36,11 @@ pub struct LoadedGenerator {
 }
 
 impl LoadedGenerator {
+    #[must_use]
     pub fn memory_budget(&self) -> Option<crate::remote::memory::MemoryBudget> {
-        self.reservation.as_ref().map(|r| r.budget())
+        self.reservation
+            .as_ref()
+            .map(super::super::remote::memory::Reservation::budget)
     }
 
     pub fn resident_bytes(&self) -> u64 {
@@ -236,15 +239,19 @@ impl LoadedGenerator {
         })
     }
 
+    #[must_use]
     pub fn generator(&self) -> TrackRef {
         self.generator
     }
+    #[must_use]
     pub fn transactions(&self) -> &[Transaction] {
         &self.transactions
     }
+    #[must_use]
     pub fn relations(&self) -> &[LoadedRelation] {
         &self.relations
     }
+    #[must_use]
     pub fn parent(&self, child: TransactionRef) -> Option<TransactionLocation> {
         self.parents.get(&child).copied()
     }
@@ -258,36 +265,40 @@ impl LoadedGenerator {
             .iter()
             .map(|&index| &self.relations[index as usize])
     }
+    #[must_use]
     pub fn transaction(&self, id: TransactionRef) -> Option<&Transaction> {
         self.by_id.get(&id).map(|&index| &self.transactions[index])
     }
 
+    #[must_use]
     pub fn transaction_ordinal(&self, id: TransactionRef) -> Option<usize> {
         self.by_id.get(&id).copied()
     }
 
+    #[must_use]
     pub fn next_boundary(&self, time: u64) -> Option<u64> {
         let next = self.transactions.partition_point(|tx| tx.begin <= time);
         let mut best = self.transactions.get(next).map(|tx| tx.begin);
-        _ = self.visit_window(time, time, |tx| {
+        drop(self.visit_window(time, time, |tx| {
             if tx.end > time && best.is_none_or(|b| tx.end < b) {
                 best = Some(tx.end);
             }
             true
-        });
+        }));
         best
     }
 
+    #[must_use]
     pub fn prev_boundary(&self, time: u64) -> Option<u64> {
         let before = self.transactions.partition_point(|tx| tx.begin < time);
         let begin = self.transactions[..before].last()?.begin;
         let mut best = begin;
-        _ = self.visit_window(begin, time.saturating_sub(1), |tx| {
+        drop(self.visit_window(begin, time.saturating_sub(1), |tx| {
             if tx.end < time && tx.end > best {
                 best = tx.end;
             }
             true
-        });
+        }));
         Some(best)
     }
 

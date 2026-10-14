@@ -1,6 +1,7 @@
 //! Headless pipeline panel tests: open a track from the sidebar, load it, paint it,
 //! navigate it, save and restore it.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 use volna_core::sidebar::TreeNode;
@@ -553,7 +554,6 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
         .count();
     let overlays = layout
         .row_range
-        .clone()
         .filter(|r| set.get(*r).unwrap().1.stages.iter().any(|s| s.lane == "1"))
         .count();
     assert_eq!(bands, overlays);
@@ -1926,7 +1926,7 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
     );
     let lane = marker_lane(&mut app, waves, &theme);
     let beside = point(
-        (lane.chips[0].rect.right() + lane.chips[1].rect.left()) / 2.0,
+        f32::midpoint(lane.chips[0].rect.right(), lane.chips[1].rect.left()),
         lane.band.top() + 4.0,
     );
     press(&mut app, waves, beside, Modifiers::default());
@@ -2358,7 +2358,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
         .find(|p| p["kind"] == "pipeline")
         .unwrap();
     assert_eq!(kept["track"], serde_json::json!(["gone", "stream"]));
-    let mut bad = json.clone();
+    let mut bad = json;
     for panel in bad["panels"].as_array_mut().unwrap() {
         if panel["kind"] == "pipeline" {
             panel["rows"]["row_px"] = serde_json::json!(1000.0);
@@ -2746,7 +2746,7 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "Manual half-million-row performance benchmark; requires substantial memory and time."]
 fn half_million_rows_load_lay_out_and_paint() {
     use std::time::Instant as Clock;
     fn rss_mib() -> f64 {
@@ -2761,85 +2761,84 @@ fn half_million_rows_load_lay_out_and_paint() {
             / 1024.0
     }
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
-    let (path, stream_path) = match std::env::var("VOLNA_PIPELINE_TRACE") {
-        Ok(p) => (
+    let (path, stream_path) = if let Ok(p) = std::env::var("VOLNA_PIPELINE_TRACE") {
+        (
             std::path::PathBuf::from(p),
             std::env::var("VOLNA_PIPELINE_STREAM").expect("VOLNA_PIPELINE_STREAM"),
-        ),
-        Err(_) => {
-            use vtr::{TxStatus, Value};
-            let t0 = Clock::now();
-            let mut w = vtr::Writer::create(file.path()).unwrap();
-            w.set_timescale(vtr::Timescale::Exponent(-10)).unwrap();
-            let core = w
-                .add_scope(None, "core", vtr::ScopeType::Module, "")
-                .unwrap();
-            let stream = w.add_stream(Some(core), "pipeline", "PIPELINE").unwrap();
-            let insn = w.add_generator(stream, "instruction").unwrap();
-            let names: Vec<_> = [
-                "ID", "IR", "IS", "IQ", "RF", "EX", "CM", "RT", "BJ", "FX", "AG", "DC", "DA", "WB",
-            ]
-            .iter()
-            .map(|s| w.intern(s))
+        )
+    } else {
+        use vtr::{TxStatus, Value};
+        let t0 = Clock::now();
+        let mut w = vtr::Writer::create(file.path()).unwrap();
+        w.set_timescale(vtr::Timescale::Exponent(-10)).unwrap();
+        let core = w
+            .add_scope(None, "core", vtr::ScopeType::Module, "")
+            .unwrap();
+        let stream = w.add_stream(Some(core), "pipeline", "PIPELINE").unwrap();
+        let insn = w.add_generator(stream, "instruction").unwrap();
+        let names: Vec<_> = [
+            "ID", "IR", "IS", "IQ", "RF", "EX", "CM", "RT", "BJ", "FX", "AG", "DC", "DA", "WB",
+        ]
+        .iter()
+        .map(|s| w.intern(s))
+        .collect();
+        let lane = w.intern("");
+        let (label, pc_key, iid_key) = (w.intern("vtr.label"), w.intern("pc"), w.intern("iid"));
+        let captions: Vec<_> = (0..2000u64)
+            .map(|pc| w.intern(&format!("0x{:04x} op{pc}", pc * 4)))
             .collect();
-            let lane = w.intern("");
-            let (label, pc_key, iid_key) = (w.intern("vtr.label"), w.intern("pc"), w.intern("iid"));
-            let captions: Vec<_> = (0..2000u64)
-                .map(|pc| w.intern(&format!("0x{:04x} op{pc}", pc * 4)))
-                .collect();
-            let mut rng = 0x2545_f491_4f6c_dd1du64;
-            let mut next = || {
-                rng ^= rng << 13;
-                rng ^= rng >> 7;
-                rng ^= rng << 17;
-                rng
-            };
-            for i in 0..500_000u64 {
-                let begin = 2 * (i * 10 / 13);
-                let tx = w.begin_tx(insn, begin).unwrap();
-                let r = next();
-                let aborted = r % 5 == 0;
-                let mut path = vec![0usize, 1, 2, 3, 4];
-                match (r >> 8) % 6 {
-                    0 => path.push(8),
-                    1 => path.push(9),
-                    2 | 3 => path.extend([10, 11, 12, 13]),
-                    _ => path.push(5),
-                }
-                path.extend([6, 7]);
-                if aborted {
-                    path.truncate(1 + (r >> 16) as usize % 4);
-                }
-                let mut t = begin;
-                for &s in &path {
-                    let len = 2 * (1 + (next() % 3));
-                    w.tx_stage(tx, names[s], lane, t, t + len, &[]).unwrap();
-                    t += len;
-                }
-                w.tx_attr(tx, label, &Value::Str(captions[(i % 2000) as usize]))
-                    .unwrap();
-                w.tx_attr(tx, pc_key, &Value::U64((i % 2000) * 4)).unwrap();
-                if !aborted {
-                    w.tx_attr(tx, iid_key, &Value::U64(i % 128)).unwrap();
-                }
-                w.end_tx(
-                    tx,
-                    t,
-                    if aborted {
-                        TxStatus::Aborted
-                    } else {
-                        TxStatus::Ok
-                    },
-                )
-                .unwrap();
+        let mut rng = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        for i in 0..500_000u64 {
+            let begin = 2 * (i * 10 / 13);
+            let tx = w.begin_tx(insn, begin).unwrap();
+            let r = next();
+            let aborted = r % 5 == 0;
+            let mut path = vec![0usize, 1, 2, 3, 4];
+            match (r >> 8) % 6 {
+                0 => path.push(8),
+                1 => path.push(9),
+                2 | 3 => path.extend([10, 11, 12, 13]),
+                _ => path.push(5),
             }
-            w.close().unwrap();
-            println!(
-                "generated 500000 rows in {:.2} s",
-                t0.elapsed().as_secs_f64()
-            );
-            (file.path().to_path_buf(), "core.pipeline".to_owned())
+            path.extend([6, 7]);
+            if aborted {
+                path.truncate(1 + (r >> 16) as usize % 4);
+            }
+            let mut t = begin;
+            for &s in &path {
+                let len = 2 * (1 + (next() % 3));
+                w.tx_stage(tx, names[s], lane, t, t + len, &[]).unwrap();
+                t += len;
+            }
+            w.tx_attr(tx, label, &Value::Str(captions[(i % 2000) as usize]))
+                .unwrap();
+            w.tx_attr(tx, pc_key, &Value::U64((i % 2000) * 4)).unwrap();
+            if !aborted {
+                w.tx_attr(tx, iid_key, &Value::U64(i % 128)).unwrap();
+            }
+            w.end_tx(
+                tx,
+                t,
+                if aborted {
+                    TxStatus::Aborted
+                } else {
+                    TxStatus::Ok
+                },
+            )
+            .unwrap();
         }
+        w.close().unwrap();
+        println!(
+            "generated 500000 rows in {:.2} s",
+            t0.elapsed().as_secs_f64()
+        );
+        (file.path().to_path_buf(), "core.pipeline".to_owned())
     };
     let rss0 = rss_mib();
     let t0 = Clock::now();
@@ -2920,9 +2919,13 @@ fn half_million_rows_load_lay_out_and_paint() {
         for _ in 0..n {
             frame(&mut app, id, &theme);
         }
-        let per = t.elapsed().as_secs_f64() / n as f64 * 1e3;
+        let per = t.elapsed().as_secs_f64() / f64::from(n) * 1e3;
         let prims = app.scene().prims.len();
-        report += &format!("{what}: {per:.2} ms per layout + paint, {prims} primitives\n");
+        writeln!(
+            report,
+            "{what}: {per:.2} ms per layout + paint, {prims} primitives"
+        )
+        .unwrap();
     }
     println!("{report}");
 }
@@ -2995,7 +2998,7 @@ fn the_pipeline_measures_from_the_reference_like_the_waves() {
     let lane = marker_lane(&mut app, pipeline, &theme);
     assert_eq!(cells_top, lane.strip().bottom());
 
-    let x = (lane.time_left + lane.band.right()) / 2.0;
+    let x = f32::midpoint(lane.time_left, lane.band.right());
     let p = point(x, cells_top + 3.0);
     let alt = Modifiers {
         alt: true,
@@ -3059,7 +3062,7 @@ fn a_pipeline_chip_goes_on_click_moves_onto_cycles_on_drag_and_esc_cancels() {
                 button: MouseButton::Left,
                 modifiers: Modifiers::default(),
             },
-        ))
+        ));
     };
     let to = |app: &mut App, x: f32| {
         app.handle(Command::Pointer(
@@ -3067,7 +3070,7 @@ fn a_pipeline_chip_goes_on_click_moves_onto_cycles_on_drag_and_esc_cancels() {
             PointerEvent::Move {
                 position: point(x, p.y),
             },
-        ))
+        ));
     };
     down(&mut app, p);
     to(&mut app, p.x + 2.0);
@@ -3149,7 +3152,7 @@ fn aligned_metadata(app: &App, waves: PanelId, pipeline: PanelId) -> f32 {
     let viewport = app.doc.shared.viewport.value;
     for time in [
         viewport.start,
-        (viewport.start + viewport.end) / 2.0,
+        f64::midpoint(viewport.start, viewport.end),
         viewport.end,
     ] {
         let wx = f64::from(wave.waves.left()) + viewport.x_of(time, wave.wave_width_f64());
@@ -3334,7 +3337,7 @@ fn timeline_divider_survives_narrow_windows_and_workspace_restore() {
     for divider in [
         serde_json::json!({"panels":[waves,pipeline],"width":-1}),
         serde_json::json!({"panels":[waves],"width":500}),
-        serde_json::json!({"panels":[waves,999999],"width":500}),
+        serde_json::json!({"panels":[waves,999_999],"width":500}),
     ] {
         invalid["timeline_dividers"] = serde_json::json!([divider]);
         assert!(

@@ -4,10 +4,10 @@ use vtr::{Direction, Reader, Timescale, Writer};
 
 fn main() -> vtr::Result<()> {
     let temporary = tempfile::tempdir()?;
-    let path = std::env::args_os()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| temporary.path().join("waveform.vtr"));
+    let path = std::env::args_os().nth(1).map_or_else(
+        || temporary.path().join("waveform.vtr"),
+        std::path::PathBuf::from,
+    );
     let mut writer = Writer::builder()
         .timescale(Timescale::Nanoseconds)
         .create(&path)?;

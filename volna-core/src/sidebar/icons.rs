@@ -26,6 +26,7 @@ impl Tint {
     }
 }
 
+#[must_use]
 pub fn stream_icon(kind: &str) -> (IconName, Tint) {
     match kind {
         "PIPELINE" => (IconName::Workflow, Tint::Pipeline),
@@ -34,6 +35,7 @@ pub fn stream_icon(kind: &str) -> (IconName, Tint) {
     }
 }
 
+#[must_use]
 pub fn scope_icon(scope: &ScopeView<'_>) -> (IconName, Tint) {
     if matches!(scope.role, ScopeRole::Stream { .. }) {
         return stream_icon(scope.kind);
@@ -41,8 +43,12 @@ pub fn scope_icon(scope: &ScopeView<'_>) -> (IconName, Tint) {
     (scope_kind_icon(scope.kind), Tint::None)
 }
 
+#[must_use]
 pub fn scope_kind_icon(kind: &str) -> IconName {
-    use IconName::*;
+    use IconName::{
+        Box, Boxes, Braces, Brackets, Cable, Component, Cpu, Folder, GitFork, Layers, Library,
+        Package, Server, SquareFunction, Terminal, Zap,
+    };
     match kind {
         "module" | "vhdl_architecture" => Box,
         "sc_module" => Boxes,
@@ -63,6 +69,7 @@ pub fn scope_kind_icon(kind: &str) -> IconName {
     }
 }
 
+#[must_use]
 pub fn member_icon(h: &Hierarchy, member: Member) -> IconName {
     match member {
         Member::Var(id) => {
@@ -80,6 +87,7 @@ pub fn member_icon(h: &Hierarchy, member: Member) -> IconName {
     }
 }
 
+#[must_use]
 pub fn direction_icon(direction: Direction) -> Option<(IconName, Tint)> {
     match direction {
         Direction::Input => Some((IconName::LogIn, Tint::In)),
@@ -89,6 +97,7 @@ pub fn direction_icon(direction: Direction) -> Option<(IconName, Tint)> {
     }
 }
 
+#[must_use]
 pub fn stream_tag<'a>(scope: &ScopeView<'a>) -> Option<&'a str> {
     (matches!(scope.role, ScopeRole::Stream { .. }) && !matches!(scope.kind, "PIPELINE" | "LOG"))
         .then_some(scope.kind)

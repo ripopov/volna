@@ -57,7 +57,7 @@ impl JsonView {
                 .line_number(false)
                 .default_value(settings::schema::default_document(host))
         });
-        let ws_change = ws.clone();
+        let ws_change = ws;
         let subscription = cx.subscribe_in(&editor, window, move |this, editor, event, _, cx| {
             if let InputEvent::Change = event
                 && let Some(json) = &this.json
@@ -124,7 +124,7 @@ impl JsonView {
         let write_error: Option<SharedString> = store.last_error().map(|e| e.to_owned().into());
         if core_text != self.synced {
             let local = self.text(cx);
-            self.synced = core_text.clone();
+            self.synced.clone_from(&core_text);
             if local == self.synced || local.is_empty() {
                 let text = core_text.clone();
                 self.editor
@@ -213,7 +213,7 @@ impl JsonView {
                             .disabled(!dirty || !editable)
                             .tooltip("Write settings.json (⌘S)")
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.apply_json(&crate::settings_panel::ApplySettingsJson, window, cx)
+                                this.apply_json(&crate::settings_panel::ApplySettingsJson, window, cx);
                             })),
                     ),
             )

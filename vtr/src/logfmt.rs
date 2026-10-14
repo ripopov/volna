@@ -36,20 +36,19 @@ fn parse_spec(s: &str) -> Spec {
     let mut chars = s.chars();
     let c0 = chars.next();
     let c1 = chars.next();
-    if let (Some(f), Some(a)) = (c0, c1) {
-        if is_align(a) {
-            sp.fill = f;
-            sp.align = a as u8;
-            i = f.len_utf8() + 1;
-        }
+    if let (Some(f), Some(a)) = (c0, c1)
+        && is_align(a)
+    {
+        sp.fill = f;
+        sp.align = a as u8;
+        i = f.len_utf8() + 1;
     }
-    if i == 0 {
-        if let Some(a) = c0 {
-            if is_align(a) {
-                sp.align = a as u8;
-                i = 1;
-            }
-        }
+    if i == 0
+        && let Some(a) = c0
+        && is_align(a)
+    {
+        sp.align = a as u8;
+        i = 1;
     }
     if i < b.len() && b[i] == b'+' {
         sp.sign_plus = true;
@@ -147,6 +146,7 @@ fn write_uint(out: &mut String, v: u64, negative: bool, sp: &Spec) {
         ""
     };
     let prefix = if sp.alt { prefix } else { "" };
+    // SAFETY: The digit buffer contains only ASCII digits and letters.
     let body = unsafe { std::str::from_utf8_unchecked(&buf[pos..]) };
     pad_number(out, sign, prefix, body, sp);
 }
@@ -182,13 +182,13 @@ fn write_str(out: &mut String, s: &str, sp: &Spec) {
 fn write_float_body(out: &mut String, v: f64, sp: &Spec) {
     let a = v.abs();
     let _ = match (sp.ty, sp.precision) {
-        (b'e', Some(p)) => write!(out, "{:.*e}", p, a),
-        (b'e', None) => write!(out, "{:e}", a),
-        (b'E', Some(p)) => write!(out, "{:.*E}", p, a),
-        (b'E', None) => write!(out, "{:E}", a),
-        (b'f' | b'F', None) => write!(out, "{:.6}", a),
-        (_, Some(p)) => write!(out, "{:.*}", p, a),
-        (_, None) => write!(out, "{}", a),
+        (b'e', Some(p)) => write!(out, "{a:.p$e}"),
+        (b'e', None) => write!(out, "{a:e}"),
+        (b'E', Some(p)) => write!(out, "{a:.p$E}"),
+        (b'E', None) => write!(out, "{a:E}"),
+        (b'f' | b'F', None) => write!(out, "{a:.6}"),
+        (_, Some(p)) => write!(out, "{a:.p$}"),
+        (_, None) => write!(out, "{a}"),
     };
 }
 
@@ -211,7 +211,7 @@ fn write_float(out: &mut String, v: f64, sp: &Spec) {
 }
 
 pub fn write_arg(out: &mut String, a: LogArg, spec: &str, strings: &StringTable) {
-    write_arg_spec(out, a, &parse_spec(spec), strings)
+    write_arg_spec(out, a, &parse_spec(spec), strings);
 }
 
 fn write_arg_spec(out: &mut String, a: LogArg, sp: &Spec, strings: &StringTable) {
@@ -272,6 +272,7 @@ pub struct ParsedFmt {
 }
 
 impl ParsedFmt {
+    #[must_use]
     pub fn parse(fmt: &str) -> ParsedFmt {
         let b = fmt.as_bytes();
         let mut segs = Vec::new();
@@ -293,12 +294,11 @@ impl ParsedFmt {
                         lit_start = i;
                         continue;
                     }
-                    let close = match fmt[i + 1..].find('}') {
-                        Some(c) => i + 1 + c,
-                        None => {
-                            lit(&mut segs, i, b.len());
-                            return ParsedFmt { segs };
-                        }
+                    let close = if let Some(c) = fmt[i + 1..].find('}') {
+                        i + 1 + c
+                    } else {
+                        lit(&mut segs, i, b.len());
+                        return ParsedFmt { segs };
                     };
                     let inner = &fmt[i + 1..close];
                     let (idx_s, spec) = match inner.find(':') {
@@ -362,14 +362,15 @@ pub fn format_message<'a>(
     strings: &StringTable,
     out: &mut String,
 ) {
-    ParsedFmt::parse(fmt).render(fmt, arg, strings, out)
+    ParsedFmt::parse(fmt).render(fmt, arg, strings, out);
 }
 
-impl<'a> LogRecord<'a> {
+impl LogRecord<'_> {
     pub fn format_into(&self, strings: &StringTable, out: &mut String) {
         self.fmt
-            .render(strings.get(self.site.fmt), |i| self.arg(i), strings, out)
+            .render(strings.get(self.site.fmt), |i| self.arg(i), strings, out);
     }
+    #[must_use]
     pub fn format(&self, strings: &StringTable) -> String {
         let mut s = String::new();
         self.format_into(strings, &mut s);

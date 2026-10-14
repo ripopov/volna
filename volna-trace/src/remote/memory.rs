@@ -24,6 +24,7 @@ pub struct Reservation {
 }
 
 impl MemoryBudget {
+    #[must_use]
     pub fn new(limit: u64) -> Self {
         Self(Arc::new(Budget {
             limit: AtomicU64::new(limit),
@@ -32,6 +33,7 @@ impl MemoryBudget {
         }))
     }
 
+    #[must_use]
     pub fn limit(&self) -> u64 {
         self.0.limit.load(Ordering::Relaxed)
     }
@@ -40,6 +42,7 @@ impl MemoryBudget {
         self.0.limit.store(limit, Ordering::Relaxed);
     }
 
+    #[must_use]
     pub fn object_limit(&self) -> u64 {
         self.0.object_limit.load(Ordering::Relaxed)
     }
@@ -48,6 +51,7 @@ impl MemoryBudget {
         self.0.object_limit.store(limit, Ordering::Relaxed);
     }
 
+    #[must_use]
     pub fn used(&self) -> u64 {
         self.0.used.load(Ordering::Relaxed)
     }
@@ -111,6 +115,7 @@ impl Drop for Reservation {
 }
 
 impl Reservation {
+    #[must_use]
     pub fn budget(&self) -> MemoryBudget {
         self.budget.clone()
     }
@@ -124,6 +129,7 @@ impl Reservation {
         Ok(())
     }
 
+    #[must_use]
     pub fn bytes(&self) -> u64 {
         self.bytes
     }

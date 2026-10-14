@@ -103,8 +103,8 @@ fn projection(app: &App) -> Value {
                 p.remove("columns");
                 strip_folds(&mut p["rows"]);
             }
-            "pipeline" => _ = p.remove("rows"),
-            "transaction" if p["pinned"] == false => _ = p.remove("record"),
+            "pipeline" => drop(p.remove("rows")),
+            "transaction" if p["pinned"] == false => drop(p.remove("record")),
             _ => {}
         }
         if let Some(clocks) = p.get_mut("clocks").and_then(Value::as_object_mut) {
@@ -1386,7 +1386,7 @@ fn markers_rulers_titles_columns_and_pins_round_trip() {
 
     let clock = catalog.clocks[0].clone();
     let name = clock.rsplit('.').next().unwrap().to_owned();
-    app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(clock.clone()))));
+    app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(clock))));
     let shown = app.panels.waves(id).unwrap().nav.clocks().rulers.clone();
     assert!(app.undo_label().unwrap().ends_with(&name));
     set_cursor(&mut app, 500);
@@ -1441,7 +1441,7 @@ fn markers_rulers_titles_columns_and_pins_round_trip() {
             track: a(tx.generator),
             id: tx.id,
             cursor: None,
-        })
+        });
     };
     select(&mut app, first);
     app.handle(Command::ShowTransaction { from: table });

@@ -69,7 +69,7 @@ pub(super) async fn relation<F: std::future::Future<Output = ()>>(
                 }
             }
             Work::Value(a, b) => {
-                use AttributeValue::*;
+                use AttributeValue::{Bytes, Enum, F64, List, Logic, Map, Text};
                 match (a, b) {
                     (F64(a), F64(b)) => {
                         if a.to_bits() != b.to_bits() {

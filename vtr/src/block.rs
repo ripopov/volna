@@ -23,6 +23,7 @@ pub struct Record {
 }
 
 #[inline]
+#[must_use]
 pub fn is_narrow(kind: SignalKind) -> bool {
     match kind {
         SignalKind::Bits { width, states } => packed_len(width, states) <= 8,
@@ -138,11 +139,11 @@ impl EncoderScratch {
 fn entry_width(kind: SignalKind, count: u32, vlen: u64) -> Option<(u32, bool)> {
     match kind {
         SignalKind::Bits { width, states } if width > 1 => {
-            let compact = (width as u64).div_ceil(8);
+            let compact = u64::from(width).div_ceil(8);
             let full = packed_len(width, states) as u64;
-            if vlen == count as u64 * compact {
+            if vlen == u64::from(count) * compact {
                 Some((compact as u32, false))
-            } else if vlen == count as u64 * full {
+            } else if vlen == u64::from(count) * full {
                 Some((full as u32, true))
             } else {
                 None
@@ -184,8 +185,14 @@ pub fn encode_chunk(
         fill.clear();
         fill.extend_from_slice(&counts[..n_sig]);
         for r in &input.records {
-            let p = unsafe { fill.get_unchecked_mut(r.sig as usize) };
-            unsafe { *sorted.get_unchecked_mut(*p as usize) = *r };
+            let signal = r.sig as usize;
+            let p = fill
+                .get_mut(signal)
+                .ok_or(Error::State("record signal exceeds signal table"))?;
+            if *p >= counts[signal + 1] {
+                return Err(Error::State("record exceeds its signal count"));
+            }
+            sorted[*p as usize] = *r;
             *p += 1;
         }
     }
@@ -270,12 +277,12 @@ pub fn finish_block(
                     continue;
                 }
                 let kind_tag = match input.kinds[s] {
-                    SignalKind::Bits { width, states } => (width as u64) << 8 | states as u64,
+                    SignalKind::Bits { width, states } => u64::from(width) << 8 | u64::from(states),
                     SignalKind::Real => 1 << 40,
                     SignalKind::VarLen => 2 << 40,
                 };
-                let mut h =
-                    kind_tag.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ scratch.entry_counts[s] as u64;
+                let mut h = kind_tag.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ u64::from(scratch.entry_counts[s]);
                 let mut total = 0usize;
                 let mut parts: [(usize, usize); 2] = [(0, 0); 2];
                 let mut n_parts = 0usize;
@@ -360,11 +367,11 @@ pub fn finish_block(
         let aliases = alias_of[first..last]
             .iter()
             .enumerate()
-            .filter(|(_, &a)| a != NO_BLOCK);
+            .filter(|&(_, &a)| a != NO_BLOCK);
         varint::put_u64(data, aliases.clone().count() as u64);
         for (local, &target) in aliases {
             varint::put_u64(data, local as u64);
-            varint::put_u64(data, target as u64);
+            varint::put_u64(data, u64::from(target));
         }
         let frame_c = &mut scratch.frame_c;
         frame_c.clear();
@@ -382,8 +389,8 @@ pub fn finish_block(
                     *c += 1;
                 }
                 if *c < ch.frags.len() && ch.frags[*c].sig as usize == s {
-                    hlen += ch.frags[*c].hlen as u64;
-                    vlen += ch.frags[*c].vlen as u64;
+                    hlen += u64::from(ch.frags[*c].hlen);
+                    vlen += u64::from(ch.frags[*c].vlen);
                 }
             }
             let one_bit = matches!(input.kinds[s], SignalKind::Bits { width: 1, .. });
@@ -400,7 +407,7 @@ pub fn finish_block(
                 let (w, full) = entry_width(input.kinds[s], scratch.entry_counts[s], vlen)
                     .unwrap_or((0, false));
                 info.w = w;
-                info.word = (hlen << 2) | (((w > 0) as u64) << 1) | full as u64;
+                info.word = (hlen << 2) | (u64::from(w > 0) << 1) | u64::from(full);
                 info.len = (varint::len_u64(info.word) as u64 + hlen + vlen) as u32;
             }
             cols.push(info);
@@ -439,7 +446,7 @@ pub fn finish_block(
             let segs = &mut scratch.segs;
             segs.clear();
             for c in &cols[ri..ri + rn] {
-                varint::put_u64(raw, c.len as u64);
+                varint::put_u64(raw, u64::from(c.len));
             }
             for s in first + ri..first + ri + rn {
                 let info = cols[s - first];
@@ -564,6 +571,7 @@ pub fn finish_block(
 }
 
 impl EncoderScratch {
+    #[must_use]
     pub fn data(&self) -> &[u8] {
         &self.data
     }
@@ -610,7 +618,7 @@ fn choose_xform(
         dict_table,
         dict_sample,
     } = t;
-    let total: u64 = segs.iter().map(|s| s.1 as u64).sum();
+    let total: u64 = segs.iter().map(|s| u64::from(s.1)).sum();
     if total < 64 {
         return Ok((Xform::None, false));
     }
@@ -686,25 +694,22 @@ fn choose_xform(
             )
             .filter(|&d| d <= DICT_SAMPLE_MAX || d * count <= xform::DICT_MAX * m)
         };
-        match coded {
-            Some(d) => {
-                trial_in.extend_from_slice(&tmp[tmp.len() - m..]);
-                let mf = m as f64;
-                est_codes += dict_table
-                    .counts()
-                    .iter()
-                    .map(|&c| c as f64 * (mf / c as f64).log2())
-                    .sum::<f64>()
-                    / 8.0;
-                let nd = (d * count).div_ceil(m).clamp(d, xform::DICT_MAX);
-                est_dict += varint::len_u64(nd as u64) + nd * w;
-                dict_ranges[si] = (1, 0);
-                any = true;
-            }
-            None => {
-                trial_in.extend_from_slice(dict_sample);
-                plain_bytes += dict_sample.len();
-            }
+        if let Some(d) = coded {
+            trial_in.extend_from_slice(&tmp[tmp.len() - m..]);
+            let mf = m as f64;
+            est_codes += dict_table
+                .counts()
+                .iter()
+                .map(|&c| f64::from(c) * (mf / f64::from(c)).log2())
+                .sum::<f64>()
+                / 8.0;
+            let nd = (d * count).div_ceil(m).clamp(d, xform::DICT_MAX);
+            est_dict += varint::len_u64(nd as u64) + nd * w;
+            dict_ranges[si] = (1, 0);
+            any = true;
+        } else {
+            trial_in.extend_from_slice(dict_sample);
+            plain_bytes += dict_sample.len();
         }
     }
     let mut dict_bytes = 0usize;
@@ -735,7 +740,9 @@ fn choose_xform(
             }
         }
     } else {
-        dict_ranges.iter_mut().for_each(|r| *r = (0, 0));
+        for r in dict_ranges.iter_mut() {
+            *r = (0, 0);
+        }
     }
     if dict_bytes > 0 {
         trial_in.clear();
@@ -777,7 +784,7 @@ fn apply_dict(
     out.clear();
     let mut r = Reader::new(raw);
     for _ in cols {
-        let _ = r.u64();
+        drop(r.u64());
     }
     let mut plan: Vec<(usize, usize, usize)> = Vec::with_capacity(cols.len());
     let mut pos = r.pos;
@@ -841,11 +848,7 @@ fn hash_bytes(mut h: u64, bytes: &[u8]) -> u64 {
 }
 
 fn columns_equal(chunks: &[ChunkEnc], a: u32, b: u32) -> bool {
-    fn parts<'a>(
-        chunks: &'a [ChunkEnc],
-        s: u32,
-        pass: usize,
-    ) -> impl Iterator<Item = &'a [u8]> + 'a {
+    fn parts(chunks: &[ChunkEnc], s: u32, pass: usize) -> impl Iterator<Item = &[u8]> + '_ {
         chunks.iter().filter_map(move |ch| {
             ch.frags.binary_search_by_key(&s, |f| f.sig).ok().map(|i| {
                 let f = ch.frags[i];
@@ -861,17 +864,17 @@ fn columns_equal(chunks: &[ChunkEnc], a: u32, b: u32) -> bool {
         let (mut ia, mut ib) = (parts(chunks, a, pass), parts(chunks, b, pass));
         let (mut sa, mut sb): (&[u8], &[u8]) = (&[], &[]);
         loop {
-            if sa.is_empty() {
-                if let Some(x) = ia.next() {
-                    sa = x;
-                    continue;
-                }
+            if sa.is_empty()
+                && let Some(x) = ia.next()
+            {
+                sa = x;
+                continue;
             }
-            if sb.is_empty() {
-                if let Some(x) = ib.next() {
-                    sb = x;
-                    continue;
-                }
+            if sb.is_empty()
+                && let Some(x) = ib.next()
+            {
+                sb = x;
+                continue;
             }
             if sa.is_empty() || sb.is_empty() {
                 if sa.is_empty() != sb.is_empty() {
@@ -904,13 +907,13 @@ fn encode_column(
             let mut code = state.code;
             for r in recs {
                 let t = r.tidx & !COMPACT_FLAG;
-                let dt = t.wrapping_sub(prev) as u64;
+                let dt = u64::from(t.wrapping_sub(prev));
                 prev = t;
                 let c = (r.payload & 15) as u8;
                 if code <= 1 && c == code ^ 1 {
                     varint::put_u64(hdr, dt << 1);
                 } else {
-                    varint::put_u64(hdr, (dt << 5) | ((c as u64) << 1) | 1);
+                    varint::put_u64(hdr, (dt << 5) | (u64::from(c) << 1) | 1);
                 }
                 code = c;
             }
@@ -923,9 +926,9 @@ fn encode_column(
             for r in recs {
                 let t = r.tidx & !COMPACT_FLAG;
                 let compact = r.tidx & COMPACT_FLAG != 0 || states == 2;
-                let dt = t.wrapping_sub(prev) as u64;
+                let dt = u64::from(t.wrapping_sub(prev));
                 prev = t;
-                varint::put_u64(hdr, (dt << 1) | compact as u64);
+                varint::put_u64(hdr, (dt << 1) | u64::from(compact));
                 let len = if compact { compact_len } else { full_len };
                 if narrow {
                     val.extend_from_slice(&r.payload.to_le_bytes()[..len]);
@@ -941,7 +944,7 @@ fn encode_column(
         SignalKind::Real => {
             for r in recs {
                 let t = r.tidx & !COMPACT_FLAG;
-                let dt = t.wrapping_sub(prev) as u64;
+                let dt = u64::from(t.wrapping_sub(prev));
                 prev = t;
                 varint::put_u64(hdr, dt);
                 val.extend_from_slice(&r.payload.to_le_bytes());
@@ -950,7 +953,7 @@ fn encode_column(
         SignalKind::VarLen => {
             for r in recs {
                 let t = r.tidx & !COMPACT_FLAG;
-                let dt = t.wrapping_sub(prev) as u64;
+                let dt = u64::from(t.wrapping_sub(prev));
                 prev = t;
                 varint::put_u64(hdr, dt);
                 let mut hr = Reader::new(heap);
@@ -1000,15 +1003,19 @@ impl BlockHeader {
         }
         Ok(h)
     }
+    #[must_use]
     pub fn tt_off(&self) -> usize {
         HEADER_LEN
     }
+    #[must_use]
     pub fn index_off(&self) -> usize {
         HEADER_LEN + self.tt_len as usize
     }
+    #[must_use]
     pub fn prev_off(&self) -> usize {
         self.index_off() + self.n_dirty as usize * INDEX_ENTRY_LEN
     }
+    #[must_use]
     pub fn data_off(&self) -> usize {
         self.prev_off() + self.n_groups as usize * 4
     }
@@ -1027,6 +1034,7 @@ pub fn decode_time_table(p: &[u8], h: &BlockHeader, d: &mut Decompressor) -> Res
     Ok(out)
 }
 
+#[must_use]
 pub fn find_group(p: &[u8], h: &BlockHeader, group: u32) -> Option<(u32, u64)> {
     let base = h.index_off();
     let n = h.n_dirty as usize;
@@ -1040,14 +1048,12 @@ pub fn find_group(p: &[u8], h: &BlockHeader, group: u32) -> Option<(u32, u64)> {
     };
     let (mut lo, mut hi) = (0usize, n);
     while lo < hi {
-        let mid = (lo + hi) / 2;
+        let mid = usize::midpoint(lo, hi);
         let (g, clen, off) = entry(mid);
-        if g == group {
-            return Some((clen, off));
-        } else if g < group {
-            lo = mid + 1;
-        } else {
-            hi = mid;
+        match g.cmp(&group) {
+            std::cmp::Ordering::Equal => return Some((clen, off)),
+            std::cmp::Ordering::Less => lo = mid + 1,
+            std::cmp::Ordering::Greater => hi = mid,
         }
     }
     None
@@ -1056,7 +1062,7 @@ pub fn find_group(p: &[u8], h: &BlockHeader, group: u32) -> Option<(u32, u64)> {
 pub fn dirty_groups<'a>(
     p: &'a [u8],
     h: &BlockHeader,
-) -> impl Iterator<Item = (u32, u32, u64)> + 'a {
+) -> impl Iterator<Item = (u32, u32, u64)> + 'a + use<'a> {
     let base = h.index_off();
     (0..h.n_dirty as usize).map(move |i| {
         let e = &p[base + i * INDEX_ENTRY_LEN..base + (i + 1) * INDEX_ENTRY_LEN];
@@ -1068,6 +1074,7 @@ pub fn dirty_groups<'a>(
     })
 }
 
+#[must_use]
 pub fn prev_dirty(p: &[u8], h: &BlockHeader, group: u32) -> u32 {
     if group >= h.n_groups {
         return NO_BLOCK;
@@ -1163,10 +1170,12 @@ impl<'a> GroupView<'a> {
         })
     }
 
+    #[must_use]
     pub fn holds(&self, sig: u32) -> bool {
         sig >= self.first_sig && ((sig - self.first_sig) as usize) < self.n_sigs
     }
 
+    #[must_use]
     pub fn alias_of(&self, sig: u32) -> Option<u32> {
         self.aliases
             .binary_search_by_key(&sig, |a| a.0)
@@ -1174,6 +1183,7 @@ impl<'a> GroupView<'a> {
             .map(|i| self.aliases[i].1)
     }
 
+    #[must_use]
     pub fn run_of(&self, sig: u32) -> usize {
         let local = sig - self.first_sig;
         let i = self.runs.partition_point(|r| r.first_local <= local);
@@ -1257,7 +1267,7 @@ fn split_column(col: &[u8], kind: SignalKind) -> Result<(&[u8], &[u8], Option<us
             }),
             SignalKind::Real => Some(8),
             SignalKind::VarLen => {
-                return Err(Error::Corrupt("variable-length column marked eligible"))
+                return Err(Error::Corrupt("variable-length column marked eligible"));
             }
         }
     };
@@ -1328,7 +1338,7 @@ pub fn untransform_column(
     x: Xform,
     tmp: &mut Vec<u8>,
 ) -> Result<()> {
-    debug_assert!(x != Xform::Dict);
+    debug_assert_ne!(x, Xform::Dict);
     if x == Xform::None || col.is_empty() || matches!(kind, SignalKind::Bits { width: 1, .. }) {
         return Ok(());
     }
@@ -1402,6 +1412,7 @@ pub struct ColumnIter<'a> {
 }
 
 impl<'a> ColumnIter<'a> {
+    #[must_use]
     pub fn new(col: &'a [u8], kind: SignalKind) -> Self {
         if col.is_empty() || matches!(kind, SignalKind::Bits { width: 1, .. }) {
             return ColumnIter {
@@ -1442,6 +1453,7 @@ impl<'a> ColumnIter<'a> {
         }
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.h.is_empty()
     }
@@ -1455,7 +1467,7 @@ impl<'a> ColumnIter<'a> {
             SignalKind::Bits { width: 1, states } => {
                 let x = self.h.u64()?;
                 let (dt, code) = if x & 1 == 0 {
-                    (x >> 1, (self.code ^ 1) as u64)
+                    (x >> 1, u64::from(self.code ^ 1))
                 } else {
                     (x >> 5, (x >> 1) & 15)
                 };
@@ -1530,7 +1542,7 @@ impl<'a> ColumnIter<'a> {
             let x = match buf[pos] {
                 b if b < 0x80 => {
                     pos += 1;
-                    b as u64
+                    u64::from(b)
                 }
                 _ => {
                     let mut r = Reader { buf, pos };
@@ -1558,11 +1570,13 @@ impl<'a> ColumnIter<'a> {
     }
 
     #[inline]
+    #[must_use]
     pub fn value_bytes(&self, c: &RawChange) -> &'a [u8] {
         &self.v.buf[c.start as usize..c.end as usize]
     }
 
     #[inline]
+    #[must_use]
     pub fn value(&self, c: &RawChange) -> SignalValue<'a> {
         match self.kind {
             SignalKind::Bits { width: 1, .. } => {
@@ -1570,7 +1584,7 @@ impl<'a> ColumnIter<'a> {
                 SignalValue::Bits {
                     width: 1,
                     states: c.states,
-                    data: &CODE_BYTES[code..code + 1],
+                    data: &CODE_BYTES[code..=code],
                 }
             }
             SignalKind::Bits { width, .. } => SignalValue::Bits {
@@ -1612,31 +1626,26 @@ pub fn for_each_tidx(col: &[u8], kind: SignalKind, mut f: impl FnMut(u32)) -> Re
     if col.is_empty() {
         return Ok(());
     }
-    let (hdr, one_bit, shift) = match kind {
-        SignalKind::Bits { width: 1, .. } => (col, true, 0),
-        _ => {
-            let mut r = Reader::new(col);
-            let hlen = (r.u64()? >> 2) as usize;
-            if r.pos + hlen > col.len() {
-                return Err(Error::Corrupt("column header stream exceeds column"));
-            }
-            (
-                &col[r.pos..r.pos + hlen],
-                false,
-                if matches!(kind, SignalKind::Bits { .. }) {
-                    1
-                } else {
-                    0
-                },
-            )
+    let (hdr, one_bit, shift) = if let SignalKind::Bits { width: 1, .. } = kind {
+        (col, true, 0)
+    } else {
+        let mut r = Reader::new(col);
+        let hlen = (r.u64()? >> 2) as usize;
+        if r.pos + hlen > col.len() {
+            return Err(Error::Corrupt("column header stream exceeds column"));
         }
+        (
+            &col[r.pos..r.pos + hlen],
+            false,
+            i32::from(matches!(kind, SignalKind::Bits { .. })),
+        )
     };
     let (mut pos, mut tidx) = (0usize, 0u32);
     while pos < hdr.len() {
         let x = match hdr[pos] {
             b if b < 0x80 => {
                 pos += 1;
-                b as u64
+                u64::from(b)
             }
             _ => {
                 let mut r = Reader { buf: hdr, pos };
@@ -1646,11 +1655,7 @@ pub fn for_each_tidx(col: &[u8], kind: SignalKind, mut f: impl FnMut(u32)) -> Re
             }
         };
         let dt = if one_bit {
-            if x & 1 == 0 {
-                x >> 1
-            } else {
-                x >> 5
-            }
+            if x & 1 == 0 { x >> 1 } else { x >> 5 }
         } else {
             x >> shift
         };
@@ -1660,6 +1665,7 @@ pub fn for_each_tidx(col: &[u8], kind: SignalKind, mut f: impl FnMut(u32)) -> Re
     Ok(())
 }
 
+#[must_use]
 pub fn frame_value(kind: SignalKind, frame: &[u8]) -> SignalValue<'_> {
     match kind {
         SignalKind::Bits { width, states } => SignalValue::Bits {
@@ -1669,5 +1675,41 @@ pub fn frame_value(kind: SignalKind, frame: &[u8]) -> SignalValue<'_> {
         },
         SignalKind::Real => SignalValue::Real(f64::from_le_bytes(frame[..8].try_into().unwrap())),
         SignalKind::VarLen => SignalValue::VarLen(frame),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_rejects_invalid_signal_counts_before_scattering() {
+        let kinds = Arc::new(vec![SignalKind::Real, SignalKind::Real]);
+        for (signal, counts) in [(2, vec![1, 0]), (0, vec![0, 1])] {
+            let input = ChunkInput {
+                records: vec![Record {
+                    sig: signal,
+                    tidx: 0,
+                    payload: 0,
+                }],
+                heap: Vec::new(),
+                sig_counts: counts,
+                kinds: Arc::clone(&kinds),
+                wide: Vec::new(),
+                times: vec![0],
+                frame: Vec::new(),
+                frame_parts: Vec::new(),
+                ends_block: false,
+            };
+            assert!(matches!(
+                encode_chunk(
+                    &input,
+                    &kinds,
+                    &mut EncoderScratch::default(),
+                    &mut ChunkEnc::default()
+                ),
+                Err(Error::State(_))
+            ));
+        }
     }
 }

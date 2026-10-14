@@ -156,11 +156,13 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
         _ => panic!("not resident"),
     };
     let object = shared(&app);
-    let lane_object = app.panels.waves(waves).unwrap().items()[0]
-        .lane()
-        .unwrap()
-        .generator(&app.doc)
-        .unwrap() as *const _;
+    let lane_object = std::ptr::from_ref(
+        app.panels.waves(waves).unwrap().items()[0]
+            .lane()
+            .unwrap()
+            .generator(&app.doc)
+            .unwrap(),
+    );
     assert!(std::ptr::eq(Arc::as_ptr(&object), lane_object));
 
     app.handle(Command::Panels(volna_core::panels::PanelsCommand::Focus(
@@ -286,7 +288,7 @@ fn edge_steps_walk_record_begins_and_ends_on_a_lane() {
             .flat_map(|t| [t.begin, t.end])
             .collect()
     };
-    bounds.sort();
+    bounds.sort_unstable();
     bounds.dedup();
     let cursor = |app: &App| app.panels.waves(waves).unwrap().cursor(&app.doc);
     app.panels.waves_mut(waves).unwrap().selected = [0].into();
@@ -379,7 +381,7 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
         saved
     );
 
-    let mut missing = saved.clone();
+    let mut missing = saved;
     for panel in missing["panels"].as_array_mut().unwrap() {
         if panel["id"] == other.0 {
             panel["rows"][0]["generator"] = serde_json::json!(["no", "such"]);

@@ -10,12 +10,14 @@ mod support;
 #[test]
 fn c_smoke() {
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
-    assert!(Command::new(&cc)
-        .arg("--version")
-        .output()
-        .expect("C compiler is required")
-        .status
-        .success());
+    assert!(
+        Command::new(&cc)
+            .arg("--version")
+            .output()
+            .expect("C compiler is required")
+            .status
+            .success()
+    );
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib = support::static_library();
     let temporary = tempfile::tempdir().unwrap();

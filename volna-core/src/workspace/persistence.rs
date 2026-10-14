@@ -17,6 +17,7 @@ pub enum Target {
     Storage { key: String },
 }
 impl Target {
+    #[must_use]
     pub fn location(&self) -> &str {
         match self {
             Self::File { uri } | Self::FallbackFile { uri } => uri,
@@ -66,6 +67,7 @@ pub struct Selection {
     pub notices: Vec<String>,
 }
 
+#[must_use]
 pub fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -126,6 +128,10 @@ pub struct SaveTicket {
 }
 mod decimal {
     use serde::{Deserialize, Deserializer, Serializer};
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Serde requires this callback to borrow the field."
+    )]
     pub fn serialize<S: Serializer>(value: &u64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&value.to_string())
     }
@@ -158,27 +164,34 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
+    #[must_use]
     pub fn target(&self) -> Option<&Target> {
         self.target.as_ref()
     }
     pub(crate) fn supersedes(&self) -> Option<&str> {
         self.supersedes.as_deref()
     }
+    #[must_use]
     pub fn revision(&self) -> u64 {
         self.revision
     }
+    #[must_use]
     pub fn dirty(&self) -> bool {
         self.revision > self.acked
     }
+    #[must_use]
     pub fn suspended(&self) -> bool {
         self.suspended
     }
+    #[must_use]
     pub fn error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
+    #[must_use]
     pub fn outstanding(&self) -> Option<&SaveTicket> {
         self.outstanding.as_ref().map(|p| &p.ticket)
     }
+    #[must_use]
     pub fn enabled(&self) -> bool {
         self.policy != Persistence::Disabled
     }

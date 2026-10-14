@@ -40,6 +40,7 @@ impl Default for StagePalette {
 }
 
 impl StagePalette {
+    #[must_use]
     pub fn build(generators: &[Arc<LoadedGenerator>]) -> Self {
         Self::from_censuses(generators.iter().map(|g| g.stage_census()))
     }
@@ -63,8 +64,7 @@ impl StagePalette {
             lane_counts
                 .iter()
                 .max_by_key(|(_, n)| *n)
-                .map(|(lane, _)| (*lane).to_owned())
-                .unwrap_or_else(|| DEFAULT_LANE.to_owned())
+                .map_or_else(|| DEFAULT_LANE.to_owned(), |(lane, _)| (*lane).to_owned())
         };
         let mut seen: Vec<(&str, u64, u64)> = Vec::new();
         let mut name_index = HashMap::new();
@@ -105,6 +105,7 @@ impl StagePalette {
             + self.by_name.keys().map(String::capacity).sum::<usize>()) as u64
     }
 
+    #[must_use]
     pub fn swatch(&self, name: &str) -> StageSwatch {
         match self.by_name.get(name) {
             Some(&rank) => StageSwatch::Step {
@@ -115,14 +116,17 @@ impl StagePalette {
         }
     }
 
+    #[must_use]
     pub fn style(&self, name: &str, theme: &Theme) -> StageStyle {
         theme.swatch(self.swatch(name))
     }
 
+    #[must_use]
     pub fn names(&self) -> &[String] {
         &self.names
     }
 
+    #[must_use]
     pub fn primary_lane(&self) -> &str {
         &self.primary_lane
     }
@@ -242,7 +246,7 @@ mod tests {
                 p.style(&pair[1], &one_dark()).fill,
             );
             assert!((a.l - b.l).abs() > 0.1, "{pair:?} differ in lightness");
-            assert!(a.h != b.h);
+            assert_ne!(a.h, b.h);
         }
         let few = StagePalette::build(&[generator(&[alu])]);
         assert!(

@@ -31,6 +31,7 @@ impl Reading {
         })
     }
 
+    #[must_use]
     pub fn is_integer(self) -> bool {
         matches!(
             self,
@@ -66,15 +67,18 @@ impl Layer {
         }
     }
 
+    #[must_use]
     pub fn with_summary(mut self, summary: Option<Arc<IntegralSummary>>) -> Self {
         self.summary = summary.filter(|s| s.matches(&self.history, self.reading));
         self
     }
 
+    #[must_use]
     pub fn sample(&self, i: Option<usize>) -> Sample {
         self.reading.sample(self.history.as_ref(), i)
     }
 
+    #[must_use]
     pub fn at(&self, t: u64) -> Sample {
         self.sample(self.history.index_at(t))
     }
@@ -82,6 +86,7 @@ impl Layer {
 
 pub type Key = Vec<(usize, Reading)>;
 
+#[must_use]
 pub fn key(layers: &[Layer]) -> Key {
     layers
         .iter()
@@ -117,6 +122,7 @@ pub fn compose(values: &[Sample], mut band: impl FnMut(usize, f64, f64)) -> Comp
     c
 }
 
+#[must_use]
 pub fn total(values: &[Sample]) -> Option<f64> {
     values.iter().try_fold(0.0, |sum, v| match v {
         Sample::Value(v) => Some(sum + v),
@@ -124,6 +130,7 @@ pub fn total(values: &[Sample]) -> Option<f64> {
     })
 }
 
+#[must_use]
 pub fn values_at(layers: &[Layer], t: u64) -> Vec<Sample> {
     layers.iter().map(|l| l.at(t)).collect()
 }
@@ -135,6 +142,7 @@ fn index_at(h: &dyn SignalHistory, t: f64) -> Option<usize> {
     h.index_at(t.floor() as u64)
 }
 
+#[must_use]
 pub fn visible_changes(layers: &[Layer], vp: &Viewport) -> usize {
     layers
         .iter()
@@ -153,23 +161,28 @@ pub struct Frame {
 }
 
 impl Frame {
+    #[must_use]
     pub fn values(&self, span: usize) -> &[Sample] {
         &self.values[span * self.layers..(span + 1) * self.layers]
     }
 
+    #[must_use]
     pub fn changes(&self, span: usize) -> u32 {
         self.changes.get(span).copied().unwrap_or(0)
     }
 
+    #[must_use]
     pub fn span_at(&self, x: f64) -> Option<usize> {
         let i = self.spans.partition_point(|s| s.1 <= x);
         (i < self.spans.len() && self.spans[i].0 <= x).then_some(i)
     }
 
+    #[must_use]
     pub fn waiting(&self) -> bool {
         self.waiting
     }
 
+    #[must_use]
     pub fn extent(&self) -> (f64, f64) {
         (0..self.spans.len()).fold((0.0, 0.0), |(lo, hi), s| {
             let c = compose(self.values(s), |_, _, _| {});
@@ -178,6 +191,7 @@ impl Frame {
     }
 }
 
+#[must_use]
 pub fn frame(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     if width == 0 || vp.width() <= 0.0 || layers.is_empty() {
         return Frame {
@@ -204,6 +218,7 @@ pub fn frame(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     columns(layers, vp, width)
 }
 
+#[must_use]
 pub fn steps(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     let w = width as f64;
     let mut times: Vec<u64> = Vec::new();
@@ -247,6 +262,7 @@ pub fn steps(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     frame
 }
 
+#[must_use]
 pub fn columns(layers: &[Layer], vp: &Viewport, width: usize) -> Frame {
     let n = layers.len();
     let w = width as f64;
@@ -374,7 +390,7 @@ impl std::fmt::Debug for IntegralSummary {
             .field("reading", &self.reading)
             .field("len", &self.len)
             .field("bytes", &self.resident_bytes())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -418,15 +434,18 @@ impl IntegralSummary {
         })
     }
 
+    #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         (self.integral.capacity() * std::mem::size_of::<f64>()
             + self.undefined.capacity() * std::mem::size_of::<u32>()) as u64
     }
 
+    #[must_use]
     pub fn reading(&self) -> Reading {
         self.reading
     }
 
+    #[must_use]
     pub fn identity(&self) -> usize {
         self.history
     }
@@ -546,6 +565,7 @@ pub enum IntegralLoad {
 }
 
 impl IntegralLoad {
+    #[must_use]
     pub fn history(&self) -> usize {
         match self {
             Self::Building { history } | Self::Failed { history } => *history,
@@ -563,6 +583,7 @@ pub struct Readout {
 }
 
 impl Readout {
+    #[must_use]
     pub fn share(&self, layer: usize) -> Option<f64> {
         let Sample::Value(v) = self.values.get(layer)? else {
             return None;
@@ -579,6 +600,7 @@ impl Readout {
     }
 }
 
+#[must_use]
 pub fn readout(frame: &Frame, x: f64, value: f64) -> Option<Readout> {
     let span = frame.span_at(x)?;
     let values = frame.values(span).to_vec();
@@ -596,6 +618,7 @@ pub fn readout(frame: &Frame, x: f64, value: f64) -> Option<Readout> {
     })
 }
 
+#[must_use]
 pub fn total_edge(layers: &[Layer], from: u64, forward: bool, limit: usize) -> Option<u64> {
     let sum_at = |t: u64| {
         let values = values_at(layers, t);
@@ -622,6 +645,7 @@ pub fn total_edge(layers: &[Layer], from: u64, forward: bool, limit: usize) -> O
     None
 }
 
+#[must_use]
 pub fn clean_range((lo, hi): (f64, f64)) -> (f64, f64) {
     fn up(x: f64) -> f64 {
         if x <= 0.0 || !x.is_finite() {
@@ -640,6 +664,7 @@ pub fn clean_range((lo, hi): (f64, f64)) -> (f64, f64) {
     if hi > lo { (lo, hi) } else { (0.0, 1.0) }
 }
 
+#[must_use]
 pub fn changes(layers: &[Layer]) -> usize {
     layers.iter().map(|l| l.history.len()).sum()
 }
@@ -751,6 +776,7 @@ fn widen(peak: &mut Peak, v: f64) {
     });
 }
 
+#[must_use]
 pub fn peaks(layers: &[Layer], vp: &Viewport, width: usize) -> Vec<Peak> {
     let w = width as f64;
     let t0 = vp.time_at(0.0, w);
@@ -883,6 +909,7 @@ impl TotalSummary {
         (1u64 << self.shift) as f64 * (TOTAL_FANOUT as f64).powi(level as i32)
     }
 
+    #[must_use]
     pub fn peaks(&self, vp: &Viewport, width: usize) -> Vec<Peak> {
         let mut out = vec![None; width];
         if width == 0 || vp.width() <= 0.0 {
@@ -919,10 +946,12 @@ impl TotalSummary {
             + blocks * std::mem::size_of::<Peak>()) as u64
     }
 
+    #[must_use]
     pub fn key(&self) -> &Key {
         &self.key
     }
 
+    #[must_use]
     pub fn range(&self) -> (f64, f64) {
         self.range
     }
@@ -934,6 +963,7 @@ pub enum TotalLoad {
     Failed,
 }
 
+#[must_use]
 pub fn number(v: f64) -> String {
     let v = if v == 0.0 { 0.0 } else { v };
     if v.fract() == 0.0 && v.abs() < 1e15 {

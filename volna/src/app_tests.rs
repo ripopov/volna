@@ -248,7 +248,7 @@ fn desktop_startup_hosts_workspace_and_dialogs(cx: &mut TestAppContext) {
         });
         vcx.run_until_parked();
         assert!(vcx.debug_bounds("startup-dialog").is_some());
-        vcx.update(|window, cx| window.close_dialog(cx));
+        vcx.update(gpui_kit::component::WindowExt::close_dialog);
         vcx.run_until_parked();
         assert!(vcx.debug_bounds("startup-dialog").is_none());
     }
@@ -352,7 +352,7 @@ fn scope_rows_without_activity_hide_counts_in_both_themes(cx: &mut TestAppContex
                     ..Default::default()
                 }),
                 cx,
-            )
+            );
         });
         vcx.run_until_parked();
         vcx.update(|window, cx| window.draw(cx).clear(cx));
@@ -430,7 +430,7 @@ fn scope_rows_show_activity_meters_in_both_themes(cx: &mut TestAppContext) {
                     ..Default::default()
                 }),
                 cx,
-            )
+            );
         });
         vcx.run_until_parked();
         vcx.update(|window, cx| window.draw(cx).clear(cx));
@@ -544,7 +544,7 @@ fn latest_open_wins_and_a_stale_open_cannot_replace_the_trace(cx: &mut TestAppCo
         })
         .unwrap();
     window
-        .update(cx, |ws, _, cx| ws.spawn_request(slow, cx))
+        .update(cx, |_, _, cx| Workspace::spawn_request(slow, cx))
         .unwrap();
     cx.run_until_parked();
     window
@@ -615,7 +615,7 @@ fn theme_changes_preserve_trace_and_interaction_state(cx: &mut TestAppContext) {
                     ..Default::default()
                 }),
                 cx,
-            )
+            );
         });
         cx.run_until_parked();
         window
@@ -1303,7 +1303,7 @@ fn status_bar_groups_stay_put_under_long_messages(cx: &mut TestAppContext) {
     let meter = bounds(&mut vcx, "status-memory");
     let right = bounds(&mut vcx, "status-right");
     let long = "#123 · X cycles 4–5 (1 cycle) ".repeat(40);
-    set_message(&mut vcx, Some(long.clone()));
+    set_message(&mut vcx, Some(long));
     assert_eq!(bounds(&mut vcx, "status-memory"), meter, "meter moved");
     assert_eq!(bounds(&mut vcx, "status-right"), right, "right group moved");
     let slot = bounds(&mut vcx, "status-message");
@@ -1773,7 +1773,7 @@ fn color_submenu_and_palette_commands_colour_the_selection(cx: &mut TestAppConte
                 tint: Some(Tint::Pink),
             }),
             cx,
-        )
+        );
     });
     vcx.run_until_parked();
     vcx.update(|window, cx| window.draw(cx).clear(cx));
@@ -2359,7 +2359,7 @@ fn ctrl_digits_place_and_move_markers_while_bare_digits_jump(cx: &mut TestAppCon
     let mut vcx = VisualTestContext::from_window(root.into(), cx);
     vcx.run_until_parked();
     for n in (1..=6).rev() {
-        let time = start + step * n as u64;
+        let time = start + step * u64::from(n);
         window
             .update(&mut vcx, |ws, _, _| ws.app.doc.shared.cursor = Some(time))
             .unwrap();
@@ -2405,7 +2405,7 @@ fn ctrl_digits_place_and_move_markers_while_bare_digits_jump(cx: &mut TestAppCon
     vcx.simulate_keystrokes("ctrl-alt-2");
     window
         .update(&mut vcx, |ws, _, _| {
-            assert_eq!(ws.app.panels.focused_id(), b)
+            assert_eq!(ws.app.panels.focused_id(), b);
         })
         .unwrap();
 }
@@ -2597,7 +2597,10 @@ fn double_click_on_a_span_zooms_to_it(cx: &mut TestAppContext) {
             let lane = ws.app.panels.focused().kind.marker_lane().unwrap().clone();
             let span = lane.spans.iter().find(|s| s.first == 0).expect("a span");
             let (x0, x1) = lane.shown(span);
-            ((x0 + x1) / 2.0, lane.band.top() + lane.band.height() / 2.0)
+            (
+                f32::midpoint(x0, x1),
+                lane.band.top() + lane.band.height() / 2.0,
+            )
         })
         .unwrap();
     let at = point(gpui_kit::px(x), gpui_kit::px(y));
@@ -2685,7 +2688,7 @@ fn reference_keys_and_a_double_click_on_the_live_span(cx: &mut TestAppContext) {
             let lane = ws.app.panels.focused().kind.marker_lane().unwrap().clone();
             let m = lane.measure.clone().expect("the Measure lane");
             let (x0, x1) = lane.live_shown(m.live.as_ref().expect("the live span"));
-            ((x0 + x1) / 2.0, m.band.top() + m.band.height() / 2.0)
+            (f32::midpoint(x0, x1), m.band.top() + m.band.height() / 2.0)
         })
         .unwrap();
     let at = point(gpui_kit::px(x), gpui_kit::px(y));
@@ -3047,7 +3050,7 @@ fn the_palette_offers_markers_when_the_query_asks_for_them(cx: &mut TestAppConte
     let mut vcx = VisualTestContext::from_window(root.into(), cx);
     vcx.run_until_parked();
     window
-        .update(&mut vcx, |ws, window, cx| ws.open_palette(window, cx))
+        .update(&mut vcx, super::Workspace::open_palette)
         .unwrap();
     vcx.run_until_parked();
     let shown = |vcx: &mut VisualTestContext| {
@@ -3126,7 +3129,7 @@ fn palette_commands_chosen_by_keyboard_reach_the_panel(cx: &mut TestAppContext) 
     };
     assert_eq!(markers(&mut vcx), 2);
     window
-        .update(&mut vcx, |ws, window, cx| ws.open_palette(window, cx))
+        .update(&mut vcx, super::Workspace::open_palette)
         .unwrap();
     vcx.run_until_parked();
     vcx.simulate_input("remove all markers");
@@ -3139,7 +3142,7 @@ fn palette_commands_chosen_by_keyboard_reach_the_panel(cx: &mut TestAppContext) 
     vcx.run_until_parked();
     assert_eq!(markers(&mut vcx), 1);
     window
-        .update(&mut vcx, |ws, window, cx| ws.open_palette(window, cx))
+        .update(&mut vcx, super::Workspace::open_palette)
         .unwrap();
     vcx.run_until_parked();
     vcx.simulate_input("add or name marker");
@@ -3214,7 +3217,7 @@ fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
     window
         .update(&mut vcx, |ws, window, cx| {
             assert!(ws.app.doc.is_loaded());
-            ws.dispatch(Command::CloseTrace, Some(window), cx)
+            ws.dispatch(Command::CloseTrace, Some(window), cx);
         })
         .unwrap();
     draw(&mut vcx);
@@ -3344,7 +3347,7 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
                 id: "hierarchy.activityIndex".into(),
                 value: volna_core::settings::Value::Text("never".into()),
             }));
-            ws.open_paths(vec![a.clone(), b.clone()], cx)
+            ws.open_paths(vec![a.clone(), b.clone()], cx);
         })
         .unwrap();
     let mut vcx = VisualTestContext::from_window(root.into(), cx);
@@ -3425,7 +3428,7 @@ fn volna_mixed_is_a_light_window_with_dark_waves_whatever_the_system(cx: &mut Te
     cx.run_until_parked();
     window
         .update(cx, |ws, window, cx| {
-            ws.dispatch(Command::AddVars(a_all(0..1)), Some(window), cx)
+            ws.dispatch(Command::AddVars(a_all(0..1)), Some(window), cx);
         })
         .unwrap();
     cx.run_until_parked();
@@ -3450,7 +3453,7 @@ fn volna_mixed_is_a_light_window_with_dark_waves_whatever_the_system(cx: &mut Te
                 ws.apply_theme_setting(cx);
             }
             ws.set_system_dark(dark, cx);
-        })
+        });
     };
     let chrome = |cx: &mut TestAppContext| cx.update(|cx| *crate::theme::core_theme(cx));
     set(cx, Some("volna-mixed"), false);
@@ -4388,7 +4391,7 @@ fn transaction_right_dock_tracks_native_moves_resize_visibility_and_undo(cx: &mu
                 .root()
                 .id();
             area.update(cx, |area, cx| {
-                area.set_dock_size(DockPlacement::Right, px(480.0), window, cx)
+                area.set_dock_size(DockPlacement::Right, px(480.0), window, cx);
             });
             node
         })
@@ -4423,7 +4426,7 @@ fn transaction_right_dock_tracks_native_moves_resize_visibility_and_undo(cx: &mu
                     },
                     window,
                     cx,
-                )
+                );
             });
         })
         .unwrap();

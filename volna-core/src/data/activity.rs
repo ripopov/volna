@@ -51,6 +51,7 @@ impl ActivityCounter {
         })
     }
 
+    #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         self.contributions.memory_bytes()
             + (self.order.capacity() * std::mem::size_of::<ScopeId>()) as u64
@@ -148,14 +149,17 @@ impl ActivityCounts {
         })
     }
 
+    #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         counts_bytes(&self.changing, &self.upper, &self.undecided)
     }
 
+    #[must_use]
     pub fn exact(&self) -> bool {
         self.undecided.is_empty()
     }
 
+    #[must_use]
     pub fn get(&self, scope: ScopeId) -> Option<(u32, u32)> {
         let changing = *self.changing.get(scope)?;
         Some((changing, self.upper.get(scope).copied().unwrap_or(changing)))
@@ -170,26 +174,31 @@ pub struct ScopeActivity {
 }
 
 impl ScopeActivity {
+    #[must_use]
     pub fn exact(&self) -> bool {
         self.changing == self.upper
     }
 
+    #[must_use]
     pub fn quiet(&self) -> bool {
         self.total > 0 && self.upper == 0
     }
 
+    #[must_use]
     pub fn label(&self) -> String {
         let total = super::sizes::grouped(self.total);
-        match self.exact() {
-            true => format!("{} / {total}", super::sizes::grouped(self.changing)),
-            false => format!(
+        if self.exact() {
+            format!("{} / {total}", super::sizes::grouped(self.changing))
+        } else {
+            format!(
                 "{}–{} / {total}",
                 super::sizes::grouped(self.changing),
                 super::sizes::grouped(self.upper)
-            ),
+            )
         }
     }
 
+    #[must_use]
     pub fn shares(&self) -> (f32, f32) {
         match self.total {
             0 => (0.0, 0.0),
@@ -200,22 +209,25 @@ impl ScopeActivity {
         }
     }
 
+    #[must_use]
     pub fn detail(&self) -> String {
         let total = super::sizes::grouped(self.total);
-        match self.exact() {
-            true => format!(
+        if self.exact() {
+            format!(
                 "{} of {total} signals change in the view",
                 super::sizes::grouped(self.changing)
-            ),
-            false => format!(
+            )
+        } else {
+            format!(
                 "{} to {} of {total} signals change in the view; reading the rest from the trace",
                 super::sizes::grouped(self.changing),
                 super::sizes::grouped(self.upper)
-            ),
+            )
         }
     }
 }
 
+#[must_use]
 pub fn estimated_seconds(info: volna_trace::data::ActivityBuildInfo) -> u64 {
     let rate = match info.format {
         vtr::activity::SourceFormat::Vtr => 1 << 30,

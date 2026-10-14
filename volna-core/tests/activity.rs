@@ -1119,9 +1119,9 @@ impl RemoteRig {
 #[cfg(unix)]
 impl Drop for RemoteRig {
     fn drop(&mut self) {
-        let _ = self.wire.shutdown(std::net::Shutdown::Both);
+        drop(self.wire.shutdown(std::net::Shutdown::Both));
         if let Some(service) = self.service.take() {
-            let _ = service.join().unwrap();
+            drop(service.join().unwrap());
         }
     }
 }

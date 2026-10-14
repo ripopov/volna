@@ -7,6 +7,7 @@ use super::{
 use crate::trace::TraceId;
 use crate::{App, Event, Instant};
 use anyhow::{Context, Result, ensure};
+use std::collections::BTreeSet;
 use volna_trace::session::OpenSpec;
 
 #[derive(Default)]
@@ -236,17 +237,18 @@ impl App {
                 persistence::select(sidecar.clone(), fallback, *policy == Persistence::Storage)
             }
         };
-        let result = selection.map(|selected| match selected.workspace {
-            Some(workspace) => self.restore_when_open(Waiting {
-                workspace: Box::new(workspace),
-                origin: selected.origin,
-                target: selected.target,
-                supersedes: selected.supersedes,
-                notices: selected.notices,
-                explicit: false,
-                traces: Default::default(),
-            }),
-            None => {
+        let result = selection.map(|selected| {
+            if let Some(workspace) = selected.workspace {
+                self.restore_when_open(Waiting {
+                    workspace: Box::new(workspace),
+                    origin: selected.origin,
+                    target: selected.target,
+                    supersedes: selected.supersedes,
+                    notices: selected.notices,
+                    explicit: false,
+                    traces: BTreeSet::default(),
+                })
+            } else {
                 let begun = self
                     .workspace
                     .scheduler
@@ -264,7 +266,7 @@ impl App {
 
     fn restore_failed(&mut self, target: Target, error: anyhow::Error) {
         self.workspace.loading = false;
-        let _ = self.workspace.scheduler.begin(Some(target), None);
+        drop(self.workspace.scheduler.begin(Some(target), None));
         let text = format!("Workspace restore failed; autosave paused: {error:#}");
         self.workspace.scheduler.suspend(text.clone());
         self.notice(text);
@@ -400,7 +402,7 @@ impl App {
             supersedes: None,
             notices: Vec::new(),
             explicit: true,
-            traces: Default::default(),
+            traces: BTreeSet::default(),
         };
         self.transition(Transition::OpenWorkspace(Box::new(waiting)));
         Ok(())

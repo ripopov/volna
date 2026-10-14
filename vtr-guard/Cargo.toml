@@ -10,3 +10,6 @@ description = "Crash guard for VTR writers: a signal handler hands fatal signals
 [dependencies]
 vtr.workspace = true
 libc = "0.2"
+
+[lints]
+workspace = true

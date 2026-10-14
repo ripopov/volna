@@ -96,7 +96,7 @@ impl Job {
                 })
             })();
             if !stop.load(AtomicOrdering::Relaxed) {
-                let _ = send.send(result);
+                drop(send.send(result));
             }
         })?;
         Ok(Self {
@@ -124,14 +124,14 @@ impl Drop for Job {
         self.cancel();
         // A completion may already be queued when its panel closes.
         if let Some(result) = self.result.take() {
-            let _ = super::spawn(move || drop(result));
+            drop(super::spawn(move || drop(result)));
         }
     }
 }
 
 pub(in crate::table) fn retire(order: Order) {
     // Releasing a large index and its source must not run in GPUI's frame callback.
-    let _ = super::spawn(move || drop(order));
+    drop(super::spawn(move || drop(order)));
 }
 
 fn checkpoint(stop: &AtomicBool) -> Result<()> {
@@ -246,8 +246,8 @@ mod tests {
             .unwrap();
         let start = std::time::Instant::now();
         let compare = |a: u64, b: u64| {
-            a.wrapping_mul(6364136223846793005)
-                .cmp(&b.wrapping_mul(6364136223846793005))
+            a.wrapping_mul(6_364_136_223_846_793_005)
+                .cmp(&b.wrapping_mul(6_364_136_223_846_793_005))
         };
         let rows = Indices::build(100_000_000, &compare, &stop).unwrap();
         assert!(matches!(&rows, Indices::Narrow(v) if v.capacity() == 100_000_000));

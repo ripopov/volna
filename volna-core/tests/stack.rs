@@ -187,7 +187,7 @@ fn exact_steps_and_columns_agree_where_a_column_holds_no_change() {
                         assert!(
                             (s - m).abs() < 1e-9,
                             "seed {seed} column {c} layer {k}: {s} vs {m}"
-                        )
+                        );
                     }
                     (Sample::Value(_), _) | (_, Sample::Value(_)) => {
                         panic!("seed {seed} column {c} layer {k}: {s:?} vs {m:?}")

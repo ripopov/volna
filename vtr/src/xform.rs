@@ -21,6 +21,7 @@ impl Xform {
         Xform::DeltaShuffle,
     ];
 
+    #[must_use]
     pub fn from_u8(v: u8) -> Option<Xform> {
         match v {
             0 => Some(Xform::None),
@@ -44,6 +45,7 @@ pub struct DictTable {
 }
 
 impl DictTable {
+    #[must_use]
     pub fn counts(&self) -> &[u32] {
         &self.counts
     }
@@ -349,7 +351,7 @@ fn sub_le(dst: &mut [u8], src: &[u8]) {
         let (a, b) = (limb(&dst[i..i + k]), limb(&src[i..i + k]));
         let (d, o1) = a.overflowing_sub(b);
         let (d, o2) = d.overflowing_sub(borrow);
-        borrow = (o1 | o2) as u64;
+        borrow = u64::from(o1 | o2);
         store_limb(&mut dst[i..i + k], d);
         i += k;
     }
@@ -366,7 +368,7 @@ fn add_le(dst: &mut [u8], src: &[u8]) {
         carry = if k < 8 {
             s >> (8 * k)
         } else {
-            (o1 | o2) as u64
+            u64::from(o1 | o2)
         };
         store_limb(&mut dst[i..i + k], s);
         i += k;
@@ -398,8 +400,8 @@ mod tests {
 
     fn lcg(seed: &mut u64) -> u8 {
         *seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         (*seed >> 56) as u8
     }
 

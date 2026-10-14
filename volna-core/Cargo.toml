@@ -3,7 +3,7 @@ name = "volna-core"
 version.workspace = true
 license.workspace = true
 repository.workspace = true
-edition = "2024"
+edition.workspace = true
 rust-version.workspace = true
 description = "Volna viewer core: document, view models, display-list rendering. No GUI toolkit."
 
@@ -11,8 +11,8 @@ description = "Volna viewer core: document, view models, display-list rendering.
 crate-type = ["rlib"]
 
 [dependencies]
-volna-trace = { path = "../volna-trace" }
-vtr = { path = "../vtr" }
+volna-trace = { version = "0.1.0", path = "../volna-trace" }
+vtr = { version = "0.1.0", path = "../vtr" }
 anyhow = "1"
 futures-channel = "0.3"
 log = "0.4"
@@ -31,6 +31,9 @@ testing = ["volna-trace/testing"]
 [dev-dependencies]
 gethostname = "=1.1.0"
 bincode = "=1.3.3"
-volna-core = { path = ".", features = ["testing"] }
+volna-core = { version = "0.1.0", path = ".", features = ["testing"] }
 tempfile = "3"
-vtr-cli = { path = "../vtr-cli" }
+vtr-cli = { version = "0.1.0", path = "../vtr-cli" }
+
+[lints]
+workspace = true

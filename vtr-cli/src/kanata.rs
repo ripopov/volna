@@ -1,6 +1,6 @@
 //! Kanata version 0004 instruction lifecycles, stages, labels, and wakeup relations.
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -103,7 +103,7 @@ fn convert_reader(reader: impl BufRead, w: &mut Writer) -> Result<()> {
                     let gid: i64 = arg(2)?.parse()?;
                     let tid = num(3)?;
                     ensure!(!ops.contains_key(&id), "duplicate instruction {id}");
-                    let gen = match threads.entry(tid) {
+                    let r#gen = match threads.entry(tid) {
                         std::collections::hash_map::Entry::Occupied(e) => *e.get(),
                         std::collections::hash_map::Entry::Vacant(e) => {
                             let stream =
@@ -120,7 +120,7 @@ fn convert_reader(reader: impl BufRead, w: &mut Writer) -> Result<()> {
                         w.clock_run(clock, cycle, 1)?;
                         clock_running = true;
                     }
-                    let tx = w.begin_tx(gen, cycle)?;
+                    let tx = w.begin_tx(r#gen, cycle)?;
                     let key = w.intern("insn_id_in_sim");
                     w.tx_attr(tx, key, &Value::I64(gid))?;
                     let key = w.intern("line");

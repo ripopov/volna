@@ -363,7 +363,9 @@ fn bus_trace(changes: u64) -> tempfile::NamedTempFile {
         .unwrap();
     for time in 0..changes {
         writer.set_time(time).unwrap();
-        writer.emit_u64(bus, time.wrapping_mul(2654435761)).unwrap();
+        writer
+            .emit_u64(bus, time.wrapping_mul(2_654_435_761))
+            .unwrap();
     }
     writer.close().unwrap();
     file

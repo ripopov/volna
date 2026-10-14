@@ -28,7 +28,7 @@ pub(crate) struct PaletteModel {
 
 impl PaletteModel {
     fn markers_section(&self) -> usize {
-        if self.preview.is_empty() { 1 } else { 0 }
+        usize::from(self.preview.is_empty())
     }
 }
 
@@ -369,7 +369,7 @@ impl Workspace {
         let ws: WeakEntity<Workspace> = cx.weak_entity();
         let query_ws = ws.clone();
         let query_model = model.clone();
-        let confirm_ws = ws.clone();
+        let confirm_ws = ws;
         let confirm_model = model.clone();
         let command_target = self.focus_handle.clone();
         let binding_target = window.focused(cx).unwrap_or_else(|| command_target.clone());
@@ -440,13 +440,13 @@ impl Workspace {
                                 }
                                 if let Some(id) = marker {
                                     window.close_dialog(cx);
-                                    _ = ws.update(cx, |ws, cx| {
+                                    drop(ws.update(cx, |ws, cx| {
                                         ws.dispatch(
                                             Command::Lane(LaneVerb::GoTo(id)),
                                             Some(window),
                                             cx,
                                         );
-                                    });
+                                    }));
                                     return;
                                 }
                                 let (action, chosen) = {
@@ -468,9 +468,9 @@ impl Workspace {
                                 if let Some(action) = action {
                                     command_target.dispatch_action(action.as_ref(), window, cx);
                                 }
-                                _ = ws.update(cx, |ws, cx| ws.focus_rename(window, cx));
+                                drop(ws.update(cx, |ws, cx| ws.focus_rename(window, cx)));
                                 let Some((spec, on)) = chosen else { return };
-                                _ = ws.update(cx, |ws, cx| {
+                                drop(ws.update(cx, |ws, cx| {
                                     let command = if matches!(spec.kind, Kind::Bool) {
                                         SettingsCommand::Set {
                                             id: spec.id.into(),
@@ -480,10 +480,10 @@ impl Workspace {
                                         SettingsCommand::Reveal { id: spec.id.into() }
                                     };
                                     ws.dispatch(Command::Settings(command), Some(window), cx);
-                                });
+                                }));
                             }
                         })
-                        .on_cancel(|window, cx| window.close_dialog(cx));
+                        .on_cancel(gpui_kit::component::WindowExt::close_dialog);
                     if let Some(rows) = &read.markers {
                         let mut group = CommandGroup::new().label("Markers");
                         for row in rows {
@@ -608,7 +608,7 @@ fn navigator_keys(
             }
             let Some(owner) = ws.upgrade() else { return };
             owner.update(cx, |ws, cx| {
-                ws.dispatch(Command::Lane(verb), Some(window), cx)
+                ws.dispatch(Command::Lane(verb), Some(window), cx);
             });
             if !close {
                 let query = state.read(cx).query(cx).to_string();

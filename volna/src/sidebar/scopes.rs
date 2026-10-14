@@ -97,7 +97,7 @@ impl Workspace {
                                                     Command::BuildActivity(trace),
                                                     Some(window),
                                                     cx,
-                                                )
+                                                );
                                             })),
                                         ),
                                 )
@@ -115,7 +115,7 @@ impl Workspace {
                                                     Command::DismissActivity(trace),
                                                     Some(window),
                                                     cx,
-                                                )
+                                                );
                                             })),
                                         ),
                                 ),
@@ -161,7 +161,7 @@ impl Workspace {
                                                     Command::CancelActivity(trace),
                                                     Some(window),
                                                     cx,
-                                                )
+                                                );
                                             }),
                                         ),
                                     ),
@@ -203,10 +203,13 @@ impl Workspace {
             .into();
         let detail: SharedString = chip
             .as_ref()
-            .map(|c| c.row_detail())
+            .map(volna_core::app::TraceChip::row_detail)
             .unwrap_or_default()
             .into();
-        let tooltip = chip.as_ref().map(|c| c.tooltip()).unwrap_or_default();
+        let tooltip = chip
+            .as_ref()
+            .map(volna_core::app::TraceChip::tooltip)
+            .unwrap_or_default();
         let expanded = self.app.scopes.is_expanded(node);
         let selected = self.app.scopes.selected == Some(node);
         let colors = t.row(selected, false);
@@ -262,7 +265,7 @@ impl Workspace {
             .hover(move |s| s.bg(t.badge_hover.bg))
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
-                this.dispatch(Command::ToggleScope(node), Some(window), cx)
+                this.dispatch(Command::ToggleScope(node), Some(window), cx);
             }))
             .child(
                 Icon::new(if expanded {
@@ -322,14 +325,14 @@ impl Workspace {
                     icon_button("expand-all", IconName::ChevronsRight, t.panel, t.hover, cx)
                         .tooltip("Expand all")
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.dispatch(Command::ExpandAllScopes(true), Some(window), cx)
+                            this.dispatch(Command::ExpandAllScopes(true), Some(window), cx);
                         })),
                 )
                 .child(
                     icon_button("collapse-all", IconName::ChevronsLeft, t.panel, t.hover, cx)
                         .tooltip("Collapse all")
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.dispatch(Command::ExpandAllScopes(false), Some(window), cx)
+                            this.dispatch(Command::ExpandAllScopes(false), Some(window), cx);
                         })),
                 ),
         );
@@ -402,7 +405,7 @@ impl Workspace {
                                     .hover(move |s| s.bg(t.badge_hover.bg))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         cx.stop_propagation();
-                                        this.dispatch(Command::ToggleScope(node), Some(window), cx)
+                                        this.dispatch(Command::ToggleScope(node), Some(window), cx);
                                     }))
                                     .child(
                                         Icon::new(if expanded {
@@ -447,7 +450,7 @@ impl Workspace {
                             let add = |label: &'static str, recursive: bool| {
                                 let owner = owner.clone();
                                 PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                                    _ = owner.update(cx, |ws, cx| {
+                                    drop(owner.update(cx, |ws, cx| {
                                         ws.dispatch(
                                             Command::AddScopeAsGroup {
                                                 scope: Traced::new(node.trace, id),
@@ -455,8 +458,8 @@ impl Workspace {
                                             },
                                             Some(window),
                                             cx,
-                                        )
-                                    });
+                                        );
+                                    }));
                                 })
                             };
                             let menu = menu.item(add("Add to Waves as Group", true));

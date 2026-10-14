@@ -188,9 +188,9 @@ impl<Tag: Copy> OpenTransfer<Tag> {
                             .unwrap()
                             .push(scopes, page, reservation)?;
                         if scopes {
-                            self.next_scope += 1
+                            self.next_scope += 1;
                         } else {
-                            self.next_var += 1
+                            self.next_var += 1;
                         }
                     }
                 }

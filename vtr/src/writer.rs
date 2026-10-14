@@ -1,11 +1,11 @@
 //! Streaming writer.
 
 use crate::block::{
-    self, BlockInput, ChunkEnc, ChunkInput, EncoderScratch, Record, COMPACT_FLAG, NO_BLOCK,
+    self, BlockInput, COMPACT_FLAG, ChunkEnc, ChunkInput, EncoderScratch, NO_BLOCK, Record,
 };
 use crate::clock::{self, ClockId};
 use crate::codec::{Compression, Compressor};
-use crate::container::{self, DirEntry, SectionKind, SECTION_FLAG_OPTIONAL};
+use crate::container::{self, DirEntry, SECTION_FLAG_OPTIONAL, SectionKind};
 use crate::ending::{self, Ending};
 use crate::error::{Error, Result};
 use crate::hierarchy::{
@@ -16,13 +16,13 @@ use crate::sections::{self, Blackout, FileType, Meta, Timescale};
 use crate::signal::{self, Logic, LogicStates};
 use crate::strings::{Interner, StrId};
 use crate::txblock::{self, TxBlockInput, TxId, TxKind, TxStatus};
-use crate::value::{packed_len, Value};
+use crate::value::{Value, packed_len};
 use crate::varint;
 use std::fs::File;
 use std::io::{BufWriter, Seek, Write};
 use std::path::Path;
-use std::sync::atomic::{compiler_fence, AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering, compiler_fence};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -120,14 +120,13 @@ impl LogPool {
                     .spawn(move || {
                         let mut compressor = Compressor::new();
                         loop {
-                            let (seq, input) = match rx.lock().unwrap().recv() {
-                                Ok(i) => i,
-                                Err(_) => return,
+                            let Ok((seq, input)) = rx.lock().unwrap().recv() else {
+                                return;
                             };
                             let mut out = Vec::new();
                             let r =
                                 logblock::encode_log_block(&input, comp, &mut compressor, &mut out)
-                                    .map(|_| out);
+                                    .map(|()| out);
                             if tx.send((seq, r)).is_err() {
                                 return;
                             }
@@ -143,7 +142,7 @@ impl LogPool {
             pending: 0,
             next_submit: 0,
             next_write: 0,
-            done: Default::default(),
+            done: std::collections::BTreeMap::default(),
         })
     }
 }
@@ -222,7 +221,7 @@ impl FileSink {
             last_dirty_block: Vec::new(),
             block_count: 0,
             meta_written: false,
-            known: Default::default(),
+            known: std::collections::HashMap::default(),
             next_string: 0,
             next_node: 0,
             signals: 0,
@@ -447,8 +446,8 @@ impl FileSink {
                 self.write_blob_section(
                     SectionKind::Hierarchy,
                     &payload,
-                    first as u64,
-                    count as u64,
+                    u64::from(first),
+                    u64::from(count),
                 )?;
             }
             Msg::Chunk(mut input) => {
@@ -477,7 +476,7 @@ impl FileSink {
                 self.block.kinds = input.kinds.clone();
                 let ends = input.ends_block;
                 if let Some(r) = &self.recycle {
-                    let _ = r.try_send(input);
+                    drop(r.try_send(input));
                 }
                 if ends {
                     self.finish_signal_block()?;
@@ -523,7 +522,7 @@ impl FileSink {
             Msg::Seal(end, reply) => {
                 let r = self.seal(end);
                 let failed = r.is_err();
-                let _ = reply.send(r);
+                drop(reply.send(r));
                 return if failed {
                     Err(Error::State("sealing failed"))
                 } else {
@@ -608,7 +607,7 @@ impl FileSink {
         };
         let mut payload = Vec::new();
         if !strings.is_empty() {
-            varint::put_u64(&mut payload, first as u64);
+            varint::put_u64(&mut payload, u64::from(first));
             varint::put_u64(&mut payload, strings.len() as u64);
             for s in &strings {
                 varint::put_blob(&mut payload, s.as_bytes());
@@ -617,17 +616,17 @@ impl FileSink {
             self.write_blob_section(
                 SectionKind::Strings,
                 &payload,
-                first as u64,
+                u64::from(first),
                 strings.len() as u64,
             )?;
             payload.clear();
         }
-        varint::put_u64(&mut payload, stream.0 as u64);
+        varint::put_u64(&mut payload, u64::from(stream.0));
         varint::put_u64(&mut payload, 2);
         stream_node.encode(stream.0, self.signals, &mut payload);
         site_node.encode(stream.0 + 1, self.signals, &mut payload);
         self.next_node += 2;
-        self.write_blob_section(SectionKind::Hierarchy, &payload, stream.0 as u64, 2)?;
+        self.write_blob_section(SectionKind::Hierarchy, &payload, u64::from(stream.0), 2)?;
         let time = self.signal_time.unwrap_or(self.max_time);
         let mut rows = Vec::new();
         logblock::encode_row(&mut rows, 0, time, self.max_id + 1, 0, &args);
@@ -652,7 +651,7 @@ impl FileSink {
         if let Some(pool) = &mut self.log_pool {
             pool.tx = None;
             for h in pool.handles.drain(..) {
-                let _ = h.join();
+                drop(h.join());
             }
         }
         let dir = container::encode_directory(&self.entries);
@@ -698,14 +697,14 @@ impl Sink {
                         .take()
                         .unwrap_or(Error::State("background writer failed")));
                 }
-                if let Some(tx) = tx {
-                    if tx.send(msg).is_err() {
-                        return Err(error
-                            .lock()
-                            .unwrap()
-                            .take()
-                            .unwrap_or(Error::State("background writer stopped")));
-                    }
+                if let Some(tx) = tx
+                    && tx.send(msg).is_err()
+                {
+                    return Err(error
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .unwrap_or(Error::State("background writer stopped")));
                 }
                 Ok(())
             }
@@ -749,7 +748,7 @@ impl Sink {
             }
             Sink::Threaded { tx, .. } => {
                 if let Some(t) = tx.take() {
-                    let _ = t.send(Msg::Close);
+                    drop(t.send(Msg::Close));
                 }
                 self.join()
             }
@@ -786,6 +785,7 @@ impl CrashState {
         if prev == 0 {
             let park = self.park.load(Ordering::Relaxed);
             if park != 0 {
+                // SAFETY: request_park stores only fn() pointers; zero is excluded above.
                 let park: fn() = unsafe { std::mem::transmute::<usize, fn()>(park) };
                 park();
             }
@@ -825,6 +825,7 @@ struct Guarded {
 
 impl Drop for Guarded {
     fn drop(&mut self) {
+        // SAFETY: Guarded is scoped inside guarded(), whose Writer retains the shared crash state.
         let state = unsafe { &*self.state };
         if std::thread::panicking() {
             state.poison();
@@ -840,6 +841,7 @@ pub struct Sealer {
 }
 
 impl Sealer {
+    #[must_use]
     pub fn state(&self) -> &CrashState {
         &self.shared.state
     }
@@ -872,7 +874,7 @@ struct StageRec {
 #[derive(Default)]
 struct OpenTx {
     id: u64,
-    gen: u32,
+    r#gen: u32,
     begin: u64,
     kind: u8,
     parent: u64,
@@ -899,20 +901,20 @@ impl OpenTx {
 
     fn write_row(&self, end: u64, status: TxStatus, out: &mut Vec<u8>) {
         varint::put_u64(out, self.id);
-        varint::put_u64(out, self.gen as u64);
+        varint::put_u64(out, u64::from(self.r#gen));
         varint::put_u64(out, self.begin);
         varint::put_u64(out, end.wrapping_sub(self.begin));
         out.push(status as u8);
         out.push(self.kind);
         varint::put_u64(out, self.parent);
-        varint::put_u64(out, self.n_attrs as u64);
+        varint::put_u64(out, u64::from(self.n_attrs));
         out.extend_from_slice(&self.attrs);
-        varint::put_u64(out, self.n_events as u64);
+        varint::put_u64(out, u64::from(self.n_events));
         out.extend_from_slice(&self.events);
         varint::put_u64(out, self.stages.len() as u64);
         for s in &self.stages {
-            varint::put_u64(out, s.name as u64);
-            varint::put_u64(out, s.lane as u64);
+            varint::put_u64(out, u64::from(s.name));
+            varint::put_u64(out, u64::from(s.lane));
             varint::put_u64(out, s.begin);
             let e = if s.end == u64::MAX {
                 end.max(s.begin)
@@ -920,7 +922,7 @@ impl OpenTx {
                 s.end
             };
             varint::put_u64(out, e.wrapping_sub(s.begin) + 1);
-            varint::put_u64(out, s.n_attrs as u64);
+            varint::put_u64(out, u64::from(s.n_attrs));
             out.extend_from_slice(&s.attrs);
         }
     }
@@ -1003,7 +1005,7 @@ struct SigInfo {
 
 struct ClockState {
     stream: NodeId,
-    gen: u32,
+    r#gen: u32,
     running: Option<(u64, u64, u64)>,
     last_edge: Option<u64>,
 }
@@ -1088,34 +1090,42 @@ pub struct WriterBuilder {
 }
 
 impl WriterBuilder {
+    #[must_use]
     pub fn options(mut self, options: WriterOptions) -> Self {
         self.options = options;
         self
     }
+    #[must_use]
     pub fn timescale(mut self, timescale: Timescale) -> Self {
         self.timescale = timescale;
         self
     }
+    #[must_use]
     pub fn time_zero(mut self, time_zero: i64) -> Self {
         self.time_zero = time_zero;
         self
     }
+    #[must_use]
     pub fn file_type(mut self, file_type: FileType) -> Self {
         self.file_type = file_type;
         self
     }
+    #[must_use]
     pub fn writer_name(mut self, name: impl Into<String>) -> Self {
         self.writer_name = Some(name.into());
         self
     }
+    #[must_use]
     pub fn date(mut self, date: impl Into<String>) -> Self {
         self.date = date.into();
         self
     }
+    #[must_use]
     pub fn comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = comment.into();
         self
     }
+    #[must_use]
     pub fn file_attr(mut self, key: impl Into<String>, value: Value) -> Self {
         self.attrs.push((key.into(), value));
         self
@@ -1138,6 +1148,7 @@ impl WriterBuilder {
 }
 
 impl Writer {
+    #[must_use]
     pub fn builder() -> WriterBuilder {
         WriterBuilder::default()
     }
@@ -1314,10 +1325,12 @@ impl Writer {
         self.strings.intern(s)
     }
 
+    #[must_use]
     pub fn options(&self) -> &WriterOptions {
         &self.opts
     }
 
+    #[must_use]
     pub fn string(&self, id: StrId) -> &str {
         self.strings.get(id)
     }
@@ -1600,10 +1613,12 @@ impl Writer {
         id
     }
 
+    #[must_use]
     pub fn signal_count(&self) -> u32 {
         self.kinds.len() as u32
     }
 
+    #[must_use]
     pub fn signal_kind(&self, s: SignalId) -> Option<SignalKind> {
         self.kinds.get(s.0 as usize).copied()
     }
@@ -1662,6 +1677,7 @@ impl Writer {
         self.times_sent > 0 || !self.times.is_empty()
     }
 
+    #[must_use]
     pub fn current_time(&self) -> u64 {
         self.time
     }
@@ -1698,6 +1714,7 @@ impl Writer {
     #[inline(always)]
     fn emit_narrow(&mut self, s: usize, payload: u64, compact: bool) -> Result<()> {
         debug_assert!(s < self.last.len() && s < self.frame_cap.len() && s < self.sig_counts.len());
+        // SAFETY: All callers validate the signal index; last, frame_cap, and sig_counts grow together.
         let lv = unsafe { *self.last.get_unchecked(s) };
         if lv.payload == payload
             && lv.compact == compact
@@ -1707,12 +1724,14 @@ impl Writer {
             return Ok(());
         }
         if lv.epoch != self.epoch {
+            // SAFETY: The validated signal index addresses equally sized per-signal tables.
             unsafe {
                 self.last.get_unchecked_mut(s).epoch = self.epoch;
                 *self.frame_cap.get_unchecked_mut(s) = (lv.payload, lv.compact);
             }
             self.mark_first_change(s);
         }
+        // SAFETY: The validated signal index addresses equally sized per-signal tables.
         unsafe {
             let l = self.last.get_unchecked_mut(s);
             l.payload = payload;
@@ -1733,9 +1752,8 @@ impl Writer {
 
     fn emit_wide(&mut self, s: usize, data: &[u8], compact: bool) -> Result<()> {
         let kind = self.kinds[s];
-        let (width, states) = match kind {
-            SignalKind::Bits { width, states } => (width, states),
-            _ => unreachable!(),
+        let SignalKind::Bits { width, states } = kind else {
+            unreachable!()
         };
         let wi = self.last[s].payload as usize;
         let slot = self.wide_off[wi];
@@ -1767,19 +1785,22 @@ impl Writer {
             self.mark_first_change(s);
             self.wide_last_tidx[wi] = 0;
         }
-        if self.wide_val[wi].capacity() == 0 {
-            if let Some(mut b) = self.wide_pool.pop() {
-                b.clear();
-                self.wide_val[wi] = b;
-            }
+        if self.wide_val[wi].capacity() == 0
+            && let Some(mut b) = self.wide_pool.pop()
+        {
+            b.clear();
+            self.wide_val[wi] = b;
         }
-        self.wide_last[slot] = compact as u8;
+        self.wide_last[slot] = u8::from(compact);
         self.wide_last[slot + 1..slot + 1 + len].copy_from_slice(&data[..len]);
         let dt = self.cur_tidx - self.wide_last_tidx[wi];
         self.wide_last_tidx[wi] = self.cur_tidx;
         let hdr = &mut self.wide_hdr[wi];
         let before = hdr.len();
-        varint::put_u64(hdr, ((dt as u64) << 1) | (compact || states == 2) as u64);
+        varint::put_u64(
+            hdr,
+            (u64::from(dt) << 1) | u64::from(compact || states == 2),
+        );
         self.wide_val[wi].extend_from_slice(&data[..len]);
         self.wide_bytes += hdr.len() - before + len;
         self.wide_count[wi] += 1;
@@ -1802,9 +1823,10 @@ impl Writer {
     pub fn emit_bit(&mut self, sig: SignalId, value: Logic) -> Result<()> {
         let code = value as u8;
         let s = self.check_sig(sig)?;
+        // SAFETY: check_sig validated this index against the signal tables.
         let info = unsafe { *self.info.get_unchecked(s) };
         if info.kind == 0 && info.width == 1 && code <= 1 {
-            return self.emit_narrow(s, code as u64, true);
+            return self.emit_narrow(s, u64::from(code), true);
         }
         match self.kinds[s] {
             SignalKind::Bits { width: 1, states } => {
@@ -1813,7 +1835,7 @@ impl Writer {
                         "logic code not representable in signal's states",
                     ));
                 }
-                self.emit_narrow(s, code as u64, code <= 1)
+                self.emit_narrow(s, u64::from(code), code <= 1)
             }
             SignalKind::Bits { .. } => Err(Error::invalid("emit_bit requires a single-bit signal")),
             _ => Err(Error::invalid("emit_bit on a non-bit signal")),
@@ -1823,6 +1845,7 @@ impl Writer {
     #[inline]
     pub fn emit_u64(&mut self, sig: SignalId, value: u64) -> Result<()> {
         let s = self.check_sig(sig)?;
+        // SAFETY: check_sig validated this index against the signal tables.
         let info = unsafe { *self.info.get_unchecked(s) };
         if info.kind == 0 && info.narrow {
             let width = info.width;
@@ -1864,8 +1887,8 @@ impl Writer {
         match self.kinds[s] {
             SignalKind::Bits { width, states } => {
                 if width <= 64 {
-                    let v = words.first().copied().unwrap_or(0) as u64
-                        | (words.get(1).copied().unwrap_or(0) as u64) << 32;
+                    let v = u64::from(words.first().copied().unwrap_or(0))
+                        | u64::from(words.get(1).copied().unwrap_or(0)) << 32;
                     return self.emit_u64(sig, v);
                 }
                 let mut buf = std::mem::take(&mut self.scratch);
@@ -1887,14 +1910,13 @@ impl Writer {
             SignalKind::Bits { width: 1, states } => {
                 let c = s_ascii
                     .last()
-                    .map(|&c| signal::code_from_ascii(c))
-                    .unwrap_or(signal::LX);
+                    .map_or(signal::LX, |&c| signal::code_from_ascii(c));
                 if signal::states_for_code(c) > states {
                     return Err(Error::invalid(
                         "logic value not representable in signal's states",
                     ));
                 }
-                self.emit_narrow(s, c as u64, c <= 1)
+                self.emit_narrow(s, u64::from(c), c <= 1)
             }
             SignalKind::Bits { width, states } => {
                 let mut buf = std::mem::take(&mut self.scratch);
@@ -1964,7 +1986,7 @@ impl Writer {
                     let mut b = [0u8; 8];
                     b[..len].copy_from_slice(&data[..len]);
                     if width == 1 {
-                        return self.emit_narrow(s, (b[0] & 15) as u64, compact);
+                        return self.emit_narrow(s, u64::from(b[0] & 15), compact);
                     }
                     self.emit_narrow(s, u64::from_le_bytes(b), compact)
                 } else {
@@ -2218,8 +2240,8 @@ impl Writer {
             self.sink.send(Msg::Section {
                 kind: SectionKind::Strings,
                 payload,
-                aux0: first as u64,
-                aux1: count as u64,
+                aux0: u64::from(first),
+                aux1: u64::from(count),
             })?;
         }
         if !self.meta_written {
@@ -2236,7 +2258,7 @@ impl Writer {
         if !self.pending_nodes.is_empty() {
             let first = (self.node_kinds.len() - self.pending_nodes.len()) as u32;
             let mut payload = Vec::new();
-            varint::put_u64(&mut payload, first as u64);
+            varint::put_u64(&mut payload, u64::from(first));
             varint::put_u64(&mut payload, self.pending_nodes.len() as u64);
             let declared = self
                 .pending_nodes
@@ -2246,7 +2268,7 @@ impl Writer {
             let mut next_signal = self.kinds.len() as u32 - declared;
             for (i, n) in self.pending_nodes.iter().enumerate() {
                 n.encode(first + i as u32, next_signal, &mut payload);
-                next_signal += n.declares_signal() as u32;
+                next_signal += u32::from(n.declares_signal());
             }
             let count = self.pending_nodes.len() as u32;
             self.pending_nodes.clear();
@@ -2278,19 +2300,22 @@ impl Writer {
         self.flush_chunk(true)
     }
 
-    fn check_gen(&self, gen: NodeId) -> Result<()> {
-        if self.node_kinds.get(gen.0 as usize) != Some(&NodeKind::Generator) {
-            return Err(Error::invalid(format!("node {} is not a generator", gen.0)));
+    fn check_gen(&self, r#gen: NodeId) -> Result<()> {
+        if self.node_kinds.get(r#gen.0 as usize) != Some(&NodeKind::Generator) {
+            return Err(Error::invalid(format!(
+                "node {} is not a generator",
+                r#gen.0
+            )));
         }
         Ok(())
     }
 
-    pub fn begin_tx(&mut self, gen: NodeId, time: u64) -> Result<TxId> {
-        self.check_gen(gen)?;
+    pub fn begin_tx(&mut self, r#gen: NodeId, time: u64) -> Result<TxId> {
+        self.check_gen(r#gen)?;
         let id = self.next_tx_id;
         self.next_tx_id += 1;
         let t = self.open.insert(id);
-        t.gen = gen.0;
+        t.r#gen = r#gen.0;
         t.begin = time;
         Ok(id)
     }
@@ -2309,7 +2334,7 @@ impl Writer {
     pub fn tx_attr(&mut self, tx: TxId, key: StrId, value: &Value) -> Result<()> {
         let t = self.open.get(tx)?;
         ensure_unique_key(t.attr_keys.iter().copied(), key)?;
-        varint::put_u64(&mut t.attrs, key.0 as u64);
+        varint::put_u64(&mut t.attrs, u64::from(key.0));
         value.encode(&mut t.attrs);
         t.attr_keys.push(key);
         t.n_attrs += 1;
@@ -2326,7 +2351,7 @@ impl Writer {
         ensure_unique_attrs(attrs)?;
         let t = self.open.get(tx)?;
         varint::put_u64(&mut t.events, time);
-        varint::put_u64(&mut t.events, name.0 as u64);
+        varint::put_u64(&mut t.events, u64::from(name.0));
         txblock::row_attrs(&mut t.events, attrs);
         t.n_events += 1;
         Ok(())
@@ -2384,7 +2409,7 @@ impl Writer {
             n_attrs: attrs.len() as u32,
         };
         for (k, v) in attrs {
-            varint::put_u64(&mut rec.attrs, k.0 as u64);
+            varint::put_u64(&mut rec.attrs, u64::from(k.0));
             v.encode(&mut rec.attrs);
         }
         t.stages.push(rec);
@@ -2398,7 +2423,7 @@ impl Writer {
             .last_mut()
             .ok_or(Error::State("transaction has no stage"))?;
         ensure_unique_key(s.attr_keys.iter().copied(), key)?;
-        varint::put_u64(&mut s.attrs, key.0 as u64);
+        varint::put_u64(&mut s.attrs, u64::from(key.0));
         value.encode(&mut s.attrs);
         s.attr_keys.push(key);
         s.n_attrs += 1;
@@ -2426,7 +2451,7 @@ impl Writer {
         attrs: &[(StrId, Value)],
     ) -> Result<()> {
         ensure_unique_attrs(attrs)?;
-        varint::put_u64(&mut self.rel_rows, kind.0 as u64);
+        varint::put_u64(&mut self.rel_rows, u64::from(kind.0));
         varint::put_u64(&mut self.rel_rows, from);
         varint::put_u64(&mut self.rel_rows, to);
         txblock::row_attrs(&mut self.rel_rows, attrs);
@@ -2437,6 +2462,7 @@ impl Writer {
         Ok(())
     }
 
+    #[must_use]
     pub fn open_tx_count(&self) -> usize {
         self.open.live
     }
@@ -2476,10 +2502,12 @@ impl Writer {
         Ok(LogSiteId(self.log_sites.len() as u32 - 1))
     }
 
+    #[must_use]
     pub fn log_site_node(&self, site: LogSiteId) -> Option<NodeId> {
         self.log_sites.get(site.0 as usize).map(|s| NodeId(s.node))
     }
 
+    #[must_use]
     pub fn log_site_count(&self) -> u32 {
         self.log_sites.len() as u32
     }
@@ -2496,9 +2524,8 @@ impl Writer {
         parent: Option<TxId>,
         args: &[LogArg],
     ) -> Result<TxId> {
-        let s = match self.log_sites.get(site.0 as usize) {
-            Some(s) => s,
-            None => return Err(Error::invalid(format!("unknown log site {}", site.0))),
+        let Some(s) = self.log_sites.get(site.0 as usize) else {
+            return Err(Error::invalid(format!("unknown log site {}", site.0)));
         };
         if args.len() != s.args.len() {
             return Err(Error::invalid(format!(
@@ -2525,7 +2552,7 @@ impl Writer {
             site.0,
             time,
             id,
-            parent.map(|p| p + 1).unwrap_or(0),
+            parent.map_or(0, |p| p + 1),
             args,
         );
         self.n_log_rows += 1;
@@ -2551,10 +2578,10 @@ impl Writer {
         let id = self.next_tx_id;
         self.next_tx_id += 1;
         let out = &mut self.log_rows;
-        varint::put_u64(out, site.0 as u64);
+        varint::put_u64(out, u64::from(site.0));
         varint::put_u64(out, time);
         varint::put_u64(out, id);
-        varint::put_u64(out, parent.map(|p| p + 1).unwrap_or(0));
+        varint::put_u64(out, parent.map_or(0, |p| p + 1));
         out.extend_from_slice(args);
         self.n_log_rows += 1;
         self.total_log += 1;
@@ -2589,16 +2616,17 @@ impl Writer {
 
     pub fn add_clock(&mut self, scope: Option<NodeId>, name: &str) -> Result<ClockId> {
         let stream = self.add_stream(scope, name, clock::STREAM_KIND)?;
-        let gen = self.add_generator(stream, clock::GENERATOR)?;
+        let r#gen = self.add_generator(stream, clock::GENERATOR)?;
         self.clocks.push(ClockState {
             stream,
-            gen: gen.0,
+            r#gen: r#gen.0,
             running: None,
             last_edge: None,
         });
         Ok(ClockId(self.clocks.len() as u32 - 1))
     }
 
+    #[must_use]
     pub fn clock_stream(&self, clock: ClockId) -> Option<NodeId> {
         self.clocks.get(clock.0 as usize).map(|c| c.stream)
     }
@@ -2642,20 +2670,21 @@ impl Writer {
                 "clock_stop at {t} precedes the stretch's first edge {first}"
             )));
         }
-        self.end_stretch(clock, t, TxStatus::Unset)
+        self.end_stretch(clock, t, TxStatus::Unset);
+        Ok(())
     }
 
-    fn end_stretch(&mut self, clock: ClockId, t: u64, status: TxStatus) -> Result<()> {
+    fn end_stretch(&mut self, clock: ClockId, t: u64, status: TxStatus) {
         let key = self.strings.intern(clock::KEY_PERIOD);
         let c = &mut self.clocks[clock.0 as usize];
         let Some((id, first, period)) = c.running.take() else {
-            return Ok(());
+            return;
         };
         let end = first + (t.max(first) - first) / period * period;
         c.last_edge = Some(end);
         let out = &mut self.clock_rows;
         varint::put_u64(out, id);
-        varint::put_u64(out, c.gen as u64);
+        varint::put_u64(out, u64::from(c.r#gen));
         varint::put_u64(out, first);
         varint::put_u64(out, end - first);
         out.push(status as u8);
@@ -2663,7 +2692,7 @@ impl Writer {
         varint::put_u64(out, 0);
         if end > first {
             varint::put_u64(out, 1);
-            varint::put_u64(out, key.0 as u64);
+            varint::put_u64(out, u64::from(key.0));
             Value::Time(period).encode(out);
         } else {
             varint::put_u64(out, 0);
@@ -2671,7 +2700,6 @@ impl Writer {
         varint::put_u64(out, 0);
         varint::put_u64(out, 0);
         self.n_clock_rows += 1;
-        Ok(())
     }
 
     fn flush_clocks(&mut self) -> Result<()> {
@@ -2747,7 +2775,7 @@ impl Writer {
             self.n_tx_rows += 1;
         }
         for i in 0..self.clocks.len() {
-            self.end_stretch(ClockId(i as u32), self.time, TxStatus::Open)?;
+            self.end_stretch(ClockId(i as u32), self.time, TxStatus::Open);
         }
         self.flush_meta_and_hierarchy()?;
         if !self.records.is_empty()
@@ -2774,28 +2802,33 @@ impl Writer {
     }
 
     pub fn guarded<R>(&mut self, f: impl FnOnce(&mut Writer) -> R) -> R {
-        let state: *const CrashState = &self.shared.state;
+        let state: *const CrashState = &raw const self.shared.state;
         let _mark = Guarded {
             state,
+            // SAFETY: state points into the live shared allocation owned by this writer.
             prev: unsafe { (*state).enter() },
         };
         f(self)
     }
 
+    #[must_use]
     pub fn state(&self) -> &CrashState {
         &self.shared.state
     }
 
+    #[must_use]
     pub fn is_poisoned(&self) -> bool {
         self.shared.state.poisoned()
     }
 
+    #[must_use]
     pub fn sealer(&self) -> Sealer {
         Sealer {
             shared: self.shared.clone(),
         }
     }
 
+    #[must_use]
     pub fn stats(&self) -> WriterStats {
         WriterStats {
             blocks: self.block_count,
@@ -2810,7 +2843,7 @@ impl Writer {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        let _ = self.close();
+        drop(self.close());
     }
 }
 

@@ -268,12 +268,14 @@ struct Kept {
 
 fn build_harness(dir: &Path, name: &str, extra: &[&str]) -> PathBuf {
     let cxx = std::env::var("CXX").unwrap_or_else(|_| "c++".into());
-    assert!(Command::new(&cxx)
-        .arg("--version")
-        .output()
-        .expect("C++ compiler is required")
-        .status
-        .success());
+    assert!(
+        Command::new(&cxx)
+            .arg("--version")
+            .output()
+            .expect("C++ compiler is required")
+            .status
+            .success()
+    );
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let exe = dir.join(name);
     let st = Command::new(&cxx)
@@ -297,7 +299,8 @@ fn monotonic_ms() -> u64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    // SAFETY: ts is a live, aligned timespec output for CLOCK_MONOTONIC.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut ts) };
     ts.tv_sec as u64 * 1000 + ts.tv_nsec as u64 / 1_000_000
 }
 
@@ -330,8 +333,8 @@ fn run(exe: &Path, case: &Case, out: &Path, guard: bool) -> (Ends, String, Vec<(
             break s;
         }
         if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            drop(child.kill());
+            drop(child.wait());
             panic!("{}: the run did not end within 90 s", case.name);
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -418,7 +421,7 @@ fn check(case: &Case, keeps: Keeps, ends: Ends, e: &Emitted, k: &Kept) -> Vec<St
     let grows = matches!(case.mode, "thread" | "deaf");
     match keeps {
         Keeps::Full(want) => {
-            let record = (want != Ending::Closed) as u64;
+            let record = u64::from(want != Ending::Closed);
             let all = if grows {
                 k.changes >= e.changes && k.logs >= e.logs + record
             } else {

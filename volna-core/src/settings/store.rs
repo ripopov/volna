@@ -49,6 +49,7 @@ pub struct Store {
 }
 
 impl Store {
+    #[must_use]
     pub fn new(host: Host) -> Self {
         let mut store = Store {
             host,
@@ -73,6 +74,7 @@ impl Store {
         store
     }
 
+    #[must_use]
     pub fn host(&self) -> Host {
         self.host
     }
@@ -89,30 +91,37 @@ impl Store {
         self.resolve()
     }
 
+    #[must_use]
     pub fn themes(&self) -> &[String] {
         &self.themes
     }
 
+    #[must_use]
     pub fn resolved(&self) -> &Settings {
         &self.resolved
     }
 
+    #[must_use]
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
 
+    #[must_use]
     pub fn syntax_error(&self) -> Option<&SyntaxError> {
         self.parsed.as_ref().err()
     }
 
+    #[must_use]
     pub fn editable(&self) -> bool {
         self.parsed.is_ok() && self.writable
     }
 
+    #[must_use]
     pub fn is_writable(&self) -> bool {
         self.writable
     }
@@ -125,28 +134,33 @@ impl Store {
         Ok(())
     }
 
+    #[must_use]
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
 
+    #[must_use]
     pub fn value(&self, id: &str) -> Option<&Value> {
         self.values.get(id)
     }
 
+    #[must_use]
     pub fn is_modified(&self, id: &str) -> bool {
         self.modified.contains(&id)
     }
 
+    #[must_use]
     pub fn modified(&self) -> &[&'static str] {
         &self.modified
     }
 
+    #[must_use]
     pub fn is_overridden(&self, id: &str) -> bool {
         self.overrides.contains_key(id)
     }
 
     pub(crate) fn load(&mut self, text: &str) -> Vec<&'static str> {
-        self.text = text.to_owned();
+        text.clone_into(&mut self.text);
         self.parsed = jsonc::parse(&self.text);
         self.resolve()
     }
@@ -217,7 +231,7 @@ impl Store {
         self.ensure_writable()?;
         let doc = self.document()?;
         let text = jsonc::set(&self.text, doc, id, &value.to_json(), &self.seed());
-        self.commit(text, now)
+        Ok(self.commit(text, now))
     }
 
     pub(crate) fn reset(&mut self, id: &str, now: Instant) -> Result<Vec<&'static str>> {
@@ -232,7 +246,7 @@ impl Store {
         {
             text = jsonc::remove(&text, &doc, id);
         }
-        self.commit(text, now)
+        Ok(self.commit(text, now))
     }
 
     pub(crate) fn replace_text(&mut self, text: String, now: Instant) -> Result<Vec<&'static str>> {
@@ -240,15 +254,15 @@ impl Store {
         if text == self.text {
             return Ok(Vec::new());
         }
-        self.commit(text, now)
+        Ok(self.commit(text, now))
     }
 
-    fn commit(&mut self, text: String, now: Instant) -> Result<Vec<&'static str>> {
+    fn commit(&mut self, text: String, now: Instant) -> Vec<&'static str> {
         self.text = text;
         self.parsed = jsonc::parse(&self.text);
         self.dirty = true;
         self.changed_at = Some(now);
-        Ok(self.resolve())
+        self.resolve()
     }
 
     pub(crate) fn next_write(&mut self, now: Instant, force: bool) -> Option<(u64, Vec<u8>)> {
@@ -287,16 +301,17 @@ impl Store {
         true
     }
 
+    #[must_use]
     pub fn pending_write(&self) -> bool {
         self.dirty || self.outstanding.is_some()
     }
 
+    #[must_use]
     pub fn diagnose(&self, text: &str) -> Vec<Diagnostic> {
         let parsed = jsonc::parse(text);
         self.analyse(&parsed).1
     }
 
-    #[allow(clippy::type_complexity)]
     fn analyse(
         &self,
         parsed: &Result<Document, SyntaxError>,
@@ -323,7 +338,7 @@ impl Store {
                         values.insert(id, value.clone());
                     }
                 }
-                modified = self.modified.clone();
+                modified.clone_from(&self.modified);
             }
             Ok(doc) => {
                 let mut seen: Vec<&str> = Vec::new();

@@ -33,6 +33,7 @@ pub enum LaneData<'a> {
 }
 
 impl TxLane {
+    #[must_use]
     pub fn new(doc: &Document, track: Traced<TrackRef>) -> Option<Self> {
         let path = doc
             .session(track.trace)?
@@ -57,6 +58,7 @@ impl TxLane {
         Some(lane)
     }
 
+    #[must_use]
     pub fn unresolved(trace: TraceId, path: Vec<String>, height: RowHeight) -> Self {
         let name = path.last().cloned().unwrap_or_default();
         let scope = path[..path.len().saturating_sub(1)].join(".");
@@ -70,10 +72,12 @@ impl TxLane {
         }
     }
 
+    #[must_use]
     pub fn track(&self) -> Option<Traced<TrackRef>> {
         self.source.track()
     }
 
+    #[must_use]
     pub fn data<'a>(&self, doc: &'a Document) -> LaneData<'a> {
         let Some(track) = self.track() else {
             return LaneData::Unresolved;
@@ -89,6 +93,7 @@ impl TxLane {
         }
     }
 
+    #[must_use]
     pub fn generator<'a>(&self, doc: &'a Document) -> Option<&'a LoadedGenerator> {
         match self.data(doc) {
             LaneData::Ready(g) => Some(g),
@@ -111,11 +116,13 @@ impl TxLane {
     }
 }
 
+#[must_use]
 pub fn capacity(height: RowHeight) -> u16 {
     let units = f32::from(height.multiple());
     (((units - 2.0 * LANE_PAD) / SUB_ROW).floor() as u16).max(1)
 }
 
+#[must_use]
 pub fn default_height(depth: u16) -> RowHeight {
     RowHeight::PRESETS
         .into_iter()
@@ -125,10 +132,12 @@ pub fn default_height(depth: u16) -> RowHeight {
         .unwrap_or(DEFAULT_MAX)
 }
 
+#[must_use]
 pub fn folded(depth: u16, height: RowHeight) -> u16 {
     depth.saturating_sub(capacity(height))
 }
 
+#[must_use]
 pub fn shown_sub_row(sub_row: u16, height: RowHeight) -> u16 {
     sub_row.min(capacity(height) - 1)
 }
@@ -143,6 +152,7 @@ pub struct LaneGeometry {
 }
 
 impl LaneGeometry {
+    #[must_use]
     pub fn new(top: f32, height: f32, row_h: f32, rows: RowHeight) -> Self {
         Self {
             top,
@@ -153,10 +163,12 @@ impl LaneGeometry {
         }
     }
 
+    #[must_use]
     pub fn sub_top(&self, sub: u16) -> f32 {
         self.top + self.pad + self.sub_h * f32::from(sub)
     }
 
+    #[must_use]
     pub fn sub_at(&self, y: f32) -> Option<u16> {
         let offset = y - self.top - self.pad;
         if offset < 0.0 || self.sub_h <= 0.0 {
@@ -167,10 +179,12 @@ impl LaneGeometry {
     }
 }
 
+#[must_use]
 pub fn is_density(generator: &LoadedGenerator, px_per_unit: f64) -> bool {
     generator.median_lifetime() as f64 * px_per_unit < DENSITY_PX
 }
 
+#[must_use]
 pub fn window(viewport: &Viewport) -> (u64, u64) {
     let start = viewport.start.max(0.0).floor() as u64;
     let end = viewport.end.max(0.0).ceil() as u64;
@@ -183,6 +197,7 @@ pub struct DensityColumn {
     pub failed: bool,
 }
 
+#[must_use]
 pub fn density(
     generator: &LoadedGenerator,
     viewport: &Viewport,
@@ -197,7 +212,7 @@ pub fn density(
     let scale = viewport.px_per_unit(columns as f64);
     let column = |t: u64| ((t as f64 - viewport.start) * scale).clamp(0.0, last) as usize;
     let (start, end) = window(viewport);
-    _ = generator.visit_window(start, end, |tx| {
+    drop(generator.visit_window(start, end, |tx| {
         let (a, b) = (column(tx.begin), column(tx.end) + 1);
         open[a] += 1;
         open[b] -= 1;
@@ -206,7 +221,7 @@ pub fn density(
             failed[b] -= 1;
         }
         true
-    });
+    }));
     let (mut n, mut f) = (0i32, 0i32);
     (0..columns)
         .map(|x| {
@@ -220,6 +235,7 @@ pub fn density(
         .collect()
 }
 
+#[must_use]
 pub fn fold_overlaps(
     generator: &LoadedGenerator,
     viewport: &Viewport,
@@ -231,13 +247,13 @@ pub fn fold_overlaps(
     }
     let (start, end) = window(viewport);
     let mut events = Vec::new();
-    _ = generator.visit_window_ordinals(start, end, |ordinal, tx| {
+    drop(generator.visit_window_ordinals(start, end, |ordinal, tx| {
         if generator.sub_row(ordinal) >= last && tx.end > tx.begin {
             events.push((tx.begin, 1i32));
             events.push((tx.end, -1));
         }
         true
-    });
+    }));
     events.sort_unstable();
     let mut spans: Vec<(u64, u64)> = Vec::new();
     let (mut open, mut from) = (0i32, 0u64);
@@ -256,6 +272,7 @@ pub fn fold_overlaps(
     spans
 }
 
+#[must_use]
 pub fn hit(
     generator: &LoadedGenerator,
     height: RowHeight,
@@ -267,7 +284,7 @@ pub fn hit(
     let end = (time + tolerance).max(0.0).ceil() as u64;
     let mut inside = None;
     let mut near: Option<(f64, usize)> = None;
-    _ = generator.visit_window_ordinals(start, end, |ordinal, tx| {
+    drop(generator.visit_window_ordinals(start, end, |ordinal, tx| {
         if shown_sub_row(generator.sub_row(ordinal), height) != sub {
             return true;
         }
@@ -281,15 +298,16 @@ pub fn hit(
             near = Some((d, ordinal));
         }
         true
-    });
+    }));
     inside.or(near.map(|(_, ordinal)| ordinal))
 }
 
+#[must_use]
 pub fn nearest_boundary(generator: &LoadedGenerator, time: f64, tolerance: f64) -> Option<u64> {
     let start = (time - tolerance).max(0.0).floor() as u64;
     let end = (time + tolerance).max(0.0).ceil() as u64;
     let mut best: Option<(f64, u64)> = None;
-    _ = generator.visit_window(start, end, |tx| {
+    drop(generator.visit_window(start, end, |tx| {
         for edge in [tx.begin, tx.end] {
             let d = (edge as f64 - time).abs();
             if d <= tolerance && best.is_none_or(|(b, _)| d < b) {
@@ -297,21 +315,23 @@ pub fn nearest_boundary(generator: &LoadedGenerator, time: f64, tolerance: f64) 
             }
         }
         true
-    });
+    }));
     best.map(|(_, edge)| edge)
 }
 
+#[must_use]
 pub fn open_at(generator: &LoadedGenerator, time: u64) -> Vec<&Transaction> {
     let mut open = Vec::new();
-    _ = generator.visit_window(time, time, |tx| {
+    drop(generator.visit_window(time, time, |tx| {
         if time < tx.end || tx.begin == tx.end {
             open.push(tx);
         }
         true
-    });
+    }));
     open
 }
 
+#[must_use]
 pub fn label(tx: &Transaction) -> String {
     let label = PipelineModel::label(tx);
     if label.is_empty() {
@@ -321,6 +341,7 @@ pub fn label(tx: &Transaction) -> String {
     }
 }
 
+#[must_use]
 pub fn value_text(generator: &LoadedGenerator, cursor: u64) -> (String, bool) {
     let open = open_at(generator, cursor);
     let failed = open.iter().any(|tx| tx.status == TxStatus::Error);

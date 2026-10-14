@@ -60,7 +60,8 @@ mod other {
     pub fn install(_: &Options) -> Result<bool, Error> {
         Err(Error::Unsupported)
     }
-    #[allow(clippy::missing_safety_doc)]
+    /// # Safety
+    /// The writer must remain live and immovable on its registering thread until unwatched.
     pub unsafe fn watch(_: *mut Writer) -> Result<(), Error> {
         Err(Error::Unsupported)
     }

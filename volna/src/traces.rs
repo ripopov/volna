@@ -163,19 +163,20 @@ impl Workspace {
                 ))
             } else {
                 PopupMenuItem::new("Close All Traces").on_click(run(|this, _, w, cx| {
-                    this.dispatch(Command::CloseTrace, Some(w), cx)
+                    this.dispatch(Command::CloseTrace, Some(w), cx);
                 }))
             };
-            let mut menu =
-                menu.item(PopupMenuItem::label(chip.tooltip()))
-                    .separator()
-                    .item(PopupMenuItem::new("Rename Trace…").on_click(run(
-                        |this, trace, w, cx| this.start_trace_rename(trace, w, cx),
-                    )));
+            let mut menu = menu
+                .item(PopupMenuItem::label(chip.tooltip()))
+                .separator()
+                .item(
+                    PopupMenuItem::new("Rename Trace…")
+                        .on_click(run(super::app::Workspace::start_trace_rename)),
+                );
             if chip.renamed {
                 menu = menu.item(PopupMenuItem::new("Use File Name").on_click(run(
                     |this, trace, w, cx| {
-                        this.dispatch(Command::RenameTrace(trace, None), Some(w), cx)
+                        this.dispatch(Command::RenameTrace(trace, None), Some(w), cx);
                     },
                 )));
             }
@@ -183,11 +184,11 @@ impl Workspace {
                 .separator()
                 .item(
                     PopupMenuItem::new("Add Trace…").on_click(run(|this, _, w, cx| {
-                        this.dispatch(Command::RequestAddTraceDialog, Some(w), cx)
+                        this.dispatch(Command::RequestAddTraceDialog, Some(w), cx);
                     })),
                 )
                 .min_w(min_w)
-                .action_context(focus.clone())
+                .action_context(focus)
         });
         cx.subscribe(&menu, move |this, _, _: &gpui_kit::DismissEvent, cx| {
             this.status_menu = None;
@@ -279,6 +280,13 @@ impl Workspace {
         }
     }
 
+    #[cfg_attr(
+        not(target_family = "wasm"),
+        expect(
+            clippy::unused_self,
+            reason = "The web implementation updates the workspace directly; the native dialog uses its entity context."
+        )
+    )]
     pub(crate) fn add_trace_dialog(&mut self, cx: &mut Context<Self>) {
         #[cfg(not(target_family = "wasm"))]
         {
@@ -368,7 +376,7 @@ impl Workspace {
                         .on_click(choose(false, paths.clone())),
                 )
                 .min_w(min_w)
-                .action_context(focus.clone())
+                .action_context(focus)
         });
         cx.subscribe(&menu, move |this, _, _: &gpui_kit::DismissEvent, cx| {
             this.status_menu = None;

@@ -44,6 +44,7 @@ impl RemoteClient {
             preparing: None,
         })
     }
+    #[must_use]
     pub fn session(&self) -> Option<u64> {
         self.inner.session()
     }

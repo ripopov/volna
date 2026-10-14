@@ -48,9 +48,9 @@ impl StartPanelView {
 
     fn dispatch(&self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         let generation = self.generation;
-        _ = self.ws.update(cx, |ws, cx| {
-            ws.dispatch_if_current(generation, command, Some(window), cx)
-        });
+        drop(self.ws.update(cx, |ws, cx| {
+            ws.dispatch_if_current(generation, command, Some(window), cx);
+        }));
     }
 }
 
@@ -184,7 +184,7 @@ impl Render for StartPanelView {
                         .icon(gpui_kit::component::Icon::empty().path(IconName::Workflow.path()))
                         .ghost()
                         .on_click(cx.listener(move |view, _, window, cx| {
-                            view.dispatch(Command::OpenPipeline { track }, window, cx)
+                            view.dispatch(Command::OpenPipeline { track }, window, cx);
                         })),
                 );
             }
@@ -206,7 +206,7 @@ impl Render for StartPanelView {
                             Command::Panels(PanelsCommand::NewTab { group_of: view.id }),
                             window,
                             cx,
-                        )
+                        );
                     })),
             ),
         );

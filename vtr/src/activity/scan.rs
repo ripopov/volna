@@ -1,6 +1,6 @@
 //! One source block reduced to what the index needs.
 
-use super::{bucket, Block, Budget, BUCKETS, STRETCH_BYTES};
+use super::{BUCKETS, Block, Budget, STRETCH_BYTES, bucket};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Cand {
@@ -44,12 +44,13 @@ pub struct BlockScan {
 const COMPACT_MIN: usize = 4096;
 
 impl BlockScan {
+    #[must_use]
     pub fn new(block: Block, prev_end: Option<u64>, t_min: u64, budget: Budget) -> BlockScan {
         let span = match prev_end {
             Some(p) => block.end.saturating_sub(p),
             None => block.end.saturating_sub(block.start).saturating_add(1),
         };
-        let j_max = 63 - (span / 4).max(1).leading_zeros();
+        let j_max = (span / 4).max(1).ilog2();
         let cap = (budget.memory.max(0.0) * block.bytes as f64 / STRETCH_BYTES as f64) as u64;
         BlockScan {
             block,
@@ -73,6 +74,7 @@ impl BlockScan {
         }
     }
 
+    #[must_use]
     pub fn estimate(rows: u64, block: Block, budget: Budget) -> u64 {
         let cap = (budget.memory.max(0.0) * block.bytes as f64 / STRETCH_BYTES as f64) as u64;
         rows * std::mem::size_of::<Row>() as u64

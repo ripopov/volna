@@ -65,14 +65,14 @@ fn delta(now: &Histogram<u64>, before: Option<&Histogram<u64>>) -> Distribution 
 }
 
 impl Workspace {
-    pub(crate) fn start_frame_sampling(&self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn start_frame_sampling(window: &Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(Duration::from_secs_f64(frames::TICK_SECONDS))
                     .await;
                 if this
-                    .update_in(cx, |this, window, cx| this.sample_frames(window, cx))
+                    .update_in(cx, super::app::Workspace::sample_frames)
                     .is_err()
                 {
                     break;
@@ -140,7 +140,7 @@ impl Workspace {
             }))
             .child(SharedString::from(status.text))
             .child(
-                canvas(move |bounds, _, _| trigger.set(bounds), |_, _, _, _| {})
+                canvas(move |bounds, _, _| trigger.set(bounds), |_, (), _, _| {})
                     .absolute()
                     .size_full(),
             )
@@ -371,7 +371,7 @@ fn chart(row: &FrameRow, t: &Theme) -> impl IntoElement {
 
 fn short_ms(value: f64) -> String {
     if value < 1.0 {
-        format!("{}", value).trim_start_matches('0').to_owned()
+        format!("{value}").trim_start_matches('0').to_owned()
     } else {
         format!("{value:.0}")
     }

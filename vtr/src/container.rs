@@ -27,6 +27,7 @@ pub enum SectionKind {
 }
 
 impl SectionKind {
+    #[must_use]
     pub fn from_u32(v: u32) -> Option<SectionKind> {
         Some(match v {
             1 => SectionKind::Meta,
@@ -55,6 +56,7 @@ pub struct DirEntry {
 }
 
 impl DirEntry {
+    #[must_use]
     pub fn payload_offset(&self) -> u64 {
         self.offset + SECTION_HEADER_LEN as u64
     }
@@ -68,6 +70,7 @@ pub fn write_file_header(w: &mut impl Write) -> std::io::Result<()> {
     ))
 }
 
+#[must_use]
 pub fn encode_file_header(magic: &[u8; 8], major: u16, minor: u16) -> [u8; FILE_HEADER_LEN] {
     let mut h = [0u8; FILE_HEADER_LEN];
     h[..8].copy_from_slice(magic);
@@ -76,6 +79,7 @@ pub fn encode_file_header(magic: &[u8; 8], major: u16, minor: u16) -> [u8; FILE_
     h
 }
 
+#[must_use]
 pub fn encode_section_header(
     kind: u32,
     flags: u32,
@@ -90,6 +94,7 @@ pub fn encode_section_header(
     h
 }
 
+#[must_use]
 pub fn encode_directory(entries: &[DirEntry]) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + entries.len() * DIR_ENTRY_LEN);
     out.extend_from_slice(&(entries.len() as u64).to_le_bytes());
@@ -104,6 +109,7 @@ pub fn encode_directory(entries: &[DirEntry]) -> Vec<u8> {
     out
 }
 
+#[must_use]
 pub fn encode_trailer(directory_offset: u64, file_len: u64) -> [u8; TRAILER_LEN] {
     let mut t = [0u8; TRAILER_LEN];
     t[0..8].copy_from_slice(&directory_offset.to_le_bytes());
@@ -185,6 +191,7 @@ impl Container {
         })
     }
 
+    #[must_use]
     pub fn directory_payload(data: &[u8]) -> Option<&[u8]> {
         if data.len() < FILE_HEADER_LEN + TRAILER_LEN {
             return None;

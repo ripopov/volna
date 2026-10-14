@@ -32,6 +32,7 @@ pub struct Activity {
 }
 
 impl PipelineModel {
+    #[must_use]
     pub fn activity(&self, doc: &Document) -> Activity {
         let Rows::Ready(set) = self.rows(doc) else {
             return Activity::default();

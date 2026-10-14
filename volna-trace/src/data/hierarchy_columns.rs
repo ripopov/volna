@@ -1,6 +1,9 @@
 //! Flat resident hierarchy storage and its streaming builder.
 
-use super::source::*;
+use super::source::{
+    Direction, Generator, Hierarchy, HierarchyBuilder, HierarchySource, Ids, ScopeRole, ScopeView,
+    SignalRef, VariableView,
+};
 use super::value::SignalShape;
 use std::collections::HashMap;
 
@@ -17,6 +20,7 @@ impl Names {
     pub fn get(&self, id: u32) -> &str {
         let i = id as usize;
         let bytes = &self.bytes[self.offsets[i] as usize..self.offsets[i + 1] as usize];
+        // SAFETY: The hierarchy builder appends whole str values and records their byte boundaries.
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
     pub fn len(&self) -> usize {
@@ -209,7 +213,7 @@ impl std::hash::Hasher for IdentityHash {
     }
     fn write(&mut self, bytes: &[u8]) {
         for &byte in bytes {
-            self.0 = self.0.wrapping_mul(257).wrapping_add(byte as u64);
+            self.0 = self.0.wrapping_mul(257).wrapping_add(u64::from(byte));
         }
     }
     fn write_u64(&mut self, value: u64) {
@@ -308,6 +312,7 @@ impl ColumnBuilder {
     }
 }
 impl HierarchyBuilder {
+    #[must_use]
     pub fn finish(self) -> Hierarchy {
         let mut out = ColumnBuilder::default();
         for scope in self.scopes {

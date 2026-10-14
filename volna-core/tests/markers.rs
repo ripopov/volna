@@ -36,7 +36,7 @@ fn same_width(a: Viewport, b: Viewport) -> bool {
 }
 
 fn centred_on(v: Viewport, t: u64) -> bool {
-    ((v.start + v.end) / 2.0 - t as f64).abs() < 1e-6 * v.width()
+    (f64::midpoint(v.start, v.end) - t as f64).abs() < 1e-6 * v.width()
 }
 
 struct Scene {

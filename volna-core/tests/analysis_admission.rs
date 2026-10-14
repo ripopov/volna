@@ -170,16 +170,20 @@ fn observe_allocation(bytes: usize) {
         }
     });
 }
+// SAFETY: All allocation operations delegate valid layouts and pointers to System.
 unsafe impl std::alloc::GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         observe_allocation(layout.size());
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
         unsafe { std::alloc::System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
         unsafe { std::alloc::System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
         observe_allocation(new_size);
+        // SAFETY: The allocator caller supplies the layout and pointer required by System.
         unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
     }
 }

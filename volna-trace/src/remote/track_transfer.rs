@@ -27,7 +27,10 @@ pub struct TrackTransfer<Tag = u64> {
 }
 
 impl<Tag: Copy> TrackTransfer<Tag> {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Rendering and transfer inputs are independent dimensions of the operation."
+    )]
     pub fn new(
         request: u64,
         tag: Tag,

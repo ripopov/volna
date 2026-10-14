@@ -4,6 +4,7 @@
 use web_time::Instant;
 
 pub trait Lerp: Clone {
+    #[must_use]
     fn lerp(&self, to: &Self, t: f64) -> Self;
     fn approx_eq(&self, other: &Self) -> bool;
 }

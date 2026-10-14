@@ -12,6 +12,7 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
+    #[must_use]
     pub fn new(trace: &Path, id: &Identity, cache_dir: Option<&Path>) -> Sidecar {
         let mut beside = trace.as_os_str().to_owned();
         beside.push(".index");
@@ -33,6 +34,7 @@ impl Sidecar {
         std::iter::once(self.beside.as_path()).chain(self.cached.as_deref())
     }
 
+    #[must_use]
     pub fn load(&self, id: &Identity) -> Option<(PathBuf, Index)> {
         self.paths()
             .find_map(|p| Index::open(p, id).ok().map(|i| (p.to_path_buf(), i)))
@@ -77,7 +79,8 @@ impl Sidecar {
         let done = (|| {
             let mut w = BufWriter::new(file);
             let summary = build(&mut w)?;
-            w.into_inner().map_err(|e| e.into_error())?;
+            w.into_inner()
+                .map_err(std::io::IntoInnerError::into_error)?;
             let publish = || {
                 std::fs::rename(&tmp, &path)?;
                 Ok(())
@@ -92,7 +95,7 @@ impl Sidecar {
         match done {
             Ok(summary) => Ok((path, summary)),
             Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
+                drop(std::fs::remove_file(&tmp));
                 Err(e)
             }
         }
@@ -115,12 +118,13 @@ fn create_tmp(path: &Path) -> std::io::Result<(std::fs::File, PathBuf)> {
             .open(&tmp)
         {
             Ok(file) => return Ok((file, tmp)),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e),
         }
     }
 }
 
+#[must_use]
 pub fn default_cache_dir() -> Option<PathBuf> {
     let var = |k: &str| {
         std::env::var_os(k)

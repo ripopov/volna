@@ -107,10 +107,10 @@ fn scan_cost(reader: &Reader, i: usize, b: Block, budget: Budget) -> Result<u64>
         )?;
         rows += view.n_sigs as u64;
         for r in &view.runs {
-            run = run.max(codec::raw_len(r.blob)? as u64 + r.count as u64 * 8);
+            run = run.max(codec::raw_len(r.blob)? as u64 + u64::from(r.count) * 8);
         }
     }
-    let times = h.n_times as u64 * 8 + codec::raw_len(&p[h.tt_off()..h.index_off()])? as u64;
+    let times = u64::from(h.n_times) * 8 + codec::raw_len(&p[h.tt_off()..h.index_off()])? as u64;
     Ok(BlockScan::estimate(rows, b, budget) + times + run)
 }
 

@@ -47,7 +47,7 @@ impl ActivitySource {
     pub fn new(path: &std::path::Path, identity: vtr::activity::Identity) -> Self {
         let loaded = std::sync::OnceLock::new();
         if let Some(index) = find_index(path, &identity) {
-            let _ = loaded.set(index);
+            drop(loaded.set(index));
         }
         Self {
             path: path.to_owned(),
@@ -110,7 +110,7 @@ impl ActivitySource {
                 let mut name = path.as_os_str().to_owned();
                 name.push(".lock");
                 if let Some(parent) = std::path::Path::new(&name).parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    drop(std::fs::create_dir_all(parent));
                 }
                 if let Ok(file) = std::fs::OpenOptions::new()
                     .write(true)
@@ -154,10 +154,10 @@ impl ActivitySource {
         let index = vtr::activity::Index::open(&path, &self.identity)?;
         let reservation = budget.reserve_object("the activity index", index.memory_bytes())?;
         control.complete()?;
-        let _ = self.loaded.set(std::sync::Arc::new(ActivityIndex {
+        drop(self.loaded.set(std::sync::Arc::new(ActivityIndex {
             index,
             _reservation: Some(reservation),
-        }));
+        })));
         Ok(())
     }
 }

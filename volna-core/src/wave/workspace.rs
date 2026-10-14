@@ -103,6 +103,10 @@ fn shows_peak() -> bool {
     true
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "Serde requires this callback to borrow the field."
+)]
 fn is_true(value: &bool) -> bool {
     *value
 }
@@ -117,6 +121,10 @@ enum SavedStyle {
 }
 
 impl SavedStyle {
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Serde requires this callback to borrow the field."
+    )]
     fn is_activity(&self) -> bool {
         *self == Self::Activity
     }
@@ -374,18 +382,17 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                     ctx.traces.tracks(trace).iter().find(|t| {
                         t.path == generator && matches!(t.kind, TrackKind::Generator { .. })
                     });
-                let lane = match track {
-                    Some(track) => TxLane {
+                let lane = if let Some(track) = track {
+                    TxLane {
                         height,
                         auto_height: false,
                         ..TxLane::new(ctx.doc, Traced::new(trace, track.id))
                             .context("lane generator vanished")?
-                    },
-                    None => {
-                        ctx.report
-                            .push(format!("Missing lane generator: {generator:?}"));
-                        TxLane::unresolved(trace, generator, height)
                     }
+                } else {
+                    ctx.report
+                        .push(format!("Missing lane generator: {generator:?}"));
+                    TxLane::unresolved(trace, generator, height)
                 };
                 let lane = TxLane { tint, ..lane };
                 items.push(Entry::new(depth, WaveRow::Lane(lane)));

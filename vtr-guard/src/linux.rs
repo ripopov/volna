@@ -5,9 +5,9 @@ use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::ptr::null_mut;
+use std::sync::Mutex;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64};
-use std::sync::Mutex;
 use vtr::{CrashState, Ending, Sealer, Writer};
 
 const FATAL: [i32; 7] = [
@@ -45,6 +45,7 @@ static TEST_STALL_MS: AtomicU64 = AtomicU64::new(0);
 static TEST_FAULT: AtomicBool = AtomicBool::new(false);
 
 struct OldActions(UnsafeCell<[MaybeUninit<libc::sigaction>; 65]>);
+// SAFETY: Installation serializes writes before handlers are registered; handlers only read initialized signal entries.
 unsafe impl Sync for OldActions {}
 static OLD: OldActions = OldActions(UnsafeCell::new([const { MaybeUninit::uninit() }; 65]));
 
@@ -61,6 +62,7 @@ static STATES: [AtomicPtr<CrashState>; SLOTS] = [const { AtomicPtr::new(null_mut
 static PARKED: [AtomicBool; SLOTS] = [const { AtomicBool::new(false) }; SLOTS];
 
 fn gettid() -> i32 {
+    // SAFETY: gettid takes no pointer arguments.
     unsafe { libc::syscall(libc::SYS_gettid) as i32 }
 }
 
@@ -69,29 +71,37 @@ fn now_ms() -> u64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    // SAFETY: ts is a live, aligned output structure.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &raw mut ts) };
     ts.tv_sec as u64 * 1000 + ts.tv_nsec as u64 / 1_000_000
 }
 
 fn say(s: &[u8]) {
+    // SAFETY: The byte slice is readable for its full length; write does not retain it.
     unsafe { libc::write(2, s.as_ptr().cast(), s.len()) };
 }
 
 fn wake() {
     let one: u64 = 1;
-    unsafe { libc::write(EFD.load(Relaxed), (&one as *const u64).cast(), 8) };
+    // SAFETY: one is a live eight-byte eventfd input; write does not retain it.
+    unsafe { libc::write(EFD.load(Relaxed), (&raw const one).cast(), 8) };
 }
 
 unsafe fn restore(sig: i32) {
-    let old = (*OLD.0.get())[sig as usize].as_ptr();
-    libc::sigaction(sig, old, null_mut());
+    // SAFETY: Only installed signals reach this function, and their prior actions were saved before registration.
+    unsafe {
+        let old = (*OLD.0.get())[sig as usize].as_ptr();
+        libc::sigaction(sig, old, null_mut());
+    }
 }
 
 fn tgkill(tid: i32, sig: i32) -> bool {
+    // SAFETY: getpid and tgkill take only integer arguments.
     unsafe { libc::syscall(libc::SYS_tgkill, libc::getpid(), tid, sig) == 0 }
 }
 
 extern "C" fn on_fatal(sig: i32, info: *mut libc::siginfo_t, _: *mut c_void) {
+    // SAFETY: libc provides a valid pointer to this thread’s errno.
     let errno = unsafe { *libc::__errno_location() };
     let tid = gettid();
     if STATE
@@ -99,9 +109,11 @@ extern "C" fn on_fatal(sig: i32, info: *mut libc::siginfo_t, _: *mut c_void) {
         .is_err()
     {
         loop {
+            // SAFETY: pause takes no pointers and is async-signal-safe.
             unsafe { libc::pause() };
         }
     }
+    // SAFETY: SA_SIGINFO supplies a live siginfo_t for the duration of this handler.
     let (code, addr) = unsafe { ((*info).si_code, (*info).si_addr() as u64) };
     SIGNO.store(sig, Relaxed);
     CODE.store(code, Relaxed);
@@ -114,8 +126,10 @@ extern "C" fn on_fatal(sig: i32, info: *mut libc::siginfo_t, _: *mut c_void) {
             say(b"vtr-guard: the rescue missed its deadline; the trace keeps what was written\n");
             break;
         }
+        // SAFETY: A null pollfd array is valid when its element count is zero.
         unsafe { libc::poll(null_mut(), 0, 1) };
     }
+    // SAFETY: The action for this installed signal is initialized, and errno belongs to this thread.
     unsafe {
         restore(sig);
         *libc::__errno_location() = errno;
@@ -131,6 +145,7 @@ extern "C" fn on_fatal(sig: i32, info: *mut libc::siginfo_t, _: *mut c_void) {
 }
 
 extern "C" fn on_stop(sig: i32, _: *mut libc::siginfo_t, _: *mut c_void) {
+    // SAFETY: libc provides a valid pointer to this thread’s errno.
     let errno = unsafe { *libc::__errno_location() };
     if STOP_SIG.compare_exchange(0, sig, AcqRel, Acquire).is_ok() {
         STOP_UNWATCHED.store(!any_watched(), Relaxed);
@@ -139,6 +154,7 @@ extern "C" fn on_stop(sig: i32, _: *mut libc::siginfo_t, _: *mut c_void) {
         STOP_ESCALATE.store(true, Release);
     }
     wake();
+    // SAFETY: libc provides a valid pointer to this thread’s errno.
     unsafe { *libc::__errno_location() = errno };
 }
 
@@ -150,6 +166,7 @@ fn park_here() -> ! {
         }
     }
     loop {
+        // SAFETY: pause takes no pointers and is async-signal-safe.
         unsafe { libc::pause() };
     }
 }
@@ -161,6 +178,7 @@ extern "C" fn on_park(_: i32, _: *mut libc::siginfo_t, _: *mut c_void) {
             continue;
         }
         let state = STATES[i].load(Acquire);
+        // SAFETY: The owner thread cannot unwatch its writer while executing this signal handler.
         if !state.is_null() && unsafe { &*state }.busy() && !unsafe { &*state }.poisoned() {
             return;
         }
@@ -201,6 +219,7 @@ pub fn install(opts: &Options) -> Result<bool, Error> {
         libc::SIGRTMAX() - 3
     };
     PARK_SIG.store(park, Relaxed);
+    // SAFETY: The installation mutex serializes registration; stack structures stay live for each syscall.
     unsafe {
         let efd = libc::eventfd(0, libc::EFD_CLOEXEC);
         if efd < 0 {
@@ -218,16 +237,16 @@ pub fn install(opts: &Options) -> Result<bool, Error> {
         spawned.map_err(Error::Os)?;
         altstack()?;
         let mut sa: libc::sigaction = std::mem::zeroed();
-        libc::sigfillset(&mut sa.sa_mask);
+        libc::sigfillset(&raw mut sa.sa_mask);
         sa.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
         sa.sa_sigaction = on_park as *const () as usize;
-        libc::sigaction(park, &sa, null_mut());
+        libc::sigaction(park, &raw const sa, null_mut());
         let old = &mut *OLD.0.get();
         if opts.crashes {
             sa.sa_sigaction = on_fatal as *const () as usize;
             for sig in FATAL {
                 libc::sigaction(sig, null_mut(), old[sig as usize].as_mut_ptr());
-                libc::sigaction(sig, &sa, null_mut());
+                libc::sigaction(sig, &raw const sa, null_mut());
             }
         }
         if opts.stops {
@@ -236,7 +255,7 @@ pub fn install(opts: &Options) -> Result<bool, Error> {
             for sig in STOP {
                 libc::sigaction(sig, null_mut(), old[sig as usize].as_mut_ptr());
                 if old[sig as usize].assume_init_ref().sa_sigaction == libc::SIG_DFL {
-                    libc::sigaction(sig, &sa, null_mut());
+                    libc::sigaction(sig, &raw const sa, null_mut());
                 }
             }
         }
@@ -249,12 +268,12 @@ pub fn install(opts: &Options) -> Result<bool, Error> {
     Ok(true)
 }
 
-extern "C" {
+unsafe extern "C" {
     fn on_exit(f: extern "C" fn(i32, *mut c_void), arg: *mut c_void) -> i32;
 }
 
 pub fn thread_init() {
-    let _ = altstack();
+    drop(altstack());
 }
 
 type StopCallback = Box<dyn Fn(i32) + Send + Sync>;
@@ -272,9 +291,10 @@ pub fn remove_stop_callback(id: u64) {
 }
 
 fn altstack() -> Result<(), Error> {
+    // SAFETY: The mapped stack remains allocated for the thread lifetime; guard-page arithmetic stays within it.
     unsafe {
         let mut cur: libc::stack_t = std::mem::zeroed();
-        libc::sigaltstack(null_mut(), &mut cur);
+        libc::sigaltstack(null_mut(), &raw mut cur);
         if cur.ss_flags & libc::SS_DISABLE == 0 && cur.ss_size >= 16 << 10 {
             return Ok(());
         }
@@ -296,38 +316,44 @@ fn altstack() -> Result<(), Error> {
             ss_flags: 0,
             ss_size: ALTSTACK,
         };
-        if libc::sigaltstack(&ss, null_mut()) != 0 {
+        if libc::sigaltstack(&raw const ss, null_mut()) != 0 {
             return Err(Error::Os(std::io::Error::last_os_error()));
         }
     }
     Ok(())
 }
 
-#[allow(clippy::missing_safety_doc)]
+/// # Safety
+/// The writer must remain live at a stable address on this thread until unwatched.
+/// Its operations must participate in the crash-state guard so rescue can wait
+/// for exclusive access before closing it.
 pub unsafe fn watch(writer: *mut Writer) -> Result<(), Error> {
-    if !ACTIVE.load(Acquire) {
-        return Ok(());
-    }
-    altstack()?;
-    let sealer = (*writer).sealer();
-    sealer.state().set_watched(true);
-    for i in 0..SLOTS {
-        if WATCHED[i]
-            .compare_exchange(null_mut(), RESERVED, AcqRel, Relaxed)
-            .is_ok()
-        {
-            OWNER[i].store(gettid(), Relaxed);
-            PARKED[i].store(false, Relaxed);
-            let slot = Box::into_raw(Box::new(Slot { writer, sealer }));
-            STATES[i].store(
-                (*slot).sealer.state() as *const CrashState as *mut CrashState,
-                Release,
-            );
-            WATCHED[i].store(slot, Release);
+    // SAFETY: The caller keeps writer live and immovable; the slot owns the sealer before publishing its state.
+    unsafe {
+        if !ACTIVE.load(Acquire) {
             return Ok(());
         }
+        altstack()?;
+        let sealer = (*writer).sealer();
+        sealer.state().set_watched(true);
+        for i in 0..SLOTS {
+            if WATCHED[i]
+                .compare_exchange(null_mut(), RESERVED, AcqRel, Relaxed)
+                .is_ok()
+            {
+                OWNER[i].store(gettid(), Relaxed);
+                PARKED[i].store(false, Relaxed);
+                let slot = Box::into_raw(Box::new(Slot { writer, sealer }));
+                STATES[i].store(
+                    std::ptr::from_ref::<CrashState>((*slot).sealer.state()).cast_mut(),
+                    Release,
+                );
+                WATCHED[i].store(slot, Release);
+                return Ok(());
+            }
+        }
+        Err(Error::Full)
     }
-    Err(Error::Full)
 }
 
 pub fn unwatch(writer: *mut Writer) {
@@ -336,6 +362,7 @@ pub fn unwatch(writer: *mut Writer) {
         if p.is_null() || p == RESERVED {
             continue;
         }
+        // SAFETY: Published slots stay live until the successful removal below; registration and removal belong to their owner.
         if unsafe { (*p).writer } == writer
             && WATCHED[i]
                 .compare_exchange(p, null_mut(), AcqRel, Relaxed)
@@ -343,6 +370,7 @@ pub fn unwatch(writer: *mut Writer) {
         {
             STATES[i].store(null_mut(), Release);
             OWNER[i].store(0, Relaxed);
+            // SAFETY: The successful compare_exchange claims the Box allocated by watch exactly once.
             let slot = unsafe { Box::from_raw(p) };
             slot.sealer.state().set_watched(false);
         }
@@ -353,6 +381,7 @@ pub fn stop_requested() -> i32 {
     STOP_SIG.load(Acquire)
 }
 
+#[must_use]
 pub fn ending() -> Ending {
     match stop_requested() {
         0 => Ending::Closed,
@@ -376,14 +405,17 @@ fn rescue_main() {
             events: libc::POLLIN,
             revents: 0,
         };
-        if unsafe { libc::poll(&mut pfd, 1, timeout) } > 0 {
+        // SAFETY: pfd is a live array of one initialized pollfd.
+        if unsafe { libc::poll(&raw mut pfd, 1, timeout) } > 0 {
             let mut v = 0u64;
-            unsafe { libc::read(pfd.fd, (&mut v as *mut u64).cast(), 8) };
+            // SAFETY: v is a writable eight-byte eventfd output; read does not retain it.
+            unsafe { libc::read(pfd.fd, (&raw mut v).cast(), 8) };
         }
         if STATE.load(Acquire) == RESCUING && TID.load(Acquire) != 0 {
             crash_rescue();
             STATE.store(DONE, Release);
             loop {
+                // SAFETY: pause takes no pointers and is async-signal-safe.
                 unsafe { libc::pause() };
             }
         }
@@ -408,8 +440,8 @@ fn warm_up() {
     let (tx, rx) = std::sync::mpsc::sync_channel::<u8>(1);
     tx.send(0).unwrap();
     rx.recv().unwrap();
-    let _ = std::thread::current();
-    let _ = format!("{}", now_ms());
+    drop(std::thread::current());
+    drop(format!("{}", now_ms()));
 }
 
 fn any_watched() -> bool {
@@ -439,10 +471,21 @@ fn crash_rescue() {
     }
     let stall = TEST_STALL_MS.load(Relaxed);
     if stall > 0 {
+        // SAFETY: A null pollfd array is valid when its element count is zero.
         unsafe { libc::poll(null_mut(), 0, stall as i32) };
     }
     if TEST_FAULT.load(Relaxed) {
-        unsafe { std::ptr::write_volatile(null_mut::<i32>(), 1) };
+        // Rescue blocks signals; fault injection must restore default delivery before raising SIGSEGV.
+        // SAFETY: The mask is initialized before use, and SIG_DFL is a valid signal disposition.
+        unsafe {
+            libc::signal(libc::SIGSEGV, libc::SIG_DFL);
+            let mut set = MaybeUninit::<libc::sigset_t>::uninit();
+            libc::sigemptyset(set.as_mut_ptr());
+            libc::sigaddset(set.as_mut_ptr(), libc::SIGSEGV);
+            libc::pthread_sigmask(libc::SIG_UNBLOCK, set.as_ptr(), null_mut());
+            libc::raise(libc::SIGSEGV);
+        }
+        unreachable!("SIGSEGV terminates rescue fault injection");
     }
     let n = finish_all(
         Ending::Crashed {
@@ -468,6 +511,7 @@ fn stop_rescue(signal: i32) -> ! {
     {
         finish_all(Ending::Stopped { signal }, 0);
     }
+    // SAFETY: The installed signal has a saved action; sigemptyset initializes set before it is read.
     unsafe {
         restore(signal);
         let mut set = MaybeUninit::<libc::sigset_t>::uninit();
@@ -494,6 +538,7 @@ extern "C" fn at_exit(status: i32, _: *mut c_void) {
     }
     let stop = stop_requested();
     if stop != 0 {
+        // SAFETY: The stop signal has an initialized saved action and raise takes no pointer arguments.
         unsafe {
             restore(stop);
             libc::raise(stop);
@@ -511,11 +556,13 @@ fn finish_all(end: Ending, stopped: i32) -> usize {
         if state.is_null() || owner == 0 || owner == stopped || owner == me {
             continue;
         }
+        // SAFETY: Published crash states are retained by watched slots throughout rescue.
         unsafe { &*state }.request_park(park_on_leave);
         waiting[i] = tgkill(owner, park);
     }
     let until = now_ms() + DEADLINE_MS.load(Relaxed) / 4;
     while (0..SLOTS).any(|i| waiting[i] && !PARKED[i].load(Acquire)) && now_ms() < until {
+        // SAFETY: A null pollfd array is valid when its element count is zero.
         unsafe { libc::poll(null_mut(), 0, 1) };
     }
     let mut n = 0;
@@ -524,12 +571,14 @@ fn finish_all(end: Ending, stopped: i32) -> usize {
         if p.is_null() || p == RESERVED {
             continue;
         }
+        // SAFETY: The atomic swap claims a published slot; rescue retains its allocation.
         let slot = unsafe { &*p };
         let owner = OWNER[i].load(Relaxed);
         let stopped_here =
             owner == stopped || owner == me || PARKED[i].load(Acquire) || !waiting[i];
         let state = slot.sealer.state();
         let r = if stopped_here && !state.busy() {
+            // SAFETY: The owner is stopped and the crash state is idle, giving rescue exclusive access.
             unsafe { (*slot.writer).close_with(end) }
         } else {
             let end = match end {

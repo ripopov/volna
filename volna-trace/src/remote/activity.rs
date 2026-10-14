@@ -138,7 +138,7 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
                                     limit,
                                     "reopen the trace",
                                 )
-                                .and_then(|_| r.charge(peak.saturating_sub(charged) as usize))
+                                .and_then(|()| r.charge(peak.saturating_sub(charged) as usize))
                                 .map_err(|e| vtr::Error::Invalid(e.to_string()))?;
                                 charged = charged.max(peak);
                                 Ok(())
@@ -190,7 +190,7 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
                         .expect("activity control")
                         .complete()
                         .map_err(anyhow::Error::from)
-                        .and_then(|_| session.install_activity(index))
+                        .and_then(|()| session.install_activity(index))
                 };
                 return Ok(self.complete(ack, result));
             }

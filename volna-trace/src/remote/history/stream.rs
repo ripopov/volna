@@ -1,4 +1,4 @@
-//! Incremental decoder for PackedHistory's fixed bincode layout.
+//! Incremental decoder for `PackedHistory`'s fixed bincode layout.
 
 use super::{PackedHistory, stride};
 use crate::data::SignalShape;
@@ -126,7 +126,7 @@ impl HistoryDecoder {
                 continue;
             }
             let value = if width == 4 {
-                u32::from_le_bytes(self.scalar[..4].try_into()?) as u64
+                u64::from(u32::from_le_bytes(self.scalar[..4].try_into()?))
             } else {
                 u64::from_le_bytes(self.scalar)
             };

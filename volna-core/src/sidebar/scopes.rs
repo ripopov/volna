@@ -14,10 +14,12 @@ pub struct TreeNode {
 }
 
 impl TreeNode {
+    #[must_use]
     pub fn trace(trace: TraceId) -> Self {
         Self { trace, scope: None }
     }
 
+    #[must_use]
     pub fn scope(scope: Traced<ScopeId>) -> Self {
         Self {
             trace: scope.trace,
@@ -25,6 +27,7 @@ impl TreeNode {
         }
     }
 
+    #[must_use]
     pub fn traced_scope(self) -> Option<Traced<ScopeId>> {
         Some(Traced::new(self.trace, self.scope?))
     }
@@ -57,7 +60,7 @@ impl ScopeTreeModel {
         for (trace, session) in traces.loaded() {
             self.expand_top(trace, session.hierarchy());
         }
-        self.selected = self.first_root(traces);
+        self.selected = Self::first_root(traces);
         self.rebuild(traces);
     }
 
@@ -66,7 +69,7 @@ impl ScopeTreeModel {
             self.expand_top(trace, session.hierarchy());
         }
         if self.selected.is_none() {
-            self.selected = self.first_root(traces);
+            self.selected = Self::first_root(traces);
         }
         self.rebuild(traces);
     }
@@ -83,7 +86,7 @@ impl ScopeTreeModel {
             self.unresolved_selected = None;
         }
         if self.selected.is_some_and(|s| s.trace == trace) {
-            self.selected = self.first_root(traces);
+            self.selected = Self::first_root(traces);
         }
         self.rebuild(traces);
     }
@@ -101,7 +104,7 @@ impl ScopeTreeModel {
         }
     }
 
-    fn first_root(&self, traces: &TraceSet) -> Option<TreeNode> {
+    fn first_root(traces: &TraceSet) -> Option<TreeNode> {
         let (trace, session) = traces.first_loaded()?;
         let root = session.hierarchy().roots().first();
         Some(match root {
@@ -126,6 +129,7 @@ impl ScopeTreeModel {
         self.rebuild(traces);
     }
 
+    #[must_use]
     pub fn is_expanded(&self, node: TreeNode) -> bool {
         match node.traced_scope() {
             Some(scope) => self.expanded.contains(&scope),
@@ -133,6 +137,7 @@ impl ScopeTreeModel {
         }
     }
 
+    #[must_use]
     pub fn has_children(traces: &TraceSet, node: TreeNode) -> bool {
         let Some(h) = traces.session(node.trace).map(|s| s.hierarchy()) else {
             return false;
@@ -143,6 +148,7 @@ impl ScopeTreeModel {
         }
     }
 
+    #[must_use]
     pub fn size(traces: &TraceSet, node: TreeNode) -> Option<ScopeSize> {
         traces.get(node.trace)?.sizes()?.get(node.scope?)
     }
@@ -193,14 +199,15 @@ impl ScopeTreeModel {
 
     pub fn select(&mut self, node: TreeNode) -> bool {
         self.unresolved_selected = None;
-        if self.selected != Some(node) {
+        if self.selected == Some(node) {
+            false
+        } else {
             self.selected = Some(node);
             true
-        } else {
-            false
         }
     }
 
+    #[must_use]
     pub fn selected_scope(&self) -> Option<Traced<ScopeId>> {
         self.selected?.traced_scope()
     }

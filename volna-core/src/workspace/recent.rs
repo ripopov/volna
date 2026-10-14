@@ -67,6 +67,7 @@ pub struct RecentRow {
 
 const FOLDER_CHARS: usize = 40;
 
+#[must_use]
 pub fn uri_path(uri: &str) -> String {
     let Ok(url) = url::Url::parse(uri) else {
         return uri.to_owned();
@@ -84,6 +85,7 @@ fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+#[must_use]
 pub fn folder(path: &str, home: Option<&str>) -> String {
     let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
     let mut parent = parent.to_owned();
@@ -113,6 +115,7 @@ pub fn folder(path: &str, home: Option<&str>) -> String {
     format!("…{tail}")
 }
 
+#[must_use]
 pub fn ago(opened: u64, now: u64) -> String {
     const MIN: u64 = 60;
     const HOUR: u64 = 60 * MIN;
@@ -152,6 +155,7 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
+#[must_use]
 pub fn row(entry: &Recent, missing: bool, now: u64, home: Option<&str>) -> RecentRow {
     let path = uri_path(&entry.uri);
     let name = file_name(&path);
@@ -178,6 +182,7 @@ pub fn row(entry: &Recent, missing: bool, now: u64, home: Option<&str>) -> Recen
 }
 
 impl App {
+    #[must_use]
     pub fn recent_rows(&self, now: u64, home: Option<&str>) -> Vec<RecentRow> {
         let view = &self.workspace.recent;
         self.workspace
@@ -188,6 +193,7 @@ impl App {
             .collect()
     }
 
+    #[must_use]
     pub fn recent_shown(&self) -> usize {
         let len = self.recent_len();
         if self.workspace.recent.expanded {

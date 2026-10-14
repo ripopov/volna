@@ -141,6 +141,7 @@ impl Workspace {
         serde_json::from_slice(bytes).context("invalid workspace")
     }
 
+    #[must_use]
     pub fn is_outdated(bytes: &[u8]) -> bool {
         #[derive(Deserialize)]
         struct Header {
@@ -433,6 +434,7 @@ impl Workspace {
 }
 
 impl RestorePlan {
+    #[must_use]
     pub fn report(&self) -> &RestoreReport {
         &self.report
     }

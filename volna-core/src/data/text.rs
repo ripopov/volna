@@ -16,6 +16,7 @@ pub enum Radix {
 impl Radix {
     pub const ALL: [Radix; 3] = [Radix::Dec, Radix::Hex, Radix::Bin];
 
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Radix::Dec => "dec",
@@ -24,10 +25,12 @@ impl Radix {
         }
     }
 
+    #[must_use]
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|radix| radix.name() == name)
     }
 
+    #[must_use]
     pub fn next(self) -> Self {
         match self {
             Radix::Dec => Radix::Hex,
@@ -36,12 +39,14 @@ impl Radix {
         }
     }
 
+    #[must_use]
     pub fn format_i64(self, value: i64) -> String {
         let magnitude = value.unsigned_abs();
         let sign = if value < 0 { "-" } else { "" };
         format!("{sign}{}", self.format_u64(magnitude))
     }
 
+    #[must_use]
     pub fn format_u64(self, value: u64) -> String {
         match self {
             Radix::Dec => value.to_string(),
@@ -51,6 +56,7 @@ impl Radix {
     }
 }
 
+#[must_use]
 pub fn is_integer(value: &AttributeValue) -> bool {
     matches!(
         value,
@@ -61,10 +67,12 @@ pub fn is_integer(value: &AttributeValue) -> bool {
     )
 }
 
+#[must_use]
 pub fn format_attribute(value: &AttributeValue, limit: usize) -> String {
     format_attribute_radix(value, Radix::Dec, limit)
 }
 
+#[must_use]
 pub fn format_attribute_radix(value: &AttributeValue, radix: Radix, limit: usize) -> String {
     let text = match value {
         AttributeValue::Null => "null".into(),
@@ -92,6 +100,7 @@ pub fn format_attribute_radix(value: &AttributeValue, radix: Radix, limit: usize
     truncate(text, limit)
 }
 
+#[must_use]
 pub fn attribute_value_min_bytes(value: &AttributeValue) -> usize {
     match value {
         AttributeValue::Text(value) => value.len(),
@@ -102,6 +111,7 @@ pub fn attribute_value_min_bytes(value: &AttributeValue) -> usize {
     }
 }
 
+#[must_use]
 pub fn format_attributes(attributes: &[(String, AttributeValue)], limit: usize) -> (String, bool) {
     if attributes.is_empty() {
         return ("no attributes".into(), false);
@@ -144,6 +154,7 @@ pub fn join_path_limited(path: &[String], limit: usize, truncated: &mut bool) ->
     out
 }
 
+#[must_use]
 pub fn truncate(mut text: String, limit: usize) -> String {
     if text.len() <= limit {
         return text;
@@ -161,6 +172,7 @@ pub fn truncate(mut text: String, limit: usize) -> String {
     text
 }
 
+#[must_use]
 pub fn truncate_ref(text: &str, limit: usize) -> String {
     if text.len() <= limit {
         return text.to_owned();

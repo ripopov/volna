@@ -75,6 +75,7 @@ impl Sheet {
 }
 
 impl Theme<Color> {
+    #[must_use]
     pub fn volna(dark: bool) -> Self {
         let s = Sheet::new(dark);
         let col = |name: &str| s.color(name);
@@ -185,6 +186,7 @@ impl Theme<Color> {
         t
     }
 
+    #[must_use]
     pub fn swatch(&self, swatch: StageSwatch) -> StageStyle {
         match swatch {
             StageSwatch::Step { rank, of } => self.stage_style(rank, of),
@@ -192,6 +194,7 @@ impl Theme<Color> {
         }
     }
 
+    #[must_use]
     pub fn stage_style(&self, k: usize, n: usize) -> StageStyle {
         match self.stages {
             StageLadder::Hsl => {
@@ -230,6 +233,7 @@ impl Theme<Color> {
         }
     }
 
+    #[must_use]
     pub fn stage_fallback(&self) -> StageStyle {
         match self.stages {
             StageLadder::Hsl => {
@@ -253,6 +257,7 @@ impl Theme<Color> {
         }
     }
 
+    #[must_use]
     pub fn value_tint(&self, value: &str) -> Color {
         let mut h: u32 = 2_166_136_261;
         for ch in value.chars() {
