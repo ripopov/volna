@@ -65,6 +65,15 @@ scroll within their own containers. Motion changes only color or opacity and
 respects the reduced-motion preference. Backgrounds are flat, borders are thin,
 and radii follow the shared 3/4/6/8/10px scale.
 
+The sample viewer's Table panel is the specimen for native column dividers.
+Each header has a 1px divider with an 8px grab area, including the trailing
+Attributes edge. Hover and drag use the focused-border role and GPUI's column
+resize cursor. Dragging changes that column's width and moves later columns;
+overflow scrolls within the table. Double-click fits the header and visible
+values. Focus a divider with Tab, resize with Left or Right, and fit with Enter.
+Attributes fills unused space until given an explicit width. Workspace files
+remember widths, including hidden columns; resetting columns restores defaults.
+
 The desktop header is a live specimen of the shared ghost icon buttons
 (`v-btn v-btn--ghost v-btn--icon`). The left and right panel icons independently
 hide or show the documentation navigator and page navigation. Each button reports

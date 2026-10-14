@@ -1259,6 +1259,101 @@ fn automatic_restore_settles_existing_trace_cancellation_and_ignores_late_result
 }
 
 #[test]
+fn cancelling_a_table_resize_after_a_save_persists_the_restored_width() {
+    use volna_core::geometry::{Modifiers, MouseButton, Rect, point};
+    use volna_core::table::TableCommand;
+    use volna_core::wave::PointerEvent;
+    use volna_trace::data::Member;
+
+    let mut app = persistent_app();
+    let now = Instant::now();
+    app.handle_at(
+        Command::OpenTable {
+            selected: a_all(vec![Member::Var(0)]),
+            clicked: None,
+        },
+        now,
+    );
+    let panel = app.panels.focused_id();
+    app.handle_at(
+        Command::Table(
+            panel,
+            TableCommand::ResizeColumn {
+                source_index: 1,
+                width: 300.0,
+            },
+        ),
+        now,
+    );
+    app.layout_panel(
+        panel,
+        Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
+        &volna_core::Theme::one_dark(),
+        1.0,
+    )
+    .unwrap();
+    let edge = app
+        .panels
+        .get(panel)
+        .unwrap()
+        .kind
+        .table()
+        .unwrap()
+        .layout
+        .columns[1]
+        .resize;
+    let position = point(edge.left() + edge.width() / 2.0, edge.top() + 10.0);
+    app.handle_at(
+        Command::Pointer(
+            panel,
+            PointerEvent::Down {
+                position,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        ),
+        now,
+    );
+    app.handle_at(
+        Command::Pointer(
+            panel,
+            PointerEvent::Move {
+                position: point(position.x + 100.0, position.y),
+            },
+        ),
+        now,
+    );
+    app.save_workspace(None);
+    let (ticket, bytes) = emitted_save(&mut app);
+    let saved: Value = serde_json::from_slice(&bytes).unwrap();
+    let table = saved["panels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "table")
+        .unwrap();
+    assert_eq!(table["widths"][1], json!(400.0));
+    app.workspace_saved(ticket, None, now);
+    assert!(!app.workspace.scheduler.dirty());
+
+    app.handle_at(Command::Action(Action::ClearSelection), now);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.widths[1], Some(300.0));
+    assert!(!table.dragging());
+    assert!(app.workspace.scheduler.dirty());
+    app.tick(now + IDLE * 2);
+    let (_, bytes) = emitted_save(&mut app);
+    let saved: Value = serde_json::from_slice(&bytes).unwrap();
+    let table = saved["panels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "table")
+        .unwrap();
+    assert_eq!(table["widths"][1], json!(300.0));
+}
+
+#[test]
 fn a_shared_timeline_divider_drag_schedules_an_autosave() {
     use volna_core::geometry::{Modifiers, MouseButton, Rect, point};
     use volna_core::wave::PointerEvent;

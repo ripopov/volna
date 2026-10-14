@@ -6,13 +6,16 @@ use std::sync::Arc;
 use web_time::Instant;
 
 use super::columns::{ColumnSet, TransactionColumn};
-use super::layout::{MAX_PREPARED_ROWS, ROW_HEIGHT, RowViewport, TableLayout};
+use super::layout::{
+    MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, MIN_COLUMN_WIDTH, ROW_HEIGHT, RowViewport, TableLayout,
+};
 use super::source::TableSource;
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::data::text::{append_exact, format_attribute, push_limited, truncate, truncate_ref};
 use crate::document::{Document, TrackLoadState};
-use crate::geometry::{MouseButton, Rect};
+use crate::geometry::{MouseButton, Point, Rect};
 use crate::nav::{Link, NavState};
+use crate::scene::{FontRole, TextMeasure};
 use crate::theme::Theme;
 use crate::trace::Traced;
 use crate::wave::model::PointerEvent;
@@ -24,7 +27,9 @@ use volna_trace::remote::memory::{MemoryBudget, Reservation};
 pub use crate::data::text::{COPY_BYTES, PREVIEW_BYTES};
 
 pub const PANEL_BYTES: u64 = 4 * 1024 * 1024;
-pub const PREVIEW_ATTRIBUTES: usize = 8;
+const FIT_PREVIEW_BYTES: usize = 16 * 1024;
+// Leave half the panel reservation for row metadata and painting, even at the maximum row count.
+const ROW_PREVIEW_BYTES: usize = PANEL_BYTES as usize / 2 / MAX_PREPARED_ROWS as usize;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RowIdentity {
@@ -94,8 +99,17 @@ struct SignalAxisBuild {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum TableDrag {
-    Vertical { grab: f32 },
-    Horizontal { grab: f32 },
+    Vertical {
+        grab: f32,
+    },
+    Horizontal {
+        grab: f32,
+    },
+    Column {
+        source_index: usize,
+        start_x: f32,
+        width: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -110,6 +124,7 @@ pub enum TableCommand {
     Page(i8),
     ToggleTransactionColumn(TransactionColumn),
     ToggleSignalColumn(usize),
+    ResizeColumn { source_index: usize, width: f32 },
     ResetColumns,
     ClearSelection,
     Cancel,
@@ -120,6 +135,7 @@ pub struct TableModel {
     pub source: TableSource,
     pub state: TableState,
     pub columns: crate::history::Journaled<ColumnSet>,
+    pub widths: crate::history::Journaled<Vec<Option<f32>>>,
     pub viewport: RowViewport,
     pub selected: Option<RowIdentity>,
     pub nav: NavState,
@@ -142,12 +158,17 @@ impl TableModel {
             TableSource::Generator(_) => ColumnSet::transactions_default(),
             TableSource::Signals(signals) => ColumnSet::signals(signals.len()),
         };
+        let count = match &source {
+            TableSource::Generator(_) => TransactionColumn::ALL.len(),
+            TableSource::Signals(signals) => signals.len() + 1,
+        };
         let mut nav = NavState::new();
         nav.link = link;
         Self {
             source,
             state: TableState::Loading,
             columns: crate::history::Journaled::new(columns),
+            widths: crate::history::Journaled::new(vec![None; count]),
             viewport: RowViewport::default(),
             selected: None,
             nav,
@@ -168,6 +189,7 @@ impl TableModel {
     pub fn clone_view(&self) -> Self {
         let mut clone = Self::new(self.source.clone(), self.nav.link, self.budget.clone());
         clone.columns = self.columns.clone();
+        clone.widths = self.widths.clone();
         clone
     }
 
@@ -702,10 +724,18 @@ impl TableModel {
             TableCommand::ToggleSignalColumn(index) => {
                 self.edit_columns(|columns| columns.toggle_signal(index))
             }
-            TableCommand::ResetColumns => self.edit_columns(|columns| {
-                columns.reset();
-                true
-            }),
+            TableCommand::ResizeColumn {
+                source_index,
+                width,
+            } => self.resize_column(source_index, width),
+            TableCommand::ResetColumns => {
+                let columns = self.edit_columns(|columns| {
+                    columns.reset();
+                    true
+                });
+                let widths = self.widths.update(|widths| widths.fill(None));
+                columns || widths
+            }
             TableCommand::ClearSelection => {
                 let changed = self.selected.take().is_some();
                 if changed && doc.selection().is_some_and(|s| s.origin == panel) {
@@ -731,6 +761,63 @@ impl TableModel {
         true
     }
 
+    fn resize_column(&mut self, source_index: usize, width: f32) -> bool {
+        if source_index >= self.widths.len() || !width.is_finite() {
+            return false;
+        }
+        self.widths.update(|widths| {
+            widths[source_index] = Some(width.clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH));
+        })
+    }
+
+    pub fn resizing_column(&self) -> Option<usize> {
+        match self.drag {
+            Some(TableDrag::Column { source_index, .. }) => Some(source_index),
+            _ => None,
+        }
+    }
+
+    fn column_edge_at(&self, position: Point) -> Option<&super::layout::ColumnRect> {
+        if !self.layout.header.contains(position) {
+            return None;
+        }
+        self.layout
+            .columns
+            .iter()
+            .find(|column| column.resize.contains(position))
+    }
+
+    pub fn column_fit_width(
+        &self,
+        source_index: usize,
+        theme: &Theme,
+        measure: &mut dyn TextMeasure,
+    ) -> Option<f32> {
+        if source_index >= self.widths.len() {
+            return None;
+        }
+        let mut width = measure.text_width(
+            self.column_title(source_index),
+            FontRole::Mono,
+            theme.mono_size,
+        );
+        let end = self
+            .viewport
+            .top
+            .saturating_add(RowViewport::visible_rows(
+                self.layout.body.height() + self.viewport.subrow_px,
+                self.layout.row_height,
+            ))
+            .min(self.len())
+            .min(self.viewport.top.saturating_add(MAX_PREPARED_ROWS));
+        for ordinal in self.viewport.top..end {
+            if let Some(text) = self.cell_text(ordinal, source_index, FIT_PREVIEW_BYTES) {
+                width = width.max(measure.text_width(&text, FontRole::Mono, theme.mono_size));
+            }
+        }
+        Some((width / theme.zoom + 14.0).clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH))
+    }
+
     pub(crate) fn take_edits(
         &mut self,
         panel: crate::panels::PanelId,
@@ -743,6 +830,15 @@ impl TableModel {
                     prop: crate::panels::content::Prop::Table(Prop::Columns(columns)),
                 },
                 Some("Change columns".into()),
+            );
+        }
+        if let Some(widths) = self.widths.take_before() {
+            history.record(
+                crate::history::Edit::Prop {
+                    panel,
+                    prop: crate::panels::content::Prop::Table(Prop::Widths(widths)),
+                },
+                Some("Resize table column".into()),
             );
         }
     }
@@ -806,6 +902,20 @@ impl TableModel {
         event: PointerEvent,
         now: Instant,
     ) -> bool {
+        if let PointerEvent::Down {
+            position,
+            button: MouseButton::Left,
+            ..
+        } = event
+            && let Some(column) = self.column_edge_at(position)
+        {
+            self.drag = Some(TableDrag::Column {
+                source_index: column.source_index,
+                start_x: position.x,
+                width: column.rect.width() / (self.layout.row_height / ROW_HEIGHT),
+            });
+            return true;
+        }
         match event {
             PointerEvent::Down {
                 position,
@@ -858,6 +968,14 @@ impl TableModel {
                 true
             }
             PointerEvent::Move { position } => match self.drag {
+                Some(TableDrag::Column {
+                    source_index,
+                    start_x,
+                    width,
+                }) => {
+                    let zoom = self.layout.row_height / ROW_HEIGHT;
+                    self.resize_column(source_index, width + (position.x - start_x) / zoom)
+                }
                 Some(TableDrag::Vertical { grab }) => {
                     self.drag_vertical(position.y, grab);
                     self.prepare_visible();
@@ -933,7 +1051,18 @@ impl TableModel {
             bounds.width(),
             status_height,
         );
-        let widths = self.visible_column_widths();
+        let mut widths = self.visible_column_widths();
+        let fixed_width = widths.iter().map(|(_, width)| width * zoom).sum::<f32>();
+        if let Some((_, width)) = widths.iter_mut().find(|(index, _)| {
+            matches!(self.source, TableSource::Generator(_))
+                && TransactionColumn::ALL[*index] == TransactionColumn::Attributes
+                && self.widths[*index].is_none()
+        }) {
+            let other_width = fixed_width - *width * zoom;
+            *width = width
+                .max((body.width() - other_width) / zoom)
+                .min(MAX_COLUMN_WIDTH);
+        }
         let content_width = widths.iter().map(|(_, width)| *width * zoom).sum::<f32>();
         self.horizontal = self
             .horizontal
@@ -942,7 +1071,7 @@ impl TableModel {
             .layout
             .columns
             .iter()
-            .map(|column| column.source_index)
+            .map(|column| (column.source_index, column.preview_bytes))
             .collect();
         let mut x = body.left() - self.horizontal;
         let mut columns = Vec::new();
@@ -954,9 +1083,28 @@ impl TableModel {
                     source_index,
                     prepared_index: columns.len(),
                     rect,
+                    resize: Rect::from_xywh(
+                        rect.right() - 1.0 - theme.splitter_grab / 2.0,
+                        header.top(),
+                        theme.splitter_grab,
+                        row_height,
+                    ),
+                    preview_bytes: ((width / (theme.mono_size * 0.5).max(1.0)).ceil() as usize * 4)
+                        .max(PREVIEW_BYTES)
+                        .next_power_of_two()
+                        .min(ROW_PREVIEW_BYTES),
                 });
             }
             x += width;
+        }
+        let preview_bytes = columns
+            .iter()
+            .map(|column| column.preview_bytes)
+            .sum::<usize>();
+        if preview_bytes > ROW_PREVIEW_BYTES {
+            for column in &mut columns {
+                column.preview_bytes = column.preview_bytes * ROW_PREVIEW_BYTES / preview_bytes;
+            }
         }
         self.viewport.clamp(self.len(), body.height(), row_height);
         let visible = RowViewport::visible_rows(body.height(), row_height) as f32;
@@ -1007,7 +1155,7 @@ impl TableModel {
                 .layout
                 .columns
                 .iter()
-                .map(|column| column.source_index)
+                .map(|column| (column.source_index, column.preview_bytes))
                 .collect::<Vec<_>>()
         {
             self.invalidate_window();
@@ -1022,18 +1170,20 @@ impl TableModel {
                 .iter()
                 .enumerate()
                 .filter(|(_, c)| visible.contains(c))
-                .map(|(i, c)| (i, c.width()))
+                .map(|(i, c)| (i, self.widths[i].unwrap_or_else(|| c.width())))
                 .collect(),
-            ColumnSet::Signals { time, visible } => std::iter::once((0, 130.0))
-                .filter(|_| *time)
-                .chain(
-                    visible
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, show)| **show)
-                        .map(|(i, _)| (i + 1, 180.0)),
-                )
-                .collect(),
+            ColumnSet::Signals { time, visible } => {
+                std::iter::once((0, self.widths[0].unwrap_or(130.0)))
+                    .filter(|_| *time)
+                    .chain(
+                        visible
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, show)| **show)
+                            .map(|(i, _)| (i + 1, self.widths[i + 1].unwrap_or(180.0))),
+                    )
+                    .collect()
+            }
         }
     }
 
@@ -1102,9 +1252,12 @@ impl TableModel {
                     .layout
                     .columns
                     .iter()
-                    .filter_map(|column| TransactionColumn::ALL.get(column.source_index))
-                    .map(|&column| PreparedCell {
-                        text: transaction_cell(tx, column),
+                    .map(|column| PreparedCell {
+                        text: transaction_cell(
+                            tx,
+                            TransactionColumn::ALL[column.source_index],
+                            column.preview_bytes,
+                        ),
                         changed: false,
                         missing: false,
                     })
@@ -1147,7 +1300,7 @@ impl TableModel {
                     let text = if missing {
                         "—".into()
                     } else {
-                        format_view(history.value_view(sample), PREVIEW_BYTES)
+                        format_view(history.value_view(sample), column.preview_bytes)
                     };
                     cells.push(PreparedCell {
                         text,
@@ -1160,6 +1313,35 @@ impl TableModel {
                     identity: RowIdentity::SignalTime(row_time),
                     time: row_time,
                     cells,
+                })
+            }
+            Rows::None => None,
+        }
+    }
+
+    fn cell_text(&self, ordinal: u64, source_index: usize, limit: usize) -> Option<String> {
+        match &self.rows {
+            Rows::Generator(generator) => {
+                let tx = generator
+                    .transactions()
+                    .get(usize::try_from(ordinal).ok()?)?;
+                Some(transaction_cell(
+                    tx,
+                    *TransactionColumn::ALL.get(source_index)?,
+                    limit,
+                ))
+            }
+            Rows::Signals { histories, .. } => {
+                let time = self.row_time(ordinal)?;
+                if source_index == 0 {
+                    return Some(time.to_string());
+                }
+                let history = histories.get(source_index - 1)?;
+                let sample = history.index_at(time);
+                Some(if sample.is_none() {
+                    "—".into()
+                } else {
+                    format_view(history.value_view(sample), limit)
                 })
             }
             Rows::None => None,
@@ -1265,13 +1447,13 @@ impl TableModel {
     }
 }
 
-fn transaction_cell(tx: &Transaction, column: TransactionColumn) -> String {
+fn transaction_cell(tx: &Transaction, column: TransactionColumn, limit: usize) -> String {
     match column {
         TransactionColumn::Label => tx
             .attributes
             .iter()
             .find(|a| a.key == "vtr.label")
-            .map_or_else(|| "—".into(), |a| format_attribute(&a.value, PREVIEW_BYTES)),
+            .map_or_else(|| "—".into(), |a| format_attribute(&a.value, limit)),
         TransactionColumn::Begin => tx.begin.to_string(),
         TransactionColumn::Duration => tx.end.saturating_sub(tx.begin).to_string(),
         TransactionColumn::End => tx.end.to_string(),
@@ -1279,27 +1461,37 @@ fn transaction_cell(tx: &Transaction, column: TransactionColumn) -> String {
         TransactionColumn::Status => tx.status.name().into(),
         TransactionColumn::Attributes => {
             let mut text = String::new();
-            let mut attributes = tx.attributes.iter().filter(|a| a.key != "vtr.label");
-            for (shown, attribute) in attributes.by_ref().take(PREVIEW_ATTRIBUTES).enumerate() {
-                if shown > 0 {
-                    push_limited(&mut text, " · ", PREVIEW_BYTES);
+            let mut attributes = tx
+                .attributes
+                .iter()
+                .filter(|a| a.key != "vtr.label")
+                .peekable();
+            if attributes.peek().is_none() {
+                return "—".into();
+            }
+            let budget = limit.saturating_sub("…".len());
+            let mut cut = false;
+            'attributes: while let Some(attribute) = attributes.next() {
+                let separator = if text.is_empty() { "" } else { " · " };
+                for part in [separator, attribute.key.as_str(), "="] {
+                    let room = budget.saturating_sub(text.len());
+                    push_limited(&mut text, part, budget);
+                    if part.len() > room {
+                        cut = true;
+                        break 'attributes;
+                    }
                 }
-                push_limited(&mut text, &attribute.key, PREVIEW_BYTES);
-                push_limited(&mut text, "=", PREVIEW_BYTES);
-                let remaining = PREVIEW_BYTES.saturating_sub(text.len());
-                push_limited(
-                    &mut text,
-                    &format_attribute(&attribute.value, remaining),
-                    PREVIEW_BYTES,
-                );
-                if text.len() >= PREVIEW_BYTES {
+                let remaining = budget.saturating_sub(text.len());
+                text.push_str(&format_attribute(&attribute.value, remaining));
+                if budget.saturating_sub(text.len()) < " · ".len() + 1 {
+                    cut = attributes.peek().is_some() || remaining < "…".len();
                     break;
                 }
             }
-            if attributes.next().is_some() {
-                push_limited(&mut text, " …", PREVIEW_BYTES);
+            if cut && limit >= "…".len() && !text.ends_with('…') {
+                text.push('…');
             }
-            if text.is_empty() { "—".into() } else { text }
+            text
         }
     }
 }
@@ -1371,14 +1563,21 @@ fn normalized_u64(offset: f32, track: f32, maximum: u64) -> u64 {
 
 pub(crate) enum Prop {
     Columns(ColumnSet),
+    Widths(Vec<Option<f32>>),
 }
 
 impl Prop {
     pub(crate) fn kind(&self) -> u8 {
-        0
+        match self {
+            Self::Columns(_) => 0,
+            Self::Widths(_) => 1,
+        }
     }
     pub(crate) fn bytes(&self) -> usize {
-        64
+        match self {
+            Self::Columns(_) => 64,
+            Self::Widths(widths) => widths.len() * std::mem::size_of::<Option<f32>>(),
+        }
     }
 }
 
@@ -1386,12 +1585,14 @@ impl TableModel {
     pub(crate) fn matches_prop(&self, prop: &Prop) -> bool {
         match prop {
             Prop::Columns(columns) => self.columns.get() == columns,
+            Prop::Widths(widths) => self.widths.get() == widths,
         }
     }
 
     pub(crate) fn swap_prop(&mut self, prop: Prop) -> Prop {
         match prop {
             Prop::Columns(columns) => Prop::Columns(self.swap_columns(columns)),
+            Prop::Widths(widths) => Prop::Widths(self.widths.swap(widths)),
         }
     }
 }
@@ -1607,6 +1808,14 @@ mod tests {
         model.state = TableState::Ready;
         model.layout(Rect::from_xywh(0.0, 0.0, 500.0, 240.0), &Theme::one_dark());
         assert!(model.window.rows[0].cells[1].text.len() <= PREVIEW_BYTES);
+        assert_eq!(
+            model.column_fit_width(1, &Theme::one_dark(), &mut crate::scene::MonoMeasure),
+            Some(MAX_COLUMN_WIDTH)
+        );
+        model.resize_column(1, 1200.0);
+        model.layout(Rect::from_xywh(0.0, 0.0, 500.0, 240.0), &Theme::one_dark());
+        assert!(model.window.rows[0].cells[1].text.len() > PREVIEW_BYTES);
+        assert!(model.window.rows[0].cells[1].text.ends_with('…'));
         model.selected = Some(RowIdentity::SignalTime(7));
         assert!(model.copy_tsv().unwrap_err().to_string().contains("64 KiB"));
     }
@@ -1633,6 +1842,159 @@ mod tests {
             events: vec![],
             stages: vec![],
         }
+    }
+
+    fn generator_model(records: Vec<Transaction>) -> TableModel {
+        let generator = LoadedGenerator::new(
+            volna_trace::data::transactions::TrackRef(7),
+            records,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let mut model = TableModel::new(
+            TableSource::Generator(TrackSource::Unresolved {
+                trace: crate::trace::TraceId::A,
+                path: vec!["request".into()],
+            }),
+            Link::default(),
+            MemoryBudget::new(16 * 1024 * 1024),
+        );
+        model.rows = Rows::Generator(Arc::new(generator));
+        model.state = TableState::Ready;
+        model
+    }
+
+    #[test]
+    fn trailing_column_fills_space_until_dragged_and_reset_restores_auto_width() {
+        let mut model = generator_model(vec![transaction(1, 0, "row")]);
+        let theme = Theme::one_dark().zoomed(1.5);
+        let bounds = Rect::from_xywh(20.0, 30.0, 1600.0, 240.0);
+        model.layout(bounds, &theme);
+        let attributes = *model.layout.columns.last().unwrap();
+        assert!((attributes.rect.right() - model.layout.header.right()).abs() < 0.01);
+        let start =
+            crate::geometry::point(attributes.rect.right() - 2.0, attributes.rect.top() + 5.0);
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        let now = Instant::now();
+        assert!(model.pointer(
+            &mut doc,
+            panel,
+            PointerEvent::Down {
+                position: start,
+                button: MouseButton::Left,
+                modifiers: Default::default(),
+            },
+            now
+        ));
+        assert_eq!(model.resizing_column(), Some(attributes.source_index));
+        model.pointer(
+            &mut doc,
+            panel,
+            PointerEvent::Move {
+                position: crate::geometry::point(start.x + 120.0, start.y + 300.0),
+            },
+            now,
+        );
+        model.pointer(&mut doc, panel, PointerEvent::Up, now);
+        let width = attributes.rect.width() / theme.zoom + 80.0;
+        assert!((model.widths[attributes.source_index].unwrap() - width).abs() < 0.01);
+        assert_eq!(model.selected, None);
+        assert!(!model.dragging());
+        model.layout(bounds, &theme);
+        assert!(model.layout.content_width > model.layout.header.width());
+        assert_eq!(model.clone_view().widths.get(), model.widths.get());
+
+        for _ in 0..2 {
+            model.command(
+                &mut doc,
+                panel,
+                TableCommand::ToggleTransactionColumn(TransactionColumn::Attributes),
+                now,
+            );
+        }
+        model.layout(Rect::from_xywh(0.0, 0.0, 2000.0, 240.0), &Theme::one_dark());
+        assert!((model.layout.columns.last().unwrap().rect.width() - width).abs() < 0.01);
+        model.command(&mut doc, panel, TableCommand::ResetColumns, now);
+        model.layout(bounds, &theme);
+        assert!(model.widths.iter().all(Option::is_none));
+        assert!(
+            (model.layout.columns.last().unwrap().rect.right() - model.layout.header.right()).abs()
+                < 0.01
+        );
+    }
+
+    #[test]
+    fn widening_attributes_rebuilds_preview_and_keeps_unicode_and_rows_bounded() {
+        let mut record = transaction(1, 0, "hidden label");
+        record
+            .attributes
+            .extend((0..20).map(|index| TransactionAttribute {
+                key: format!("field{index}"),
+                value: AttributeValue::Text("α".repeat(20)),
+            }));
+        let records = (0..300)
+            .map(|index| {
+                let mut record = record.clone();
+                record.id = TransactionRef(index + 1);
+                record.begin = index;
+                record.end = index + 8;
+                record
+            })
+            .collect();
+        let mut model = generator_model(records);
+        let theme = Theme::one_dark();
+        let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 10_000.0);
+        model.layout(bounds, &theme);
+        let first = &model.window.rows[0].cells.last().unwrap().text;
+        assert!(!first.contains("field19="));
+        assert!(model.resize_column(6, 4000.0));
+        model.layout(bounds, &theme);
+        let expanded = &model.window.rows[0].cells.last().unwrap().text;
+        assert!(expanded.contains("field19="), "{expanded}");
+        assert!(expanded.len() > PREVIEW_BYTES);
+        assert!(!expanded.contains("vtr.label"));
+        assert_eq!(model.window.rows.len(), MAX_PREPARED_ROWS as usize);
+        assert!(model.window.bytes <= PANEL_BYTES as usize / 2);
+
+        let mut record = transaction(1, 0, "row");
+        record.attributes[1].key = "α".repeat(1000);
+        let preview = transaction_cell(&record, TransactionColumn::Attributes, 32);
+        assert!(preview.ends_with('…'));
+        assert!(preview.len() <= 32);
+    }
+
+    #[test]
+    fn fit_measures_header_and_visible_full_values_independently_of_preview_and_zoom() {
+        let mut model = generator_model(vec![
+            transaction(1, 0, "short"),
+            transaction(2, 1, &"x".repeat(300)),
+        ]);
+        let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 84.0);
+        let theme = Theme::one_dark();
+        model.layout(bounds, &theme);
+        let short = model
+            .column_fit_width(0, &theme, &mut crate::scene::MonoMeasure)
+            .unwrap();
+        assert!(short < 210.0);
+        model.viewport.subrow_px = 5.0;
+        let long = model
+            .column_fit_width(0, &theme, &mut crate::scene::MonoMeasure)
+            .unwrap();
+        assert!(long > 2100.0);
+        let zoomed = theme.zoomed(2.0);
+        model.layout(Rect::from_xywh(0.0, 0.0, 2000.0, 168.0), &zoomed);
+        let zoomed_width = model
+            .column_fit_width(0, &zoomed, &mut crate::scene::MonoMeasure)
+            .unwrap();
+        assert!((long - zoomed_width).abs() < 0.01);
+        assert!(!model.resize_column(0, f32::NAN));
+        assert!(!model.resize_column(usize::MAX, 100.0));
+        model.resize_column(0, 0.0);
+        assert_eq!(model.widths[0], Some(MIN_COLUMN_WIDTH));
+        model.resize_column(0, f32::MAX);
+        assert_eq!(model.widths[0], Some(MAX_COLUMN_WIDTH));
     }
 
     #[test]

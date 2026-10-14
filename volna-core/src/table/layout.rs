@@ -4,6 +4,8 @@ use crate::geometry::Rect;
 
 pub const ROW_HEIGHT: f32 = 24.0;
 pub const MAX_PREPARED_ROWS: u64 = 256;
+pub const MIN_COLUMN_WIDTH: f32 = 48.0;
+pub const MAX_COLUMN_WIDTH: f32 = 16_384.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RowViewport {
@@ -83,6 +85,8 @@ pub struct ColumnRect {
     pub source_index: usize,
     pub prepared_index: usize,
     pub rect: Rect,
+    pub resize: Rect,
+    pub preview_bytes: usize,
 }
 
 #[derive(Clone, Debug, Default)]

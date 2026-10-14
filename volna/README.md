@@ -127,6 +127,14 @@ Workspace files store panel structure, views, markers, and row choices. The
 native frontend writes them atomically. Incompatible workspace versions are
 discarded. Settings and recent items live separately in the config directory.
 
+Table headers have draggable dividers, including the edge after Attributes.
+Dragging resizes one column and moves the columns that follow it. Double-click
+fits the header and visible values; a focused divider supports Left, Right, and
+Enter. Attributes initially fills the remaining width, and its bounded preview
+grows with the column. Table panel schema version 3 stores widths per column,
+including hidden columns. **Columns → Reset to defaults** restores column
+visibility and automatic widths.
+
 ### Marker shortcuts
 
 Across the workspace, **Ctrl+1–6** places the numbered marker at the cursor,

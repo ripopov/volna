@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use volna_trace::data::source::Lookup;
 
-pub(crate) const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -45,6 +45,7 @@ struct TablePanel {
     title: Option<String>,
     source: SavedTableSource,
     columns: Vec<String>,
+    widths: Vec<Option<f32>>,
     link: Link,
 }
 
@@ -96,6 +97,7 @@ pub(crate) fn save(
         title,
         source,
         columns,
+        widths: table.widths.get().clone(),
         link: table.nav.link,
     })?)
 }
@@ -157,6 +159,16 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         }
     };
     let mut table = TableModel::new(source, saved.link, ctx.budget.clone());
+    ensure!(
+        saved.widths.len() == table.widths.len(),
+        "invalid table column widths"
+    );
+    ensure!(
+        saved.widths.iter().flatten().all(|width| width.is_finite()
+            && (super::layout::MIN_COLUMN_WIDTH..=super::layout::MAX_COLUMN_WIDTH).contains(width)),
+        "invalid table column width"
+    );
+    table.widths.restore(saved.widths);
     let mut columns = table.columns.get().clone();
     match &mut columns {
         ColumnSet::Transactions(visible) => {

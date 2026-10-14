@@ -28,7 +28,14 @@ pub(crate) struct Stamp {
     filter: String,
     wave: Option<WaveStamp>,
     pipeline: Option<PipelineStamp>,
+    table: Option<TableStamp>,
     transactions: Vec<(PanelId, Option<crate::transaction::ShownRecord>)>,
+}
+#[derive(PartialEq)]
+struct TableStamp {
+    columns: crate::table::columns::ColumnSet,
+    widths: Vec<Option<f32>>,
+    link: Link,
 }
 #[derive(PartialEq)]
 struct PipelineStamp {
@@ -91,6 +98,7 @@ impl Stamp {
         }
         let panel = match command {
             Command::Pointer(id, _)
+            | Command::Table(id, _)
             | Command::PipelineActivity(id, _)
             | Command::MenuSelect(id, _)
             | Command::RenameMarker(id, _)
@@ -147,6 +155,15 @@ impl Stamp {
                 row_cap: p.row_cap,
                 label_width: p.label_width,
             }),
+            table: app
+                .panels
+                .get(panel)
+                .and_then(|p| p.kind.table())
+                .map(|t| TableStamp {
+                    columns: t.columns.get().clone(),
+                    widths: t.widths.get().clone(),
+                    link: t.nav.link,
+                }),
             transactions: app
                 .panels
                 .iter()

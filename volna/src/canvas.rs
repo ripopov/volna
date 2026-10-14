@@ -1,11 +1,12 @@
-//! `PanelCanvas`: the GPUI element that hosts a core-painted panel (waves or pipeline).
+//! Core-painted panels with native GPUI interaction overlays.
 
+use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId, Entity, Font,
-    FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
-    IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder,
-    PinchEvent, Pixels, ScrollDelta, ScrollWheelEvent, ShapedLine, SharedString, Style, TextAlign,
-    TextRun, Window, fill, point, px, quad, size,
+    AnyElement, App, AvailableSpace, Bounds, ContentMask, CursorStyle, DispatchPhase, Element,
+    ElementId, Entity, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
+    InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PathBuilder, PinchEvent, Pixels, ScrollDelta, ScrollWheelEvent, ShapedLine,
+    SharedString, Style, TextAlign, TextRun, Window, div, fill, point, px, quad, size,
 };
 use volna_core::FontRole;
 use volna_core::app::{Command, PanelLayout};
@@ -137,6 +138,7 @@ pub struct CanvasPrepaint {
         Option<gpui_kit::accesskit::NodeId>,
     )>,
     table_status: Option<String>,
+    table_splitters: Option<AnyElement>,
     wave_rows: Vec<volna_core::wave::model::AccessibleRow>,
     scale: f64,
 }
@@ -238,6 +240,71 @@ impl TextMeasure for GpuiMeasure<'_> {
     fn text_width(&mut self, text: &str, font: FontRole, size: f32) -> f32 {
         f32::from(shape(self.window, self.theme, text, font, size, Hsla::default()).width())
     }
+}
+
+fn fit_table_column(
+    owner: &Entity<Workspace>,
+    panel: volna_core::panels::PanelId,
+    source_index: usize,
+    window: &Window,
+    cx: &App,
+) -> Option<Command> {
+    let t = *theme(cx);
+    let core = *core_theme(cx);
+    let width = owner
+        .read(cx)
+        .app
+        .panels
+        .get(panel)?
+        .kind
+        .table()?
+        .column_fit_width(source_index, &core, &mut GpuiMeasure { window, theme: &t })?;
+    Some(Command::Table(
+        panel,
+        volna_core::table::TableCommand::ResizeColumn {
+            source_index,
+            width,
+        },
+    ))
+}
+
+fn resize_table_column(
+    owner: &Entity<Workspace>,
+    panel: volna_core::panels::PanelId,
+    generation: u64,
+    source_index: usize,
+    direction: f32,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    cx.stop_propagation();
+    let table = owner
+        .read(cx)
+        .app
+        .panels
+        .get(panel)
+        .and_then(|panel| panel.kind.table());
+    let Some(table) = table else { return };
+    let Some(column) = table
+        .layout
+        .columns
+        .iter()
+        .find(|column| column.source_index == source_index)
+    else {
+        return;
+    };
+    let width = table.widths[source_index].unwrap_or(column.rect.width() / theme(cx).zoom);
+    let step = if window.modifiers().shift { 32.0 } else { 8.0 };
+    let command = Command::Table(
+        panel,
+        volna_core::table::TableCommand::ResizeColumn {
+            source_index,
+            width: width + direction * step,
+        },
+    );
+    owner.update(cx, |ws, cx| {
+        ws.dispatch_if_current(generation, command, Some(window), cx)
+    });
 }
 
 const SHAPED_CACHE_LIMIT: usize = 4096;
@@ -486,6 +553,18 @@ impl Element for PanelCanvas {
             .into_iter()
             .map(|r| (r, window.insert_hitbox(gbounds(r), HitboxBehavior::Normal)))
             .collect();
+        let mut table_splitters = self.table_splitters(cx);
+        if let Some((edges, header)) = &mut table_splitters {
+            edges.prepaint_as_root(
+                gbounds(*header).origin,
+                size(
+                    AvailableSpace::Definite(px(header.width())),
+                    AvailableSpace::Definite(px(header.height())),
+                ),
+                window,
+                cx,
+            );
+        }
         let table = window
             .is_a11y_active()
             .then(|| {
@@ -505,6 +584,7 @@ impl Element for PanelCanvas {
                 .map(|table| table.accessible_rows().map(|row| (row, None)).collect())
                 .unwrap_or_default(),
             table_status: table.map(|table| format!("Table rows. {}", table.status())),
+            table_splitters: table_splitters.map(|(edges, _)| edges),
             wave_rows: if self.waves && window.is_a11y_active() {
                 let app = &self.ws.read(cx).app;
                 app.panels
@@ -591,6 +671,20 @@ impl Element for PanelCanvas {
         }
         scene.clear();
         self.register_mouse_handlers(prepaint, window);
+        if let Some(edges) = &mut prepaint.table_splitters {
+            edges.paint(window, cx);
+            if self
+                .ws
+                .read(cx)
+                .app
+                .panels
+                .get(self.panel)
+                .and_then(|panel| panel.kind.table())
+                .is_some_and(|table| table.resizing_column().is_some())
+            {
+                window.set_window_cursor_style(CursorStyle::ResizeColumn);
+            }
+        }
         self.ws.update(cx, |ws, _| {
             ws.scene = scene;
             ws.shaped = shaped;
@@ -603,6 +697,134 @@ impl Element for PanelCanvas {
 }
 
 impl PanelCanvas {
+    fn table_splitters(&self, cx: &App) -> Option<(AnyElement, CRect)> {
+        let table = self.ws.read(cx).app.panels.get(self.panel)?.kind.table()?;
+        let header = table.layout.header;
+        let t = *theme(cx);
+        let mut edges = div()
+            .id(("table-column-edges", self.panel.0))
+            .tab_group()
+            .tab_index(0)
+            .tab_stop(false)
+            .relative()
+            .w(px(header.width()))
+            .h(px(header.height()))
+            .overflow_hidden();
+        for column in &table.layout.columns {
+            if column.resize.right() <= header.left() || column.resize.left() >= header.right() {
+                continue;
+            }
+            let source_index = column.source_index;
+            let group: SharedString =
+                format!("table-{}-column-edge-{source_index}", self.panel.0).into();
+            let active = table.resizing_column() == Some(source_index);
+            let highlight = div()
+                .w(px(1.0))
+                .h_full()
+                .bg(if active { t.border_focused } else { t.border })
+                .group_hover(group.clone(), move |style| style.bg(t.border_focused));
+            let owner = self.ws.clone();
+            let narrow_owner = owner.clone();
+            let widen_owner = owner.clone();
+            let fit_owner = owner.clone();
+            let generation = self.generation;
+            let panel = self.panel;
+            let focus = self.table_focus.clone();
+            let width = column.rect.width() / t.zoom;
+            edges = edges.child(
+                div()
+                    .id(("table-column-resize", source_index))
+                    .group(group)
+                    .absolute()
+                    .top_0()
+                    .left(px(column.resize.left() - header.left()))
+                    .w(px(column.resize.width()))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .occlude()
+                    .cursor_col_resize()
+                    .role(gpui_kit::accesskit::Role::Splitter)
+                    .aria_label(format!("Resize {}", table.column_title(source_index)))
+                    .aria_description(
+                        "Left and Right resize the column. Enter fits its header and visible rows.",
+                    )
+                    .aria_orientation(gpui_kit::accesskit::Orientation::Vertical)
+                    .aria_numeric_value(width as f64)
+                    .aria_min_numeric_value(volna_core::table::layout::MIN_COLUMN_WIDTH as f64)
+                    .aria_max_numeric_value(volna_core::table::layout::MAX_COLUMN_WIDTH as f64)
+                    .aria_numeric_value_step(8.0)
+                    .tab_index(source_index as isize)
+                    .focus(move |style| style.bg(t.hover.bg))
+                    .child(highlight)
+                    .key_context("TableColumnResize")
+                    .on_action(move |_: &crate::table_panel::NarrowColumn, window, cx| {
+                        resize_table_column(
+                            &narrow_owner,
+                            panel,
+                            generation,
+                            source_index,
+                            -1.0,
+                            window,
+                            cx,
+                        );
+                    })
+                    .on_action(move |_: &crate::table_panel::WidenColumn, window, cx| {
+                        resize_table_column(
+                            &widen_owner,
+                            panel,
+                            generation,
+                            source_index,
+                            1.0,
+                            window,
+                            cx,
+                        );
+                    })
+                    .on_action(move |_: &crate::table_panel::FitColumn, window, cx| {
+                        cx.stop_propagation();
+                        if let Some(command) =
+                            fit_table_column(&fit_owner, panel, source_index, window, cx)
+                        {
+                            fit_owner.update(cx, |ws, cx| {
+                                ws.dispatch_if_current(generation, command, Some(window), cx)
+                            });
+                        }
+                    })
+                    .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                        cx.stop_propagation();
+                        if owner.read(cx).app.doc.generation() != generation {
+                            return;
+                        }
+                        if let Some(focus) = &focus {
+                            window.focus(focus, cx);
+                        }
+                        let command = if event.click_count >= 2 {
+                            let Some(command) =
+                                fit_table_column(&owner, panel, source_index, window, cx)
+                            else {
+                                return;
+                            };
+                            command
+                        } else {
+                            Command::Pointer(
+                                panel,
+                                PointerEvent::Down {
+                                    position: cpoint(event.position),
+                                    button: volna_core::geometry::MouseButton::Left,
+                                    modifiers: to_modifiers(event.modifiers),
+                                },
+                            )
+                        };
+                        owner.update(cx, |ws, cx| {
+                            ws.dispatch_if_current(generation, command, Some(window), cx)
+                        });
+                    }),
+            );
+        }
+        Some((edges.into_any_element(), header))
+    }
+
     fn register_mouse_handlers(&self, prepaint: &CanvasPrepaint, window: &mut Window) {
         let ws = self.ws.clone();
         let hitbox = prepaint.hitbox.clone();

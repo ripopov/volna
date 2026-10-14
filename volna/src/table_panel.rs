@@ -17,6 +17,19 @@ use volna_core::icons::IconName;
 use volna_core::table::columns::{ColumnSet, TransactionColumn};
 use volna_core::table::{TableCommand, TableState};
 
+gpui_kit::actions!(table_column, [NarrowColumn, WidenColumn, FitColumn]);
+
+pub(crate) fn init(cx: &mut gpui_kit::App) {
+    use gpui_kit::KeyBinding;
+    cx.bind_keys([
+        KeyBinding::new("left", NarrowColumn, Some("TableColumnResize")),
+        KeyBinding::new("shift-left", NarrowColumn, Some("TableColumnResize")),
+        KeyBinding::new("right", WidenColumn, Some("TableColumnResize")),
+        KeyBinding::new("shift-right", WidenColumn, Some("TableColumnResize")),
+        KeyBinding::new("enter", FitColumn, Some("TableColumnResize")),
+    ]);
+}
+
 impl CanvasPanelView {
     fn table_command(&self, command: TableCommand, window: &mut Window, cx: &mut Context<Self>) {
         _ = self.ws.update(cx, |ws, cx| {

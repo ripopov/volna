@@ -3865,6 +3865,268 @@ fn shift_o_toggles_group_overlays_and_hosts_their_menu(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, VisualTestContext, point, size};
+    use volna_core::{panels::PanelsCommand, table::TableCommand};
+    use volna_trace::data::Member;
+    init(cx);
+    for dark in [true, false] {
+        let mut workspace = None;
+        let root = cx.add_window(|window, cx| {
+            let ws = cx.new(|cx| Workspace::new(window, cx));
+            workspace = Some(ws.clone());
+            gpui_kit::component::Root::new(ws, window, cx)
+        });
+        let window = RootWindow {
+            root,
+            workspace: workspace.unwrap(),
+        };
+        let mut vcx = VisualTestContext::from_window(root.into(), cx);
+        vcx.simulate_resize(size(px(1600.0), px(700.0)));
+        let panel = window
+            .update(&mut vcx, |ws, window, cx| {
+                ws.set_session(
+                    OpenSpec::Path(
+                        concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/examples/pipeline_showcase.vtr"
+                        )
+                        .into(),
+                    )
+                    .open()
+                    .unwrap(),
+                    cx,
+                );
+                ws.app.sidebar_visible = false;
+                let origin = ws.app.panels.focused_id();
+                ws.dispatch(
+                    Command::OpenTable {
+                        selected: a_all(vec![Member::Generator(0)]),
+                        clicked: None,
+                    },
+                    Some(window),
+                    cx,
+                );
+                let panel = ws.app.panels.focused_id();
+                ws.dispatch(
+                    Command::Panels(PanelsCommand::Close(origin)),
+                    Some(window),
+                    cx,
+                );
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                panel
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let edge = |vcx: &mut VisualTestContext, source_index| {
+            window
+                .update(vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    let column = table
+                        .layout
+                        .columns
+                        .iter()
+                        .find(|column| column.source_index == source_index)
+                        .unwrap();
+                    (column.rect.right() - 1.0, column.rect.top() + 12.0)
+                })
+                .unwrap()
+        };
+        let (x, y) = edge(&mut vcx, 0);
+        let at = |x, y| point(px(x), px(y));
+        vcx.simulate_mouse_move(at(x + 2.0, y), None, Modifiers::default());
+        vcx.simulate_mouse_down(at(x + 2.0, y), MouseButton::Left, Modifiers::default());
+        vcx.simulate_mouse_move(
+            at(x + 152.0, y + 60.0),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        vcx.simulate_mouse_up(
+            at(x + 152.0, y + 60.0),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, window, cx| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                assert_eq!(table.widths[0], Some(360.0));
+                assert_eq!(table.selected, None);
+                assert!(!table.dragging());
+                assert_eq!(ws.app.panels.len(), 1);
+                ws.dispatch(Command::Undo, Some(window), cx);
+                assert_eq!(
+                    ws.app
+                        .panels
+                        .get(panel)
+                        .unwrap()
+                        .kind
+                        .table()
+                        .unwrap()
+                        .widths[0],
+                    None
+                );
+                ws.dispatch(
+                    Command::Table(
+                        panel,
+                        TableCommand::ResizeColumn {
+                            source_index: 6,
+                            width: 500.0,
+                        },
+                    ),
+                    Some(window),
+                    cx,
+                );
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let (x, y) = edge(&mut vcx, 6);
+        vcx.simulate_mouse_move(at(x + 2.0, y), None, Modifiers::default());
+        vcx.simulate_mouse_down(at(x + 2.0, y), MouseButton::Left, Modifiers::default());
+        vcx.simulate_mouse_move(
+            at(x + 182.0, y + 40.0),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        vcx.simulate_mouse_up(
+            at(x + 182.0, y + 40.0),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, window, cx| {
+                assert_eq!(
+                    ws.app
+                        .panels
+                        .get(panel)
+                        .unwrap()
+                        .kind
+                        .table()
+                        .unwrap()
+                        .widths[6],
+                    Some(680.0)
+                );
+                ws.dispatch(
+                    Command::Table(
+                        panel,
+                        TableCommand::ResizeColumn {
+                            source_index: 0,
+                            width: 48.0,
+                        },
+                    ),
+                    Some(window),
+                    cx,
+                );
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let (x, y) = edge(&mut vcx, 0);
+        vcx.simulate_mouse_move(at(x, y), None, Modifiers::default());
+        vcx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position: at(x, y),
+            modifiers: Modifiers::default(),
+            click_count: 2,
+            first_mouse: false,
+        });
+        vcx.simulate_mouse_up(at(x, y), MouseButton::Left, Modifiers::default());
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, window, cx| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                assert!(table.widths[0].unwrap() > 48.0);
+                assert_eq!(table.selected, None);
+                assert_eq!(ws.app.panels.len(), 1);
+                ws.dispatch(
+                    Command::Table(panel, TableCommand::ResetColumns),
+                    Some(window),
+                    cx,
+                );
+                assert!(
+                    ws.app
+                        .panels
+                        .get(panel)
+                        .unwrap()
+                        .kind
+                        .table()
+                        .unwrap()
+                        .widths
+                        .iter()
+                        .all(Option::is_none)
+                );
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let (x, y) = edge(&mut vcx, 6);
+        let auto_width = window
+            .update(&mut vcx, |ws, _, _| {
+                ws.app
+                    .panels
+                    .get(panel)
+                    .unwrap()
+                    .kind
+                    .table()
+                    .unwrap()
+                    .layout
+                    .columns
+                    .last()
+                    .unwrap()
+                    .rect
+                    .width()
+            })
+            .unwrap();
+        vcx.simulate_mouse_move(at(x - 2.0, y), None, Modifiers::default());
+        vcx.simulate_mouse_down(at(x - 2.0, y), MouseButton::Left, Modifiers::default());
+        vcx.simulate_mouse_move(
+            at(x - 62.0, y),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        vcx.simulate_mouse_up(at(x - 62.0, y), MouseButton::Left, Modifiers::default());
+        vcx.run_until_parked();
+        let before = window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                assert_eq!(table.widths[6], Some(auto_width - 60.0));
+                table.widths.get().clone()
+            })
+            .unwrap();
+        let mut keyboard_resized = false;
+        for _ in 0..20 {
+            vcx.simulate_keystrokes("tab");
+            vcx.simulate_keystrokes("right");
+            vcx.run_until_parked();
+            keyboard_resized = window
+                .update(&mut vcx, |ws, _, _| {
+                    ws.app
+                        .panels
+                        .get(panel)
+                        .unwrap()
+                        .kind
+                        .table()
+                        .unwrap()
+                        .widths
+                        .get()
+                        != &before
+                })
+                .unwrap();
+            if keyboard_resized {
+                break;
+            }
+        }
+        assert!(
+            keyboard_resized,
+            "column dividers must be reachable by Tab and resize with Right"
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     use volna_core::{panels::PanelsCommand, table::TableCommand, transaction::TransactionCommand};
