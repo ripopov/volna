@@ -11,7 +11,8 @@
     "check": "astro check",
     "build": "npm run build:viewer && astro build && node scripts/check-links.mjs",
     "preview": "astro preview",
-    "test": "node tests/site.mjs"
+    "test": "node tests/site.mjs && node tests/web-sorting.mjs",
+    "test:sorting": "node tests/web-sorting.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "0.42.5",

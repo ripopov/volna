@@ -19,7 +19,7 @@ const server = createServer(async (req, res) => {
     if (file !== root && !file.startsWith(root + '/')) throw new Error('outside output');
     if ((await stat(file)).isDirectory()) file += '/index.html';
     const content = await readFile(file);
-    res.writeHead(200, { 'Content-Type': mime[extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp', 'Content-Type': mime[extname(file)] || 'application/octet-stream' });
     res.end(content);
   } catch {
     res.writeHead(404); res.end('Not found');
@@ -34,6 +34,7 @@ const report = { pages: [], accessibility: [], behavior: [] };
 try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || (existsSync(chrome) ? chrome : undefined) });
   const behaviorContext = await browser.newContext({ viewport: { width: 1440, height: 1000 }, colorScheme: 'dark' });
+  await behaviorContext.addInitScript(() => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 }));
   const page = await behaviorContext.newPage();
   const appErrors = [];
   page.on('pageerror', error => appErrors.push(error.message));
@@ -244,6 +245,7 @@ try {
   for (const theme of ['dark', 'light']) {
     for (const width of [1440, 360]) {
       const context = await browser.newContext({ viewport: { width, height: 1000 }, colorScheme: theme, reducedMotion: 'reduce' });
+      await context.addInitScript(() => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 }));
       const page = await context.newPage();
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));

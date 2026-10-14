@@ -2996,12 +2996,14 @@ impl App {
         }
         if let Some(table) = panel.kind.table() {
             return format!(
-                "panel={} table focused={} rows={} top={} selected={:?} status={}",
+                "panel={} table focused={} rows={} top={} selected={:?} sort={:?} first_time={:?} status={}",
                 id.0,
                 id == self.panels.focused_id(),
                 table.len(),
                 table.viewport.top,
                 table.selected,
+                table.applied_sort(),
+                table.row_time(0),
                 table.status()
             );
         }

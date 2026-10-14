@@ -33,6 +33,14 @@ pub use app::Workspace;
 
 pub fn init_app(cx: &mut App) {
     gpui_kit::init(cx);
+    // Test applications have short-lived executors; core tests use their own worker threads.
+    #[cfg(not(test))]
+    {
+        let executor = cx.background_executor().clone();
+        volna_core::table::sort::set_executor(move |work| {
+            executor.spawn(async move { work() }).detach();
+        });
+    }
     table_panel::init(cx);
     theme::set(theme::CoreTheme::one_dark(), cx);
     if let Err(e) = assets::load_fonts(cx) {
@@ -76,14 +84,7 @@ fn window_options(cx: &mut App) -> WindowOptions {
 }
 
 pub fn application() -> Application {
-    #[cfg(not(target_family = "wasm"))]
-    {
-        gpui_kit::application().with_assets(assets::Assets)
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        gpui_kit::platform::single_threaded_web().with_assets(assets::Assets)
-    }
+    gpui_kit::application().with_assets(assets::Assets)
 }
 
 pub fn open_main_window(
@@ -475,7 +476,22 @@ pub mod web {
     }
 
     #[wasm_bindgen(start)]
-    pub fn start() {
+    pub fn start() -> Result<(), JsValue> {
+        // Worker instances initialize the module, but must not create another application.
+        if js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("document"))?.is_undefined() {
+            return Ok(());
+        }
+        let memory = js_sys::WebAssembly::Memory::from(wasm_bindgen::memory());
+        let atomics = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("Atomics"))?;
+        if !memory
+            .buffer()
+            .is_instance_of::<js_sys::SharedArrayBuffer>()
+            || !js_sys::Reflect::get(&atomics, &JsValue::from_str("waitAsync"))?.is_function()
+        {
+            return Err(JsValue::from_str(
+                "Volna requires shared WebAssembly memory and Atomics.waitAsync. Serve it over HTTPS with Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp.",
+            ));
+        }
         console_error_panic_hook::set_once();
         gpui_kit::web::init_logging();
         if let Some(json) = host_snapshot("volnaHostTheme") {
@@ -646,6 +662,7 @@ pub mod web {
             }
         });
         APP.with(|slot| *slot.borrow_mut() = Some(handle));
+        Ok(())
     }
 
     thread_local! {

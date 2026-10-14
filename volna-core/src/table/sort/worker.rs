@@ -7,9 +7,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering as AtomicOrdering},
-        mpsc,
     },
-    thread,
 };
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
@@ -76,7 +74,7 @@ impl Order {
 
 pub(in crate::table) struct Job {
     cancel: Arc<AtomicBool>,
-    result: Option<mpsc::Receiver<Result<Order>>>,
+    result: Option<futures_channel::oneshot::Receiver<Result<Order>>>,
 }
 impl Job {
     pub fn start(source: Source, len: u64, sort: Sort, budget: MemoryBudget) -> Result<Self> {
@@ -86,23 +84,21 @@ impl Job {
         )?;
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = cancel.clone();
-        let (send, result) = mpsc::sync_channel(1);
-        thread::Builder::new()
-            .name("table-sort".into())
-            .spawn(move || {
-                let result = (|| {
-                    let rows = Indices::build(len, &|a, b| source.compare(sort, a, b), &stop)?;
-                    Ok(Order {
-                        rows,
-                        _reservation: reservation,
-                        sort,
-                        source,
-                    })
-                })();
-                if !stop.load(AtomicOrdering::Relaxed) {
-                    let _ = send.send(result);
-                }
-            })?;
+        let (send, result) = futures_channel::oneshot::channel();
+        super::spawn(move || {
+            let result = (|| {
+                let rows = Indices::build(len, &|a, b| source.compare(sort, a, b), &stop)?;
+                Ok(Order {
+                    rows,
+                    _reservation: reservation,
+                    sort,
+                    source,
+                })
+            })();
+            if !stop.load(AtomicOrdering::Relaxed) {
+                let _ = send.send(result);
+            }
+        })?;
         Ok(Self {
             cancel,
             result: Some(result),
@@ -112,12 +108,9 @@ impl Job {
         self.cancel.store(true, AtomicOrdering::Relaxed);
     }
     pub fn poll(&mut self) -> Option<Result<Order>> {
-        let result = match self.result.as_ref()?.try_recv() {
-            Ok(result) => Some(result),
-            Err(mpsc::TryRecvError::Disconnected) => {
-                Some(Err(anyhow::anyhow!("Sort cancelled or worker stopped")))
-            }
-            Err(mpsc::TryRecvError::Empty) => None,
+        let result = match self.result.as_mut()?.try_recv() {
+            Ok(result) => result,
+            Err(_) => Some(Err(anyhow::anyhow!("Sort cancelled or worker stopped"))),
         };
         if result.is_some() {
             self.result = None;
@@ -131,18 +124,14 @@ impl Drop for Job {
         self.cancel();
         // A completion may already be queued when its panel closes.
         if let Some(result) = self.result.take() {
-            let _ = thread::Builder::new()
-                .name("table-sort-retire".into())
-                .spawn(move || drop(result));
+            let _ = super::spawn(move || drop(result));
         }
     }
 }
 
 pub(in crate::table) fn retire(order: Order) {
     // Releasing a large index and its source must not run in GPUI's frame callback.
-    let _ = thread::Builder::new()
-        .name("table-sort-retire".into())
-        .spawn(move || drop(order));
+    let _ = super::spawn(move || drop(order));
 }
 
 fn checkpoint(stop: &AtomicBool) -> Result<()> {

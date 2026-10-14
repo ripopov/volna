@@ -5,8 +5,8 @@ pub mod columns;
 pub mod layout;
 pub mod model;
 pub mod paint;
-pub mod source;
 pub mod sort;
+pub mod source;
 
 pub use layout::{ColumnRect, RowViewport, TableLayout};
 pub use model::{

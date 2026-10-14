@@ -17,6 +17,16 @@ const executablePath = process.env.CHROME_PATH || (existsSync(chrome) ? chrome :
 
 export default defineConfig({
   output: 'static',
+  vite: {
+    server: { headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    } },
+    preview: { headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    } },
+  },
   site: process.env.DOCS_SITE,
   base: process.env.DOCS_BASE || '/',
   trailingSlash: 'always',

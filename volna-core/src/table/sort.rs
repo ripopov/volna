@@ -1,16 +1,10 @@
 //! Typed row ordering over in-memory source ordinals, never formatted cells.
 
-#[cfg(not(target_arch = "wasm32"))]
 use super::columns::TransactionColumn;
-#[cfg(not(target_arch = "wasm32"))]
 use crate::data::loaded_tracks::LoadedGenerator;
-#[cfg(not(target_arch = "wasm32"))]
 use std::cmp::Ordering;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
 use volna_trace::data::transactions::{AttributeValue, TransactionAttribute};
-#[cfg(not(target_arch = "wasm32"))]
 use volna_trace::data::{SignalHistory, value_view::ValueView};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,7 +14,6 @@ pub struct Sort {
 }
 
 #[derive(Clone)]
-#[cfg(not(target_arch = "wasm32"))]
 pub(super) enum Source {
     Generator(Arc<LoadedGenerator>),
     Signals {
@@ -30,7 +23,6 @@ pub(super) enum Source {
     },
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Source {
     fn time(&self, row: u64) -> u64 {
         match self {
@@ -116,7 +108,6 @@ impl Source {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn nullable((a, b): (bool, bool), order: Ordering) -> (Ordering, bool) {
     if a || b {
         (a.cmp(&b), true)
@@ -125,7 +116,6 @@ fn nullable((a, b): (bool, bool), order: Ordering) -> (Ordering, bool) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn sequence<A, B, T>(mut a: A, mut b: B, compare: impl Fn(T, T) -> Ordering) -> Ordering
 where
     A: Iterator<Item = T>,
@@ -146,7 +136,6 @@ where
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn values(a: ValueView<'_>, b: ValueView<'_>) -> (Ordering, bool) {
     let tag = |v: &ValueView<'_>| match v {
         ValueView::Unavailable => 5,
@@ -175,7 +164,6 @@ fn values(a: ValueView<'_>, b: ValueView<'_>) -> (Ordering, bool) {
     nullable(missing, order)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn attributes(a: &AttributeValue, b: &AttributeValue) -> (Ordering, bool) {
     use AttributeValue::*;
     let tag = |a: &AttributeValue| match a {
@@ -240,7 +228,6 @@ fn attributes(a: &AttributeValue, b: &AttributeValue) -> (Ordering, bool) {
     nullable((matches!(a, Null), matches!(b, Null)), order)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn decimal(a: i128, scale_a: i32, b: i128, scale_b: i32) -> Ordering {
     let sign = a.signum().cmp(&b.signum());
     if sign != Ordering::Equal || a == 0 {
@@ -256,10 +243,8 @@ fn decimal(a: i128, scale_a: i32, b: i128, scale_b: i32) -> Ordering {
     if a < 0 { order.reverse() } else { order }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-mod native;
-#[cfg(not(target_arch = "wasm32"))]
-pub(super) use native::{Job, Order, required_bytes, retire};
+mod worker;
+pub(super) use worker::{Job, Order, required_bytes, retire};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
@@ -316,5 +301,32 @@ mod tests {
             .0,
             Ordering::Less
         );
+    }
+}
+
+/// Installs the host's background executor before any table sorting starts.
+/// The executor must run CPU work off the UI thread and retain detached jobs.
+pub fn set_executor(spawn: impl Fn(Box<dyn FnOnce() + Send>) + Send + Sync + 'static) {
+    let _ = EXECUTOR.set(Box::new(spawn));
+}
+
+type Spawn = Box<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
+static EXECUTOR: std::sync::OnceLock<Spawn> = std::sync::OnceLock::new();
+
+fn spawn(work: impl FnOnce() + Send + 'static) -> anyhow::Result<()> {
+    if let Some(executor) = EXECUTOR.get() {
+        executor(Box::new(work));
+        return Ok(());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::Builder::new()
+            .name("table-worker".into())
+            .spawn(work)?;
+        Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        anyhow::bail!("Background executor is unavailable")
     }
 }

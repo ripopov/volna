@@ -1,3 +1,5 @@
+import { ensureIsolation } from '../isolation.js';
+
 const base = new URL('../', import.meta.url);
 const status = document.getElementById('viewer-status');
 const error = document.getElementById('viewer-error');
@@ -173,8 +175,15 @@ window.volnaViewerState = state => {
 };
 
 try {
+  await ensureIsolation();
+  if (!crossOriginIsolated || typeof SharedArrayBuffer === 'undefined') {
+    throw new Error('Background workers require HTTPS and cross-origin isolation. Configure Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp.');
+  }
+  if (typeof Atomics.waitAsync !== 'function') {
+    throw new Error('Background workers require Atomics.waitAsync. Update to a browser that supports it.');
+  }
   viewer = await import(new URL('viewer/pkg/volna.js', base));
-  await viewer.default(new URL('viewer/pkg/volna_bg.wasm', base));
+  await viewer.default({ module_or_path: new URL('viewer/pkg/volna_bg.wasm', base) });
 } catch (cause) {
   clearTimeout(startupTimer);
   showError(`The viewer could not start: ${cause.message}`);

@@ -146,9 +146,7 @@ pub struct TableModel {
     pub request: u64,
     pub sort_requested: Option<super::sort::Sort>,
     pub sort_error: Option<String>,
-    #[cfg(not(target_arch = "wasm32"))]
     sort_order: Option<super::sort::Order>,
-    #[cfg(not(target_arch = "wasm32"))]
     sort_job: Option<(u64, super::sort::Job)>,
     sort_revision: u64,
     drag: Option<TableDrag>,
@@ -186,9 +184,7 @@ impl TableModel {
             request: 0,
             sort_requested: None,
             sort_error: None,
-            #[cfg(not(target_arch = "wasm32"))]
             sort_order: None,
-            #[cfg(not(target_arch = "wasm32"))]
             sort_job: None,
             sort_revision: 0,
             drag: None,
@@ -205,10 +201,7 @@ impl TableModel {
         let mut clone = Self::new(self.source.clone(), self.nav.link, self.budget.clone());
         clone.columns = self.columns.clone();
         clone.widths = self.widths.clone();
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            clone.sort_requested = self.sort_requested;
-        }
+        clone.sort_requested = self.sort_requested;
         clone
     }
 
@@ -550,7 +543,6 @@ impl TableModel {
     }
 
     fn source_index(&self, ordinal: u64) -> Option<usize> {
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(order) = &self.sort_order {
             return usize::try_from(order.source_row(ordinal)?).ok();
         }
@@ -558,18 +550,10 @@ impl TableModel {
     }
 
     pub fn applied_sort(&self) -> Option<super::sort::Sort> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.sort_order.as_ref().map(|o| o.sort)
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            None
-        }
+        self.sort_order.as_ref().map(|o| o.sort)
     }
 
     pub fn sorting(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
         if self.sort_job.is_some() {
             return true;
         }
@@ -582,14 +566,11 @@ impl TableModel {
         self.sort_revision = self.sort_revision.wrapping_add(1);
         self.sort_requested = None;
         self.sort_error = None;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Some((_, job)) = &self.sort_job {
-                job.cancel();
-            }
-            if let Some(order) = self.sort_order.take() {
-                super::sort::retire(order);
-            }
+        if let Some((_, job)) = &self.sort_job {
+            job.cancel();
+        }
+        if let Some(order) = self.sort_order.take() {
+            super::sort::retire(order);
         }
     }
 
@@ -599,28 +580,20 @@ impl TableModel {
         {
             return false;
         }
-        #[cfg(not(target_arch = "wasm32"))]
+        // Restoring source order frees the existing index and requires no allocation.
+        if self
+            .sort_requested
+            .is_some_and(|sort| sort.column == column && sort.descending)
         {
-            // Restoring source order frees the existing index and requires no allocation.
-            if self
-                .sort_requested
-                .is_some_and(|sort| sort.column == column && sort.descending)
-            {
-                return true;
-            }
-            if self.sort_error.is_some() {
-                return false;
-            }
-            super::sort::required_bytes(self.len()).is_some_and(|bytes| {
-                self.budget
-                    .reserve_object("table sort index", bytes)
-                    .is_ok()
-            })
+            return true;
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
+        if self.sort_error.is_some() {
+            return false;
         }
+        super::sort::required_bytes(self.len()).is_some_and(|bytes| {
+            bytes <= self.budget.object_limit()
+                && bytes <= self.budget.limit().saturating_sub(self.budget.used())
+        })
     }
 
     fn cycle_sort(&mut self, column: usize) -> bool {
@@ -640,86 +613,72 @@ impl TableModel {
         };
         self.sort_revision = self.sort_revision.wrapping_add(1);
         self.sort_error = None;
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Some((_, job)) = &self.sort_job {
-                job.cancel();
-            }
-            if self.sort_requested.is_none() {
-                if let Some(order) = self.sort_order.take() {
-                    super::sort::retire(order);
-                }
-                self.invalidate_window();
-            }
+        if let Some((_, job)) = &self.sort_job {
+            job.cancel();
         }
-        #[cfg(target_arch = "wasm32")]
-        if self.sort_requested.is_some() {
-            self.sort_error = Some("Sorting requires the native application".into());
+        if self.sort_requested.is_none() {
+            if let Some(order) = self.sort_order.take() {
+                super::sort::retire(order);
+            }
+            self.invalidate_window();
         }
         true
     }
 
     fn poll_sort(&mut self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
+        let mut changed = false;
+        if let Some((revision, result)) = self
+            .sort_job
+            .as_mut()
+            .and_then(|(r, job)| job.poll().map(|result| (*r, result)))
         {
-            let mut changed = false;
-            if let Some((revision, result)) = self
-                .sort_job
-                .as_mut()
-                .and_then(|(r, job)| job.poll().map(|result| (*r, result)))
-            {
-                self.sort_job = None;
-                changed = true;
-                if revision == self.sort_revision {
-                    match result {
-                        Ok(order) => {
-                            if let Some(old) = self.sort_order.replace(order) {
-                                super::sort::retire(old);
-                            }
-                            if let Some(rank) = self.selected_ordinal() {
-                                self.viewport.reveal(
-                                    rank,
-                                    self.len(),
-                                    self.layout.body.height(),
-                                    self.row_px(),
-                                );
-                            }
-                            self.invalidate_window();
+            self.sort_job = None;
+            changed = true;
+            if revision == self.sort_revision {
+                match result {
+                    Ok(order) => {
+                        if let Some(old) = self.sort_order.replace(order) {
+                            super::sort::retire(old);
                         }
-                        Err(error) => self.sort_error = Some(format!("{error:#}")),
+                        if let Some(rank) = self.selected_ordinal() {
+                            self.viewport.reveal(
+                                rank,
+                                self.len(),
+                                self.layout.body.height(),
+                                self.row_px(),
+                            );
+                        }
+                        self.invalidate_window();
                     }
-                } else if let Ok(order) = result {
-                    super::sort::retire(order);
+                    Err(error) => self.sort_error = Some(format!("{error:#}")),
                 }
+            } else if let Ok(order) = result {
+                super::sort::retire(order);
             }
-            if self.sort_job.is_none() && self.sorting() {
-                if let Some(sort) = self.sort_requested {
-                    let source = match &self.rows {
-                        Rows::Generator(g) => super::sort::Source::Generator(g.clone()),
-                        Rows::Signals {
-                            histories,
-                            axis,
-                            _axis_reservation,
-                        } => super::sort::Source::Signals {
-                            histories: histories.clone(),
-                            axis: axis.clone(),
-                            _reservation: _axis_reservation.clone(),
-                        },
-                        Rows::None => return changed,
-                    };
-                    match super::sort::Job::start(source, self.len(), sort, self.budget.clone()) {
-                        Ok(job) => self.sort_job = Some((self.sort_revision, job)),
-                        Err(error) => self.sort_error = Some(format!("{error:#}")),
-                    }
-                    changed = true;
+        }
+        if self.sort_job.is_none() && self.sorting() {
+            if let Some(sort) = self.sort_requested {
+                let source = match &self.rows {
+                    Rows::Generator(g) => super::sort::Source::Generator(g.clone()),
+                    Rows::Signals {
+                        histories,
+                        axis,
+                        _axis_reservation,
+                    } => super::sort::Source::Signals {
+                        histories: histories.clone(),
+                        axis: axis.clone(),
+                        _reservation: _axis_reservation.clone(),
+                    },
+                    Rows::None => return changed,
+                };
+                match super::sort::Job::start(source, self.len(), sort, self.budget.clone()) {
+                    Ok(job) => self.sort_job = Some((self.sort_revision, job)),
+                    Err(error) => self.sort_error = Some(format!("{error:#}")),
                 }
+                changed = true;
             }
-            changed
         }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+        changed
     }
 
     pub fn len(&self) -> u64 {
@@ -802,7 +761,6 @@ impl TableModel {
                 }),
             _ => None,
         }?;
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(order) = &self.sort_order {
             return order.rank(source_row);
         }
@@ -956,12 +914,8 @@ impl TableModel {
             }
             TableCommand::Cancel => {
                 if self.sorting() {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        self.sort_requested = self.sort_order.as_ref().map(|o| o.sort);
-                    }
+                    self.sort_requested = self.sort_order.as_ref().map(|o| o.sort);
                     self.sort_revision = self.sort_revision.wrapping_add(1);
-                    #[cfg(not(target_arch = "wasm32"))]
                     if let Some((_, job)) = &self.sort_job {
                         job.cancel();
                     }
@@ -974,10 +928,7 @@ impl TableModel {
             }
             TableCommand::Retry => {
                 if self.sort_error.is_some() {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        self.sort_error = None;
-                    }
+                    self.sort_error = None;
                     true
                 } else {
                     self.retry(doc)
@@ -1696,7 +1647,6 @@ impl TableModel {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Drop for TableModel {
     fn drop(&mut self) {
         if let Some((_, job)) = &self.sort_job {
@@ -2126,7 +2076,6 @@ mod tests {
         model
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn finish_sort(model: &mut TableModel) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while model.sorting() {
@@ -2139,7 +2088,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn sort_cycles_exact_keys_stable_ties_and_preserves_selected_record() {
         let big = 1u64 << 54;
         let mut model = generator_model(vec![
@@ -2198,7 +2146,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn missing_values_stay_last_and_signal_rows_use_sorted_time_axis() {
         let mut open = transaction(1, 1, "open");
         open.status = vtr::TxStatus::Open;
@@ -2243,7 +2190,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn sort_admission_accounts_for_retained_index_and_rechecks_before_allocation() {
         let mut model = generator_model((0..100).map(|i| transaction(i, i, "row")).collect());
         model.budget.set_limit(400);
@@ -2290,7 +2236,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn every_transaction_column_sorts_its_complete_typed_values() {
         let mut records = vec![
             transaction(1, 10, "z"),
@@ -2332,7 +2277,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_arch = "wasm32"))]
     fn newest_sort_wins_and_failed_admission_preserves_previous_order() {
         let mut model =
             generator_model((0..2000).map(|i| transaction(i, 2000 - i, "row")).collect());

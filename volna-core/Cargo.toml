@@ -14,6 +14,7 @@ crate-type = ["rlib"]
 volna-trace = { path = "../volna-trace" }
 vtr = { path = "../vtr" }
 anyhow = "1"
+futures-channel = "0.3"
 log = "0.4"
 sha2 = "0.10"
 web-time = "1"

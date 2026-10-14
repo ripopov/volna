@@ -16,7 +16,9 @@ function webviewHtml(vscode, webview, extensionUri) {
     "default-src 'none'",
     `img-src ${webview.cspSource} blob: data:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
-    `script-src 'nonce-${nonce}' 'wasm-unsafe-eval' ${webview.cspSource}`,
+    // wasm_thread discovers its module URL through eval before spawning the worker pool.
+    `script-src 'nonce-${nonce}' 'wasm-unsafe-eval' 'unsafe-eval' ${webview.cspSource}`,
+    "worker-src blob:",
     `connect-src ${webview.cspSource}`,
     `font-src ${webview.cspSource}`,
   ].join("; ");

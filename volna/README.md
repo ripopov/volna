@@ -144,7 +144,7 @@ bar labels the previous order and offers Cancel. Selection follows the record,
 including after sorting, Go to, and copying. Sort choices are local to the open
 view and are not saved in workspace files.
 
-Native sorting compares complete typed values, never cell previews: integers and
+Sorting on native and web compares complete typed values, never cell previews: integers and
 timestamps stay exact, text uses case-sensitive byte order, and ties retain
 source order in both directions. Missing labels, unavailable signal samples, and
 open transaction end/duration values sort last. Attributes compare key/value
@@ -163,7 +163,28 @@ source order remains available because it frees memory. Sorting becomes
 available again when budget permits; after an allocation error, use Retry. No
 sort files or memory mappings are used.
 Rank access is O(1); locating a selected source row is O(log N). Source rows must
-also fit in RAM. Browser builds currently do not support sorting.
+also fit in RAM. Native and web use the same engine on GPUI's background executor.
+The browser uses shared-memory Web Workers; it never runs a sort on the UI thread.
+WASM32 has a 4 GiB address-space ceiling shared by source data, indices, and runtime,
+so its maximum dataset size is lower than native even on machines with more RAM.
+
+The web build requires `rust-src` (`rustup component add rust-src`).
+`tools/build-web.mjs` rebuilds the standard library with atomics and emits a
+shared-memory module. Serve it over HTTPS (localhost also works), with
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` on the top-level page and its frames.
+The browser must support `SharedArrayBuffer` and `Atomics.waitAsync`; startup
+reports missing support instead of silently running background work on the UI thread.
+The docs development server and browser tests set these headers; `docs/public/_headers`
+is included for static hosts that support that configuration. On GitHub Pages,
+a same-origin service worker supplies the headers and reloads the page once; it
+does not cache recordings or assets. Content Security Policy must allow `worker-src blob:`;
+the current GPUI worker launcher also needs `unsafe-eval` to discover its module URL.
+
+After building the docs, `npm run test:sorting` in `docs/` checks a 1,000,000-row
+browser table, cancellation, selection, memory refusal, keyboard sorting, and
+animation frames during sorting. It also tests static-host isolation and missing
+browser capability errors.
 
 The reproducible scale check sorts and verifies 100M procedural keys in RAM.
 It measures the sorter, independently of trace loading and frame latency:

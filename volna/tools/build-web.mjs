@@ -28,6 +28,7 @@ export async function buildWebViewer(destination) {
       },
     ),
   );
+  // wasm-bindgen initializes a separate stack and TLS block for each shared-memory worker.
   run(
     "cargo",
     [
@@ -39,9 +40,15 @@ export async function buildWebViewer(destination) {
       "wasm32-unknown-unknown",
       "--release",
       "--locked",
+      "-Zbuild-std=std,panic_abort",
     ],
     {
-      env: { ...process.env, RUSTC_BOOTSTRAP: "1" },
+      env: {
+        ...process.env,
+        RUSTC_BOOTSTRAP: "1",
+        CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:
+          "-C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=4294967296 -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base",
+      },
     },
   );
   await rm(destination, { recursive: true, force: true });

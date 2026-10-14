@@ -1,6 +1,9 @@
-//! Admission for decoded client storage.
+//! Non-blocking admission for decoded storage shared by UI and background workers.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -9,14 +12,9 @@ pub struct MemoryBudget(Arc<Budget>);
 
 #[derive(Debug)]
 struct Budget {
-    state: Mutex<State>,
-}
-
-#[derive(Debug)]
-struct State {
-    limit: u64,
-    object_limit: u64,
-    used: u64,
+    limit: AtomicU64,
+    object_limit: AtomicU64,
+    used: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -28,36 +26,30 @@ pub struct Reservation {
 impl MemoryBudget {
     pub fn new(limit: u64) -> Self {
         Self(Arc::new(Budget {
-            state: Mutex::new(State {
-                limit,
-                object_limit: u64::MAX,
-                used: 0,
-            }),
+            limit: AtomicU64::new(limit),
+            object_limit: AtomicU64::new(u64::MAX),
+            used: AtomicU64::new(0),
         }))
     }
 
-    fn state(&self) -> std::sync::MutexGuard<'_, State> {
-        self.0.state.lock().expect("memory budget lock")
-    }
-
     pub fn limit(&self) -> u64 {
-        self.state().limit
+        self.0.limit.load(Ordering::Relaxed)
     }
 
     pub fn set_limit(&self, limit: u64) {
-        self.state().limit = limit;
+        self.0.limit.store(limit, Ordering::Relaxed);
     }
 
     pub fn object_limit(&self) -> u64 {
-        self.state().object_limit
+        self.0.object_limit.load(Ordering::Relaxed)
     }
 
     pub fn set_object_limit(&self, limit: u64) {
-        self.state().object_limit = limit;
+        self.0.object_limit.store(limit, Ordering::Relaxed);
     }
 
     pub fn used(&self) -> u64 {
-        self.state().used
+        self.0.used.load(Ordering::Relaxed)
     }
 
     pub fn reserve_object(&self, what: &str, bytes: u64) -> anyhow::Result<Reservation> {
@@ -74,17 +66,30 @@ impl MemoryBudget {
     }
 
     fn admit(&self, bytes: u64) -> anyhow::Result<()> {
-        let mut state = self.state();
-        let next = state.used.checked_add(bytes).filter(|&n| n <= state.limit);
+        let limit = self.limit();
+        let admitted = self
+            .0
+            .used
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_add(bytes).filter(|&next| next <= limit)
+            });
         anyhow::ensure!(
-            next.is_some(),
+            admitted.is_ok(),
             "memory budget exceeded: {} MiB more would pass the {} MiB budget; \
              release retained objects or raise the memory budget",
             bytes.div_ceil(MIB),
-            state.limit / MIB
+            limit / MIB
         );
-        state.used = next.unwrap();
         Ok(())
+    }
+
+    fn release(&self, bytes: u64) {
+        self.0
+            .used
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+                used.checked_sub(bytes)
+            })
+            .expect("balanced memory reservation");
     }
 }
 
@@ -101,11 +106,7 @@ pub(crate) fn check_object(what: &str, bytes: u64, limit: u64, then: &str) -> an
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        let mut state = self.budget.state();
-        state.used = state
-            .used
-            .checked_sub(self.bytes)
-            .expect("balanced memory reservation");
+        self.budget.release(self.bytes);
     }
 }
 
@@ -119,11 +120,7 @@ impl Reservation {
             .bytes
             .checked_sub(bytes)
             .ok_or_else(|| anyhow::anyhow!("reservation shrink exceeds ownership"))?;
-        let mut state = self.budget.state();
-        state.used = state
-            .used
-            .checked_sub(bytes)
-            .expect("balanced memory reservation");
+        self.budget.release(bytes);
         Ok(())
     }
 
@@ -164,6 +161,30 @@ impl Reservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_admission_never_exceeds_budget_and_releases_every_reservation() {
+        let budget = MemoryBudget::new(30);
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let budget = &budget;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    for _ in 0..100 {
+                        let reservation = budget.reserve(10).ok();
+                        barrier.wait();
+                        assert_eq!(budget.used(), 30);
+                        barrier.wait();
+                        drop(reservation);
+                        barrier.wait();
+                        assert_eq!(budget.used(), 0);
+                        barrier.wait();
+                    }
+                });
+            }
+        });
+    }
 
     #[test]
     fn reservations_are_shared_checked_and_released() {

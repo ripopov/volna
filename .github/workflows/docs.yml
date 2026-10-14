@@ -37,6 +37,7 @@ jobs:
         with:
           toolchain: '1.97.1'
           targets: wasm32-unknown-unknown
+          components: rust-src
       - run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
         working-directory: .
       - run: npm ci
