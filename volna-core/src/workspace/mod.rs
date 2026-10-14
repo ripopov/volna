@@ -2,7 +2,7 @@
 
 use crate::nav::Tween;
 use crate::panels::{
-    Layout, Panel, PanelId, Panels,
+    DockLayout, Panel, PanelId, Panels,
     workspace::{RestoreContext, Traces, valid_viewport},
 };
 use crate::sidebar::ScopeTreeModel;
@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use volna_trace::data::source::Lookup;
 
 pub const FORMAT: &str = "volna-workspace";
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ROWS: usize = 100_000;
 
@@ -56,7 +56,7 @@ pub struct Workspace {
     pub supersedes: Option<String>,
     pub traces: Vec<Trace>,
     pub timescale: i8,
-    pub layout: Layout,
+    pub layout: DockLayout,
     pub timeline_dividers: Vec<crate::panels::TimelineDivider>,
     pub focused: PanelId,
     pub panels: Vec<Box<RawValue>>,

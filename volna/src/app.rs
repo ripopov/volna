@@ -1585,6 +1585,27 @@ impl Workspace {
                     }),
                 ),
             )
+            .when_some(self.app.panels.layout().right.as_ref(), |el, dock| {
+                el.child(
+                    icon_button(
+                        "toggle-right-sidebar",
+                        IconName::PanelRight,
+                        t.bar,
+                        t.bar_hover,
+                        cx,
+                    )
+                    .selected(dock.open)
+                    .tooltip("Toggle right sidebar")
+                    .debug_selector(|| "toggle-right-sidebar".into())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dispatch(
+                            Command::Panels(volna_core::panels::PanelsCommand::ToggleRightDock),
+                            Some(window),
+                            cx,
+                        );
+                    })),
+                )
+            })
             .child(
                 icon_button("open-file", IconName::FolderOpen, t.bar, t.bar_hover, cx)
                     .tooltip("Open trace (⌘O)")

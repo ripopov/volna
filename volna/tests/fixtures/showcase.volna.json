@@ -1,6 +1,6 @@
 {
   "format": "volna-workspace",
-  "version": 6,
+  "version": 7,
   "traces": [
     {
       "letter": "A",
@@ -16,10 +16,13 @@
   ],
   "timescale": -9,
   "layout": {
-    "tabs": [
-      17
-    ],
-    "active": 17
+    "center": {
+      "tabs": [
+        17
+      ],
+      "active": 17
+    },
+    "right": null
   },
   "timeline_dividers": [],
   "focused": 17,

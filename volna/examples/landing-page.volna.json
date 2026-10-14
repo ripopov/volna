@@ -1,6 +1,6 @@
 {
   "format": "volna-workspace",
-  "version": 6,
+  "version": 7,
   "traces": [
     {
       "letter": "A",
@@ -16,55 +16,58 @@
   ],
   "timescale": -9,
   "layout": {
-    "split": "horizontal",
-    "sizes": [
-      0.69,
-      0.31
-    ],
-    "children": [
-      {
-        "split": "vertical",
-        "sizes": [
-          0.56,
-          0.44
-        ],
-        "children": [
-          {
-            "tabs": [
-              1
-            ],
-            "active": 1
-          },
-          {
-            "tabs": [
-              2
-            ],
-            "active": 2
-          }
-        ]
-      },
-      {
-        "split": "vertical",
-        "sizes": [
-          0.62,
-          0.38
-        ],
-        "children": [
-          {
-            "tabs": [
-              3
-            ],
-            "active": 3
-          },
-          {
-            "tabs": [
-              4
-            ],
-            "active": 4
-          }
-        ]
-      }
-    ]
+    "center": {
+      "split": "horizontal",
+      "sizes": [
+        0.69,
+        0.31
+      ],
+      "children": [
+        {
+          "split": "vertical",
+          "sizes": [
+            0.56,
+            0.44
+          ],
+          "children": [
+            {
+              "tabs": [
+                1
+              ],
+              "active": 1
+            },
+            {
+              "tabs": [
+                2
+              ],
+              "active": 2
+            }
+          ]
+        },
+        {
+          "split": "vertical",
+          "sizes": [
+            0.62,
+            0.38
+          ],
+          "children": [
+            {
+              "tabs": [
+                3
+              ],
+              "active": 3
+            },
+            {
+              "tabs": [
+                4
+              ],
+              "active": 4
+            }
+          ]
+        }
+      ]
+    },
+    "right": null
   },
   "timeline_dividers": [
     {

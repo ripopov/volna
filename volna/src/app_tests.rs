@@ -1437,8 +1437,8 @@ fn pipeline_box_zoom_captures_outside_release_and_ignores_double_click_open(
             assert_eq!(ws.app.panels.focused_id(), id);
             assert_eq!(
                 ws.app.panels.iter().count(),
-                1,
-                "a modified second press opens no transaction tab"
+                2,
+                "a modified second press opens no additional transaction tab"
             );
         })
         .unwrap();
@@ -1562,7 +1562,7 @@ fn pipeline_label_double_click_pans_and_cell_double_click_opens_details(cx: &mut
             let pipeline = ws.app.panels.pipeline(panel).unwrap();
             let viewport = pipeline.nav.viewport(&ws.app.doc);
             assert_eq!(pipeline.selected_row(&ws.app.doc), Some(row));
-            assert_eq!(ws.app.panels.iter().count(), 1);
+            assert_eq!(ws.app.panels.iter().count(), 2);
             assert!((viewport.width() - initial.width()).abs() < 1e-6);
             assert!(
                 (viewport.x_of_tick(begin, pipeline.last_layout().cells_width_f64()) - 32.0).abs()
@@ -3977,6 +3977,317 @@ fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut T
             assert_eq!(ws.filter.read(cx).text(), "123");
             assert_eq!(ws.app.doc.shared.cursor, Some(time + 1));
             assert_eq!(ws.app.doc.markers().len(), 2);
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn transaction_right_dock_tracks_native_moves_resize_visibility_and_undo(cx: &mut TestAppContext) {
+    use gpui_kit::base::dock::{DockPlacement, InsertTarget};
+    use gpui_kit::{VisualTestContext, size};
+    use volna_core::panels::{PanelsCommand, Placement};
+    use volna_core::testing::a;
+    use volna_trace::data::transactions::TransactionRef;
+    init(cx);
+    let window = cx.add_window(Workspace::new);
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_resize(size(px(1200.0), px(800.0)));
+    let (origin, detail) = window
+        .update(&mut vcx, |ws, window, cx| {
+            let session = OpenSpec::Path(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/examples/pipeline_showcase.vtr"
+                )
+                .into(),
+            )
+            .open()
+            .unwrap();
+            let track = session
+                .tracks()
+                .iter()
+                .find(|track| track.path.join(".") == "soc.cpu0.pipeline.instruction")
+                .unwrap()
+                .id;
+            ws.set_session(session, cx);
+            ws.app.sidebar_visible = false;
+            ws.dispatch(Command::OpenPipeline { track: a(track) }, Some(window), cx);
+            let origin = ws.app.panels.focused_id();
+            let detail = ws.app.panels.first_free_transaction().unwrap();
+            assert!(matches!(
+                ws.app
+                    .panels
+                    .transaction(detail)
+                    .unwrap()
+                    .state(&ws.app.doc),
+                volna_core::transaction::TxPanelState::Empty
+            ));
+            ws.dispatch(
+                Command::SelectTransaction {
+                    panel: origin,
+                    track: a(track),
+                    id: TransactionRef(33),
+                    cursor: None,
+                },
+                Some(window),
+                cx,
+            );
+            (origin, detail)
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    let resized_node = window
+        .update(&mut vcx, |ws, window, cx| {
+            assert_eq!(
+                ws.app.panels.layout().placement(detail),
+                Some(Placement::Right)
+            );
+            let area = ws.dock.as_ref().unwrap().area.clone();
+            let node = area
+                .read(cx)
+                .layout(DockPlacement::Right)
+                .unwrap()
+                .root()
+                .id();
+            area.update(cx, |area, cx| {
+                area.set_dock_size(DockPlacement::Right, px(480.0), window, cx)
+            });
+            node
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            let area = ws.dock.as_ref().unwrap().area.clone();
+            assert_eq!(
+                area.read(cx)
+                    .layout(DockPlacement::Right)
+                    .unwrap()
+                    .root()
+                    .id(),
+                resized_node
+            );
+            assert_eq!(ws.app.panels.layout().right.as_ref().unwrap().width, 480.0);
+            let right = area.read(cx).layout(DockPlacement::Right).unwrap();
+            let panel = right.panels().next().unwrap();
+            let center = area.read(cx).layout(DockPlacement::Center).unwrap();
+            let target = center
+                .find_panel_node(center.panels().next().unwrap())
+                .unwrap();
+            // Exercise the same Kit move path used by tab drag-and-drop.
+            area.update(cx, |area, cx| {
+                area.move_panel(
+                    panel,
+                    InsertTarget::Tabs {
+                        node: target,
+                        ix: None,
+                        activate: true,
+                    },
+                    window,
+                    cx,
+                )
+            });
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            assert_eq!(
+                ws.app.panels.layout().placement(detail),
+                Some(Placement::Center)
+            );
+            assert!(ws.app.panels.layout().right.is_none());
+            assert_eq!(ws.app.panels.len(), 2);
+            assert_eq!(
+                ws.app
+                    .panels
+                    .transaction(detail)
+                    .unwrap()
+                    .shown()
+                    .unwrap()
+                    .id,
+                TransactionRef(33)
+            );
+            ws.dispatch(Command::Undo, Some(window), cx);
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    let nodes = |ws: &Workspace, cx: &gpui_kit::App| {
+        let area = ws.dock.as_ref().unwrap().area.read(cx);
+        [DockPlacement::Center, DockPlacement::Right]
+            .map(|region| area.layout(region).unwrap().root().id())
+    };
+    let retained_nodes = window
+        .update(&mut vcx, |ws, window, cx| {
+            assert_eq!(
+                ws.app.panels.layout().placement(detail),
+                Some(Placement::Right)
+            );
+            let before = nodes(ws, cx);
+            ws.dispatch(
+                Command::Panels(PanelsCommand::ToggleRightDock),
+                Some(window),
+                cx,
+            );
+            before
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            assert_eq!(nodes(ws, cx), retained_nodes);
+            assert!(
+                !ws.dock
+                    .as_ref()
+                    .unwrap()
+                    .area
+                    .read(cx)
+                    .is_dock_open(DockPlacement::Right)
+            );
+            ws.dispatch(Command::ShowTransaction { from: origin }, Some(window), cx);
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, cx| {
+            assert_eq!(nodes(ws, cx), retained_nodes);
+            assert!(
+                ws.dock
+                    .as_ref()
+                    .unwrap()
+                    .area
+                    .read(cx)
+                    .is_dock_open(DockPlacement::Right)
+            );
+            assert_eq!(ws.app.panels.focused_id(), detail);
+            assert_eq!(ws.app.panels.len(), 2);
+            ws.app.panels.validate().unwrap();
+        })
+        .unwrap();
+    vcx.simulate_resize(size(px(360.0), px(800.0)));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    window
+        .update(&mut vcx, |ws, _, cx| {
+            let area = ws.dock.as_ref().unwrap().area.read(cx);
+            assert_eq!(nodes(ws, cx), retained_nodes);
+            assert!(area.dock_size(DockPlacement::Right).unwrap() < area.bounds().size.width);
+            assert_eq!(ws.app.panels.layout().right.as_ref().unwrap().width, 480.0);
+        })
+        .unwrap();
+
+    let show_close_menu = |vcx: &mut VisualTestContext| {
+        let (owner, generation) = window
+            .update(vcx, |ws, _, cx| (cx.weak_entity(), ws.app.doc.generation()))
+            .unwrap();
+        let menu = vcx.update(|window, cx| {
+            PopupMenu::build(window, cx, |menu, _, cx| {
+                crate::dock::close_menu(menu, &owner, detail, generation, cx)
+            })
+        });
+        window
+            .update(vcx, |ws, window, cx| {
+                cx.subscribe(&menu, |ws, _, _: &gpui_kit::DismissEvent, cx| {
+                    ws.status_menu = None;
+                    cx.notify();
+                })
+                .detach();
+                window.focus(&menu.read(cx).focus_handle(cx), cx);
+                ws.status_menu = Some((point(px(20.0), px(80.0)), menu));
+                cx.notify();
+            })
+            .unwrap();
+        vcx.run_until_parked();
+    };
+    show_close_menu(&mut vcx);
+    // The first sidebar action hides the entire region, retaining the record.
+    vcx.simulate_keystrokes("down enter");
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert!(!ws.app.panels.layout().right.as_ref().unwrap().open);
+            assert_eq!(ws.app.panels.len(), 2);
+            assert_eq!(
+                ws.app
+                    .panels
+                    .transaction(detail)
+                    .unwrap()
+                    .shown()
+                    .unwrap()
+                    .id,
+                TransactionRef(33)
+            );
+        })
+        .unwrap();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let toggle = vcx
+        .debug_bounds("toggle-right-sidebar")
+        .expect("hidden sidebar retains its toolbar toggle");
+    vcx.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            assert!(ws.app.panels.layout().right.as_ref().unwrap().open);
+            assert_eq!(
+                ws.app
+                    .panels
+                    .transaction(detail)
+                    .unwrap()
+                    .shown()
+                    .unwrap()
+                    .id,
+                TransactionRef(33)
+            );
+            ws.dispatch(
+                Command::Panels(PanelsCommand::Move {
+                    panel: detail,
+                    placement: Placement::Center,
+                }),
+                Some(window),
+                cx,
+            );
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    show_close_menu(&mut vcx);
+    // In the center the close action still removes the panel.
+    vcx.simulate_keystrokes("down enter");
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert!(ws.app.panels.get(detail).is_none());
+            assert!(ws.app.panels.get(origin).is_some());
+        })
+        .unwrap();
+
+    // The adapter rejects regions the core cannot represent and reinstalls
+    // the accepted layout rather than leaving a divergent widget tree visible.
+    let accepted = window
+        .update(&mut vcx, |ws, window, cx| {
+            let area = ws.dock.as_ref().unwrap().area.clone();
+            area.update(cx, |area, cx| {
+                area.set_dock(
+                    DockPlacement::Bottom,
+                    gpui_kit::base::dock::DockLayout::h_split(),
+                    window,
+                    cx,
+                );
+            });
+            ws.app.panels.layout().clone()
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, cx| {
+            assert_eq!(ws.app.panels.layout(), &accepted);
+            assert!(
+                !ws.dock
+                    .as_ref()
+                    .unwrap()
+                    .area
+                    .read(cx)
+                    .has_dock(DockPlacement::Bottom)
+            );
         })
         .unwrap();
 }

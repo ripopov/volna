@@ -7,7 +7,7 @@ use std::time::Duration;
 use web_time::Instant;
 
 use crate::marker::Marker;
-use crate::panels::{Layout, Panel, PanelId, content::Prop};
+use crate::panels::{DockLayout, Panel, PanelId, content::Prop};
 use crate::wave::tree::Entry;
 
 pub const MERGE_WINDOW: Duration = Duration::from_secs(1);
@@ -187,7 +187,7 @@ pub(crate) enum Edit {
 }
 
 pub(crate) struct Structure {
-    pub layout: Layout,
+    pub layout: DockLayout,
     pub focused: PanelId,
     pub close: Vec<PanelId>,
     pub reopen: Vec<Panel>,

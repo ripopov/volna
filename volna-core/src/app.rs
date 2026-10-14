@@ -884,9 +884,12 @@ impl App {
         let focused = self.panels.focused_id();
         let kind = &self.panels.focused().kind;
         if kind.waves().is_some() {
+            self.panel_command(PanelsCommand::Focus(focused));
             return Some(focused);
         }
-        if kind.is_start() {
+        if kind.is_start()
+            && self.panels.layout().placement(focused) == Some(crate::panels::Placement::Center)
+        {
             let waves = self.fresh_waves();
             return self.replace_panel(focused, waves, None).ok();
         }
@@ -901,9 +904,7 @@ impl App {
             return Some(id);
         }
         let waves = self.fresh_waves();
-        match self.restructure(None, |panels| {
-            Ok((panels.open(waves, focused, None)?, Vec::new()))
-        }) {
+        match self.restructure(None, |panels| panels.open_center(waves, focused, None)) {
             Ok(id) => Some(id),
             Err(error) => {
                 self.events.push(Event::Notice(error.to_string()));
@@ -954,6 +955,12 @@ impl App {
                 let label = format!("Close {}", crate::history::count(others, "panel", "panels"));
                 self.restructure(Some(label), |panels| Ok(((), panels.close_others(id)?)))
             }
+            PanelsCommand::Move { panel, placement } => self
+                .restructure(Some("Move panel".into()), |panels| {
+                    Ok((panels.move_panel(panel, placement)?, Vec::new()))
+                })
+                .map(|_| ()),
+            PanelsCommand::ToggleRightDock => self.panels.toggle_right_dock().map(|_| ()),
             PanelsCommand::Focus(id) => self.panels.focus(id).map(|_| ()),
             PanelsCommand::FocusNext => self.panels.focus_next(false).map(|_| ()),
             PanelsCommand::FocusPrev => self.panels.focus_next(true).map(|_| ()),
@@ -1412,37 +1419,22 @@ impl App {
     }
 
     fn show_transaction(&mut self, from: PanelId) {
+        if self.panels.get(from).is_none() {
+            return;
+        }
         if self.doc.selection().is_none() {
             self.events
                 .push(Event::Notice("Select a record first.".into()));
             self.changed();
             return;
         }
-        if let Some(id) = self.panels.first_free_transaction() {
-            self.panel_command(PanelsCommand::Focus(id));
-            self.sync_selection();
-            return;
-        }
         let model = TransactionModel::new(
             self.table_memory_budget(),
             self.settings.resolved().transaction.detail_items,
         );
-        let kind = PanelKind::Transaction(Box::new(model));
         let label = Some("Open transaction panel".to_owned());
-        if self
-            .panels
-            .get(from)
-            .is_some_and(|panel| panel.kind.is_start())
-        {
-            _ = self.replace_panel(from, kind, label);
-            self.sync_selection();
-            return;
-        }
         match self.restructure(label, |panels| {
-            Ok((
-                panels.open(kind, from, Some(crate::panels::Axis::Horizontal))?,
-                Vec::new(),
-            ))
+            Ok((panels.ensure_transaction(model)?, Vec::new()))
         }) {
             Ok(_) => self.sync_selection(),
             Err(error) => {
@@ -1670,19 +1662,8 @@ impl App {
         table.nav.reset(Some(self.doc.limits()));
         let kind = PanelKind::Table(Box::new(table));
         let label = Some("Open table".to_owned());
-        if self
-            .panels
-            .get(beside)
-            .is_some_and(|panel| panel.kind.is_start())
-        {
-            _ = self.replace_panel(beside, kind, label);
-            return;
-        }
         match self.restructure(label, |panels| {
-            Ok((
-                panels.open(kind, beside, Some(crate::panels::Axis::Vertical))?,
-                Vec::new(),
-            ))
+            panels.open_center(kind, beside, Some(crate::panels::Axis::Vertical))
         }) {
             Ok(_) => {}
             Err(error) => {
@@ -1708,10 +1689,7 @@ impl App {
             )));
             return;
         };
-        if let Some(id) = self.panels.pipeline_for_track(track) {
-            self.panel_command(PanelsCommand::Focus(id));
-            return;
-        }
+        let existing = self.panels.pipeline_for_track(track);
         let model = PipelineModel::new(
             TrackSource::Resolved {
                 track,
@@ -1719,26 +1697,42 @@ impl App {
             },
             self.settings.resolved().link_by_default(),
         );
+        let inspector = TransactionModel::new(
+            self.table_memory_budget(),
+            self.settings.resolved().transaction.detail_items,
+        );
         let focused = self.panels.focused_id();
         let label = Some(format!("Open pipeline {}", declaration.path.join(".")));
-        if self.panels.focused().kind.is_start() {
-            _ = self.replace_panel(focused, PanelKind::Pipeline(Box::new(model)), label);
-            return;
-        }
+        let beside = self.panels.center_target(focused);
         match self.restructure(label, |panels| {
-            Ok((
-                panels.open(
+            let replace_start = existing.is_none()
+                && beside
+                    .is_some_and(|id| panels.get(id).is_some_and(|panel| panel.kind.is_start()));
+            let added = usize::from(existing.is_none() && !replace_start)
+                + usize::from(panels.first_free_transaction().is_none());
+            anyhow::ensure!(
+                panels.len() + added <= crate::panels::MAX_PANELS,
+                "panel limit reached"
+            );
+            let (pipeline, removed) = if let Some(id) = existing {
+                (id, Vec::new())
+            } else {
+                panels.open_center(
                     PanelKind::Pipeline(Box::new(model)),
                     focused,
                     Some(crate::panels::Axis::Vertical),
-                )?,
-                Vec::new(),
-            ))
+                )?
+            };
+            panels.ensure_transaction(inspector)?;
+            // Selecting records remains the pipeline's keyboard interaction.
+            panels.focus(pipeline)?;
+            Ok((pipeline, removed))
         }) {
             Ok(_) => {
                 if let Some(w) = self.panels.waves_mut(focused) {
                     w.menu_dismiss();
                 }
+                self.sync_selection();
             }
             Err(error) => {
                 self.events.push(Event::Notice(error.to_string()));

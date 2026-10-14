@@ -8,6 +8,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     dock::Panel,
     input::{Input, InputEvent, InputState},
+    menu::PopupMenu,
     scroll::ScrollableElement,
     tooltip::Tooltip,
 };
@@ -179,6 +180,16 @@ impl Panel for TransactionPanelView {
     }
     fn inner_padding(&self, _: &App) -> bool {
         false
+    }
+
+    fn dropdown_menu(
+        &mut self,
+        menu: PopupMenu,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> PopupMenu {
+        let menu = crate::dock::placement_menu(menu, &self.ws, self.id, self.generation, cx);
+        crate::dock::close_menu(menu, &self.ws, self.id, self.generation, cx)
     }
 
     fn toolbar_buttons(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<Vec<Button>> {

@@ -152,7 +152,7 @@ fn search_order_activation_keyboard_and_notices() {
         requests.as_slice(),
         [volna_core::session::LoadRequest::Track { .. }]
     ));
-    assert_eq!(app.panels.len(), 2);
+    assert_eq!(app.panels.len(), 3);
     assert!(app.panels.focused().kind.pipeline().is_some());
     assert!(app.status().sidebar_notice.unwrap().contains("Log sites"));
     assert!(
@@ -166,7 +166,7 @@ fn search_order_activation_keyboard_and_notices() {
     app.handle(Command::SetFilter(String::new()));
     app.handle(Command::ScopesKey(Key::Enter));
     assert!(app.status().sidebar_notice.is_none());
-    assert_eq!(app.panels.len(), 3);
+    assert_eq!(app.panels.len(), 4);
     assert_eq!(
         app.panels.focused().kind.pipeline().unwrap().track.path(),
         ["soc", "cpu", "thread0"]

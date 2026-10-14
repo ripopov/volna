@@ -565,7 +565,7 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
 
     let generator = Member::Generator(0);
     app.handle(Command::ActivateMembers(a_all(vec![generator])));
-    assert_eq!(app.panels.len(), 3);
+    assert_eq!(app.panels.len(), 4);
     assert!(app.take_requests().is_empty());
     let second = app.panels.focused_id();
     frame(&mut app, second, &theme);
@@ -576,13 +576,13 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
     app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
         scope(session.as_ref(), &["cpu", "thread0"]),
     )])));
-    assert_eq!(app.panels.len(), 3);
+    assert_eq!(app.panels.len(), 4);
     assert_eq!(app.panels.focused_id(), pipeline);
     let bus = scope(session.as_ref(), &["cpu", "bus"]);
     app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(bus)])));
     pump(&mut app);
     let bus_panel = app.panels.focused_id();
-    assert_eq!(app.panels.len(), 4);
+    assert_eq!(app.panels.len(), 5);
     frame(&mut app, bus_panel, &theme);
     let grey = theme.stage_fallback().fill;
     assert_eq!(app.scene().quads().filter(|(_, c)| *c == grey).count(), 1);
@@ -2277,7 +2277,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
         .unwrap();
     assert!(plan.report().notices.is_empty());
     plan.commit(&mut restored).unwrap();
-    assert_eq!(restored.panels.len(), 2);
+    assert_eq!(restored.panels.len(), 3);
     let p = restored.panels.pipeline(pipeline).unwrap();
     assert_eq!(p.track.path(), ["cpu", "thread0"]);
     assert!(p.is_attached());
@@ -2396,7 +2396,11 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
         app.doc.track(a(track)).is_none(),
         "released with its last consumer"
     );
-    assert_eq!(app.panels.focused_id(), waves);
+    assert_eq!(
+        app.panels.focused_id(),
+        app.panels.first_free_transaction().unwrap()
+    );
+    app.handle(Command::Panels(PanelsCommand::Focus(waves)));
     app.deliver(request.perform());
     assert!(
         app.doc.track(a(track)).is_none(),
@@ -2470,18 +2474,18 @@ fn a_stream_opened_first_replaces_the_start_panel_and_rows_find_a_waveform_tab()
     assert!(app.panels.focused().kind.is_start());
     let track = stream_track(session.as_ref(), &["cpu", "thread0"]);
     app.handle(Command::OpenPipeline { track: a(track) });
-    assert_eq!(app.panels.len(), 1);
+    assert_eq!(app.panels.len(), 2);
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, start);
     assert!(app.panels.pipeline(pipeline).unwrap().is_attached());
     pump(&mut app);
     assert!(app.doc.track(a(track)).is_some());
     app.handle(Command::AddVars(a_all(vec![0])));
-    assert_eq!(app.panels.len(), 2);
+    assert_eq!(app.panels.len(), 3);
     let waves = app.panels.focused_id();
     assert_eq!(app.panels.waves(waves).unwrap().items().len(), 1);
     assert_eq!(
-        app.panels.layout(),
+        app.panels.layout().center.as_ref().unwrap(),
         &Layout::Tabs {
             tabs: vec![pipeline, waves],
             active: waves
@@ -2489,13 +2493,13 @@ fn a_stream_opened_first_replaces_the_start_panel_and_rows_find_a_waveform_tab()
     );
     app.handle(Command::Panels(PanelsCommand::Focus(pipeline)));
     app.handle(Command::AddVars(a_all(vec![0])));
-    assert_eq!(app.panels.len(), 2);
+    assert_eq!(app.panels.len(), 3);
     assert_eq!(app.panels.focused_id(), waves);
     assert_eq!(app.panels.waves(waves).unwrap().items().len(), 2);
     app.handle(Command::Panels(PanelsCommand::Close(waves)));
     app.handle(Command::Panels(PanelsCommand::Close(pipeline)));
     assert_eq!(app.panels.len(), 1);
-    assert!(app.panels.focused().kind.is_start());
+    assert!(app.panels.focused().kind.transaction().is_some());
     assert!(app.doc.track(a(track)).is_none());
     app.panels.validate().unwrap();
 }
@@ -2541,8 +2545,15 @@ fn the_checked_in_showcase_has_two_pipeline_streams_on_a_cycle_time_base() {
         );
         assert!(app.scene().texts().any(|t| t.contains(": lw   a1, 0(a2)")));
     }
-    assert_eq!(app.panels.len(), 2);
-    assert!(app.panels.iter().all(|p| p.kind.pipeline().is_some()));
+    assert_eq!(app.panels.len(), 3);
+    assert_eq!(
+        app.panels
+            .iter()
+            .filter(|p| p.kind.pipeline().is_some())
+            .count(),
+        2
+    );
+    assert!(app.panels.first_free_transaction().is_some());
     assert!(counts.iter().all(|n| *n > 500), "{counts:?}");
     assert!(app.status().time_range.unwrap().ends_with("cycle"));
 }
@@ -3093,20 +3104,29 @@ fn a_pipeline_chip_goes_on_click_moves_onto_cycles_on_drag_and_esc_cancels() {
     assert_eq!(app.doc.markers()[0].time, a);
 }
 
+fn set_center(app: &mut App, center: Layout) {
+    let mut layout = app.panels.layout().clone();
+    layout.center = Some(center);
+    app.handle(Command::Panels(PanelsCommand::SetLayout {
+        layout,
+        from_revision: app.panels.revision(),
+    }));
+}
+
 fn dock_timelines(
     app: &mut App,
     waves: PanelId,
     pipeline: PanelId,
     axis: volna_core::panels::Axis,
 ) {
-    app.handle(Command::Panels(PanelsCommand::SetLayout {
-        layout: Layout::Split {
+    set_center(
+        app,
+        Layout::Split {
             split: axis,
             sizes: vec![0.5, 0.5],
             children: vec![Layout::single(waves), Layout::single(pipeline)],
         },
-        from_revision: app.panels.revision(),
-    }));
+    );
 }
 
 fn timeline_frames(app: &mut App, waves: PanelId, pipeline: PanelId, width: f32, theme: &Theme) {
@@ -3349,21 +3369,22 @@ fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans
         tabs: vec![waves, inactive],
         active: waves,
     };
-    app.handle(Command::Panels(PanelsCommand::SetLayout {
-        layout: Layout::Split {
+    set_center(
+        &mut app,
+        Layout::Split {
             split: Axis::Horizontal,
             sizes: vec![0.4, 0.3, 0.3],
             children: vec![tabs.clone(), Layout::single(pipeline), Layout::single(side)],
         },
-        from_revision: app.panels.revision(),
-    }));
+    );
     let stack = |children| Layout::Split {
         split: Axis::Vertical,
         sizes: vec![0.5, 0.5],
         children,
     };
-    app.handle(Command::Panels(PanelsCommand::SetLayout {
-        layout: Layout::Split {
+    set_center(
+        &mut app,
+        Layout::Split {
             split: Axis::Horizontal,
             sizes: vec![0.7, 0.3],
             children: vec![
@@ -3371,8 +3392,7 @@ fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans
                 Layout::single(side),
             ],
         },
-        from_revision: app.panels.revision(),
-    }));
+    );
     let theme = Theme::one_dark();
     timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
     assert_eq!(aligned_metadata(&app, waves, pipeline), 620.0);
@@ -3394,8 +3414,9 @@ fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans
             .shared_metadata
     );
 
-    app.handle(Command::Panels(PanelsCommand::SetLayout {
-        layout: stack(vec![
+    set_center(
+        &mut app,
+        stack(vec![
             Layout::single(pipeline),
             Layout::Split {
                 split: Axis::Horizontal,
@@ -3403,8 +3424,7 @@ fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans
                 children: vec![tabs, Layout::single(side)],
             },
         ]),
-        from_revision: app.panels.revision(),
-    }));
+    );
     let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
     assert!(saved.timeline_dividers.is_empty());
 }
@@ -3448,8 +3468,9 @@ fn saved_timeline_membership_uses_the_dock_tree_without_settings() {
     let (mut app, session, waves, pipeline) = opened(30);
     app.handle(Command::Settings(volna_core::app::SettingsCommand::Open));
     let settings = app.panels.settings_id().unwrap();
-    app.handle(Command::Panels(PanelsCommand::SetLayout {
-        layout: Layout::Split {
+    set_center(
+        &mut app,
+        Layout::Split {
             split: Axis::Vertical,
             sizes: vec![0.5, 0.5],
             children: vec![
@@ -3461,8 +3482,7 @@ fn saved_timeline_membership_uses_the_dock_tree_without_settings() {
                 },
             ],
         },
-        from_revision: app.panels.revision(),
-    }));
+    );
     let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
     let mut restored = App::new();
     restored.set_session(session);

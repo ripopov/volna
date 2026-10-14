@@ -1,7 +1,9 @@
 //! Panel identity, ownership, and docking operations.
 
 pub(crate) mod content;
+mod dock;
 mod layout;
+pub use dock::{DockLayout, Placement, SideDock};
 mod timeline;
 pub(crate) mod workspace;
 pub use layout::{Axis, Layout, MAX_LAYOUT_DEPTH, MAX_PANELS};
@@ -23,17 +25,33 @@ use crate::wave::model::{PointerEvent, WaveModel};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PanelsCommand {
-    Split { panel: PanelId, axis: Axis },
-    NewTab { group_of: PanelId },
+    Move {
+        panel: PanelId,
+        placement: Placement,
+    },
+    ToggleRightDock,
+    Split {
+        panel: PanelId,
+        axis: Axis,
+    },
+    NewTab {
+        group_of: PanelId,
+    },
     Close(PanelId),
     CloseOthers(PanelId),
     Focus(PanelId),
     FocusNext,
     FocusPrev,
     FocusIndex(usize),
-    ToggleLink { panel: PanelId, dim: LinkDim },
+    ToggleLink {
+        panel: PanelId,
+        dim: LinkDim,
+    },
     Rename(PanelId, Option<String>),
-    SetLayout { layout: Layout, from_revision: u64 },
+    SetLayout {
+        layout: DockLayout,
+        from_revision: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -328,7 +346,7 @@ impl Panel {
 }
 
 pub struct Panels {
-    layout: Layout,
+    layout: DockLayout,
     pub(crate) timeline: Vec<TimelineDivider>,
     timeline_revision: Option<u64>,
     panels: BTreeMap<PanelId, Panel>,
@@ -347,7 +365,7 @@ impl Panels {
     pub fn new() -> Self {
         let id = PanelId(1);
         Self {
-            layout: Layout::single(id),
+            layout: DockLayout::single(id),
             timeline: Vec::new(),
             timeline_revision: None,
             panels: BTreeMap::from([(id, Panel::new(id, PanelKind::Start))]),
@@ -358,7 +376,7 @@ impl Panels {
     }
 
     pub(crate) fn restore(
-        layout: Layout,
+        layout: DockLayout,
         panels: Vec<Panel>,
         focused: PanelId,
         previous: &Self,
@@ -389,7 +407,11 @@ impl Panels {
         result.layout = result.layout.normalized().expect("validated layout");
         result.validate()?;
         if let Some(id) = previous.settings_id() {
-            result.readd_settings(id, previous.focused == id)?;
+            result.readd_settings(
+                id,
+                previous.layout.placement(id).unwrap(),
+                previous.focused == id,
+            )?;
         }
         Ok(result)
     }
@@ -412,7 +434,12 @@ impl Panels {
     }
 
     pub fn first_start(&self) -> Option<PanelId> {
-        self.first(PanelKind::is_start)
+        self.layout
+            .center
+            .as_ref()?
+            .panels()
+            .into_iter()
+            .find(|id| self.panels[id].kind.is_start())
     }
 
     fn first(&self, pred: impl Fn(&PanelKind) -> bool) -> Option<PanelId> {
@@ -426,37 +453,49 @@ impl Panels {
         if let Some(id) = self.settings_id() {
             return self.focus(id);
         }
-        ensure!(self.len() < MAX_PANELS, "panel limit reached");
-        let id = self.unused_id()?;
-        self.advance()?;
-        self.next_id = id.0 + 1;
-        self.insert_settings(id, self.focused, true);
+        if let Some(beside) = self.center_target(self.focused) {
+            self.open(PanelKind::Settings, beside, None)?;
+        } else {
+            self.open_in(PanelKind::Settings, Placement::Center)?;
+        }
         Ok(true)
     }
 
-    fn insert_settings(&mut self, id: PanelId, beside: PanelId, focus: bool) {
-        if let Some(Layout::Tabs { tabs, active }) = self.layout.group_mut(beside) {
+    fn insert_settings(
+        &mut self,
+        id: PanelId,
+        preferred: PanelId,
+        placement: Placement,
+        focus: bool,
+    ) {
+        let beside = self.placement_target(preferred, placement);
+        if let Some(Layout::Tabs { tabs, active }) =
+            beside.and_then(|beside| self.layout.group_mut(beside))
+        {
             tabs.push(id);
             if focus {
                 *active = id;
             }
+        } else {
+            self.layout.insert(id, placement);
         }
         self.panels.insert(id, Panel::new(id, PanelKind::Settings));
         if focus {
             self.focused = id;
+            self.layout.activate(id);
         }
     }
 
-    fn readd_settings(&mut self, id: PanelId, focus: bool) -> Result<()> {
+    fn readd_settings(&mut self, id: PanelId, placement: Placement, focus: bool) -> Result<()> {
         ensure!(!self.panels.contains_key(&id), "settings id reused");
         ensure!(self.len() < MAX_PANELS, "panel limit reached");
         self.next_id = self.next_id.max(id.0 + 1);
         let beside = self.focused;
-        self.insert_settings(id, beside, focus);
+        self.insert_settings(id, beside, placement, focus);
         self.validate()
     }
 
-    pub fn layout(&self) -> &Layout {
+    pub fn layout(&self) -> &DockLayout {
         &self.layout
     }
     pub fn revision(&self) -> u64 {
@@ -584,8 +623,8 @@ impl Panels {
     pub fn validate(&self) -> Result<()> {
         self.layout.validate(&self.ids())?;
         ensure!(
-            self.layout.visible().contains(&self.focused),
-            "focused panel is not visible"
+            self.layout.active_for(self.focused) == Some(self.focused),
+            "focused panel is not an active tab"
         );
         ensure!(
             self.content_count() > 0,
@@ -602,7 +641,7 @@ impl Panels {
         Ok(())
     }
 
-    pub fn set_layout(&mut self, layout: Layout, from_revision: u64) -> Result<bool> {
+    pub fn set_layout(&mut self, layout: DockLayout, from_revision: u64) -> Result<bool> {
         ensure!(from_revision == self.revision, "stale layout proposal");
         layout.validate(&self.ids())?;
         let layout = layout.normalized().expect("validated nonempty tree");
@@ -613,15 +652,104 @@ impl Panels {
         self.advance()?;
         let visible = layout.visible();
         if !visible.contains(&self.focused) {
-            self.focused = layout.active_for(self.focused).unwrap_or(visible[0]);
+            let active = layout.active_for(self.focused).unwrap();
+            self.focused = if visible.contains(&active) {
+                active
+            } else {
+                visible.first().copied().unwrap_or(active)
+            };
         }
         self.layout = layout;
         Ok(true)
     }
 
+    pub fn move_panel(&mut self, id: PanelId, placement: Placement) -> Result<bool> {
+        ensure!(self.panels.contains_key(&id), "unknown panel");
+        if self.layout.placement(id) == Some(placement) {
+            return self.focus(id);
+        }
+        let mut layout = self.layout.clone();
+        layout.remove(id);
+        layout = layout.normalized().unwrap_or(DockLayout {
+            center: None,
+            right: None,
+        });
+        layout.insert(id, placement);
+        self.set_layout(layout, self.revision)?;
+        self.focus(id)?;
+        Ok(true)
+    }
+
+    pub fn toggle_right_dock(&mut self) -> Result<bool> {
+        let Some(dock) = self.layout.right.as_ref() else {
+            return Ok(false);
+        };
+        let mut layout = self.layout.clone();
+        layout.right.as_mut().unwrap().open = !dock.open;
+        self.set_layout(layout, self.revision)
+    }
+
+    /// Reveal the reusable inspector in its current region, or create one in
+    /// the right dock. Pinned inspectors keep their records and are not reused.
+    pub(crate) fn ensure_transaction(&mut self, model: TransactionModel) -> Result<PanelId> {
+        if let Some(id) = self.first_free_transaction() {
+            self.focus(id)?;
+            Ok(id)
+        } else {
+            self.open_in(PanelKind::Transaction(Box::new(model)), Placement::Right)
+        }
+    }
+
+    pub(crate) fn open_in(&mut self, kind: PanelKind, placement: Placement) -> Result<PanelId> {
+        ensure!(self.len() < MAX_PANELS, "panel limit reached");
+        let id = self.unused_id()?;
+        self.advance()?;
+        self.next_id = id.0 + 1;
+        self.layout.insert(id, placement);
+        self.focused = id;
+        self.layout.activate(id);
+        self.panels.insert(id, Panel::new(id, kind));
+        Ok(id)
+    }
+
+    /// Prefer the requested central group, falling back to the first visible
+    /// central panel. Sidebar focus must not determine a new viewer's region.
+    pub(crate) fn center_target(&self, preferred: PanelId) -> Option<PanelId> {
+        self.placement_target(preferred, Placement::Center)
+    }
+
+    fn placement_target(&self, preferred: PanelId, placement: Placement) -> Option<PanelId> {
+        let tree = match placement {
+            Placement::Center => self.layout.center.as_ref(),
+            Placement::Right => self.layout.right.as_ref().map(|dock| &dock.layout),
+        }?;
+        tree.active_for(preferred)
+            .or_else(|| tree.visible().first().copied())
+    }
+
+    /// Open a viewer centrally, replacing a start placeholder when present.
+    /// Explicit tab/split actions use `open` to keep the requested region.
+    pub(crate) fn open_center(
+        &mut self,
+        kind: PanelKind,
+        preferred: PanelId,
+        split: Option<Axis>,
+    ) -> Result<(PanelId, Vec<Panel>)> {
+        let id = match self.center_target(preferred) {
+            Some(beside) if self.panels[&beside].kind.is_start() => {
+                let result = self.replace(beside, kind)?;
+                self.focus(result.0)?;
+                return Ok(result);
+            }
+            Some(beside) => self.open(kind, beside, split)?,
+            None => self.open_in(kind, Placement::Center)?,
+        };
+        Ok((id, Vec::new()))
+    }
+
     pub fn focus(&mut self, id: PanelId) -> Result<bool> {
         ensure!(self.panels.contains_key(&id), "unknown panel");
-        if self.focused == id {
+        if self.focused == id && self.layout.visible().contains(&id) {
             return Ok(false);
         }
         self.advance()?;
@@ -763,6 +891,7 @@ impl Panels {
         self.next_id = id.0 + 1;
         self.layout = layout;
         self.focused = id;
+        self.layout.activate(id);
         self.panels.insert(id, Panel::new(id, kind));
         Ok(id)
     }
@@ -820,12 +949,24 @@ impl Panels {
                 .insert(start, Panel::new(start, PanelKind::Start));
             tabs.push(start);
         }
-        self.layout = Layout::Tabs { tabs, active: id };
+        let kept = Layout::Tabs { tabs, active: id };
+        self.layout = if self.layout.placement(id) == Some(Placement::Right) {
+            DockLayout {
+                center: None,
+                right: Some(SideDock {
+                    layout: kept,
+                    width: self.layout.right.as_ref().unwrap().width,
+                    open: true,
+                }),
+            }
+        } else {
+            kept.into()
+        };
         self.focused = id;
         Ok(removed.into_iter().map(|(_, panel)| panel).collect())
     }
 
-    pub fn saved_view(&self) -> (Layout, PanelId, Vec<&Panel>) {
+    pub fn saved_view(&self) -> (DockLayout, PanelId, Vec<&Panel>) {
         let mut layout = self.layout.clone();
         for id in self.iter().filter(|p| p.kind.is_settings()).map(|p| p.id) {
             layout.remove(id);
@@ -834,7 +975,7 @@ impl Panels {
         let focused = if self.panels[&self.focused].kind.is_settings() {
             layout
                 .active_for(self.focused)
-                .unwrap_or_else(|| layout.visible()[0])
+                .unwrap_or_else(|| layout.active_for(layout.panels()[0]).unwrap())
         } else {
             self.focused
         };
@@ -842,7 +983,7 @@ impl Panels {
         (layout, focused, panels)
     }
 
-    pub(crate) fn structure(&self) -> (Layout, PanelId, BTreeSet<PanelId>) {
+    pub(crate) fn structure(&self) -> (DockLayout, PanelId, BTreeSet<PanelId>) {
         let (layout, focused, panels) = self.saved_view();
         let ids = panels.iter().map(|p| p.id).collect();
         (layout, focused, ids)
@@ -858,10 +999,12 @@ impl Panels {
         }
         structure.layout.validate(&ids)?;
         ensure!(
-            structure.layout.visible().contains(&structure.focused),
-            "focused panel is not visible"
+            structure.layout.active_for(structure.focused) == Some(structure.focused),
+            "focused panel is not an active tab"
         );
-        let settings = self.settings_id();
+        let settings = self
+            .settings_id()
+            .map(|id| (id, self.layout.placement(id).unwrap()));
         self.advance()?;
         let closed = structure
             .close
@@ -875,8 +1018,8 @@ impl Panels {
         }
         self.layout = structure.layout;
         self.focused = structure.focused;
-        if let Some(id) = settings {
-            self.insert_settings(id, structure.focused, false);
+        if let Some((id, placement)) = settings {
+            self.insert_settings(id, structure.focused, placement, false);
         }
         self.validate()?;
         Ok(Structure {
@@ -890,13 +1033,15 @@ impl Panels {
     pub fn reset(&mut self) -> Result<()> {
         let id = self.unused_id()?;
         self.advance()?;
-        let settings = self.settings_id().map(|id| (id, self.focused == id));
+        let settings = self
+            .settings_id()
+            .map(|id| (id, self.layout.placement(id).unwrap(), self.focused == id));
         self.next_id = id.0 + 1;
         self.panels = BTreeMap::from([(id, Panel::new(id, PanelKind::Start))]);
-        self.layout = Layout::single(id);
+        self.layout = DockLayout::single(id);
         self.focused = id;
-        if let Some((settings, focus)) = settings {
-            self.readd_settings(settings, focus)?;
+        if let Some((settings, placement, focus)) = settings {
+            self.readd_settings(settings, placement, focus)?;
         }
         Ok(())
     }

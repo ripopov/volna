@@ -19,7 +19,7 @@ use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Axis as GAxis, Context, Div, Empty, Entity, EventEmitter,
     FocusHandle, Focusable, IntoElement, Render, Stateful, WeakEntity, Window, div, px,
 };
-use volna_core::panels::{Axis, Layout, PanelId, PanelsCommand};
+use volna_core::panels::{Axis, DockLayout, Layout, PanelId, PanelsCommand, Placement, SideDock};
 use volna_core::{App as CoreApp, Command};
 
 use crate::app::Workspace;
@@ -138,8 +138,10 @@ pub(crate) struct DockHost {
     views: BTreeMap<PanelId, PanelView>,
     single: Rc<Cell<bool>>,
     revision: Option<u64>,
-    installed: Option<Layout>,
-    echo: Option<Layout>,
+    installed: Option<DockLayout>,
+    echo: Option<DockLayout>,
+    zoom: f32,
+    right_width: Option<f32>,
     generation: u64,
 }
 
@@ -164,12 +166,31 @@ impl DockHost {
             if !matches!(event, base::DockEvent::LayoutChanged) {
                 return;
             }
-            let candidate = from_dock(&area.read(cx).dump(cx).center);
             let Some(host) = &mut ws.dock else { return };
+            let snapshot = area.read(cx).dump(cx);
+            let measured_width = snapshot
+                .right_dock
+                .as_ref()
+                .map(|dock| f32::from(dock.size()));
+            let mut candidate = from_area(&snapshot, host.zoom);
+            // Clamping to a narrow window must not overwrite the preferred
+            // width when an unrelated tab or focus event arrives.
+            if measured_width == host.right_width
+                && let Ok(layout) = &mut candidate
+                && let (Some(right), Some(previous)) = (
+                    &mut layout.right,
+                    host.installed
+                        .as_ref()
+                        .and_then(|layout| layout.right.as_ref()),
+                )
+            {
+                right.width = previous.width;
+            }
             match candidate {
                 Ok(layout) if host.echo.as_ref() == Some(&layout) => {}
                 Ok(layout) => {
                     let revision = host.revision.unwrap_or(0);
+                    host.right_width = measured_width;
                     host.installed = Some(layout.clone());
                     host.echo = Some(layout.clone());
                     ws.dispatch(
@@ -181,7 +202,12 @@ impl DockHost {
                         cx,
                     );
                 }
-                Err(e) => log::warn!("invalid dock layout: {e:#}"),
+                Err(e) => {
+                    log::warn!("invalid dock layout: {e:#}");
+                    // A rejected widget proposal must not remain on screen.
+                    host.installed = None;
+                    cx.notify();
+                }
             }
         })
         .detach();
@@ -192,6 +218,8 @@ impl DockHost {
             revision: None,
             installed: None,
             echo: None,
+            zoom: 1.0,
+            right_width: None,
             generation: 0,
         }
     }
@@ -211,7 +239,9 @@ impl DockHost {
             self.revision = None;
             self.generation = app.doc.generation();
         }
-        self.single.set(app.panels.len() == 1);
+        // Content panels keep their placement menu even when they are alone.
+        self.single
+            .set(app.panels.len() == 1 && app.panels.focused().kind.is_start());
         self.views.retain(|id, _| app.panels.get(*id).is_some());
         for panel in app.panels.iter() {
             self.views.entry(panel.id).or_insert_with(|| {
@@ -255,9 +285,24 @@ impl DockHost {
             });
         }
         let layout = app.panels.layout();
-        if self.installed.as_ref() != Some(layout) {
-            let bounds = self.area.read(cx).bounds();
-            if app.panels.len() > 1
+        let zoom = crate::theme::theme(cx).zoom;
+        let bounds = self.area.read(cx).bounds();
+        let available = f32::from(bounds.size.width);
+        let right_width = layout.right.as_ref().map(|dock| {
+            let center_min = if layout.center.is_some() {
+                (available * 0.5).min(160.0 * zoom)
+            } else {
+                0.0
+            };
+            (dock.width * zoom)
+                .min((available - center_min).max(100.0))
+                .max(100.0)
+        });
+        if self.installed.as_ref() != Some(layout)
+            || self.zoom != zoom
+            || self.right_width != right_width
+        {
+            if (app.panels.len() > 1 || layout.right.is_some())
                 && (bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0))
             {
                 window.on_next_frame(move |_, cx| {
@@ -265,16 +310,87 @@ impl DockHost {
                 });
                 return;
             }
-            let tree = to_dock(
-                layout,
-                &self.views,
-                f32::from(bounds.size.width),
-                f32::from(bounds.size.height),
-                cx,
-            );
-            self.area
-                .update(cx, |area, cx| area.set_center(tree, window, cx));
-            self.echo = from_dock(&self.area.read(cx).dump(cx).center).ok();
+            let same_trees = self.zoom == zoom
+                && self.installed.as_ref().is_some_and(|installed| {
+                    installed.center == layout.center
+                        && installed.right.as_ref().map(|dock| &dock.layout)
+                            == layout.right.as_ref().map(|dock| &dock.layout)
+                });
+            if same_trees {
+                // Width and visibility belong to the dock, not its pane tree.
+                // Keep Kit's tab groups and split widgets alive for these edits.
+                if let Some(dock) = &layout.right {
+                    self.area.update(cx, |area, cx| {
+                        area.set_dock_size(
+                            base::DockPlacement::Right,
+                            px(right_width.unwrap()),
+                            window,
+                            cx,
+                        );
+                        if area.is_dock_open(base::DockPlacement::Right) != dock.open {
+                            area.toggle_dock(base::DockPlacement::Right, window, cx);
+                        }
+                    });
+                }
+            } else {
+                let occupied = layout
+                    .right
+                    .as_ref()
+                    .filter(|dock| dock.open)
+                    .and(right_width)
+                    .unwrap_or(0.0);
+                let center =
+                    layout
+                        .center
+                        .as_ref()
+                        .map_or_else(base::DockLayout::h_split, |tree| {
+                            to_dock(
+                                tree,
+                                &self.views,
+                                (f32::from(bounds.size.width) - occupied).max(1.0),
+                                f32::from(bounds.size.height),
+                                cx,
+                            )
+                        });
+                let right = layout.right.as_ref().map(|dock| {
+                    to_dock(
+                        &dock.layout,
+                        &self.views,
+                        right_width.unwrap(),
+                        f32::from(bounds.size.height),
+                        cx,
+                    )
+                });
+                self.area.update(cx, |area, cx| {
+                    // Remove the outgoing region before installing either tree: a
+                    // moved panel must never belong to both regions during reconcile.
+                    area.remove_dock(base::DockPlacement::Right, window, cx);
+                    // Unsupported regions can only arrive in a rejected proposal.
+                    area.remove_dock(base::DockPlacement::Left, window, cx);
+                    area.remove_dock(base::DockPlacement::Bottom, window, cx);
+                    area.set_center(center, window, cx);
+                    if let (Some(tree), Some(dock)) = (right, &layout.right) {
+                        area.set_dock(base::DockPlacement::Right, tree, window, cx);
+                        area.set_dock_size(
+                            base::DockPlacement::Right,
+                            px(right_width.unwrap()),
+                            window,
+                            cx,
+                        );
+                        if !dock.open {
+                            area.toggle_dock(base::DockPlacement::Right, window, cx);
+                        }
+                    }
+                });
+            }
+            self.zoom = zoom;
+            self.right_width = right_width;
+            self.echo = from_area(&self.area.read(cx).dump(cx), zoom).ok();
+            if let (Some(echo), Some(preferred)) = (&mut self.echo, &layout.right)
+                && let Some(right) = &mut echo.right
+            {
+                right.width = preferred.width;
+            }
             self.installed = Some(layout.clone());
         }
         if self.revision != Some(app.panels.revision()) {
@@ -310,6 +426,120 @@ impl DockHost {
             cx.notify(view.entity_id());
         }
     }
+}
+
+fn from_area(state: &base::DockAreaState, zoom: f32) -> Result<DockLayout> {
+    ensure!(
+        state.left_dock.is_none() && state.bottom_dock.is_none(),
+        "unsupported dock region"
+    );
+    let empty = |state: &base::PanelState| {
+        !matches!(state.info, base::PanelInfo::Panel(_)) && state.children.is_empty()
+    };
+    Ok(DockLayout {
+        center: if empty(&state.center) {
+            None
+        } else {
+            Some(from_dock(&state.center)?)
+        },
+        right: state
+            .right_dock
+            .as_ref()
+            .filter(|dock| !empty(dock.panel()))
+            .map(|dock| -> Result<SideDock> {
+                Ok(SideDock {
+                    layout: from_dock(dock.panel())?,
+                    width: f32::from(dock.size()) / zoom,
+                    open: dock.open(),
+                })
+            })
+            .transpose()?,
+    })
+}
+
+/// Panel placement is a core command so menu moves share history and persistence
+/// with drag-and-drop proposals from DockArea.
+pub(crate) fn placement_menu(
+    menu: PopupMenu,
+    ws: &WeakEntity<Workspace>,
+    id: PanelId,
+    generation: u64,
+    cx: &App,
+) -> PopupMenu {
+    let placement = ws
+        .upgrade()
+        .and_then(|ws| ws.read(cx).app.panels.layout().placement(id));
+    let (label, destination) = if placement == Some(Placement::Right) {
+        ("Move to center", Placement::Center)
+    } else {
+        ("Move to right sidebar", Placement::Right)
+    };
+    let ws = ws.clone();
+    menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+        _ = ws.update(cx, |ws, cx| {
+            ws.dispatch_if_current(
+                generation,
+                Command::Panels(PanelsCommand::Move {
+                    panel: id,
+                    placement: destination,
+                }),
+                Some(window),
+                cx,
+            );
+        });
+    }))
+}
+
+/// Hiding the sidebar preserves all its tabs; closing a tab removes only that
+/// panel. Center panels have no sidebar to hide.
+pub(crate) fn close_menu(
+    mut menu: PopupMenu,
+    ws: &WeakEntity<Workspace>,
+    id: PanelId,
+    generation: u64,
+    cx: &App,
+) -> PopupMenu {
+    let in_sidebar = ws
+        .upgrade()
+        .is_some_and(|ws| ws.read(cx).app.panels.layout().placement(id) == Some(Placement::Right));
+    if in_sidebar {
+        let ws = ws.clone();
+        menu = menu.item(
+            PopupMenuItem::new("Hide sidebar").on_click(move |_, window, cx| {
+                _ = ws.update(cx, |ws, cx| {
+                    let layout = ws.app.panels.layout();
+                    if layout.placement(id) == Some(Placement::Right)
+                        && layout.right.as_ref().is_some_and(|dock| dock.open)
+                    {
+                        ws.dispatch_if_current(
+                            generation,
+                            Command::Panels(PanelsCommand::ToggleRightDock),
+                            Some(window),
+                            cx,
+                        );
+                    }
+                });
+            }),
+        );
+    }
+    let ws = ws.clone();
+    menu.item(
+        PopupMenuItem::new(if in_sidebar {
+            "Close tab"
+        } else {
+            "Close panel"
+        })
+        .on_click(move |_, window, cx| {
+            _ = ws.update(cx, |ws, cx| {
+                ws.dispatch_if_current(
+                    generation,
+                    Command::Panels(PanelsCommand::Close(id)),
+                    Some(window),
+                    cx,
+                );
+            });
+        }),
+    )
 }
 
 fn to_dock(
@@ -786,6 +1016,7 @@ impl Panel for CanvasPanelView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> PopupMenu {
+        menu = placement_menu(menu, &self.ws, self.id, self.generation, cx);
         for (title, axis) in [
             ("Split Right", Axis::Horizontal),
             ("Split Down", Axis::Vertical),
@@ -803,9 +1034,7 @@ impl Panel for CanvasPanelView {
                 },
             )));
         }
-        menu = menu.item(PopupMenuItem::new("Close Panel").on_click(cx.listener(
-            |view, _, window, cx| view.dispatch(PanelsCommand::Close(view.id), window, cx),
-        )));
+        menu = close_menu(menu, &self.ws, self.id, self.generation, cx);
         menu = menu.item(
             PopupMenuItem::new("Close Other Panels").on_click(cx.listener(
                 |view, _, window, cx| {

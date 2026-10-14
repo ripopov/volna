@@ -93,6 +93,34 @@ list and owns window chrome. Local and remote sessions return the same
 immutable trace objects. Remote transport carries raw trace data; settings,
 presentation, and workspace edits stay in the viewer.
 
+### Docking and transaction details
+
+New waveform, pipeline, table, and Settings panels open in the center, even
+when the sidebar has focus or the center is empty. Requests that reuse an
+existing panel preserve its placement and reveal it if its sidebar is hidden.
+Explicit split and new-tab actions stay in the chosen panel's region.
+
+Opening a pipeline automatically reveals an unpinned transaction inspector,
+creating one in the right sidebar when needed. Keyboard focus stays in the
+pipeline. With no selected record the inspector shows its empty state; selecting
+a record fills it immediately. An existing inspector retains its placement,
+including in the center. If all inspectors are pinned, a separate unpinned
+inspector is opened.
+Pinning keeps a record in place so the next request for details opens another
+details tab. The panel menu offers **Move to center** and
+**Move to right sidebar**. Waveform, pipeline, and table panels offer the same
+placement actions. Tabs can also be dragged between the center and right dock.
+**Hide sidebar** preserves every tab and its state, and the title-bar toggle
+remains available to reopen it. **Close tab** (or the tab's × button) removes an
+individual panel. Central panels retain **Close panel**. Requesting details again
+reveals an existing unpinned inspector in its current location.
+
+The GPUI Kit `DockArea` renders both regions, including their tabs, splits, and
+resize handles. The core owns panel identities and validates the complete
+layout before accepting widget changes. Moving a panel preserves its view and
+record state and is undoable. Workspace version 7 stores the center tree and
+optional right dock, including its width and visibility.
+
 ### Workspace persistence
 
 Workspace files store panel structure, views, markers, and row choices. The

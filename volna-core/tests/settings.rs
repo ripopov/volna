@@ -268,7 +268,10 @@ fn the_settings_tab_is_chrome_that_survives_traces_and_never_reaches_a_workspace
         .expect("workspace write");
     let json: serde_json::Value = serde_json::from_str(&saved).unwrap();
     assert_eq!(json["panels"].as_array().unwrap().len(), 1);
-    assert_eq!(json["layout"]["tabs"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["layout"]["center"]["tabs"].as_array().unwrap().len(),
+        1
+    );
     assert!(!saved.contains("Settings"));
     app.handle_at(Command::CloseTrace, t0);
     events(&mut app);

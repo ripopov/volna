@@ -281,14 +281,15 @@ fn split_shares_survive_normalization_and_close() {
             split: Axis::Horizontal,
             sizes: vec![0.8, 0.2],
             children: vec![Layout::single(a), Layout::single(b)],
-        },
+        }
+        .into(),
         p.revision(),
     )
     .unwrap();
     let c = p.create(a, Some(Axis::Horizontal)).unwrap();
     let Layout::Split {
         sizes, children, ..
-    } = p.layout()
+    } = p.layout().center.as_ref().unwrap()
     else {
         panic!()
     };
@@ -296,13 +297,13 @@ fn split_shares_survive_normalization_and_close() {
     assert_eq!(children.len(), 3);
     assert_eq!(p.layout().panels(), vec![a, c, b]);
     p.close(c).unwrap();
-    let Layout::Split { sizes, .. } = p.layout() else {
+    let Layout::Split { sizes, .. } = p.layout().center.as_ref().unwrap() else {
         panic!()
     };
     assert!((sizes[0] - 2.0 / 3.0).abs() < 1e-6);
     assert!((sizes[1] - 1.0 / 3.0).abs() < 1e-6);
     p.close(a).unwrap();
-    assert_eq!(p.layout(), &Layout::single(b));
+    assert_eq!(p.layout(), &Layout::single(b).into());
     p.close(b).unwrap();
     assert_eq!(p.len(), 1);
     p.validate().unwrap();
@@ -361,7 +362,7 @@ fn invalid_and_stale_dock_proposals_are_atomic() {
             children: vec![Layout::single(a), Layout::single(b)],
         },
     ] {
-        assert!(p.set_layout(tree, p.revision()).is_err());
+        assert!(p.set_layout(tree.into(), p.revision()).is_err());
         assert_eq!(p.layout(), &before);
         assert_eq!(p.focused_id(), b);
     }
@@ -444,7 +445,7 @@ fn deterministic_random_commands_preserve_invariants_and_never_reuse_ids() {
         }
         p.validate().unwrap();
         let json = serde_json::to_string(p.layout()).unwrap();
-        let tree: Layout = serde_json::from_str(&json).unwrap();
+        let tree: volna_core::panels::DockLayout = serde_json::from_str(&json).unwrap();
         assert_eq!(&tree, p.layout());
     }
 }
@@ -492,7 +493,7 @@ fn the_start_panel_gives_way_to_content_and_returns_when_the_last_panel_closes()
     let second = app.panels.focused_id();
     assert!(app.panels.can_close(waves) && app.panels.can_close(second));
     app.handle(Command::Panels(PanelsCommand::Close(waves)));
-    assert_eq!(app.panels.layout(), &Layout::single(second));
+    assert_eq!(app.panels.layout(), &Layout::single(second).into());
     app.handle(Command::Panels(PanelsCommand::Close(second)));
     assert_eq!(app.panels.len(), 1);
     let again = app.panels.focused_id();
@@ -507,4 +508,106 @@ fn the_start_panel_gives_way_to_content_and_returns_when_the_last_panel_closes()
     app.handle(Command::Action(Action::ClosePanel));
     assert!(!app.doc.is_loaded());
     assert!(app.panels.focused().kind.is_start());
+}
+
+#[test]
+fn dock_moves_allow_an_empty_center_and_reject_duplicate_membership_atomically() {
+    use volna_core::panels::{Placement, SideDock};
+    let mut panels = wave_panels();
+    let a = panels.focused_id();
+    let b = panels.create(a, None).unwrap();
+    panels.move_panel(b, Placement::Right).unwrap();
+    let before = panels.layout().clone();
+    let revision = panels.revision();
+    let mut invalid = before.clone();
+    invalid.right = Some(SideDock {
+        layout: Layout::single(a),
+        width: 400.0,
+        open: true,
+    });
+    assert!(panels.set_layout(invalid, revision).is_err());
+    assert_eq!(panels.layout(), &before);
+    assert_eq!(panels.revision(), revision);
+    let mut invalid = before.clone();
+    invalid.right.as_mut().unwrap().width = f32::NAN;
+    assert!(panels.set_layout(invalid, revision).is_err());
+    panels.move_panel(a, Placement::Right).unwrap();
+    assert!(panels.layout().center.is_none());
+    panels.toggle_right_dock().unwrap();
+    assert!(panels.layout().visible().is_empty());
+    panels.validate().unwrap();
+    panels.focus(a).unwrap();
+    assert!(panels.layout().right.as_ref().unwrap().open);
+    panels.close(a).unwrap();
+    assert_eq!(panels.focused_id(), b);
+    panels.move_panel(b, Placement::Center).unwrap();
+    assert!(panels.layout().right.is_none());
+    panels.validate().unwrap();
+}
+
+#[test]
+fn saving_with_settings_focused_and_a_hidden_inspector_keeps_a_valid_content_focus() {
+    use volna_core::panels::Placement;
+    let mut panels = wave_panels();
+    let content = panels.focused_id();
+    panels.open_settings().unwrap();
+    let settings = panels.focused_id();
+    panels.move_panel(content, Placement::Right).unwrap();
+    panels.toggle_right_dock().unwrap();
+    assert_eq!(panels.focused_id(), settings);
+    let (layout, focused, saved) = panels.saved_view();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(focused, content);
+    assert!(layout.center.is_none());
+    assert!(!layout.right.unwrap().open);
+}
+
+#[test]
+fn settings_keep_their_region_across_panel_move_history_reset_and_restore() {
+    use volna_core::panels::Placement;
+    for placement in [Placement::Center, Placement::Right] {
+        let mut app = linked_app();
+        let content = app.panels.focused_id();
+        app.handle(Command::Settings(SettingsCommand::Open));
+        let settings = app.panels.settings_id().unwrap();
+        panel(
+            &mut app,
+            PanelsCommand::Move {
+                panel: settings,
+                placement,
+            },
+        );
+        panel(
+            &mut app,
+            PanelsCommand::Move {
+                panel: content,
+                placement: Placement::Right,
+            },
+        );
+        for command in [Command::Undo, Command::Redo, Command::Undo] {
+            app.handle(command);
+            assert_eq!(app.panels.settings_id(), Some(settings));
+            assert_eq!(app.panels.layout().placement(settings), Some(placement));
+            app.panels.validate().unwrap();
+        }
+        let saved = volna_core::workspace::Workspace::capture(
+            &app,
+            volna_core::testing::paths("trace.vtr"),
+            None,
+        )
+        .unwrap();
+        app.panels.reset().unwrap();
+        assert_eq!(app.panels.layout().placement(settings), Some(placement));
+        saved
+            .prepare(
+                &app,
+                "file:///tmp/trace.vtr",
+                "file:///tmp/trace.vtr.volna.json",
+            )
+            .unwrap()
+            .commit(&mut app)
+            .unwrap();
+        assert_eq!(app.panels.layout().placement(settings), Some(placement));
+        app.panels.validate().unwrap();
+    }
 }

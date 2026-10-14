@@ -212,7 +212,7 @@ fn closing_a_trace_takes_its_rows_and_panels_in_one_step() {
     pump(&mut app);
     let waves = app.panels.first_waves().unwrap();
     assert_eq!(app.panels.waves(waves).unwrap().items().len(), 3);
-    assert_eq!(app.panels.len(), 2);
+    assert_eq!(app.panels.len(), 3);
     let session = app.doc.session(b()).unwrap().clone();
 
     let rows = app.rows_revision();
@@ -224,14 +224,18 @@ fn closing_a_trace_takes_its_rows_and_panels_in_one_step() {
     );
     assert_eq!(app.undo_label(), Some("Close trace B"));
     assert_eq!(app.doc.traces().len(), 1);
-    assert_eq!(app.panels.len(), 1, "B's pipeline closed with it");
+    assert_eq!(
+        app.panels.len(),
+        2,
+        "B's pipeline closes; the empty inspector remains available"
+    );
     let items = app.panels.waves(waves).unwrap().items();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].row.trace(), Some(TraceId::A));
 
     app.handle(Command::Undo);
     assert!(Arc::ptr_eq(app.doc.session(b()).unwrap(), &session));
-    assert_eq!(app.panels.len(), 2);
+    assert_eq!(app.panels.len(), 3);
     pump(&mut app);
     let items = app.panels.waves(waves).unwrap().items();
     assert_eq!(items.len(), 3);
@@ -243,7 +247,7 @@ fn closing_a_trace_takes_its_rows_and_panels_in_one_step() {
     );
     app.handle(Command::Redo);
     assert_eq!(app.doc.traces().len(), 1);
-    assert_eq!(app.panels.len(), 1);
+    assert_eq!(app.panels.len(), 2);
 
     app.handle(Command::Undo);
     app.take_events();

@@ -175,7 +175,7 @@ fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
     assert_eq!(pipeline.rows.target(), row_position);
     assert_eq!(pipeline.follow, FollowActivity::Suspended);
     assert_eq!(pipeline.selected_row(&app.doc), Some(row));
-    assert_eq!(app.panels.iter().count(), 1);
+    assert_eq!(app.panels.iter().count(), 2);
 
     app.panels
         .pipeline_mut(panel)
@@ -474,13 +474,21 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
 }
 
 #[test]
-fn a_pinned_panel_keeps_its_record_and_the_next_one_opens_beside_it() {
+fn a_pinned_panel_keeps_its_record_and_the_next_one_opens_in_the_right_dock() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
     let first = show(&mut app, pipeline, insn, 4);
     app.handle(Command::Transaction(first, TransactionCommand::Pin(true)));
     let second = show(&mut app, pipeline, insn, 33);
     assert_ne!(first, second);
+    assert_eq!(
+        app.panels.layout().right.as_ref().unwrap().layout.panels(),
+        vec![first, second]
+    );
+    assert_eq!(
+        app.panels.layout().center.as_ref().unwrap().panels(),
+        vec![pipeline]
+    );
     assert_eq!(view(&app, first).identity.id, TransactionRef(4));
     assert_eq!(view(&app, second).identity.id, TransactionRef(33));
     app.handle(Command::Transaction(first, TransactionCommand::Pin(false)));
@@ -719,4 +727,268 @@ fn session_first_other(app: &App, track: TrackRef, not: TransactionRef) -> Trans
         .map(|tx| tx.id)
         .find(|id| *id != not)
         .unwrap()
+}
+
+#[test]
+fn inspector_placement_preserves_record_history_and_restores_across_regions() {
+    use volna_core::panels::{PanelsCommand, Placement};
+    let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
+    let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let panel = show(&mut app, pipeline, insn, 33);
+    assert_eq!(app.panels.layout().placement(panel), Some(Placement::Right));
+    assert_eq!(
+        app.panels.layout().center.as_ref().unwrap().panels(),
+        vec![pipeline]
+    );
+    app.handle(Command::Panels(PanelsCommand::Move {
+        panel,
+        placement: Placement::Center,
+    }));
+    assert!(app.panels.layout().right.is_none());
+    assert_eq!(view(&app, panel).identity.id, TransactionRef(33));
+    app.handle(Command::Undo);
+    assert_eq!(app.panels.layout().placement(panel), Some(Placement::Right));
+    app.handle(Command::Redo);
+    assert_eq!(
+        app.panels.layout().placement(panel),
+        Some(Placement::Center)
+    );
+    // Reusing the inspector respects the user's placement.
+    assert_eq!(show(&mut app, pipeline, insn, 4), panel);
+    assert_eq!(
+        app.panels.layout().placement(panel),
+        Some(Placement::Center)
+    );
+    app.handle(Command::Panels(PanelsCommand::Move {
+        panel,
+        placement: Placement::Right,
+    }));
+    let mut layout = app.panels.layout().clone();
+    layout.right.as_mut().unwrap().width = 510.0;
+    app.handle(Command::Panels(PanelsCommand::SetLayout {
+        layout,
+        from_revision: app.panels.revision(),
+    }));
+    app.handle(Command::Panels(PanelsCommand::ToggleRightDock));
+    assert!(!app.panels.layout().visible().contains(&panel));
+    assert_eq!(app.panels.focused_id(), pipeline);
+    let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+    let saved = Workspace::parse(&saved.to_bytes().unwrap()).unwrap();
+    let mut restored = App::new();
+    restored.set_session(session);
+    saved
+        .prepare(
+            &restored,
+            "file:///tmp/trace.vtr",
+            "file:///tmp/trace.vtr.volna.json",
+        )
+        .unwrap()
+        .commit(&mut restored)
+        .unwrap();
+    pump(&mut restored);
+    assert_eq!(
+        restored.panels.layout().right.as_ref().unwrap().width,
+        510.0
+    );
+    assert!(!restored.panels.layout().right.as_ref().unwrap().open);
+    restored.handle(Command::Panels(PanelsCommand::Focus(panel)));
+    assert!(restored.panels.layout().right.as_ref().unwrap().open);
+    assert_eq!(view(&restored, panel).identity.id, TransactionRef(4));
+    assert_eq!(show(&mut restored, pipeline, insn, 33), panel);
+    restored.panels.validate().unwrap();
+}
+
+#[test]
+fn new_viewers_open_centrally_when_the_inspector_is_focused_or_the_center_is_empty() {
+    use volna_core::app::SettingsCommand;
+    use volna_core::panels::{PanelsCommand, Placement};
+    use volna_trace::data::Member;
+
+    for empty_center in [false, true] {
+        for viewer in ["waves", "table", "pipeline", "settings"] {
+            let (mut app, session, pipeline) =
+                with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
+            let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+            let detail = show(&mut app, pipeline, insn, 4);
+            if empty_center {
+                app.handle(Command::Panels(PanelsCommand::Close(pipeline)));
+                assert!(app.panels.layout().center.is_none());
+            }
+            let before = app.panels.layout().clone();
+            let command = match viewer {
+                "waves" => Command::AddToWaves(vec![a(Member::Generator(0))]),
+                "table" => Command::OpenTable {
+                    selected: vec![a(Member::Generator(0))],
+                    clicked: None,
+                },
+                "pipeline" => Command::OpenPipeline {
+                    track: a(track(session.as_ref(), "soc.l2.bus")),
+                },
+                "settings" => Command::Settings(SettingsCommand::Open),
+                _ => unreachable!(),
+            };
+            app.handle(command);
+            let opened = app.panels.focused_id();
+            assert_eq!(
+                app.panels.layout().placement(opened),
+                Some(Placement::Center),
+                "{viewer}"
+            );
+            let kind = &app.panels.get(opened).unwrap().kind;
+            match viewer {
+                "waves" => assert!(
+                    kind.waves()
+                        .unwrap()
+                        .items()
+                        .iter()
+                        .any(|item| item.lane_track().is_some())
+                ),
+                "table" => assert!(kind.table().is_some()),
+                "pipeline" => assert!(kind.pipeline().is_some()),
+                "settings" => assert!(kind.is_settings()),
+                _ => unreachable!(),
+            }
+            assert_eq!(app.panels.layout().right, before.right);
+            assert_eq!(view(&app, detail).identity.id, TransactionRef(4));
+            app.panels.validate().unwrap();
+
+            // Settings is transient chrome; content creation is one undo step,
+            // including the first generator lane inserted into a new viewer.
+            if viewer != "settings" {
+                app.handle(Command::Undo);
+                assert_eq!(app.panels.layout(), &before, "{viewer}");
+                app.handle(Command::Redo);
+                assert_eq!(app.panels.focused_id(), opened);
+                assert_eq!(
+                    app.panels.layout().placement(opened),
+                    Some(Placement::Center)
+                );
+                app.panels.validate().unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn table_from_a_sidebar_pipeline_opens_centrally_and_moved_waveforms_are_reused() {
+    use volna_core::panels::{PanelsCommand, Placement};
+    use volna_trace::data::Member;
+
+    let (mut app, _, pipeline) =
+        with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline.instruction");
+    app.handle(Command::Panels(PanelsCommand::Move {
+        panel: pipeline,
+        placement: Placement::Right,
+    }));
+    assert!(app.panels.layout().center.is_none());
+    app.handle(Command::OpenTableFromPanel {
+        panel: pipeline,
+        row: None,
+    });
+    let table = app.panels.focused_id();
+    assert!(app.panels.get(table).unwrap().kind.table().is_some());
+    assert_eq!(
+        app.panels.layout().placement(table),
+        Some(Placement::Center)
+    );
+
+    app.handle(Command::AddToWaves(vec![a(Member::Generator(0))]));
+    let waves = app.panels.focused_id();
+    app.handle(Command::Panels(PanelsCommand::Move {
+        panel: waves,
+        placement: Placement::Right,
+    }));
+    for empty_center in [false, true] {
+        if empty_center {
+            app.handle(Command::Panels(PanelsCommand::Close(table)));
+        }
+        app.handle(Command::Panels(PanelsCommand::ToggleRightDock));
+        let count = app.panels.len();
+        app.handle(Command::AddToWaves(vec![a(Member::Generator(0))]));
+        assert_eq!(app.panels.focused_id(), waves);
+        assert_eq!(app.panels.len(), count);
+        assert_eq!(app.panels.layout().placement(waves), Some(Placement::Right));
+        assert!(app.panels.layout().right.as_ref().unwrap().open);
+        app.panels.validate().unwrap();
+    }
+}
+
+#[test]
+fn opening_a_pipeline_reveals_a_reusable_inspector_without_stealing_focus() {
+    use volna_core::panels::{PanelsCommand, Placement};
+    let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
+    let pipeline_track = a(track(session.as_ref(), "soc.cpu0.pipeline"));
+    let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let detail = app.panels.first_free_transaction().unwrap();
+    assert_eq!(app.panels.focused_id(), pipeline);
+    assert_eq!(
+        app.panels.layout().placement(detail),
+        Some(Placement::Right)
+    );
+    assert!(matches!(
+        app.panels.transaction(detail).unwrap().state(&app.doc),
+        TxPanelState::Empty
+    ));
+    assert!(app.doc.selection().is_none());
+
+    // The pipeline and its automatically created inspector are one layout edit.
+    app.handle(Command::Undo);
+    assert_eq!(app.panels.len(), 1);
+    assert!(app.panels.focused().kind.is_start());
+    assert!(app.panels.layout().right.is_none());
+    app.handle(Command::Redo);
+    pump(&mut app);
+    assert_eq!(app.panels.focused_id(), pipeline);
+    assert_eq!(app.panels.first_free_transaction(), Some(detail));
+
+    select(&mut app, pipeline, insn, 4);
+    assert_eq!(view(&app, detail).identity.id, TransactionRef(4));
+    assert_eq!(app.panels.focused_id(), pipeline);
+    app.handle(Command::Panels(PanelsCommand::ToggleRightDock));
+    app.handle(Command::OpenPipeline {
+        track: pipeline_track,
+    });
+    assert_eq!(app.panels.len(), 2);
+    assert!(app.panels.layout().right.as_ref().unwrap().open);
+    assert_eq!(app.panels.focused_id(), pipeline);
+
+    app.handle(Command::Panels(PanelsCommand::Move {
+        panel: detail,
+        placement: Placement::Center,
+    }));
+    app.handle(Command::OpenPipeline {
+        track: pipeline_track,
+    });
+    assert_eq!(app.panels.first_free_transaction(), Some(detail));
+    assert_eq!(
+        app.panels.layout().placement(detail),
+        Some(Placement::Center)
+    );
+    assert!(app.panels.layout().right.is_none());
+
+    app.handle(Command::Transaction(detail, TransactionCommand::Pin(true)));
+    app.handle(Command::OpenPipeline {
+        track: pipeline_track,
+    });
+    let following = app.panels.first_free_transaction().unwrap();
+    assert_ne!(following, detail);
+    select(&mut app, pipeline, insn, 33);
+    assert_eq!(view(&app, detail).identity.id, TransactionRef(4));
+    assert_eq!(view(&app, following).identity.id, TransactionRef(33));
+    assert_eq!(app.panels.focused_id(), pipeline);
+
+    // Opening another track from a focused inspector still puts the pipeline
+    // in the center and reuses the same inspector.
+    app.handle(Command::Panels(PanelsCommand::Focus(following)));
+    app.handle(Command::OpenPipeline {
+        track: a(track(session.as_ref(), "soc.l2.bus")),
+    });
+    let second = app.panels.focused_id();
+    assert!(app.panels.pipeline(second).is_some());
+    assert_eq!(
+        app.panels.layout().placement(second),
+        Some(Placement::Center)
+    );
+    assert_eq!(app.panels.first_free_transaction(), Some(following));
+    app.panels.validate().unwrap();
 }

@@ -78,7 +78,7 @@ impl Layout {
         Ok(())
     }
 
-    fn validate_node(
+    pub(super) fn validate_node(
         &self,
         depth: usize,
         nodes: &mut usize,

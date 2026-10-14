@@ -75,7 +75,14 @@ fn projection(app: &App) -> Value {
     shared.remove("viewport");
     shared.remove("cursor");
     shared.remove("reference");
-    strip_layout(&mut o["layout"]);
+    if !o["layout"]["center"].is_null() {
+        strip_layout(&mut o["layout"]["center"]);
+    }
+    if let Some(right) = o["layout"]["right"].as_object_mut() {
+        right.remove("width");
+        right.remove("open");
+        strip_layout(&mut right["layout"]);
+    }
     for panel in o["panels"].as_array_mut().unwrap() {
         let p = panel.as_object_mut().unwrap();
         for key in [
@@ -731,7 +738,12 @@ impl Driver {
                 Layout::Split { children, .. } => children.iter_mut().any(reverse),
             }
         }
-        if !reverse(&mut layout) {
+        if !layout.center.as_mut().is_some_and(reverse)
+            && !layout
+                .right
+                .as_mut()
+                .is_some_and(|dock| reverse(&mut dock.layout))
+        {
             return "nothing to rearrange".into();
         }
         let from_revision = self.app.panels.revision();
@@ -900,7 +912,10 @@ fn random_commands_undo_and_redo_to_every_earlier_cockpit() {
         .and_then(|n| n.parse().ok())
         .unwrap_or(0);
     let mut labels = std::collections::BTreeSet::new();
-    for seed in [1, 7, 42, 1234, 99991].into_iter().chain(100..100 + more) {
+    for seed in [1, 7, 42, 101, 1234, 99991]
+        .into_iter()
+        .chain(100..100 + more)
+    {
         labels.extend(model_based(seed, 400, None));
     }
     for step in ["Add trace B", "Rename trace B", "Close trace B"] {

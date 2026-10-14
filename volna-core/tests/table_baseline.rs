@@ -47,9 +47,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     let session = fixture();
     let mut app = App::new();
     app.set_session(session.clone());
-    for request in app.take_requests() {
-        app.deliver(request.perform());
-    }
+    pump(&mut app);
     let budget = app
         .doc
         .session(TraceId::A)

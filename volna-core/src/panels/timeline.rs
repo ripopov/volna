@@ -3,7 +3,7 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{Axis, Layout, PanelId, PanelKind, Panels};
+use super::{Axis, DockLayout, Layout, PanelId, PanelKind, Panels};
 use crate::geometry::{Point, Rect};
 use crate::pipeline::model::Drag as PipelineDrag;
 use crate::wave::{layout::MIN_COLUMN, model::Drag as WaveDrag};
@@ -39,10 +39,12 @@ fn columns(layout: &Layout, out: &mut Vec<Vec<Vec<PanelId>>>) -> Vec<Vec<PanelId
 }
 
 impl Panels {
-    pub(crate) fn timeline_dividers(&self, layout: &Layout) -> Vec<TimelineDivider> {
+    pub(crate) fn timeline_dividers(&self, layout: &DockLayout) -> Vec<TimelineDivider> {
         let mut all = Vec::new();
-        let root = columns(layout, &mut all);
-        all.push(root);
+        for tree in layout.trees() {
+            let root = columns(tree, &mut all);
+            all.push(root);
+        }
         all.into_iter()
             .filter_map(|column| {
                 let groups: Vec<Vec<_>> = column

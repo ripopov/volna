@@ -103,7 +103,8 @@ fn unknown_panel_payload_is_preserved_verbatim_including_large_integers() {
     saved.layout = volna_core::panels::Layout::Tabs {
         tabs: vec![app.panels.focused_id(), PanelId(999)],
         active: PanelId(999),
-    };
+    }
+    .into();
     saved.focused = PanelId(999);
     let plan = saved.prepare(&app, TRACE, LOCATION).unwrap();
     assert_eq!(plan.report().notices.len(), 1);
@@ -129,7 +130,7 @@ fn invalid_restores_are_atomic_and_unlinked_null_cursor_is_required() {
         invalid.push(v);
     }
     let mut v = original.clone();
-    v["layout"]["tabs"] = json!([2, 2]);
+    v["layout"]["center"]["tabs"] = json!([2, 2]);
     invalid.push(v);
     let mut v = original.clone();
     v["shared"]["viewport"]["end"] = json!(-100);
@@ -182,7 +183,8 @@ fn parser_rejects_truncation_oversized_files_and_excessive_nesting() {
     assert!(Workspace::parse(&vec![b' '; MAX_BYTES + 1]).is_err());
     let mut v = value(&app());
     for _ in 0..150 {
-        v["layout"] = json!({"split":"horizontal","sizes":[1.0],"children":[v["layout"].take()]});
+        v["layout"]["center"] =
+            json!({"split":"horizontal","sizes":[1.0],"children":[v["layout"]["center"].take()]});
     }
     assert!(Workspace::parse(&serde_json::to_vec(&v).unwrap()).is_err());
 }
@@ -534,7 +536,7 @@ fn invalid_open_workspace_cannot_flush_live_edits_or_queue_trace_opens() {
         ("/sidebar/width", json!(-1)),
         ("/panels/0/selected", json!([999])),
         ("/panels/0/link/cursor", json!(false)),
-        ("/layout/tabs", json!([999])),
+        ("/layout/center/tabs", json!([999])),
         ("/focused", json!(999)),
         ("/traces/0/path", json!("different.vtr")),
         ("/traces/1/letter", json!("A")),
@@ -681,7 +683,8 @@ fn opaque_panel_rename_preserves_unknown_members_and_large_numbers() {
     saved.layout = volna_core::panels::Layout::Tabs {
         tabs: vec![app.panels.focused_id(), PanelId(90)],
         active: PanelId(90),
-    };
+    }
+    .into();
     saved.focused = PanelId(90);
     saved
         .prepare(&app, TRACE, LOCATION)
