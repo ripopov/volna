@@ -15,6 +15,7 @@ const PARTITIONS: usize = 2;
 const SLOTS: usize = 2;
 const WARPS: usize = PARTITIONS * SLOTS;
 const INSTRUCTIONS: u64 = 5_000;
+const FULL_EXEC_MASK: u32 = u32::MAX;
 const CLOCK_PATH: &str = "gpu.clock";
 
 macro_rules! vocabulary {
@@ -32,7 +33,7 @@ vocabulary! {
     dimensions: "gpu.grid_dimensions", block: "gpu.block_coordinates",
     threads: "gpu.block_dimensions", warp: "gpu.logical_warp", epoch: "gpu.slot_epoch",
     pc: "gpu.pc", sequence: "gpu.sequence", opcode: "gpu.opcode", class: "gpu.class",
-    mask: "gpu.active_mask", space: "gpu.address_space", operation: "gpu.operation",
+    mask: "gpu.active_mask", exec_mask: "exec_mask", space: "gpu.address_space", operation: "gpu.operation",
     address: "gpu.address", bytes: "gpu.bytes", outcome: "gpu.cache_outcome",
     shape: "gpu.tensor_shape", direction: "gpu.direction", source: "gpu.source_resource",
     destination: "gpu.destination_resource", route: "gpu.route", hop: "gpu.hop_index",
@@ -774,10 +775,19 @@ impl Op {
             12 => Self::Shared,
             24 => Self::Store,
             36 => Self::Atomic,
-            99 => Self::Branch,
+            63 | 99 => Self::Branch,
             n if n % 8 == 1 => Self::Add,
             n if n % 8 == 2 => Self::Xor,
             _ => Self::Fma,
+        }
+    }
+    fn exec_mask(self, sequence: u64) -> u32 {
+        // The branch at 63 serializes complementary lane paths, reconverging at 96.
+        match sequence % 100 {
+            64..=79 => 0x0000_ffff,
+            80..=95 => 0xffff_0000,
+            _ if matches!(self, Self::Store | Self::Atomic) => 0x0000_ffff,
+            _ => FULL_EXEC_MASK,
         }
     }
     fn names(self, n: &Names) -> (StrId, StrId) {
@@ -824,6 +834,7 @@ fn issue(
         (e.n.sequence, Value::U64(sequence)),
         (e.n.opcode, Value::Str(opcode)),
         (e.n.class, Value::Str(class)),
+        (e.n.exec_mask, Value::U64(u64::from(op.exec_mask(sequence)))),
         (
             e.n.mask,
             Value::U64(if matches!(op, Op::Store | Op::Atomic) {
@@ -1248,11 +1259,26 @@ fn readback(path: &Path) -> anyhow::Result<()> {
     let mut warps = BTreeMap::new();
     let mut packet = None;
     let mut last_tx_end = 0;
+    let mut invalid_exec_mask = None;
+    let mut divergent_instructions = 0;
     rd.visit_transactions(&TxQuery::default(), |tx| {
         last_tx_end = last_tx_end.max(tx.end);
         match rd.str(rd.hierarchy().name(tx.generator)) {
             "Instruction" => {
                 *counts.entry(tx.parent.unwrap_or(0)).or_default() += 1;
+                match tx
+                    .attrs
+                    .iter()
+                    .find(|a| rd.str(a.key) == "exec_mask")
+                    .map(|a| &a.value)
+                {
+                    Some(Value::U64(mask)) if *mask > 0 && *mask <= u64::from(FULL_EXEC_MASK) => {
+                        divergent_instructions += u64::from(*mask != u64::from(FULL_EXEC_MASK));
+                    }
+                    _ => {
+                        invalid_exec_mask.get_or_insert(tx.id);
+                    }
+                }
             }
             "Warp" => {
                 warps.insert(tx.id, tx.generator);
@@ -1264,6 +1290,14 @@ fn readback(path: &Path) -> anyhow::Result<()> {
         }
         true
     })?;
+    ensure!(
+        invalid_exec_mask.is_none(),
+        "instruction {invalid_exec_mask:?} lacks a nonzero SIMT32 exec_mask"
+    );
+    ensure!(
+        divergent_instructions > 0,
+        "trace contains no lane divergence"
+    );
     ensure!(
         stretches[0].end >= last_tx_end,
         "GPU clock stops before the last transaction"
@@ -1380,6 +1414,22 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn divergent_paths_reconverge() {
+        for block in [0, 100, 2400, 4900] {
+            assert_eq!(Op::at(block + 63, 0).exec_mask(block + 63), FULL_EXEC_MASK);
+            for offset in 64..80 {
+                let first = Op::at(block + offset, 0).exec_mask(block + offset);
+                let second = Op::at(block + offset + 16, 0).exec_mask(block + offset + 16);
+                assert_eq!(first & second, 0);
+                assert_eq!(first | second, FULL_EXEC_MASK);
+                assert_eq!(first.count_ones(), 16);
+            }
+            assert_eq!(Op::at(block + 96, 0).exec_mask(block + 96), FULL_EXEC_MASK);
+        }
+        assert_eq!(Op::Barrier.exec_mask(2499), FULL_EXEC_MASK);
+    }
 
     #[test]
     fn round_trip_counts_and_ancestry() -> anyhow::Result<()> {
