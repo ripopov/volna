@@ -340,7 +340,7 @@ impl Render for TransactionPanelView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(t.editor.bg)
+            .bg(t.panel.bg)
             .font_family(t.ui_font)
             .text_size(px(t.ui_size))
             .text_color(t.editor.text)
