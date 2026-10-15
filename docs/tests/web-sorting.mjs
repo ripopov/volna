@@ -46,7 +46,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto(`${origin}${base}app/`);
-  await page.locator('#open-recording:enabled').waitFor({ timeout: 60000 });
+  await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
   assert.equal(page.workers().length, 4);
   assert.equal(await page.evaluate(() => crossOriginIsolated), true);
   await page.locator('#recording-file').setInputFiles(fixture);
@@ -54,6 +54,7 @@ try {
   const workspace = JSON.parse(await readFile(new URL('../../volna/examples/landing-page.volna.json', import.meta.url)));
   workspace.traces[0] = { ...workspace.traces[0], path: 'rows.vtr', name: 'rows.vtr', time_range: [0, 1000000] };
   workspace.panels = [workspace.panels.find(p => p.kind === 'table')];
+  workspace.panels[0].id = 4;
   workspace.panels[0].source.path = ['sort', 'rows'];
   workspace.panels[0].widths = [210, 120, 105, 120, 100, 90, 360];
   workspace.layout = { center: { tabs: [4], active: 4 }, right: null };
@@ -63,6 +64,7 @@ try {
   workspace.traces[0].timescale = -12;
   workspace.sidebar.expanded = [];
   workspace.sidebar.selected_scope = null;
+  workspace.sidebar.width = 190;
   await page.evaluate(async base => (await import(`${base}viewer/pkg/volna.js`)).dispatch_command('openWorkspace'), base);
   await page.locator('input[aria-label="Open a Volna workspace"]').setInputFiles({
     name: 'rows.volna.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(workspace)),

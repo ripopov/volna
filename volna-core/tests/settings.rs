@@ -285,9 +285,10 @@ fn the_settings_tab_is_chrome_that_survives_traces_and_never_reaches_a_workspace
 #[test]
 fn theme_names_validate_the_theme_key_and_unavailable_keys_are_diagnosed() {
     let mut app = app();
+    let default_theme = app.settings.resolved().appearance.theme.clone();
     app.settings_loaded("{\"appearance.theme\": \"paper\", \"remote.serverPath\": \"x\"}");
     events(&mut app);
-    assert_eq!(app.settings.resolved().appearance.theme, "volna");
+    assert_eq!(app.settings.resolved().appearance.theme, default_theme);
     assert_eq!(app.settings.diagnostics().len(), 2);
     app.set_theme_names(vec!["paper".into()]);
     assert_eq!(changed_keys(&events(&mut app)), vec!["appearance.theme"]);

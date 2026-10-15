@@ -56,6 +56,7 @@ function candidates(traceUri, sidecarBytes, workspaceUri = `${traceUri}.volna.js
 
 async function openSample() {
   pendingSample = true;
+  delete document.body.dataset.workspaceRestored;
   window.volnaCurrentState = '';
   status.textContent = 'Loading the sample recording and workspace…';
   status.hidden = false;
@@ -82,6 +83,7 @@ async function openSample() {
 
 async function openFile(file) {
   if (!file) return;
+  delete document.body.dataset.workspaceRestored;
   window.volnaCurrentState = '';
   status.textContent = `Opening ${file.name}…`;
   status.hidden = false;
@@ -167,7 +169,9 @@ window.volnaViewerState = state => {
     pendingLocal = null;
     status.hidden = true;
   }
-  if (pendingSample && state.includes('panel=2 pipeline') && state.includes('panel=3 transaction') && state.includes('panel=4 table')) {
+  if (pendingSample && /^panel=\d+ pipeline .* ready /m.test(state)
+      && /^panel=\d+ transaction .* ready /m.test(state)
+      && /^panel=\d+ table .*rows=[1-9]\d*/m.test(state)) {
     pendingSample = false;
     status.hidden = true;
     document.body.dataset.workspaceRestored = 'true';

@@ -44,10 +44,7 @@ try {
   assert.equal(await page.getByRole('navigation', { name: 'Site' }).getByRole('link', { name: 'Web App' }).getAttribute('href'), `${base}app/`);
   const sample = page.frameLocator('iframe[title="Interactive Volna sample recording"]');
   await sample.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
-  const sampleState = await sample.locator('body').evaluate(() => window.volnaCurrentState);
-  assert.match(sampleState, /panel=1 .*items=\d+/);
-  assert.match(sampleState, /panel=4 table .*rows=\d+/);
-  assert.match(sampleState, /panel=3 transaction/);
+  verifySampleWorkspace(await sample.locator('body').evaluate(() => window.volnaCurrentState));
   await page.screenshot({ path: `${results}/landing-restored-dark-1440.png`, fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1600 });
   const frameBounds = await page.locator('.v-viewer-frame').boundingBox();
@@ -72,7 +69,8 @@ try {
   assert.equal(await page.locator('.v-guide').count(), 10);
   await page.goto(`${origin}${base}app/`);
   assert.equal(await page.locator('.volna-header, #starlight__sidebar').count(), 0);
-  await page.locator('#viewer-status').waitFor({ state: 'hidden', timeout: 60000 });
+  await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
+  verifySampleWorkspace(await page.evaluate(() => window.volnaCurrentState));
   const appCanvas = await page.locator('body > canvas').boundingBox();
   assert.ok(appCanvas && Math.abs(appCanvas.width - 1440) < 2 && Math.abs(appCanvas.height - 1000) < 2,
     'standalone canvas must fill the browser viewport');
@@ -80,14 +78,14 @@ try {
   await page.locator('body[data-local-trace-opened="landing.vtr"]').waitFor({ timeout: 30000 });
   await page.evaluate(async base => (await import(`${base}viewer/pkg/volna.js`)).dispatch_command('openWorkspace'), base);
   await page.locator('input[aria-label="Open a Volna workspace"]').setInputFiles(fileURLToPath(new URL('../../volna/examples/landing-page.volna.json', import.meta.url)));
-  await page.waitForFunction(() => window.volnaCurrentState?.includes('panel=4 table'));
+  await page.waitForFunction(() => window.volnaCurrentState?.includes('panel=40 table'));
   const downloadPromise = page.waitForEvent('download');
   await page.evaluate(async base => (await import(`${base}viewer/pkg/volna.js`)).dispatch_command('saveWorkspaceAs'), base);
   assert.equal((await downloadPromise).suggestedFilename(), 'landing.vtr.volna.json');
   await page.getByRole('button', { name: 'Load sample' }).click();
   await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
   const selectedTransaction = () => page.evaluate(() => window.volnaCurrentState
-    .split('\n').find(line => line.startsWith('panel=3 transaction ')));
+    .split('\n').find(line => line.startsWith('panel=37 transaction ')));
   const islandTransaction = await selectedTransaction();
   assert.match(islandTransaction, /ready record=Some/);
   for (const [theme, width, zoom] of [
@@ -107,13 +105,13 @@ try {
   }
   report.behavior.push('Islands light and dark switching preserves the selected transaction at desktop, narrow width, and 125% zoom');
   report.behavior.push('Islands tab headers meet their content and match the untabbed sidebar without an outer border');
-  await page.mouse.move(1130, 632);
+  await page.mouse.move(550, 620);
   await page.mouse.down();
-  await page.mouse.move(1180, 632, { steps: 3 });
+  await page.mouse.move(600, 620, { steps: 3 });
   await page.mouse.move(950, 500, { steps: 3 });
   await page.mouse.up();
   assert.deepEqual(appErrors, [], 'dragging the Table panel must not panic in the browser');
-  report.behavior.push('landing workspace restore, header destinations, docs overview, standalone app sample, local file, workspace import and export, Table panel drag');
+  report.behavior.push('landing workspace restore, header destinations, docs overview, standalone app default workspace, local file, workspace import and export, Table panel drag');
   const failedViewer = await behaviorContext.newPage();
   await failedViewer.route('**/viewer/pkg/volna_bg.wasm', route => route.abort());
   await failedViewer.goto(`${origin}${base}`);
@@ -323,17 +321,24 @@ async function writeReport() {
   await writeFile(`${results}/report.json`, JSON.stringify(report, null, 2) + '\n');
 }
 
+function verifySampleWorkspace(state) {
+  assert.match(state, /panel=39 .*items=13 loaded=13 .*cursor=Some\(69\).*viewport=\(46,95\)/);
+  assert.match(state, /panel=38 pipeline track=soc.cpu0.pipeline.instruction .*ready rows=420/);
+  assert.match(state, /panel=40 table .*rows=420/);
+  assert.match(state, /panel=37 transaction .*ready record=Some\(\("soc.cpu0.pipeline.instruction", 23\)\)/);
+}
+
 async function verifySampleIslandContour(page, screenshot) {
-  const colors = await page.evaluate(async bytes => {
+  const colors = await page.evaluate(async ({ bytes, sidebarWidth }) => {
     const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/png' }));
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     const context = canvas.getContext('2d');
     context.drawImage(bitmap, 0, 0);
     bitmap.close();
-    const points = { untabbed: [4, 50], headerLeft: [194, 50], contentLeft: [194, 70], headerTop: [210, 36] };
+    const points = { untabbed: [4, 50], headerLeft: [sidebarWidth + 4, 50], contentLeft: [sidebarWidth + 4, 70], headerTop: [sidebarWidth + 20, 36] };
     return Object.fromEntries(Object.entries(points).map(([name, [x, y]]) =>
       [name, [...context.getImageData(x, y, 1, 1).data]]));
-  }, [...screenshot]);
+  }, { bytes: [...screenshot], sidebarWidth: 423 });
   for (const edge of ['headerLeft', 'contentLeft', 'headerTop']) {
     assert.deepEqual(colors[edge], colors.untabbed, `${edge}: tabbed and untabbed island contours must match`);
   }

@@ -1,7 +1,7 @@
 ---
 import '../../design-system/styles.css';
 const base = import.meta.env.BASE_URL;
-const { sample } = Astro.props;
+const { sample, controls = false } = Astro.props;
 ---
 <!doctype html>
 <html lang="en" data-theme="dark">
@@ -15,7 +15,7 @@ const { sample } = Astro.props;
     <main id="viewer" aria-label="Volna viewer">
       <div id="viewer-status" role="status">Loading the Volna viewer…</div>
       <div id="viewer-error" role="alert" hidden></div>
-      {!sample && <nav id="viewer-actions" aria-label="Recording controls">
+      {controls && <nav id="viewer-actions" aria-label="Recording controls">
         <button class="v-btn v-btn--sm" id="open-recording" type="button" disabled>Open recording</button>
         <button class="v-btn v-btn--sm" id="load-sample" type="button" disabled>Load sample</button>
       </nav>}
