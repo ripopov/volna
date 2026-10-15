@@ -978,7 +978,7 @@ impl TableModel {
     }
 
     fn column_edge_at(&self, position: Point) -> Option<&super::layout::ColumnRect> {
-        if !self.layout.header.contains(position) {
+        if !self.layout.header.contains(position) && !self.layout.body.contains(position) {
             return None;
         }
         self.layout
@@ -1299,7 +1299,7 @@ impl TableModel {
                         rect.right() - 1.0 - theme.splitter_grab / 2.0,
                         header.top(),
                         theme.splitter_grab,
-                        row_height,
+                        row_height + body.height(),
                     ),
                     preview_bytes: ((width / (theme.mono_size * 0.5).max(1.0)).ceil() as usize * 4)
                         .max(PREVIEW_BYTES)
@@ -1829,6 +1829,7 @@ impl TableModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::point;
     use crate::pipeline::TrackSource;
     use crate::table::SignalSource;
     use volna_trace::data::history::VecHistory;
@@ -2342,6 +2343,71 @@ mod tests {
         );
         finish_sort(&mut model);
         assert_eq!(model.applied_sort().unwrap().column, 1);
+    }
+
+    #[test]
+    fn body_column_edges_resize_after_scrolling_and_stay_inside_the_table() {
+        let mut model = generator_model((1..=100).map(|id| transaction(id, id, "row")).collect());
+        let theme = Theme::one_dark().zoomed(1.5);
+        let bounds = Rect::from_xywh(20.0, 30.0, 800.0, 400.0);
+        model.horizontal = 80.0;
+        model.viewport.top = 20;
+        model.layout(bounds, &theme);
+        let column = model.layout.columns[0];
+        let start = point(column.rect.right() - 1.0, model.layout.body.bottom() - 1.0);
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        let now = Instant::now();
+        assert!(model.pointer(
+            &mut doc,
+            panel,
+            PointerEvent::Down {
+                position: start,
+                button: MouseButton::Left,
+                modifiers: Default::default(),
+            },
+            now,
+        ));
+        assert_eq!(model.resizing_column(), Some(column.source_index));
+        model.pointer(
+            &mut doc,
+            panel,
+            PointerEvent::Move {
+                position: point(start.x + 90.0, start.y + 100.0),
+            },
+            now,
+        );
+        model.pointer(&mut doc, panel, PointerEvent::Up, now);
+        assert_eq!(
+            model.widths[column.source_index],
+            Some(column.rect.width() / theme.zoom + 60.0),
+        );
+        assert_eq!(model.selected, None);
+        assert_eq!(model.viewport.top, 20);
+        assert_eq!(model.horizontal, 80.0);
+        assert!(!model.dragging());
+        assert!(
+            model
+                .column_edge_at(point(start.x, model.layout.body.bottom()))
+                .is_none()
+        );
+        assert!(
+            model
+                .column_edge_at(point(start.x, model.layout.header.top() - 1.0))
+                .is_none()
+        );
+
+        model.horizontal = model.widths[column.source_index].unwrap() * theme.zoom;
+        model.layout(bounds, &theme);
+        let body = model.layout.body;
+        let clipped_edge = point(body.left() - 2.0, body.top() + 5.0);
+        assert!(model.layout.columns[0].resize.contains(clipped_edge));
+        assert!(model.column_edge_at(clipped_edge).is_none());
+        assert!(
+            model
+                .column_edge_at(point(body.right(), clipped_edge.y))
+                .is_none()
+        );
     }
 
     #[test]

@@ -73,9 +73,10 @@ themes. Muted foregrounds remain available for secondary information and disable
 controls.
 
 The sample viewer's Table panel is the specimen for native column dividers.
-Each header has a 1px divider with an 8px grab area, including the trailing
-Attributes edge. Hover and drag use the focused-border role and GPUI's column
-resize cursor. Dragging changes that column's width and moves later columns;
+Each column has a 1px divider with an 8px grab area extending through the header
+and body, including the trailing Attributes edge. Hover and drag use the
+focused-border role and GPUI's column resize cursor. Dragging changes that
+column's width and moves later columns;
 overflow scrolls within the table. Double-click fits the header and visible
 values. Focus a divider with Tab, resize with Left or Right, and fit with Enter.
 Attributes fills unused space until given an explicit width. Workspace files

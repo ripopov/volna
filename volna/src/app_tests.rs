@@ -4001,7 +4001,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
         }
         vcx.simulate_resize(size(px(1600.0), px(700.0)));
         vcx.update(|window, cx| window.draw(cx).clear(cx));
-        let edge = |vcx: &mut VisualTestContext, source_index| {
+        let edge = |vcx: &mut VisualTestContext, source_index, in_body| {
             window
                 .update(vcx, |ws, _, _| {
                     let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
@@ -4011,44 +4011,57 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
                         .iter()
                         .find(|column| column.source_index == source_index)
                         .unwrap();
-                    (column.rect.right() - 1.0, column.rect.top() + 12.0)
+                    let y = if in_body {
+                        table.layout.body.top() + table.layout.body.height() * 0.5
+                    } else {
+                        column.rect.top() + 12.0
+                    };
+                    (column.rect.right() - 1.0, y)
                 })
                 .unwrap()
         };
-        let (x, y) = edge(&mut vcx, 0);
         let at = |x, y| point(px(x), px(y));
-        vcx.simulate_mouse_move(at(x + 2.0, y), None, Modifiers::default());
-        vcx.simulate_mouse_down(at(x + 2.0, y), MouseButton::Left, Modifiers::default());
-        vcx.simulate_mouse_move(
-            at(x + 152.0, y + 60.0),
-            Some(MouseButton::Left),
-            Modifiers::default(),
-        );
-        vcx.simulate_mouse_up(
-            at(x + 152.0, y + 60.0),
-            MouseButton::Left,
-            Modifiers::default(),
-        );
-        vcx.run_until_parked();
+        for in_body in [false, true] {
+            let (x, y) = edge(&mut vcx, 0, in_body);
+            vcx.simulate_mouse_move(at(x + 2.0, y), None, Modifiers::default());
+            vcx.simulate_mouse_down(at(x + 2.0, y), MouseButton::Left, Modifiers::default());
+            vcx.simulate_mouse_move(
+                at(x + 152.0, y + 60.0),
+                Some(MouseButton::Left),
+                Modifiers::default(),
+            );
+            vcx.simulate_mouse_up(
+                at(x + 152.0, y + 60.0),
+                MouseButton::Left,
+                Modifiers::default(),
+            );
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, window, cx| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert_eq!(table.widths[0], Some(360.0));
+                    assert_eq!(table.selected, None);
+                    assert!(!table.dragging());
+                    assert_eq!(ws.app.panels.len(), 1);
+                    ws.dispatch(Command::Undo, Some(window), cx);
+                    assert_eq!(
+                        ws.app
+                            .panels
+                            .get(panel)
+                            .unwrap()
+                            .kind
+                            .table()
+                            .unwrap()
+                            .widths[0],
+                        None
+                    );
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+        }
         window
             .update(&mut vcx, |ws, window, cx| {
-                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
-                assert_eq!(table.widths[0], Some(360.0));
-                assert_eq!(table.selected, None);
-                assert!(!table.dragging());
-                assert_eq!(ws.app.panels.len(), 1);
-                ws.dispatch(Command::Undo, Some(window), cx);
-                assert_eq!(
-                    ws.app
-                        .panels
-                        .get(panel)
-                        .unwrap()
-                        .kind
-                        .table()
-                        .unwrap()
-                        .widths[0],
-                    None
-                );
                 ws.dispatch(
                     Command::Table(
                         panel,
@@ -4064,7 +4077,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
             .unwrap();
         vcx.run_until_parked();
         vcx.update(|window, cx| window.draw(cx).clear(cx));
-        let (x, y) = edge(&mut vcx, 6);
+        let (x, y) = edge(&mut vcx, 6, true);
         vcx.simulate_mouse_move(at(x + 2.0, y), None, Modifiers::default());
         vcx.simulate_mouse_down(at(x + 2.0, y), MouseButton::Left, Modifiers::default());
         vcx.simulate_mouse_move(
@@ -4106,7 +4119,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
             .unwrap();
         vcx.run_until_parked();
         vcx.update(|window, cx| window.draw(cx).clear(cx));
-        let (x, y) = edge(&mut vcx, 0);
+        let (x, y) = edge(&mut vcx, 0, true);
         vcx.simulate_mouse_move(at(x, y), None, Modifiers::default());
         vcx.simulate_event(MouseDownEvent {
             button: MouseButton::Left,
@@ -4144,7 +4157,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
             .unwrap();
         vcx.run_until_parked();
         vcx.update(|window, cx| window.draw(cx).clear(cx));
-        let (x, y) = edge(&mut vcx, 6);
+        let (x, y) = edge(&mut vcx, 6, true);
         let auto_width = window
             .update(&mut vcx, |ws, _, _| {
                 ws.app
@@ -4205,6 +4218,47 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
             keyboard_resized,
             "column dividers must be reachable by Tab and resize with Right"
         );
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let cell = window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                at(
+                    table.layout.body.left() + 20.0,
+                    table.layout.body.top() + 12.0,
+                )
+            })
+            .unwrap();
+        vcx.simulate_click(cell, Modifiers::default());
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                assert!(table.selected.is_some());
+                assert!(!table.dragging());
+                assert_eq!(table.applied_sort(), None);
+                assert_eq!(ws.app.panels.len(), 1);
+            })
+            .unwrap();
+        vcx.simulate_resize(size(px(360.0), px(260.0)));
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let (x, y) = edge(&mut vcx, 0, true);
+        vcx.simulate_mouse_move(at(x, y), None, Modifiers::default());
+        vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: at(x, y),
+            delta: gpui_kit::ScrollDelta::Pixels(at(0.0, 48.0)),
+            ..Default::default()
+        });
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                assert_eq!(
+                    table.viewport.top, 2,
+                    "scrolling over a divider reaches the table"
+                );
+                assert!(!table.dragging());
+            })
+            .unwrap();
     }
 }
 

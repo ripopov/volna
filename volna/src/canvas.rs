@@ -553,12 +553,12 @@ impl Element for PanelCanvas {
             .map(|r| (r, window.insert_hitbox(gbounds(r), HitboxBehavior::Normal)))
             .collect();
         let mut table_splitters = self.table_splitters(cx);
-        if let Some((edges, header)) = &mut table_splitters {
+        if let Some((edges, bounds)) = &mut table_splitters {
             edges.prepaint_as_root(
-                gbounds(*header).origin,
+                gbounds(*bounds).origin,
                 size(
-                    AvailableSpace::Definite(px(header.width())),
-                    AvailableSpace::Definite(px(header.height())),
+                    AvailableSpace::Definite(px(bounds.width())),
+                    AvailableSpace::Definite(px(bounds.height())),
                 ),
                 window,
                 cx,
@@ -699,6 +699,12 @@ impl PanelCanvas {
     fn table_splitters(&self, cx: &App) -> Option<(AnyElement, CRect)> {
         let table = self.ws.read(cx).app.panels.get(self.panel)?.kind.table()?;
         let header = table.layout.header;
+        let bounds = CRect::from_xywh(
+            header.left(),
+            header.top(),
+            header.width(),
+            header.height() + table.layout.body.height(),
+        );
         let t = *theme(cx);
         let mut edges = div()
             .id(("table-column-edges", self.panel.0))
@@ -706,8 +712,8 @@ impl PanelCanvas {
             .tab_index(0)
             .tab_stop(false)
             .relative()
-            .w(px(header.width()))
-            .h(px(header.height()))
+            .w(px(bounds.width()))
+            .h(px(bounds.height()))
             .overflow_hidden();
         for column in &table.layout.columns {
             if column.rect.right() <= header.left() || column.rect.left() >= header.right() {
@@ -744,7 +750,7 @@ impl PanelCanvas {
                         column.rect.left() - header.left() + column.resize.width() * 0.5
                     ))
                     .w(px((column.rect.width() - column.resize.width()).max(0.0)))
-                    .h_full()
+                    .h(px(header.height()))
                     .aria_label(format!(
                         "Sort {}: {direction}",
                         table.column_title(source_index)
@@ -814,7 +820,7 @@ impl PanelCanvas {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .occlude()
+                    .block_mouse_except_scroll()
                     .cursor_col_resize()
                     .role(gpui_kit::accesskit::Role::Splitter)
                     .aria_label(format!("Resize {}", table.column_title(source_index)))
@@ -893,7 +899,7 @@ impl PanelCanvas {
                     }),
             );
         }
-        Some((edges.into_any_element(), header))
+        Some((edges.into_any_element(), bounds))
     }
 
     fn register_mouse_handlers(&self, prepaint: &CanvasPrepaint, window: &mut Window) {
@@ -1136,7 +1142,7 @@ impl PanelCanvas {
 
         window.on_mouse_event({
             move |ev: &ScrollWheelEvent, phase, window, cx| {
-                if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
+                if phase != DispatchPhase::Bubble || !hitbox.should_handle_scroll(window) {
                     return;
                 }
                 let delta = ev.delta.pixel_delta(px(row_h));

@@ -133,7 +133,8 @@ Workspace files store panel structure, views, markers, and row choices. The
 native frontend writes them atomically. Incompatible workspace versions are
 discarded. Settings and recent items live separately in the config directory.
 
-Table headers have draggable dividers, including the edge after Attributes.
+Table columns have 1px draggable dividers extending through the header and body,
+including the edge after Attributes.
 Dragging resizes one column and moves the columns that follow it. Double-click
 fits the header and visible values; a focused divider supports Left, Right, and
 Enter. Attributes initially fills the remaining width, and its bounded preview
