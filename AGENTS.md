@@ -39,6 +39,19 @@ and assets live in `docs/design-system`; engineering content lives in Markdown
 and builds through Astro/Starlight. The current VTR guides in `vtr/docs` are
 authoritative.
 
+# UI design workflow
+
+For visual design discussions, inspect the existing implementation and offer an
+interactive mockup before changing application code. Include the controls and
+states needed to evaluate the design, such as active sort direction, inherited
+settings, and explicit overrides. Provide a clickable standalone HTML preview
+alongside any inline visualization. Keep drafts and review screenshots in `atemp`.
+
+Once a direction is accepted, implement it using the existing behavior and shared
+design system. Keep drawing and interaction bounds aligned. Verify the running
+application in both themes, at narrow widths and different zoom levels, including
+keyboard use. Inspect application screenshots and test meaningful interactions.
+
 # Compatibility
 
 Volna is a research project. Do not add backwards-compatibility machinery
