@@ -3,20 +3,45 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use volna_trace::data::value::{SignalShape, ValueKind, WaveValue, kind_of_bits};
-use volna_trace::data::value_view::ValueView;
+use volna_trace::data::value::{SignalShape, ValueKind, WaveValue};
+use volna_trace::data::value_view::{LogicView, ValueView};
+
+use super::text::{truncate, truncate_ref};
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Translated {
     pub text: String,
     pub kind: ValueKind,
+    pub truncated: bool,
 }
 
 impl Translated {
-    fn normal(text: impl Into<String>) -> Self {
-        Translated {
-            text: text.into(),
-            kind: ValueKind::Normal,
+    fn bounded(text: &str, kind: ValueKind, limit: usize) -> Self {
+        Self {
+            text: truncate_ref(text, limit),
+            kind,
+            truncated: text.len() > limit,
+        }
+    }
+
+    fn chars(chars: impl IntoIterator<Item = char>, kind: ValueKind, limit: usize) -> Self {
+        let mut text = String::new();
+        let mut truncated = false;
+        for c in chars {
+            if text.len().saturating_add(c.len_utf8()) > limit {
+                text.push(c);
+                truncated = true;
+                break;
+            }
+            text.push(c);
+        }
+        if truncated {
+            text = truncate(text, limit);
+        }
+        Self {
+            text,
+            kind,
+            truncated,
         }
     }
 }
@@ -26,7 +51,14 @@ pub trait Translator: Send + Sync {
     fn name(&self) -> &'static str;
     fn badge(&self) -> &'static str;
     fn applies(&self, shape: SignalShape) -> bool;
-    fn translate(&self, value: &WaveValue) -> Translated;
+    /// Format within a UTF-8 byte budget without materializing an unbounded input.
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated;
+    fn translate(&self, value: &WaveValue) -> Translated {
+        self.translate_view(&ValueView::borrowed(value), usize::MAX)
+    }
+    fn prefix(&self) -> &'static str {
+        ""
+    }
     fn numeric_kind(&self) -> Option<NumericKind> {
         None
     }
@@ -182,8 +214,8 @@ impl Translators {
     }
 }
 
-fn non_binary_word(bits: &[u8]) -> Option<Translated> {
-    let kind = kind_of_bits(bits);
+fn non_binary_word(bits: &LogicView<'_>, limit: usize) -> Option<Translated> {
+    let kind = bits.kind();
     let text = match kind {
         ValueKind::Normal => return None,
         ValueKind::Undef => "UNDEF",
@@ -191,24 +223,19 @@ fn non_binary_word(bits: &[u8]) -> Option<Translated> {
         ValueKind::DontCare => "DON'T CARE",
         ValueKind::Weak => "WEAK",
     };
-    Some(Translated {
-        text: text.into(),
-        kind,
-    })
+    Some(Translated::bounded(text, kind, limit))
 }
 
-fn bits_of(value: &WaveValue) -> Option<&str> {
-    match value {
-        WaveValue::Bits(s) => Some(s.as_str()),
-        _ => None,
-    }
-}
-
-fn not_applicable() -> Translated {
-    Translated {
-        text: "?".into(),
-        kind: ValueKind::Undef,
-    }
+fn not_applicable(value: &ValueView<'_>, limit: usize) -> Translated {
+    Translated::bounded(
+        if matches!(value, ValueView::Unavailable) {
+            "—"
+        } else {
+            "?"
+        },
+        ValueKind::Undef,
+        limit,
+    )
 }
 
 struct BitTranslator;
@@ -225,23 +252,27 @@ impl Translator for BitTranslator {
     fn applies(&self, shape: SignalShape) -> bool {
         matches!(shape, SignalShape::Bit | SignalShape::Event)
     }
-    fn translate(&self, value: &WaveValue) -> Translated {
-        raw_bits(value)
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
+        raw_bits(value, limit)
     }
 }
 
-fn raw_bits(value: &WaveValue) -> Translated {
-    let Some(bits) = bits_of(value) else {
-        return not_applicable();
+fn raw_bits(value: &ValueView<'_>, limit: usize) -> Translated {
+    let ValueView::Logic(bits) = value else {
+        return not_applicable(value, limit);
     };
-    Translated {
-        text: bits.to_string(),
-        kind: kind_of_bits(bits.as_bytes()),
-    }
+    Translated::chars(
+        (0..bits.width).map(|i| char::from(bits.bit(i))),
+        bits.kind(),
+        limit,
+    )
 }
 
 struct BinaryTranslator;
 impl Translator for BinaryTranslator {
+    fn prefix(&self) -> &'static str {
+        "0b"
+    }
     fn id(&self) -> &'static str {
         "bin"
     }
@@ -257,13 +288,16 @@ impl Translator for BinaryTranslator {
     fn applies(&self, shape: SignalShape) -> bool {
         shape.is_digital()
     }
-    fn translate(&self, value: &WaveValue) -> Translated {
-        raw_bits(value)
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
+        raw_bits(value, limit)
     }
 }
 
 struct HexTranslator;
 impl Translator for HexTranslator {
+    fn prefix(&self) -> &'static str {
+        "0x"
+    }
     fn id(&self) -> &'static str {
         "hex"
     }
@@ -279,25 +313,21 @@ impl Translator for HexTranslator {
     fn applies(&self, shape: SignalShape) -> bool {
         shape.is_digital()
     }
-    fn translate(&self, value: &WaveValue) -> Translated {
-        let Some(bits) = bits_of(value) else {
-            return not_applicable();
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
+        let ValueView::Logic(bits) = value else {
+            return not_applicable(value, limit);
         };
-        let bytes = bits.as_bytes();
-        let ndigits = bytes.len().div_ceil(4);
-        let mut out = String::with_capacity(ndigits);
-        for d in 0..ndigits {
-            let end = bytes.len() - (ndigits - 1 - d) * 4;
+        let ndigits = bits.width.div_ceil(4);
+        let chars = (0..ndigits).map(|d| {
+            let end = bits.width - (ndigits - 1 - d) * 4;
             let start = end.saturating_sub(4);
-            let nib = &bytes[start..end];
             let mut v = 0u8;
-            let mut special: Option<u8> = None;
-            for &c in nib {
-                match c {
+            let mut special = None;
+            for i in start..end {
+                match bits.bit(i) {
                     b'0' => v <<= 1,
                     b'1' => v = (v << 1) | 1,
-                    other => {
-                        let c = other.to_ascii_lowercase();
+                    c => {
                         special = Some(match (special, c) {
                             (Some(b'x'), _) | (_, b'x' | b'u' | b'w') => b'x',
                             (Some(b'z'), _) | (_, b'z') => b'z',
@@ -306,23 +336,38 @@ impl Translator for HexTranslator {
                     }
                 }
             }
-            match special {
-                Some(c) => out.push(c as char),
-                None => out.push(char::from_digit(u32::from(v), 16).unwrap()),
-            }
-        }
-        Translated {
-            text: out,
-            kind: kind_of_bits(bytes),
-        }
+            special.map_or_else(|| char::from_digit(u32::from(v), 16).unwrap(), char::from)
+        });
+        Translated::chars(chars, bits.kind(), limit)
     }
 }
 
-fn binary_to_decimal(bits: &[u8]) -> String {
+fn decimal(bits: &LogicView<'_>, signed: bool, limit: usize) -> Translated {
+    if let Some(value) = non_binary_word(bits, limit) {
+        return value;
+    }
+    let negative = signed && bits.width > 0 && bits.bit(0) == b'1';
+    let last_one = negative.then(|| (0..bits.width).rfind(|&i| bits.bit(i) == b'1').unwrap());
+    let bit = |i| {
+        let value = u64::from(bits.bit(i) == b'1');
+        if last_one.is_some_and(|last| i < last) {
+            1 - value
+        } else {
+            value
+        }
+    };
+    let first = (0..bits.width).find(|&i| bit(i) != 0).unwrap_or(bits.width);
+    // Decimal conversion is quadratic; never build an integer larger than the output budget.
+    if bits.width - first > limit.saturating_mul(4) {
+        return Translated {
+            text: truncate_ref("…", limit),
+            kind: ValueKind::Normal,
+            truncated: true,
+        };
+    }
     let mut limbs: Vec<u32> = vec![0];
-    for &c in bits {
-        let bit = u64::from(c == b'1');
-        let mut carry = bit;
+    for i in first..bits.width {
+        let mut carry = bit(i);
         for limb in &mut limbs {
             let v = u64::from(*limb) * 2 + carry;
             *limb = (v % 1_000_000_000) as u32;
@@ -332,15 +377,15 @@ fn binary_to_decimal(bits: &[u8]) -> String {
             limbs.push(carry as u32);
         }
     }
-    let mut s = String::new();
+    let mut text = if negative { "-".into() } else { String::new() };
     for (i, limb) in limbs.iter().rev().enumerate() {
         if i == 0 {
-            s.push_str(&limb.to_string());
+            write!(text, "{limb}").unwrap();
         } else {
-            write!(s, "{limb:09}").unwrap();
+            write!(text, "{limb:09}").unwrap();
         }
     }
-    s
+    Translated::bounded(&text, ValueKind::Normal, limit)
 }
 
 struct UnsignedTranslator;
@@ -360,14 +405,11 @@ impl Translator for UnsignedTranslator {
     fn applies(&self, shape: SignalShape) -> bool {
         shape.is_digital()
     }
-    fn translate(&self, value: &WaveValue) -> Translated {
-        let Some(bits) = bits_of(value) else {
-            return not_applicable();
-        };
-        if let Some(t) = non_binary_word(bits.as_bytes()) {
-            return t;
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
+        match value {
+            ValueView::Logic(bits) => decimal(bits, false, limit),
+            _ => not_applicable(value, limit),
         }
-        Translated::normal(binary_to_decimal(bits.as_bytes()))
     }
 }
 
@@ -388,29 +430,11 @@ impl Translator for SignedTranslator {
     fn applies(&self, shape: SignalShape) -> bool {
         matches!(shape, SignalShape::Vector { .. })
     }
-    fn translate(&self, value: &WaveValue) -> Translated {
-        let Some(bits) = bits_of(value) else {
-            return not_applicable();
-        };
-        let bytes = bits.as_bytes();
-        if let Some(t) = non_binary_word(bytes) {
-            return t;
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
+        match value {
+            ValueView::Logic(bits) => decimal(bits, true, limit),
+            _ => not_applicable(value, limit),
         }
-        if bytes.first() != Some(&b'1') {
-            return Translated::normal(binary_to_decimal(bytes));
-        }
-        let mut inverted: Vec<u8> = bytes
-            .iter()
-            .map(|&c| if c == b'1' { b'0' } else { b'1' })
-            .collect();
-        for c in inverted.iter_mut().rev() {
-            if *c == b'0' {
-                *c = b'1';
-                break;
-            }
-            *c = b'0';
-        }
-        Translated::normal(format!("-{}", binary_to_decimal(&inverted)))
     }
 }
 
@@ -477,24 +501,23 @@ impl Translator for FloatTranslator {
             }
         )
     }
-    fn translate(&self, value: &WaveValue) -> Translated {
-        let Some(bits) = bits_of(value) else {
-            return not_applicable();
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
+        let ValueView::Logic(bits) = value else {
+            return not_applicable(value, limit);
         };
-        let bytes = bits.as_bytes();
-        if let Some(t) = non_binary_word(bytes) {
-            return t;
+        if let Some(value) = non_binary_word(bits, limit) {
+            return value;
         }
-        let raw = bytes
-            .iter()
-            .fold(0u64, |acc, &c| (acc << 1) | u64::from(c == b'1'));
-        let v = match bytes.len() {
+        let Some(raw) = bits.to_u64() else {
+            return not_applicable(value, limit);
+        };
+        let number = match bits.width {
             16 => half_to_f64(raw as u16),
             32 => f64::from(f32::from_bits(raw as u32)),
             64 => f64::from_bits(raw),
-            _ => return not_applicable(),
+            _ => return not_applicable(value, limit),
         };
-        Translated::normal(format_float(v))
+        Translated::bounded(&format_float(number), ValueKind::Normal, limit)
     }
 }
 
@@ -515,10 +538,12 @@ impl Translator for RealTranslator {
     fn applies(&self, shape: SignalShape) -> bool {
         shape == SignalShape::Real
     }
-    fn translate(&self, value: &WaveValue) -> Translated {
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
         match value {
-            WaveValue::Real(v) => Translated::normal(format_float(*v)),
-            _ => not_applicable(),
+            ValueView::Real(number) => {
+                Translated::bounded(&format_float(*number), ValueKind::Normal, limit)
+            }
+            _ => not_applicable(value, limit),
         }
     }
 }
@@ -537,11 +562,21 @@ impl Translator for TextTranslator {
     fn applies(&self, shape: SignalShape) -> bool {
         shape == SignalShape::Text
     }
-    fn translate(&self, value: &WaveValue) -> Translated {
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
         match value {
-            WaveValue::Text(s) => Translated::normal(s.clone()),
-            WaveValue::Bytes(bytes) => Translated::normal(format!("\"{}\"", bytes.escape_ascii())),
-            _ => not_applicable(),
+            ValueView::Text(text) => Translated::bounded(text, ValueKind::Normal, limit),
+            ValueView::Bytes(bytes) => Translated::chars(
+                std::iter::once('"')
+                    .chain(
+                        bytes
+                            .iter()
+                            .flat_map(|b| std::ascii::escape_default(*b).map(char::from)),
+                    )
+                    .chain(std::iter::once('"')),
+                ValueKind::Normal,
+                limit,
+            ),
+            _ => not_applicable(value, limit),
         }
     }
 }
@@ -549,6 +584,76 @@ impl Translator for TextTranslator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn borrowed_packed_values_share_waveform_translation_and_respect_byte_limits() {
+        let translators = Translators::builtin();
+        for bits in [
+            "00111111110000000000000000000000",
+            "11111111111111111111111111111111",
+            "0101x1z00110",
+        ] {
+            let mut packed = vec![0; bits.len().div_ceil(4)];
+            for (i, c) in bits.bytes().rev().enumerate() {
+                vtr::signal::set_code(&mut packed, 4, i, vtr::signal::code_from_ascii(c));
+            }
+            let view = ValueView::Logic(LogicView::packed_lsb(bits.len() as u32, 4, &packed));
+            for translator in translators.applicable(SignalShape::Vector {
+                width: bits.len() as u32,
+            }) {
+                let expected = translator.translate(&WaveValue::Bits(bits.into()));
+                assert_eq!(
+                    translator.translate_view(&view, usize::MAX),
+                    expected,
+                    "{}",
+                    translator.id()
+                );
+                for limit in 0..=expected.text.len() + 1 {
+                    let bounded = translator.translate_view(&view, limit);
+                    assert!(bounded.text.len() <= limit);
+                    assert_eq!(bounded.kind, expected.kind);
+                    assert_eq!(bounded.truncated, expected.text.len() > limit);
+                    if !bounded.truncated {
+                        assert_eq!(bounded.text, expected.text);
+                    }
+                }
+            }
+        }
+        for value in [
+            WaveValue::Text("αβγδ".into()),
+            WaveValue::Bytes(vec![0, 255, b'"', b'\\']),
+        ] {
+            let text = translators.get("text").unwrap();
+            for limit in 0..=32 {
+                let bounded = text.translate_view(&ValueView::borrowed(&value), limit);
+                assert!(bounded.text.len() <= limit);
+                assert_eq!(bounded.truncated, text.translate(&value).text.len() > limit);
+            }
+        }
+    }
+
+    #[test]
+    fn huge_decimal_previews_and_wide_twos_complement_stay_bounded() {
+        let translators = Translators::builtin();
+        let huge = ValueView::Logic(LogicView::ascii(vec![b'1'; 1_000_000]));
+        for id in ["hex", "bin", "udec"] {
+            let result = translators.get(id).unwrap().translate_view(&huge, 32);
+            assert!(result.truncated);
+            assert!(result.text.len() <= 32);
+        }
+        assert_eq!(
+            translators
+                .get("sdec")
+                .unwrap()
+                .translate_view(&huge, 32)
+                .text,
+            "-1"
+        );
+        assert_eq!(
+            tr("sdec", &format!("1{}", "0".repeat(79))),
+            "-604462909807314587353088"
+        );
+    }
 
     #[test]
     fn packed_logic_reads_as_numbers() {

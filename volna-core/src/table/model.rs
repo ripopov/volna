@@ -6,12 +6,14 @@ use std::sync::Arc;
 use web_time::Instant;
 
 use super::columns::{ColumnSet, TransactionColumn};
+use super::format::{self, FormatChoice, TableFormats};
 use super::layout::{
     MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, MIN_COLUMN_WIDTH, ROW_HEIGHT, RowViewport, TableLayout,
 };
 use super::source::TableSource;
 use crate::data::loaded_tracks::LoadedGenerator;
-use crate::data::text::{append_exact, format_attribute, push_limited, truncate, truncate_ref};
+use crate::data::text::{append_exact, push_limited};
+use crate::data::translator::{Translated, Translator, Translators};
 use crate::document::{Document, TrackLoadState};
 use crate::geometry::{MouseButton, Point, Rect};
 use crate::nav::{Link, NavState};
@@ -19,7 +21,7 @@ use crate::scene::{FontRole, TextMeasure};
 use crate::theme::Theme;
 use crate::trace::Traced;
 use crate::wave::model::PointerEvent;
-use volna_trace::data::transactions::{Transaction, TransactionRef};
+use volna_trace::data::transactions::{AttributeType, AttributeValue, Transaction, TransactionRef};
 use volna_trace::data::value_view::ValueView;
 use volna_trace::data::{SignalHistory, SignalRef};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
@@ -115,6 +117,11 @@ enum TableDrag {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TableCommand {
     SortColumn(usize),
+    NumberFormat(String),
+    ColumnFormat {
+        source_index: usize,
+        translator: Option<String>,
+    },
     Scroll(f32),
     Select(u64),
     GoTo(u64),
@@ -145,6 +152,8 @@ pub struct TableModel {
     pub state: TableState,
     pub columns: crate::history::Journaled<ColumnSet>,
     pub widths: crate::history::Journaled<Vec<Option<f32>>>,
+    pub formats: crate::history::Journaled<TableFormats>,
+    translators: Translators,
     pub viewport: RowViewport,
     pub selected: Option<RowIdentity>,
     pub nav: NavState,
@@ -169,7 +178,12 @@ pub struct TableModel {
 
 impl TableModel {
     #[must_use]
-    pub fn new(source: TableSource, link: Link, budget: MemoryBudget) -> Self {
+    pub fn new(
+        source: TableSource,
+        link: Link,
+        budget: MemoryBudget,
+        translators: Translators,
+    ) -> Self {
         let columns = match &source {
             TableSource::Generator(_) => ColumnSet::transactions_default(),
             TableSource::Signals(signals) => ColumnSet::signals(signals.len()),
@@ -185,6 +199,8 @@ impl TableModel {
             state: TableState::Loading,
             columns: crate::history::Journaled::new(columns),
             widths: crate::history::Journaled::new(vec![None; count]),
+            formats: crate::history::Journaled::new(TableFormats::new(count)),
+            translators,
             viewport: RowViewport::default(),
             selected: None,
             nav,
@@ -210,9 +226,15 @@ impl TableModel {
 
     #[must_use]
     pub fn clone_view(&self) -> Self {
-        let mut clone = Self::new(self.source.clone(), self.nav.link, self.budget.clone());
+        let mut clone = Self::new(
+            self.source.clone(),
+            self.nav.link,
+            self.budget.clone(),
+            self.translators.clone(),
+        );
         clone.columns = self.columns.clone();
         clone.widths = self.widths.clone();
+        clone.formats = self.formats.clone();
         clone.sort_requested = self.sort_requested;
         clone
     }
@@ -881,6 +903,37 @@ impl TableModel {
     ) -> bool {
         match command {
             TableCommand::SortColumn(column) => self.cycle_sort(column),
+            TableCommand::NumberFormat(translator) => {
+                if !format::number_translators(&self.translators)
+                    .iter()
+                    .any(|t| t.id() == translator)
+                {
+                    return false;
+                }
+                let changed = self.formats.update(|f| f.numbers = translator);
+                if changed {
+                    self.invalidate_window();
+                }
+                changed
+            }
+            TableCommand::ColumnFormat {
+                source_index,
+                translator,
+            } => {
+                let Some(menu) = self.column_formats(source_index) else {
+                    return false;
+                };
+                if !menu.iter().any(|c| c.translator == translator) {
+                    return false;
+                }
+                let changed = self
+                    .formats
+                    .update(|f| f.columns[source_index] = translator);
+                if changed {
+                    self.invalidate_window();
+                }
+                changed
+            }
             TableCommand::Scroll(pixels) => {
                 self.viewport
                     .scroll(pixels, self.len(), self.layout.body.height(), self.row_px());
@@ -1013,6 +1066,130 @@ impl TableModel {
         }
     }
 
+    #[must_use]
+    pub fn number_format(&self) -> &'static str {
+        self.translators
+            .get(&self.formats.numbers)
+            .expect("number translator")
+            .badge()
+    }
+
+    #[must_use]
+    pub fn number_formats(&self) -> Vec<FormatChoice> {
+        format::number_translators(&self.translators)
+            .iter()
+            .map(|t| FormatChoice {
+                translator: Some(t.id().into()),
+                label: t.name().into(),
+                preview: String::new(),
+                checked: t.id() == self.formats.numbers,
+            })
+            .collect()
+    }
+
+    fn column_shape(&self, column: usize) -> Option<volna_trace::data::SignalShape> {
+        match &self.rows {
+            Rows::Signals { histories, .. } => column
+                .checked_sub(1)
+                .and_then(|i| histories.get(i))
+                .map(|h| h.shape()),
+            Rows::Generator(generator) => match self.transaction_column(column)? {
+                TransactionColumn::Id => Some(volna_trace::data::SignalShape::Vector { width: 64 }),
+                TransactionColumn::Attribute(key) => {
+                    let entry = generator
+                        .attribute_catalogue()
+                        .iter()
+                        .find(|a| &a.key == key)?;
+                    if entry.value_type == AttributeType::Mixed {
+                        return None;
+                    }
+                    let tx = generator.transactions().get(entry.example_row)?;
+                    format::attribute_shape(&tx.attributes.iter().find(|a| &a.key == key)?.value)
+                }
+                _ => None,
+            },
+            Rows::None => None,
+        }
+    }
+
+    fn column_translators(&self, column: usize) -> Vec<std::sync::Arc<dyn Translator>> {
+        self.column_shape(column).map_or_else(Vec::new, |shape| {
+            self.translators
+                .applicable(shape)
+                .into_iter()
+                .filter(|t| {
+                    matches!(self.source, TableSource::Signals(_))
+                        || t.numeric_kind() != Some(crate::data::NumericKind::Float)
+                })
+                .collect()
+        })
+    }
+
+    #[must_use]
+    pub fn column_translator(&self, column: usize) -> Option<Arc<dyn Translator>> {
+        (self.column_translators(column).len() > 1).then(|| {
+            self.formats.translator(
+                &self.translators,
+                column,
+                self.column_shape(column).expect("column shape"),
+            )
+        })
+    }
+
+    #[must_use]
+    pub fn column_formats(&self, column: usize) -> Option<Vec<FormatChoice>> {
+        let current = self.column_translator(column)?;
+        let shape = self.column_shape(column)?;
+        let inherited = self.formats.columns.get(column)?.is_none();
+        let default = self.formats.default_translator(&self.translators, shape);
+        let mut choices = vec![FormatChoice {
+            translator: None,
+            label: format!("Use table default · {}", default.name()),
+            preview: String::new(),
+            checked: inherited,
+        }];
+        for translator in self.column_translators(column) {
+            let preview = match &self.rows {
+                Rows::Generator(generator) => {
+                    let example = match self.transaction_column(column) {
+                        Some(TransactionColumn::Attribute(key)) => generator
+                            .attribute_catalogue()
+                            .iter()
+                            .find(|a| &a.key == key)
+                            .map(|a| a.example_row),
+                        _ => self
+                            .selected_ordinal()
+                            .and_then(|i| self.source_index(i))
+                            .or(Some(0)),
+                    };
+                    example
+                        .and_then(|i| generator.transactions().get(i))
+                        .map(|tx| self.transaction_cell(tx, column, 48, Some(translator.as_ref())))
+                }
+                Rows::Signals { histories, .. } => {
+                    let history = &histories[column - 1];
+                    let time = self
+                        .selected_ordinal()
+                        .and_then(|i| self.row_time(i))
+                        .or_else(|| self.row_time(self.viewport.top));
+                    time.and_then(|t| history.index_at(t)).map(|i| {
+                        format::translate(translator.as_ref(), &history.value_view(Some(i)), 48)
+                            .text
+                    })
+                }
+                Rows::None => None,
+            }
+            .unwrap_or_default();
+            choices.push(FormatChoice {
+                checked: !inherited && translator.id() == current.id(),
+                translator: Some(translator.id().into()),
+                label: translator.name().into(),
+                preview,
+            });
+        }
+        Some(choices)
+    }
+
     fn edit_columns(&mut self, f: impl FnOnce(&mut ColumnSet) -> bool) -> bool {
         let mut columns = self.columns.get().clone();
         if !f(&mut columns) || !self.columns.set(columns) {
@@ -1020,6 +1197,7 @@ impl TableModel {
         }
         let count = self.columns.len();
         self.widths.update(|widths| widths.resize(count, None));
+        self.formats.update(|f| f.columns.resize(count, None));
         if self
             .sort_requested
             .into_iter()
@@ -1072,7 +1250,11 @@ impl TableModel {
             self.column_title(source_index),
             FontRole::Mono,
             theme.mono_size,
-        ) + 22.0 * theme.zoom;
+        ) + if self.column_translator(source_index).is_some() {
+            70.0
+        } else {
+            22.0
+        } * theme.zoom;
         let end = self
             .viewport
             .top
@@ -1102,6 +1284,15 @@ impl TableModel {
                     prop: crate::panels::content::Prop::Table(Prop::Columns(columns)),
                 },
                 Some("Change columns".into()),
+            );
+        }
+        if let Some(formats) = self.formats.take_before() {
+            history.record(
+                crate::history::Edit::Prop {
+                    panel,
+                    prop: crate::panels::content::Prop::Table(Prop::Formats(formats)),
+                },
+                Some("Change table format".into()),
             );
         }
         if let Some(widths) = self.widths.take_before() {
@@ -1211,7 +1402,10 @@ impl TableModel {
                 .layout
                 .columns
                 .iter()
-                .find(|column| column.rect.contains(position))
+                .find(|column| {
+                    column.rect.contains(position)
+                        && !column.format.is_some_and(|rect| rect.contains(position))
+                })
                 .map(|column| column.source_index)
                 .is_some_and(|column| self.cycle_sort(column)),
             PointerEvent::Down {
@@ -1402,6 +1596,15 @@ impl TableModel {
                         theme.splitter_grab,
                         row_height + body.height(),
                     ),
+                    format: self.column_translator(source_index).map(|_| {
+                        let badge_width = (width - 20.0 * zoom).min(44.0 * zoom).max(0.0);
+                        Rect::from_xywh(
+                            rect.right() - 20.0 * zoom - badge_width,
+                            rect.top() + 2.0 * zoom,
+                            badge_width,
+                            row_height - 4.0 * zoom,
+                        )
+                    }),
                     preview_bytes: ((width / (theme.mono_size * 0.5).max(1.0)).ceil() as usize * 4)
                         .max(PREVIEW_BYTES)
                         .next_power_of_two()
@@ -1566,11 +1769,11 @@ impl TableModel {
                     .columns
                     .iter()
                     .map(|column| PreparedCell {
-                        text: transaction_cell(
+                        text: self.transaction_cell(
                             tx,
-                            self.transaction_column(column.source_index)
-                                .expect("visible column"),
+                            column.source_index,
                             column.preview_bytes,
+                            None,
                         ),
                         changed: false,
                         missing: match self.transaction_column(column.source_index) {
@@ -1623,11 +1826,14 @@ impl TableModel {
                     *hint = sample;
                     let missing = sample.is_none();
                     let changed = sample.is_some_and(|i| history.time(i) == row_time);
-                    let text = if missing {
-                        "—".into()
-                    } else {
-                        format_view(history.value_view(sample), column.preview_bytes)
-                    };
+                    let text = self
+                        .signal_value(
+                            column.source_index,
+                            history.as_ref(),
+                            sample,
+                            column.preview_bytes,
+                        )
+                        .text;
                     cells.push(PreparedCell {
                         text,
                         changed,
@@ -1649,11 +1855,7 @@ impl TableModel {
         match &self.rows {
             Rows::Generator(generator) => {
                 let tx = generator.transactions().get(self.source_index(ordinal)?)?;
-                Some(transaction_cell(
-                    tx,
-                    self.transaction_column(source_index)?,
-                    limit,
-                ))
+                Some(self.transaction_cell(tx, source_index, limit, None))
             }
             Rows::Signals { histories, .. } => {
                 let time = self.row_time(ordinal)?;
@@ -1662,14 +1864,34 @@ impl TableModel {
                 }
                 let history = histories.get(source_index - 1)?;
                 let sample = history.index_at(time);
-                Some(if sample.is_none() {
-                    "—".into()
-                } else {
-                    format_view(history.value_view(sample), limit)
-                })
+                Some(
+                    self.signal_value(source_index, history.as_ref(), sample, limit)
+                        .text,
+                )
             }
             Rows::None => None,
         }
+    }
+
+    fn signal_value(
+        &self,
+        column: usize,
+        history: &dyn SignalHistory,
+        sample: Option<usize>,
+        limit: usize,
+    ) -> Translated {
+        let value = if sample.is_none() {
+            ValueView::Unavailable
+        } else {
+            history.value_view(sample)
+        };
+        format::translate(
+            self.formats
+                .translator(&self.translators, column, history.shape())
+                .as_ref(),
+            &value,
+            limit,
+        )
     }
 
     #[must_use]
@@ -1734,7 +1956,7 @@ impl TableModel {
                     &mut text,
                     &format!(
                         "\t{}\t{}\t{}\t{}\t{}",
-                        tx.id.0,
+                        self.attribute_text(&AttributeValue::U64(tx.id.0), 4, None, COPY_BYTES),
                         tx.begin,
                         tx.end,
                         tx.end.saturating_sub(tx.begin),
@@ -1752,20 +1974,17 @@ impl TableModel {
                 }
                 append_exact(&mut text, "\n", COPY_BYTES)?;
                 append_exact(&mut text, &time.to_string(), COPY_BYTES)?;
-                for (_, history) in signals.iter().zip(histories) {
+                for (column, history) in histories.iter().enumerate() {
                     append_exact(&mut text, "\t", COPY_BYTES)?;
                     let sample = history.index_at(time);
-                    let value = if sample.is_none() {
-                        "—".into()
-                    } else {
-                        let (value, cut) = bounded_view(
-                            history.value_view(sample),
-                            COPY_BYTES.saturating_sub(text.len()),
-                        );
-                        anyhow::ensure!(!cut, "Row exceeds the 64 KiB clipboard limit.");
-                        value
-                    };
-                    append_exact(&mut text, &value, COPY_BYTES)?;
+                    let value = self.signal_value(
+                        column + 1,
+                        history.as_ref(),
+                        sample,
+                        COPY_BYTES.saturating_sub(text.len()),
+                    );
+                    anyhow::ensure!(!value.truncated, "Row exceeds the 64 KiB clipboard limit.");
+                    append_exact(&mut text, &value.text, COPY_BYTES)?;
                 }
             }
             _ => return Err(anyhow::anyhow!("Source is not ready.")),
@@ -1785,111 +2004,94 @@ impl Drop for TableModel {
     }
 }
 
-fn transaction_cell(tx: &Transaction, column: &TransactionColumn, limit: usize) -> String {
-    match column {
-        TransactionColumn::Attribute(key) => tx
-            .attributes
-            .iter()
-            .find(|a| &a.key == key)
-            .map_or_else(|| "—".into(), |a| format_attribute(&a.value, limit)),
-        TransactionColumn::Label => tx
-            .attributes
-            .iter()
-            .find(|a| a.key == "vtr.label")
-            .map_or_else(|| "—".into(), |a| format_attribute(&a.value, limit)),
-        TransactionColumn::Begin => tx.begin.to_string(),
-        TransactionColumn::Duration => tx.end.saturating_sub(tx.begin).to_string(),
-        TransactionColumn::End => tx.end.to_string(),
-        TransactionColumn::Id => tx.id.0.to_string(),
-        TransactionColumn::Status => tx.status.name().into(),
-        TransactionColumn::Attributes => {
-            let mut text = String::new();
-            let mut attributes = tx
+impl TableModel {
+    fn transaction_cell(
+        &self,
+        tx: &Transaction,
+        source_index: usize,
+        limit: usize,
+        requested: Option<&dyn Translator>,
+    ) -> String {
+        let column = self
+            .transaction_column(source_index)
+            .expect("transaction column");
+        match column {
+            TransactionColumn::Attribute(key) => {
+                tx.attributes.iter().find(|a| &a.key == key).map_or_else(
+                    || "—".into(),
+                    |a| self.attribute_text(&a.value, source_index, requested, limit),
+                )
+            }
+            TransactionColumn::Label => tx
                 .attributes
                 .iter()
-                .filter(|a| a.key != "vtr.label")
-                .peekable();
-            if attributes.peek().is_none() {
-                return "—".into();
-            }
-            let budget = limit.saturating_sub("…".len());
-            let mut cut = false;
-            'attributes: while let Some(attribute) = attributes.next() {
-                let separator = if text.is_empty() { "" } else { " · " };
-                for part in [separator, attribute.key.as_str(), "="] {
-                    let room = budget.saturating_sub(text.len());
-                    push_limited(&mut text, part, budget);
-                    if part.len() > room {
-                        cut = true;
-                        break 'attributes;
+                .find(|a| a.key == "vtr.label")
+                .map_or_else(
+                    || "—".into(),
+                    |a| self.attribute_text(&a.value, source_index, requested, limit),
+                ),
+            TransactionColumn::Begin => tx.begin.to_string(),
+            TransactionColumn::Duration => tx.end.saturating_sub(tx.begin).to_string(),
+            TransactionColumn::End => tx.end.to_string(),
+            TransactionColumn::Id => self.attribute_text(
+                &AttributeValue::U64(tx.id.0),
+                source_index,
+                requested,
+                limit,
+            ),
+            TransactionColumn::Status => tx.status.name().into(),
+            TransactionColumn::Attributes => {
+                let mut text = String::new();
+                let mut attributes = tx
+                    .attributes
+                    .iter()
+                    .filter(|a| a.key != "vtr.label")
+                    .peekable();
+                if attributes.peek().is_none() {
+                    return "—".into();
+                }
+                let budget = limit.saturating_sub("…".len());
+                let mut cut = false;
+                'attributes: while let Some(attribute) = attributes.next() {
+                    let separator = if text.is_empty() { "" } else { " · " };
+                    for part in [separator, attribute.key.as_str(), "="] {
+                        let room = budget.saturating_sub(text.len());
+                        push_limited(&mut text, part, budget);
+                        if part.len() > room {
+                            cut = true;
+                            break 'attributes;
+                        }
                     }
-                }
-                let remaining = budget.saturating_sub(text.len());
-                text.push_str(&format_attribute(&attribute.value, remaining));
-                if budget.saturating_sub(text.len()) < " · ".len() + 1 {
-                    cut = attributes.peek().is_some() || remaining < "…".len();
-                    break;
-                }
-            }
-            if cut && limit >= "…".len() && !text.ends_with('…') {
-                text.push('…');
-            }
-            text
-        }
-    }
-}
-
-fn format_view(value: ValueView<'_>, limit: usize) -> String {
-    bounded_view(value, limit).0
-}
-
-fn bounded_view(value: ValueView<'_>, limit: usize) -> (String, bool) {
-    match value {
-        ValueView::Unavailable => ("—".into(), false),
-        ValueView::Real(value) => {
-            let text = value.to_string();
-            let cut = text.len() > limit;
-            (truncate(text, limit), cut)
-        }
-        ValueView::Text(value) => {
-            let cut = value.len() > limit;
-            (truncate_ref(&value, limit), cut)
-        }
-        ValueView::Logic(value) => {
-            let mut text = String::with_capacity(value.width.min(limit));
-            let room = limit.saturating_sub(if value.width > limit { "…".len() } else { 0 });
-            let shown = value.width.min(room);
-            for index in 0..shown {
-                text.push(char::from(value.bit(index)));
-            }
-            let cut = shown < value.width;
-            if cut {
-                push_limited(&mut text, "…", limit);
-            }
-            (text, cut)
-        }
-        ValueView::Bytes(value) => {
-            let mut text = String::new();
-            let mut cut = false;
-            push_limited(&mut text, "b\"", limit);
-            for &byte in value.iter() {
-                for escaped in std::ascii::escape_default(byte) {
-                    if text.len() >= limit.saturating_sub(2) {
-                        cut = true;
+                    let remaining = budget.saturating_sub(text.len());
+                    text.push_str(&self.attribute_text(
+                        &attribute.value,
+                        source_index,
+                        requested,
+                        remaining,
+                    ));
+                    if budget.saturating_sub(text.len()) < " · ".len() + 1 {
+                        cut = attributes.peek().is_some() || remaining < "…".len();
                         break;
                     }
-                    text.push(char::from(escaped));
                 }
-                if cut {
-                    break;
+                if cut && limit >= "…".len() && !text.ends_with('…') {
+                    text.push('…');
                 }
+                text
             }
-            if cut {
-                push_limited(&mut text, "…", limit);
-            }
-            push_limited(&mut text, "\"", limit);
-            (text, cut)
         }
+    }
+
+    fn attribute_text(
+        &self,
+        value: &AttributeValue,
+        column: usize,
+        requested: Option<&dyn Translator>,
+        limit: usize,
+    ) -> String {
+        let translator = format::attribute_shape(value)
+            .map(|shape| self.formats.translator(&self.translators, column, shape));
+        format::attribute(value, requested.or(translator.as_deref()), limit)
     }
 }
 
@@ -1907,6 +2109,7 @@ fn normalized_u64(offset: f32, track: f32, maximum: u64) -> u64 {
 pub(crate) enum Prop {
     Columns(ColumnSet),
     Widths(Vec<Option<f32>>),
+    Formats(TableFormats),
 }
 
 impl Prop {
@@ -1914,12 +2117,14 @@ impl Prop {
         match self {
             Self::Columns(_) => 0,
             Self::Widths(_) => 1,
+            Self::Formats(_) => 2,
         }
     }
     pub(crate) fn bytes(&self) -> usize {
         match self {
             Self::Columns(columns) => columns.bytes(),
             Self::Widths(widths) => widths.len() * std::mem::size_of::<Option<f32>>(),
+            Self::Formats(formats) => formats.bytes(),
         }
     }
 }
@@ -1929,6 +2134,7 @@ impl TableModel {
         match prop {
             Prop::Columns(columns) => self.columns.get() == columns,
             Prop::Widths(widths) => self.widths.get() == widths,
+            Prop::Formats(formats) => self.formats.get() == formats,
         }
     }
 
@@ -1936,6 +2142,11 @@ impl TableModel {
         match prop {
             Prop::Columns(columns) => Prop::Columns(self.swap_columns(columns)),
             Prop::Widths(widths) => Prop::Widths(self.widths.swap(widths)),
+            Prop::Formats(formats) => {
+                let old = self.formats.swap(formats);
+                self.invalidate_window();
+                Prop::Formats(old)
+            }
         }
     }
 }
@@ -1978,6 +2189,7 @@ mod tests {
             TableSource::Signals(vec![signal_source("a", 1), signal_source("b", 2)]),
             Link::default(),
             budget,
+            Translators::builtin(),
         );
         model
             .attach(&mut Document::new(), &Default::default())
@@ -2011,6 +2223,7 @@ mod tests {
             TableSource::Signals(vec![signal_source("a", 1)]),
             Link::default(),
             budget.clone(),
+            Translators::builtin(),
         );
         model
             .attach(&mut Document::new(), &Default::default())
@@ -2076,6 +2289,7 @@ mod tests {
             TableSource::Signals(sources),
             Link::default(),
             MemoryBudget::new(16 * 1024 * 1024),
+            Translators::builtin(),
         );
         model.build_signal_rows(histories).unwrap();
         model.state = TableState::Ready;
@@ -2143,6 +2357,7 @@ mod tests {
             TableSource::Signals(vec![signal_source("wide", 1)]),
             Link::default(),
             MemoryBudget::new(16 * 1024 * 1024),
+            Translators::builtin(),
         );
         model
             .build_signal_rows(vec![Arc::new(BorrowOnly {
@@ -2203,10 +2418,147 @@ mod tests {
             }),
             Link::default(),
             MemoryBudget::new(16 * 1024 * 1024),
+            Translators::builtin(),
         );
         model.rows = Rows::Generator(Arc::new(generator));
         model.state = TableState::Ready;
         model
+    }
+
+    #[test]
+    fn column_formats_override_defaults_without_changing_selection_or_sort() {
+        let mut model = generator_model((1..=30).map(|i| transaction(i, i, "row")).collect());
+        model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Attribute("addr".into())));
+        model.cycle_sort(7);
+        finish_sort(&mut model);
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        let now = Instant::now();
+        model.select(&mut doc, panel, 20, now);
+        let selected = model.selected.clone();
+        let viewport = model.viewport;
+        let sort = model.applied_sort();
+        assert_eq!(model.cell_text(0, 7, 64).unwrap(), "0x80");
+        assert!(
+            model
+                .column_formats(7)
+                .unwrap()
+                .iter()
+                .any(|c| c.preview == "128")
+        );
+        assert!(model.command(
+            &mut doc,
+            panel,
+            TableCommand::ColumnFormat {
+                source_index: 7,
+                translator: Some("udec".into())
+            },
+            now
+        ));
+        assert!(model.command(
+            &mut doc,
+            panel,
+            TableCommand::NumberFormat("bin".into()),
+            now
+        ));
+        assert_eq!(model.cell_text(0, 7, 64).unwrap(), "128");
+        assert_eq!(model.cell_text(0, 4, 64).unwrap(), "0b1");
+        assert_eq!(model.cell_text(0, 1, 64).unwrap(), "1");
+        assert_eq!(model.selected, selected);
+        assert_eq!(model.viewport, viewport);
+        assert_eq!(model.applied_sort(), sort);
+        assert!(!model.command(
+            &mut doc,
+            panel,
+            TableCommand::ColumnFormat {
+                source_index: 7,
+                translator: Some("text".into())
+            },
+            now
+        ));
+        assert!(!model.command(
+            &mut doc,
+            panel,
+            TableCommand::NumberFormat("float".into()),
+            now
+        ));
+        model.edit_columns(|c| c.move_transaction(7, Some(1)));
+        model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Attribute("addr".into())));
+        model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Attribute("addr".into())));
+        assert_eq!(model.clone_view().formats.get(), model.formats.get());
+        assert_eq!(model.cell_text(0, 7, 64).unwrap(), "128");
+        assert!(model.command(
+            &mut doc,
+            panel,
+            TableCommand::ColumnFormat {
+                source_index: 7,
+                translator: None
+            },
+            now
+        ));
+        assert_eq!(model.cell_text(0, 7, 64).unwrap(), "0b10000000");
+        model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &Theme::one_dark());
+        let slot = model
+            .layout
+            .columns
+            .iter()
+            .position(|c| c.source_index == 7)
+            .unwrap();
+        assert_eq!(model.window.rows[0].cells[slot].text, "0b10000000");
+    }
+
+    #[test]
+    fn signal_formats_share_translators_for_display_previews_and_clipboard() {
+        let mut model = signal_model(MemoryBudget::new(16 * 1024 * 1024));
+        let history = |width, bits: &str| {
+            Arc::new(VecHistory {
+                shape: SignalShape::Vector { width },
+                times: vec![7],
+                values: vec![WaveValue::Bits(bits.into())],
+                initial: WaveValue::Unavailable,
+            }) as Arc<dyn SignalHistory>
+        };
+        model
+            .build_signal_rows(vec![
+                history(32, "00111111110000000000000000000000"),
+                history(8, "11111111"),
+            ])
+            .unwrap();
+        model.state = TableState::Ready;
+        model.layout(Rect::from_xywh(0.0, 0.0, 800.0, 240.0), &Theme::one_dark());
+        assert_eq!(model.window.rows[0].cells[1].text, "0x3fc00000");
+        let choices = model.column_formats(1).unwrap();
+        assert!(
+            choices
+                .iter()
+                .any(|c| c.translator.as_deref() == Some("float") && c.preview == "1.5")
+        );
+        assert!(
+            !model
+                .column_formats(2)
+                .unwrap()
+                .iter()
+                .any(|c| c.translator.as_deref() == Some("float"))
+        );
+        assert!(model.column_formats(0).is_none());
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        for (column, translator) in [(1, "float"), (2, "sdec")] {
+            assert!(model.command(
+                &mut doc,
+                panel,
+                TableCommand::ColumnFormat {
+                    source_index: column,
+                    translator: Some(translator.into())
+                },
+                Instant::now()
+            ));
+        }
+        model.layout(Rect::from_xywh(0.0, 0.0, 800.0, 240.0), &Theme::one_dark());
+        assert_eq!(model.window.rows[0].cells[1].text, "1.5");
+        assert_eq!(model.window.rows[0].cells[2].text, "-1");
+        model.selected = Some(RowIdentity::SignalTime(7));
+        assert_eq!(model.copy_tsv().unwrap(), "Time\ta\tb\n7\t1.5\t-1");
     }
 
     fn finish_sort(model: &mut TableModel) {
@@ -2240,7 +2592,7 @@ mod tests {
             .iter()
             .position(|c| c.source_index == slot)
             .unwrap();
-        assert_eq!(model.window.rows[0].cells[cell].text, u64::MAX.to_string());
+        assert_eq!(model.window.rows[0].cells[cell].text, "0xffffffffffffffff");
         assert!(model.window.rows[2].cells[cell].missing);
         assert_eq!(model.window.rows[2].cells[cell].text, "—");
         assert!(!model.window.rows[3].cells[cell].missing);
@@ -2322,7 +2674,7 @@ mod tests {
             model
                 .copy_tsv()
                 .unwrap()
-                .contains(&format!("\t30\t{}", big + 2))
+                .contains(&format!("\t0x1e\t{}", big + 2))
         );
         assert_eq!(model.window.rows[0].time, big + 1);
         model.cycle_sort(1);
@@ -2695,7 +3047,7 @@ mod tests {
 
         let mut record = transaction(1, 0, "row");
         record.attributes[1].key = "α".repeat(1000);
-        let preview = transaction_cell(&record, &TransactionColumn::Attributes, 32);
+        let preview = model.transaction_cell(&record, 6, 32, None);
         assert!(preview.ends_with('…'));
         assert!(preview.len() <= 32);
     }
@@ -2756,6 +3108,7 @@ mod tests {
             }),
             Link::default(),
             MemoryBudget::new(16 * 1024 * 1024),
+            Translators::builtin(),
         );
         model.rows = Rows::Generator(generator);
         model.state = TableState::Ready;
@@ -2767,7 +3120,7 @@ mod tests {
         assert_eq!(model.selected_ordinal(), Some(899));
         assert_eq!(
             model.copy_tsv().unwrap(),
-            "Generator\tID\tBegin\tEnd\tDuration\tStatus\nsoc.request\t900\t3600\t3608\t8\tok"
+            "Generator\tID\tBegin\tEnd\tDuration\tStatus\nsoc.request\t0x384\t3600\t3608\t8\tok"
         );
     }
 
@@ -2810,6 +3163,7 @@ mod tests {
             TableSource::Signals(vec![signal_source("a", 1)]),
             Link::default(),
             budget.clone(),
+            Translators::builtin(),
         );
         model
             .attach(&mut Document::new(), &Default::default())

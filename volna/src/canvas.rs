@@ -1,6 +1,10 @@
 //! Core-painted panels with native GPUI interaction overlays.
 
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_kit::component::{
+    Sizable,
+    button::{Button, ButtonVariants},
+    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
+};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, CursorStyle, DispatchPhase, Element,
@@ -785,13 +789,14 @@ impl PanelCanvas {
             };
             let center = column.rect.left() + column.rect.width() * 0.5;
             let draggable = table.source.generator_track().is_some();
+            let has_format = column.format.is_some();
             edges = edges.child(
                 div()
                     .id(("table-sort", source_index))
                     .occlude()
                     .when(enabled, gpui_kit::Styled::cursor_pointer)
                     .role(gpui_kit::accesskit::Role::Button)
-                    .tab_index((source_index * 2) as isize)
+                    .tab_index((source_index * 3) as isize)
                     .tab_stop(enabled)
                     .focus(move |style| style.border_1().border_color(t.border_focused))
                     .absolute()
@@ -888,7 +893,22 @@ impl PanelCanvas {
                             },
                         )
                     })
-                    .context_menu(move |menu, _, _| {
+                    .context_menu(move |mut menu, window, cx| {
+                        if has_format {
+                            let owner = context_owner.clone();
+                            menu = menu
+                                .submenu("Format", window, cx, move |menu, _, cx| {
+                                    crate::table_panel::format_menu(
+                                        menu,
+                                        &owner,
+                                        panel,
+                                        generation,
+                                        Some(source_index),
+                                        cx,
+                                    )
+                                })
+                                .separator();
+                        }
                         let owner = context_owner.clone();
                         let command = hide_command.clone();
                         menu.item(PopupMenuItem::new("Hide column").on_click(
@@ -905,6 +925,54 @@ impl PanelCanvas {
                         ))
                     }),
             );
+            if let Some(rect) = column.format {
+                let translator = table.column_translator(source_index).expect("format badge");
+                let owner = self.ws.clone();
+                let inherited = table.formats.columns[source_index].is_none();
+                let hint = format!(
+                    "Format {}: {} · {}",
+                    table.column_title(source_index),
+                    translator.name(),
+                    if inherited {
+                        "table default"
+                    } else {
+                        "column override"
+                    }
+                );
+                edges = edges.child(
+                    div()
+                        .absolute()
+                        .left(px(rect.left() - header.left()))
+                        .top(px(rect.top() - header.top()))
+                        .w(px(rect.width()))
+                        .h(px(rect.height()))
+                        .occlude()
+                        .child(
+                            Button::new(("table-format", source_index))
+                                .label(translator.badge())
+                                .dropdown_caret(rect.width() >= 40.0 * t.zoom)
+                                .accessibility_label(hint.clone())
+                                .tooltip(hint)
+                                .debug_selector(move || format!("table-format-{source_index}"))
+                                .xsmall()
+                                .compact()
+                                .ghost()
+                                .w_full()
+                                .h_full()
+                                .tab_index((source_index * 3 + 1) as isize)
+                                .dropdown_menu(move |menu, _, cx| {
+                                    crate::table_panel::format_menu(
+                                        menu,
+                                        &owner,
+                                        panel,
+                                        generation,
+                                        Some(source_index),
+                                        cx,
+                                    )
+                                }),
+                        ),
+                );
+            }
             if column.resize.right() <= header.left() || column.resize.left() >= header.right() {
                 continue;
             }
@@ -948,7 +1016,7 @@ impl PanelCanvas {
                     .aria_min_numeric_value(f64::from(volna_core::table::layout::MIN_COLUMN_WIDTH))
                     .aria_max_numeric_value(f64::from(volna_core::table::layout::MAX_COLUMN_WIDTH))
                     .aria_numeric_value_step(8.0)
-                    .tab_index((source_index * 2 + 1) as isize)
+                    .tab_index((source_index * 3 + 2) as isize)
                     .focus(move |style| style.bg(t.hover.bg))
                     .child(highlight)
                     .key_context("TableColumnResize")

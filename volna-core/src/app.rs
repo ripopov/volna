@@ -1739,6 +1739,7 @@ impl App {
             source,
             self.settings.resolved().link_by_default(),
             self.table_memory_budget(),
+            self.doc.translators.clone(),
         );
         table.nav.reset(Some(self.doc.limits()));
         let kind = PanelKind::Table(Box::new(table));

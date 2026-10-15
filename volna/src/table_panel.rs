@@ -9,12 +9,100 @@ use gpui_kit::component::{
     Disableable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     input::{Input, InputState},
+    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
 };
 use gpui_kit::prelude::*;
-use gpui_kit::{AnyElement, Context, Empty, Focusable, Window, div, px};
+use gpui_kit::{AnyElement, App, Context, Empty, Entity, Focusable, Window, div, px};
 use volna_core::Command;
 use volna_core::icons::IconName;
 use volna_core::table::{TableCommand, TableState};
+
+pub(crate) fn format_menu(
+    mut menu: PopupMenu,
+    owner: &Entity<crate::app::Workspace>,
+    panel: volna_core::panels::PanelId,
+    generation: u64,
+    column: Option<usize>,
+    cx: &App,
+) -> PopupMenu {
+    let ws = owner.read(cx);
+    if ws.app.doc.generation() != generation {
+        return menu;
+    }
+    let Some(table) = ws.app.panels.get(panel).and_then(|p| p.kind.table()) else {
+        return menu;
+    };
+    let choices = if let Some(column) = column {
+        let Some(format) = table.column_formats(column) else {
+            return menu;
+        };
+        menu = menu.label(format!("Format · {}", table.column_title(column)));
+        format
+    } else {
+        menu = menu.label("Default number format");
+        table.number_formats()
+    };
+    for (index, choice) in choices.into_iter().enumerate() {
+        if column.is_some() && index == 1 {
+            menu = menu.separator();
+        }
+        let owner = owner.clone();
+        let selector = format!(
+            "table-format-choice-{}",
+            choice.translator.as_deref().unwrap_or("inherit")
+        );
+        let command = match column {
+            Some(source_index) => TableCommand::ColumnFormat {
+                source_index,
+                translator: choice.translator,
+            },
+            None => TableCommand::NumberFormat(choice.translator.expect("number format")),
+        };
+        menu = menu.item(
+            PopupMenuItem::element(move |_, cx| {
+                let t = theme(cx);
+                let selector = selector.clone();
+                div()
+                    .id(("table-format-choice", index))
+                    .debug_selector(move || selector)
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .w_full()
+                    .aria_label(format!("{} {}", choice.label, choice.preview))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(choice.label.clone()),
+                    )
+                    .when(!choice.preview.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .max_w(px(110.0 * t.zoom))
+                                .truncate()
+                                .font_family(t.mono_font)
+                                .text_color(t.panel.text_muted)
+                                .child(choice.preview.clone()),
+                        )
+                    })
+            })
+            .checked(choice.checked)
+            .on_click(move |_, window, cx| {
+                owner.update(cx, |ws, cx| {
+                    ws.dispatch_if_current(
+                        generation,
+                        Command::Table(panel, command.clone()),
+                        Some(window),
+                        cx,
+                    );
+                });
+            }),
+        );
+    }
+    menu.min_w(px(230.0)).max_w(px(340.0))
+}
 
 gpui_kit::actions!(
     table_column,
@@ -68,6 +156,7 @@ impl CanvasPanelView {
         let failed = matches!(table.state, TableState::Failed(_) | TableState::Refused(_))
             || table.sort_error.is_some();
         let loading = matches!(table.state, TableState::Loading) || table.sorting();
+        let number_format = table.number_format();
         let picker = self
             .table_columns
             .get_or_insert_with(|| {
@@ -86,10 +175,11 @@ impl CanvasPanelView {
         let generation = self.generation;
         let mut toolbar = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_1()
             .px_2()
-            .h(px(32.0 * t.zoom))
+            .min_h(px(32.0 * t.zoom))
             .flex_none();
         for (name, icon, tooltip, command) in [
             (
@@ -147,6 +237,22 @@ impl CanvasPanelView {
                     .on_click(cx.listener(|view, _, window, cx| view.table_go_to(window, cx))),
             )
             .child(crate::table_columns::ColumnPicker::popover(picker, cx))
+            .child(
+                action_button(
+                    "table-number-format",
+                    gpui_kit::component::Icon::empty().path(IconName::Hash.path()),
+                    cx,
+                )
+                .label(number_format)
+                .accessibility_label(format!("Default number format: {number_format}"))
+                .ghost()
+                .tooltip("Default format for numeric columns; column overrides are preserved")
+                .debug_selector(|| "table-number-format".into())
+                .dropdown_menu({
+                    let owner = owner.clone();
+                    move |menu, _, cx| format_menu(menu, &owner, id, generation, None, cx)
+                }),
+            )
             .child(
                 action_button(
                     "table-details",

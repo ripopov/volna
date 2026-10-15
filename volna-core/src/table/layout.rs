@@ -90,6 +90,7 @@ pub struct ColumnRect {
     pub prepared_index: usize,
     pub rect: Rect,
     pub resize: Rect,
+    pub format: Option<Rect>,
     pub preview_bytes: usize,
 }
 

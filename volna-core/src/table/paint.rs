@@ -37,7 +37,11 @@ pub fn paint(model: &TableModel, theme: &Theme, scene: &mut Scene) {
                 Rect::from_xywh(
                     column.rect.left(),
                     column.rect.top(),
-                    (column.rect.width() - 22.0 * theme.zoom).max(0.0),
+                    (column
+                        .format
+                        .map_or(column.rect.right() - 22.0 * theme.zoom, |rect| rect.left())
+                        - column.rect.left())
+                    .max(0.0),
                     column.rect.height(),
                 ),
                 model.column_title(column.source_index),

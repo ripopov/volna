@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use volna_trace::data::source::Lookup;
 
-pub(crate) const VERSION: u32 = 4;
+pub(crate) const VERSION: u32 = 5;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -43,6 +43,7 @@ struct TablePanel {
     source: SavedTableSource,
     columns: ColumnSet,
     widths: Vec<Option<f32>>,
+    formats: super::format::TableFormats,
     link: Link,
 }
 
@@ -75,6 +76,7 @@ pub(crate) fn save(
         source,
         columns: table.columns.get().clone(),
         widths: table.widths.get().clone(),
+        formats: table.formats.get().clone(),
         link: table.nav.link,
     })?)
 }
@@ -135,7 +137,12 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             TableSource::Signals(restored)
         }
     };
-    let mut table = TableModel::new(source, saved.link, ctx.budget.clone());
+    let mut table = TableModel::new(
+        source,
+        saved.link,
+        ctx.budget.clone(),
+        ctx.doc.translators.clone(),
+    );
     ensure!(
         saved.widths.len() == saved.columns.len(),
         "invalid table column widths"
@@ -156,6 +163,26 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         ),
         _ => anyhow::bail!("table columns do not match source"),
     }
+    ensure!(
+        saved.formats.columns.len() == saved.columns.len(),
+        "invalid table format columns"
+    );
+    ensure!(
+        super::format::number_translators(&ctx.doc.translators)
+            .iter()
+            .any(|t| t.id() == saved.formats.numbers),
+        "invalid table number translator"
+    );
+    ensure!(
+        saved
+            .formats
+            .columns
+            .iter()
+            .flatten()
+            .all(|id| ctx.doc.translators.get(id).is_some()),
+        "unknown table column translator"
+    );
+    table.formats.restore(saved.formats);
     table.columns.restore(saved.columns);
     Ok(Panel {
         id: saved.id,

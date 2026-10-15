@@ -4806,6 +4806,165 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
 }
 
 #[gpui_kit::test]
+fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+    use volna_core::{
+        panels::PanelsCommand,
+        table::{TableCommand, columns::TransactionColumn},
+    };
+    use volna_trace::data::Member;
+    init(cx);
+    for dark in [true, false] {
+        for width in [1000.0, 360.0] {
+            let mut workspace = None;
+            let root = cx.add_window(|window, cx| {
+                let ws = cx.new(|cx| Workspace::new(window, cx));
+                workspace = Some(ws.clone());
+                gpui_kit::component::Root::new(ws, window, cx)
+            });
+            let window = RootWindow {
+                root,
+                workspace: workspace.unwrap(),
+            };
+            let mut vcx = VisualTestContext::from_window(root.into(), cx);
+            vcx.simulate_resize(size(px(width), px(700.0)));
+            let panel = window
+                .update(&mut vcx, |ws, window, cx| {
+                    ws.set_session(
+                        OpenSpec::Path(
+                            concat!(
+                                env!("CARGO_MANIFEST_DIR"),
+                                "/examples/pipeline_showcase.vtr"
+                            )
+                            .into(),
+                        )
+                        .open()
+                        .unwrap(),
+                        cx,
+                    );
+                    ws.app.sidebar_visible = false;
+                    let origin = ws.app.panels.focused_id();
+                    ws.dispatch(
+                        Command::OpenTable {
+                            selected: a_all(vec![Member::Generator(0)]),
+                            clicked: None,
+                        },
+                        Some(window),
+                        cx,
+                    );
+                    let panel = ws.app.panels.focused_id();
+                    ws.dispatch(
+                        Command::Panels(PanelsCommand::Close(origin)),
+                        Some(window),
+                        cx,
+                    );
+                    for command in [
+                        TableCommand::ShowTransactionColumn(TransactionColumn::Id),
+                        TableCommand::MoveColumn {
+                            source_index: 4,
+                            before: Some(0),
+                        },
+                    ] {
+                        ws.dispatch(Command::Table(panel, command), Some(window), cx);
+                    }
+                    crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                    panel
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            let selected = window
+                .update(&mut vcx, |ws, window, cx| {
+                    ws.dispatch(
+                        Command::Table(panel, TableCommand::Select(10)),
+                        Some(window),
+                        cx,
+                    );
+                    ws.app
+                        .panels
+                        .get(panel)
+                        .unwrap()
+                        .kind
+                        .table()
+                        .unwrap()
+                        .selected
+                        .clone()
+                })
+                .unwrap();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let click = |vcx: &mut VisualTestContext, selector: &'static str| {
+                let bounds = vcx.debug_bounds(selector).expect(selector);
+                assert!(
+                    bounds.left() >= px(0.0) && bounds.right() <= px(width),
+                    "{selector}: {bounds:?}"
+                );
+                vcx.simulate_click(bounds.center(), Modifiers::default());
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+            };
+            click(&mut vcx, "table-number-format");
+            click(&mut vcx, "table-format-choice-udec");
+            click(&mut vcx, "table-format-4");
+            click(&mut vcx, "table-format-choice-bin");
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert_eq!(table.number_format(), "dec");
+                    assert_eq!(table.formats.columns[4].as_deref(), Some("bin"));
+                    assert_eq!(table.selected, selected);
+                    assert_eq!(table.sort_requested, None);
+                })
+                .unwrap();
+            click(&mut vcx, "table-number-format");
+            click(&mut vcx, "table-format-choice-hex");
+            click(&mut vcx, "table-format-4");
+            click(&mut vcx, "table-format-choice-inherit");
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert!(table.formats.columns[4].is_none());
+                    assert_eq!(table.column_translator(4).unwrap().id(), "hex");
+                    assert_eq!(table.selected, selected);
+                })
+                .unwrap();
+            for _ in 0..40 {
+                let focused = vcx.update(|window, _| {
+                    gpui_kit::test::TestWindowExt::find(window, ("table-format", 4usize)).focused()
+                        == Some(true)
+                });
+                if focused {
+                    break;
+                }
+                vcx.update(|window, cx| gpui_kit::test::TestWindowExt::press(window, "tab", cx));
+            }
+            vcx.simulate_keystrokes("space");
+            vcx.simulate_event(gpui_kit::KeyUpEvent {
+                keystroke: gpui_kit::Keystroke::parse("space").unwrap(),
+            });
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(vcx.debug_bounds("table-format-choice-inherit").is_some());
+            vcx.simulate_keystrokes("escape");
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(vcx.debug_bounds("table-format-choice-inherit").is_none());
+            vcx.simulate_keystrokes("enter");
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(vcx.debug_bounds("table-format-choice-inherit").is_some());
+            vcx.simulate_keystrokes("down down down enter");
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert_eq!(table.selected, selected);
+                    assert_eq!(table.sort_requested, None);
+                    assert!(table.formats.columns[4].is_some());
+                })
+                .unwrap();
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
     use volna_core::{

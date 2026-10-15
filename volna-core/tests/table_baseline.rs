@@ -146,6 +146,53 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
     assert!(tsv.starts_with("Time\t"));
     app.handle(Command::Table(
         panel,
+        TableCommand::NumberFormat("bin".into()),
+    ));
+    app.handle(Command::Table(
+        panel,
+        TableCommand::ColumnFormat {
+            source_index: 1,
+            translator: Some("udec".into()),
+        },
+    ));
+    let formats = app
+        .panels
+        .get(panel)
+        .unwrap()
+        .kind
+        .table()
+        .unwrap()
+        .formats
+        .get()
+        .clone();
+    assert_eq!(formats.numbers, "bin");
+    assert_eq!(formats.columns[1].as_deref(), Some("udec"));
+    app.handle(Command::Undo);
+    assert!(
+        app.panels
+            .get(panel)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .formats
+            .columns[1]
+            .is_none()
+    );
+    app.handle(Command::Redo);
+    assert_eq!(
+        app.panels
+            .get(panel)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .formats
+            .get(),
+        &formats
+    );
+    app.handle(Command::Table(
+        panel,
         TableCommand::ResizeColumn {
             source_index: 1,
             width: 750.0,
@@ -160,18 +207,18 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
     )
     .unwrap();
     let bytes = saved.to_bytes().unwrap();
-    fn contains_table_v4(value: &serde_json::Value) -> bool {
+    fn contains_table_v5(value: &serde_json::Value) -> bool {
         match value {
             serde_json::Value::Object(object) => {
                 (object.get("kind").and_then(|value| value.as_str()) == Some("table")
-                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(4))
-                    || object.values().any(contains_table_v4)
+                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(5))
+                    || object.values().any(contains_table_v5)
             }
-            serde_json::Value::Array(values) => values.iter().any(contains_table_v4),
+            serde_json::Value::Array(values) => values.iter().any(contains_table_v5),
             _ => false,
         }
     }
-    assert!(contains_table_v4(&serde_json::from_slice(&bytes).unwrap()));
+    assert!(contains_table_v5(&serde_json::from_slice(&bytes).unwrap()));
     let parsed = Workspace::parse(&bytes).unwrap();
     let plan = parsed
         .prepare(
@@ -187,6 +234,7 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
     assert_eq!(restored.viewport.top, 0);
     assert_eq!(restored.selected, None);
     assert_eq!(restored.widths[1], Some(750.0));
+    assert_eq!(restored.formats.get(), &formats);
     app.handle(Command::Table(panel, TableCommand::ToggleSignalColumn(1)));
     frame(&mut app, panel);
     assert_eq!(

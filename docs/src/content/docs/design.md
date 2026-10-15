@@ -73,6 +73,14 @@ themes. Muted foregrounds remain available for secondary information and disable
 controls.
 
 The sample viewer's Table panel is the specimen for native column dividers.
+Its numeric-format toolbar button pairs a number-sign icon with the current mode
+(for example, `hex`) and defaults numeric data to hexadecimal.
+Enable the ID column or a numeric attribute in Columns to expose its format badge.
+The badge opens compatible translators with sample values; choosing a format
+overrides the table default for that column. Use table default restores inheritance.
+Time columns retain their time representation, and format changes preserve row
+selection, scroll position, and sorting. These preferences are saved with the table.
+
 Each column has a 1px divider with an 8px grab area extending through the header
 and body, including the trailing Attributes edge. Hover and drag use the
 focused-border role and GPUI's column resize cursor. Dragging changes that
