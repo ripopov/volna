@@ -195,19 +195,21 @@ impl SettingsPanelView {
                     })),
             )
             .child(
-                Button::new("settings-json")
-                    .label(if view.json {
-                        "Back to settings"
-                    } else {
-                        "Open settings.json"
-                    })
-                    .icon(gpui_kit::component::Icon::empty().path(IconName::Braces.path()))
-                    .outline()
-                    .xsmall()
-                    .tooltip("Toggle the JSON view (⌘⇧,)")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch(SettingsCommand::ToggleJson, window, cx);
-                    })),
+                crate::ui::action_button(
+                    "settings-json",
+                    gpui_kit::component::Icon::empty().path(IconName::Braces.path()),
+                    cx,
+                )
+                .label(if view.json {
+                    "Back to settings"
+                } else {
+                    "Open settings.json"
+                })
+                .outline()
+                .tooltip("Toggle the JSON view (⌘⇧,)")
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.dispatch(SettingsCommand::ToggleJson, window, cx);
+                })),
             )
             .into_any_element()
     }
@@ -450,7 +452,7 @@ fn render_row(
                         .items_center()
                         .gap_1()
                         .child(control)
-                        .child(render_actions(ws, spec, value, modified, editable)),
+                        .child(render_actions(ws, spec, value, modified, editable, cx)),
                 ),
         )
         .into_any_element()
@@ -789,42 +791,45 @@ fn render_actions(
     value: Value,
     modified: bool,
     editable: bool,
+    cx: &App,
 ) -> AnyElement {
     let ws = ws.clone();
     let id = spec.id;
     let json = format!("\"{}\": {}", id, value.to_json_text());
-    Button::new(SharedString::from(format!("setting-actions-{id}")))
-        .icon(gpui_kit::assets::IconName::Ellipsis)
-        .ghost()
-        .xsmall()
-        .tooltip("Reset, copy id, copy as JSON")
-        .dropdown_menu_with_anchor(gpui_kit::Anchor::TopRight, move |menu: PopupMenu, _, _| {
-            let ws_reset = ws.clone();
-            let json = json.clone();
-            menu.item(
-                PopupMenuItem::new("Reset setting")
-                    .disabled(!modified || !editable)
-                    .on_click(move |_, window, cx| {
-                        dispatch(
-                            &ws_reset,
-                            SettingsCommand::Reset { id: id.into() },
-                            window,
-                            cx,
-                        );
-                    }),
-            )
-            .item(
-                PopupMenuItem::new("Copy setting id").on_click(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(id.to_owned()));
+    crate::ui::action_button(
+        SharedString::from(format!("setting-actions-{id}")),
+        gpui_kit::assets::IconName::Ellipsis,
+        cx,
+    )
+    .ghost()
+    .tooltip("Reset, copy id, copy as JSON")
+    .dropdown_menu_with_anchor(gpui_kit::Anchor::TopRight, move |menu: PopupMenu, _, _| {
+        let ws_reset = ws.clone();
+        let json = json.clone();
+        menu.item(
+            PopupMenuItem::new("Reset setting")
+                .disabled(!modified || !editable)
+                .on_click(move |_, window, cx| {
+                    dispatch(
+                        &ws_reset,
+                        SettingsCommand::Reset { id: id.into() },
+                        window,
+                        cx,
+                    );
                 }),
-            )
-            .item(
-                PopupMenuItem::new("Copy setting as JSON").on_click(move |_, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(json.clone()));
-                }),
-            )
-        })
-        .into_any_element()
+        )
+        .item(
+            PopupMenuItem::new("Copy setting id").on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(id.to_owned()));
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Copy setting as JSON").on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(json.clone()));
+            }),
+        )
+    })
+    .into_any_element()
 }
 
 impl EventEmitter<base::PanelEvent> for SettingsPanelView {}

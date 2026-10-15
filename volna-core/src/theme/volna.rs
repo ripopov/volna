@@ -109,7 +109,7 @@ impl Theme<Color> {
             text,
             text_muted: muted,
             text_placeholder: faint,
-            icon: muted,
+            icon: text,
             icon_muted: faint,
             icon_accent: accent,
             error: undef,

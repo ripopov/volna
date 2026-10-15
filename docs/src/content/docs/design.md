@@ -65,6 +65,13 @@ scroll within their own containers. Motion changes only color or opacity and
 respects the reduced-motion preference. Backgrounds are flat, borders are thin,
 and radii follow the shared 3/4/6/8/10px scale.
 
+The sample viewer's title bar and panel toolbars are specimens of native action
+buttons: a 24px control contains a 16px icon at 100% interface zoom, with a 1.5-unit
+SVG stroke. Both scale with interface zoom. Enabled icons use the primary
+foreground (`--viewer-text`), which is near white in dark themes and dark in light
+themes. Muted foregrounds remain available for secondary information and disabled
+controls.
+
 The sample viewer's Table panel is the specimen for native column dividers.
 Each header has a 1px divider with an 8px grab area, including the trailing
 Attributes edge. Hover and drag use the focused-border role and GPUI's column

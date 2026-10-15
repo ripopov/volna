@@ -5,8 +5,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{ElementExt as _, Tab, Tabs as TabList, dock as base};
 use gpui_kit::component::{
-    Sizable,
-    button::{Button, ButtonVariants},
+    button::ButtonVariants,
     dock::{ClosePanel, PanelHandle, ToggleZoom},
     menu::DropdownMenu,
 };
@@ -17,6 +16,7 @@ use gpui_kit::{
 };
 
 use crate::theme::{ThemePx, theme};
+use crate::ui::action_button;
 
 fn backdrop(bounds: gpui_kit::Bounds<Pixels>, cx: &App) -> [gpui_kit::Background; 2] {
     use gpui_kit::{linear_color_stop, linear_gradient};
@@ -401,28 +401,28 @@ impl Tabs {
             .gap_1()
             .px_1()
             .children(handle.and_then(|h| h.title_suffix(window, cx)))
-            .children(buttons.into_iter().map(|b| b.xsmall().ghost()))
+            .children(buttons.into_iter().map(ButtonVariants::ghost))
             .when(zoomable || group.is_zoomed(), |el| {
                 el.child(
-                    Button::new("island-zoom")
-                        .icon(if group.is_zoomed() {
+                    action_button(
+                        "island-zoom",
+                        if group.is_zoomed() {
                             IconName::Minimize
                         } else {
                             IconName::Maximize
-                        })
-                        .xsmall()
-                        .ghost()
-                        .tooltip("Zoom panel")
-                        .on_click({
-                            let group = group.clone();
-                            move |_, w, cx| group.toggle_zoom(w, cx)
-                        }),
+                        },
+                        cx,
+                    )
+                    .ghost()
+                    .tooltip("Zoom panel")
+                    .on_click({
+                        let group = group.clone();
+                        move |_, w, cx| group.toggle_zoom(w, cx)
+                    }),
                 )
             })
             .child(
-                Button::new("island-menu")
-                    .icon(IconName::Ellipsis)
-                    .xsmall()
+                action_button("island-menu", IconName::Ellipsis, cx)
                     .ghost()
                     .tooltip("Panel menu")
                     .dropdown_menu({
@@ -472,9 +472,7 @@ impl Tabs {
             )
             .when(tab_count > 1, |el| {
                 el.child(
-                    Button::new("island-tab-list")
-                        .icon(IconName::ChevronDown)
-                        .xsmall()
+                    action_button("island-tab-list", IconName::ChevronDown, cx)
                         .ghost()
                         .tooltip("All tabs")
                         .dropdown_menu({

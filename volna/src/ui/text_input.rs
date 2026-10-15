@@ -310,11 +310,7 @@ impl Render for TextInput {
                         .cursor(CursorStyle::PointingHand)
                         .hover(move |s| s.bg(colors.bg).border_1().border_color(hover_border))
                         .on_click(cx.listener(|this, _, _, cx| this.clear(cx)))
-                        .child(
-                            Icon::new(IconName::X)
-                                .size(t.px(12.0))
-                                .color(colors.icon_muted),
-                        ),
+                        .child(Icon::new(IconName::X).size(t.px(12.0)).color(colors.icon)),
                 )
             })
     }

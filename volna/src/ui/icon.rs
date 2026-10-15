@@ -46,7 +46,7 @@ impl RenderOnce for Icon {
             if self.inherit {
                 window.text_style().color
             } else {
-                t.panel.icon_muted
+                t.panel.icon
             }
         });
         icon_svg(self.name, size, color)

@@ -162,7 +162,7 @@ impl RenderOnce for LinuxControls {
             .children(self.buttons.into_iter().map(|button| {
                 let control = Control::for_button(button, maximized);
                 let enabled = control.enabled(window);
-                let size = t.px(20.0);
+                let size = t.px(24.0);
                 div()
                     .id(ElementId::from(control.id()))
                     .flex()
@@ -172,7 +172,7 @@ impl RenderOnce for LinuxControls {
                     .h(size)
                     .rounded_full()
                     .text_color(if enabled {
-                        t.bar.icon_muted
+                        t.bar.icon
                     } else {
                         t.bar.text_placeholder
                     })
@@ -181,7 +181,7 @@ impl RenderOnce for LinuxControls {
                             .hover(|s| s.bg(t.bar_hover.bg).text_color(t.bar_hover.icon))
                             .active(|s| s.bg(t.bar_hover.bg).text_color(t.bar_hover.icon))
                     })
-                    .child(Icon::new(control.icon()).size(t.px(16.0)).inherit_color())
+                    .child(Icon::new(control.icon()).size(t.px(20.0)).inherit_color())
                     .on_mouse_move(|_, _, cx| cx.stop_propagation())
                     .on_click(move |_, window, cx| {
                         cx.stop_propagation();
@@ -226,7 +226,7 @@ impl RenderOnce for WindowsControls {
                     .w(t.px(46.0))
                     .h_full()
                     .text_color(if enabled {
-                        t.bar.icon_muted
+                        t.bar.icon
                     } else {
                         t.bar.text_placeholder
                     })
@@ -235,7 +235,7 @@ impl RenderOnce for WindowsControls {
                             .active(|s| s.bg(hover_bg.opacity(0.8)).text_color(hover_fg))
                     })
                     .window_control_area(control.area())
-                    .child(Icon::new(control.icon()).size(t.px(16.0)).inherit_color())
+                    .child(Icon::new(control.icon()).size(t.px(20.0)).inherit_color())
             }))
     }
 }

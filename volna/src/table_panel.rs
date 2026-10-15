@@ -2,6 +2,7 @@
 
 use crate::dock::CanvasPanelView;
 use crate::theme::theme;
+use crate::ui::action_button;
 #[cfg(not(target_arch = "wasm32"))]
 use gpui_kit::ClipboardItem;
 use gpui_kit::component::{
@@ -130,21 +131,23 @@ impl CanvasPanelView {
         ] {
             let owner = owner.clone();
             toolbar = toolbar.child(
-                Button::new(name)
-                    .icon(gpui_kit::component::Icon::empty().path(icon.path()))
-                    .tooltip(tooltip)
-                    .ghost()
-                    .small()
-                    .on_click(move |_, window, cx| {
-                        owner.update(cx, |ws, cx| {
-                            ws.dispatch_if_current(
-                                generation,
-                                Command::Table(id, command.clone()),
-                                Some(window),
-                                cx,
-                            );
-                        });
-                    }),
+                action_button(
+                    name,
+                    gpui_kit::component::Icon::empty().path(icon.path()),
+                    cx,
+                )
+                .tooltip(tooltip)
+                .ghost()
+                .on_click(move |_, window, cx| {
+                    owner.update(cx, |ws, cx| {
+                        ws.dispatch_if_current(
+                            generation,
+                            Command::Table(id, command.clone()),
+                            Some(window),
+                            cx,
+                        );
+                    });
+                }),
             );
         }
         toolbar = toolbar
@@ -156,17 +159,20 @@ impl CanvasPanelView {
                     .on_click(cx.listener(|view, _, window, cx| view.table_go_to(window, cx))),
             )
             .child(
-                Button::new("table-columns")
-                    .icon(gpui_kit::component::Icon::empty().path(IconName::TableColumns.path()))
-                    .label("Columns")
-                    .ghost()
-                    .small()
-                    .dropdown_menu_with_anchor(
-                        gpui_kit::Anchor::TopLeft,
-                        move |menu: PopupMenu, _, _| {
-                            let menu = column_items.iter().fold(
-                                menu,
-                                |menu, (label, checked, command)| {
+                action_button(
+                    "table-columns",
+                    gpui_kit::component::Icon::empty().path(IconName::TableColumns.path()),
+                    cx,
+                )
+                .label("Columns")
+                .ghost()
+                .dropdown_menu_with_anchor(
+                    gpui_kit::Anchor::TopLeft,
+                    move |menu: PopupMenu, _, _| {
+                        let menu =
+                            column_items
+                                .iter()
+                                .fold(menu, |menu, (label, checked, command)| {
                                     let owner = columns_owner.clone();
                                     let command = command.clone();
                                     menu.item(
@@ -183,34 +189,35 @@ impl CanvasPanelView {
                                                 });
                                             }),
                                     )
+                                });
+                        let owner = columns_owner.clone();
+                        menu.separator()
+                            .item(PopupMenuItem::new("Reset to defaults").on_click(
+                                move |_, window, cx| {
+                                    owner.update(cx, |ws, cx| {
+                                        ws.dispatch_if_current(
+                                            generation,
+                                            Command::Table(id, TableCommand::ResetColumns),
+                                            Some(window),
+                                            cx,
+                                        );
+                                    });
                                 },
-                            );
-                            let owner = columns_owner.clone();
-                            menu.separator()
-                                .item(PopupMenuItem::new("Reset to defaults").on_click(
-                                    move |_, window, cx| {
-                                        owner.update(cx, |ws, cx| {
-                                            ws.dispatch_if_current(
-                                                generation,
-                                                Command::Table(id, TableCommand::ResetColumns),
-                                                Some(window),
-                                                cx,
-                                            );
-                                        });
-                                    },
-                                ))
-                        },
-                    ),
+                            ))
+                    },
+                ),
             )
             .child(
-                Button::new("table-details")
-                    .icon(gpui_kit::component::Icon::empty().path(IconName::TableDetails.path()))
-                    .label("Details")
-                    .ghost()
-                    .small()
-                    .disabled(!has_selection)
-                    .tooltip("Show this record in a Transaction panel (Enter)")
-                    .on_click(cx.listener(|view, _, window, cx| view.show_transaction(window, cx))),
+                action_button(
+                    "table-details",
+                    gpui_kit::component::Icon::empty().path(IconName::TableDetails.path()),
+                    cx,
+                )
+                .label("Details")
+                .ghost()
+                .disabled(!has_selection)
+                .tooltip("Show this record in a Transaction panel (Enter)")
+                .on_click(cx.listener(|view, _, window, cx| view.show_transaction(window, cx))),
             );
         if failed || loading {
             let command = if loading {

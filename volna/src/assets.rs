@@ -34,10 +34,17 @@ impl AssetSource for Assets {
         {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
-        match IconName::from_path(path) {
-            Some(icon) => Ok(Some(Cow::Borrowed(icon.svg()))),
-            None => ComponentAssets.load(path),
-        }
+        let bytes = match IconName::from_path(path) {
+            Some(icon) => Some(Cow::Borrowed(icon.svg())),
+            None => ComponentAssets.load(path)?,
+        };
+        let Some(bytes) = bytes else { return Ok(None) };
+        // Keep bundled and toolkit icons at a consistent 1.5-unit stroke weight.
+        let svg = std::str::from_utf8(&bytes)?
+            .replace("stroke-width=\"2\"", "stroke-width=\"1.5\"")
+            .replace("stroke-width=\"1.75\"", "stroke-width=\"1.5\"")
+            .replace("stroke-width=\"1.7\"", "stroke-width=\"1.5\"");
+        Ok(Some(Cow::Owned(svg.into_bytes())))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {

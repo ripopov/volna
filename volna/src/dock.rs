@@ -27,6 +27,7 @@ use crate::app::Workspace;
 use crate::settings_panel::SettingsPanelView;
 use crate::start_panel::StartPanelView;
 use crate::transaction_panel::TransactionPanelView;
+use crate::ui::action_button;
 
 pub(crate) enum PanelView {
     Canvas(Entity<CanvasPanelView>),
@@ -119,10 +120,8 @@ pub(crate) fn tab_title(
         })
         .child(title)
         .child(
-            Button::new(("close-tab", id.0 as usize))
-                .icon(IconName::X)
+            action_button(("close-tab", id.0 as usize), IconName::X, cx)
                 .ghost()
-                .xsmall()
                 .tab_stop(false)
                 .tooltip("Close tab")
                 .debug_selector(|| format!("tab-close-{}", id.0))
@@ -784,10 +783,8 @@ impl Panel for CanvasPanelView {
             .nav()?
             .link;
         let link_button = |name, icon, linked, dim, tooltip: &'static str| {
-            Button::new(name)
-                .icon(icon)
+            action_button(name, icon, cx)
                 .ghost()
-                .xsmall()
                 .selected(linked)
                 .tooltip(tooltip)
                 .on_click(cx.listener(move |view, _, window, cx| {
@@ -816,10 +813,8 @@ impl Panel for CanvasPanelView {
                 LinkDim::Cursor,
                 "Follow shared cursor (Shift+L)",
             ),
-            Button::new("new-tab")
-                .icon(IconName::Plus)
+            action_button("new-tab", IconName::Plus, cx)
                 .ghost()
-                .xsmall()
                 .tooltip("New waveform tab")
                 .on_click(cx.listener(|view, _, window, cx| {
                     view.dispatch(PanelsCommand::NewTab { group_of: view.id }, window, cx);

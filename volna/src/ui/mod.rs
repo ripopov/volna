@@ -9,7 +9,7 @@ pub mod splitter;
 pub mod text_input;
 pub mod window_controls;
 
-pub use button::icon_button;
+pub use button::{action_button, icon_button};
 pub use header::panel_header;
 pub use icon::{Icon, IconName};
 pub use menu::popup_at;

@@ -94,7 +94,7 @@ try {
   await page.mouse.click(350, 108);
   await sorting();
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await page.mouse.click(506, 78); // Cancel in the table toolbar.
+  await page.mouse.click(554, 84); // Cancel in the table toolbar.
   await settled();
   assert.match(await state(), /column: 0, descending: false/, 'cancel retains the applied order');
 

@@ -28,7 +28,7 @@ use volna_core::transaction::{
 
 use crate::app::Workspace;
 use crate::theme::{ThemePx, hsla, theme};
-use crate::ui::{Icon, IconName};
+use crate::ui::{Icon, IconName, action_button};
 
 const LANE_PX: f32 = 18.0;
 const PARENT_ROW_PX: f32 = 88.0;
@@ -198,10 +198,8 @@ impl Panel for TransactionPanelView {
         let model = owner.read(cx).app.panels.transaction(self.id)?;
         let pinned = model.pinned();
         Some(vec![
-            Button::new("tx-pin")
-                .icon(KitIcon::Pin)
+            action_button("tx-pin", KitIcon::Pin, cx)
                 .ghost()
-                .xsmall()
                 .selected(pinned)
                 .tooltip(if pinned {
                     "Pinned: this panel keeps its record"
@@ -299,12 +297,10 @@ impl Render for TransactionPanelView {
             .px_3()
             .pb_1()
             .child(
-                Button::new("tx-back")
+                action_button("tx-back", gpui_kit::assets::IconName::ChevronLeft, cx)
                     .debug_selector(|| "tx-back".into())
-                    .icon(gpui_kit::assets::IconName::ChevronLeft)
                     .label("Back")
                     .ghost()
-                    .xsmall()
                     .tooltip(BACK_TOOLTIP)
                     .disabled(!back)
                     .on_click(cx.listener(|view, _, window, cx| {
@@ -313,12 +309,10 @@ impl Render for TransactionPanelView {
                     })),
             )
             .child(
-                Button::new("tx-forward")
+                action_button("tx-forward", gpui_kit::assets::IconName::ChevronRight, cx)
                     .debug_selector(|| "tx-forward".into())
-                    .icon(gpui_kit::assets::IconName::ChevronRight)
                     .label("Forward")
                     .ghost()
-                    .xsmall()
                     .tooltip(FORWARD_TOOLTIP)
                     .disabled(!forward)
                     .on_click(cx.listener(|view, _, window, cx| {
@@ -464,14 +458,16 @@ impl TransactionPanelView {
         };
         actions = actions
             .child(
-                Button::new("tx-reveal")
-                    .label(reveal_label)
-                    .icon(gpui_kit::component::Icon::empty().path(IconName::Locate.path()))
-                    .ghost()
-                    .small()
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.send(Command::RevealTransaction { panel: view.id }, window, cx);
-                    })),
+                action_button(
+                    "tx-reveal",
+                    gpui_kit::component::Icon::empty().path(IconName::Locate.path()),
+                    cx,
+                )
+                .label(reveal_label)
+                .ghost()
+                .on_click(cx.listener(|view, _, window, cx| {
+                    view.send(Command::RevealTransaction { panel: view.id }, window, cx);
+                })),
             )
             .child(
                 Button::new("tx-fit")
@@ -543,23 +539,25 @@ impl TransactionPanelView {
             )
         };
         let mut actions = div().flex().items_center().gap_1().flex_wrap().child(
-            Button::new("tx-trace-parents")
-                .debug_selector(|| "tx-trace-parents".into())
-                .label(if matches!(state, ParentTraceState::Failed(_)) {
-                    "Retry tracing parents"
-                } else {
-                    "Trace parents"
-                })
-                .icon(gpui_kit::component::Icon::empty().path(IconName::Workflow.path()))
-                .small()
-                .disabled(matches!(
-                    state,
-                    ParentTraceState::Loading | ParentTraceState::Ready
-                ))
-                .tooltip("Load the full parent chain and show its graph")
-                .on_click(cx.listener(|view, _, window, cx| {
-                    view.dispatch(TransactionCommand::TraceParents, window, cx);
-                })),
+            action_button(
+                "tx-trace-parents",
+                gpui_kit::component::Icon::empty().path(IconName::Workflow.path()),
+                cx,
+            )
+            .debug_selector(|| "tx-trace-parents".into())
+            .label(if matches!(state, ParentTraceState::Failed(_)) {
+                "Retry tracing parents"
+            } else {
+                "Trace parents"
+            })
+            .disabled(matches!(
+                state,
+                ParentTraceState::Loading | ParentTraceState::Ready
+            ))
+            .tooltip("Load the full parent chain and show its graph")
+            .on_click(cx.listener(|view, _, window, cx| {
+                view.dispatch(TransactionCommand::TraceParents, window, cx);
+            })),
         );
         if state != ParentTraceState::Idle {
             actions = actions.child(
