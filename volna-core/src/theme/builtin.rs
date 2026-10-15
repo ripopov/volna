@@ -34,11 +34,13 @@ pub const VOLNA: &str = "volna";
 pub const VOLNA_DARK: &str = "volna-dark";
 pub const VOLNA_LIGHT: &str = "volna-light";
 pub const VOLNA_MIXED: &str = "volna-mixed";
+pub const VOLNA_ISLANDS_DARK: &str = "volna-islands-dark";
 pub const ONE_DARK: &str = "one-dark";
 
-const CODED: [(&str, &str); 5] = [
+const CODED: [(&str, &str); 6] = [
     (VOLNA, "Volna"),
     (VOLNA_DARK, "Volna Dark"),
+    (VOLNA_ISLANDS_DARK, "Volna Islands Dark"),
     (VOLNA_LIGHT, "Volna Light"),
     (VOLNA_MIXED, "Volna Mixed"),
     (ONE_DARK, "One Dark"),
@@ -60,6 +62,7 @@ pub fn resolve(id: &str, system_dark: bool) -> Option<Themes> {
     let volna = Theme::volna;
     Some(match id {
         VOLNA => Themes::uniform(volna(system_dark)),
+        VOLNA_ISLANDS_DARK => Themes::uniform(Theme::islands_dark()),
         VOLNA_DARK => Themes::uniform(volna(true)),
         VOLNA_LIGHT => Themes::uniform(volna(false)),
         VOLNA_MIXED => Themes {
@@ -86,6 +89,44 @@ impl Theme {
 mod tests {
     use super::*;
     use crate::theme::Appearance;
+
+    #[test]
+    fn islands_is_opt_in_and_preserves_data_semantics_at_every_zoom() {
+        let dark = resolve(VOLNA_DARK, true).unwrap().chrome;
+        for system_dark in [false, true] {
+            let islands = resolve(VOLNA_ISLANDS_DARK, system_dark).unwrap();
+            for zoom in [0.75, 1.0, 1.25, 2.0] {
+                let t = islands.chrome.zoomed(zoom);
+                let style = t.islands.unwrap();
+                assert!(super::super::contrast(t.panel.bg, style.background) >= 1.2);
+                assert!(style.background.l > t.panel.bg.l);
+                for background in style.ocean {
+                    assert!(super::super::contrast(t.bar.text, background) >= 4.5);
+                    assert!(super::super::contrast(t.bar.text_muted, background) >= 4.5);
+                    assert!(super::super::contrast(t.bar.icon, background) >= 3.0);
+                }
+                assert_eq!(t.panel.bg, t.editor.bg);
+                assert_eq!(t.bar.bg, t.panel.bg);
+                assert_eq!(t.wave_signal, dark.wave_signal);
+                assert_eq!(t.wave_undef, dark.wave_undef);
+                assert_eq!(t.wave_highimp, dark.wave_highimp);
+                assert_eq!(t.wave_dontcare, dark.wave_dontcare);
+                assert_eq!(t.stages, dark.stages);
+                for (a, b) in t.markers.iter().zip(dark.markers) {
+                    assert_eq!(a.stroke, b.stroke);
+                    assert_eq!(a.background, b.background);
+                }
+                let reset = t.zoomed(1.0);
+                assert_eq!(reset.scale(style.gap), style.gap);
+                assert_eq!(reset.row_height, dark.row_height);
+            }
+            for (id, _) in choices().filter(|(id, _)| *id != VOLNA_ISLANDS_DARK) {
+                let themes = resolve(id, system_dark).unwrap();
+                assert!(themes.chrome.islands.is_none(), "{id}");
+                assert!(themes.canvas.islands.is_none(), "{id}");
+            }
+        }
+    }
 
     #[test]
     fn every_bundled_palette_resolves_with_its_declared_appearance() {

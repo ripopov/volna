@@ -71,9 +71,19 @@ impl<C: Copy> MarkerColors<C> {
     }
 }
 
+/// Workspace geometry is opt-in; existing themes retain the toolkit's dock skin.
+#[derive(Clone, Copy, Debug)]
+pub struct Islands<C = Color> {
+    pub background: C,
+    pub ocean: [C; 3],
+    pub radius: f32,
+    pub gap: f32,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Theme<C = Color> {
     pub appearance: Appearance,
+    pub islands: Option<Islands<C>>,
     pub editor: Surface<C>,
     pub panel: Surface<C>,
     pub bar: Surface<C>,
@@ -206,6 +216,12 @@ impl<C: Copy> Theme<C> {
         let f = &f;
         Theme {
             appearance: self.appearance,
+            islands: self.islands.map(|i| Islands {
+                background: f(i.background),
+                ocean: i.ocean.map(f),
+                radius: i.radius,
+                gap: i.gap,
+            }),
             editor: self.editor.map(f),
             panel: self.panel.map(f),
             bar: self.bar.map(f),
@@ -354,6 +370,7 @@ impl Theme<Color> {
         };
         let mut t = Self {
             appearance: Appearance::Dark,
+            islands: None,
             editor: surface(0x0028_2c33),
             panel: surface(0x002f_343e),
             bar: surface(0x003b_414d),

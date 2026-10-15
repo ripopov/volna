@@ -7,6 +7,7 @@ mod canvas;
 pub mod desktop;
 mod dock;
 mod frame_stats;
+mod islands;
 #[cfg(not(target_family = "wasm"))]
 pub mod native_workspace;
 mod palette;

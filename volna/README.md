@@ -46,6 +46,12 @@ The launcher accepts VTR or FST paths, multiple traces, and saved
 `.volna.json` workspaces. `--no-workspace` disables workspace reads and writes;
 `--config-dir DIR` chooses the settings directory.
 
+## Islands appearance
+
+**Volna Islands Dark** is an opt-in theme in Settings → Appearance. It uses
+rounded tab-group islands on continuous surrounding chrome and preserves the
+existing themes and default. See [geometry and implementation](ISLANDS.md).
+
 ## GPU transaction example
 
 [`examples/gpu_transaction_trace.rs`](examples/gpu_transaction_trace.rs) generates

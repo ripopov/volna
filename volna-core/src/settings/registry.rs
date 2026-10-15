@@ -305,7 +305,7 @@ pub static REGISTRY: &[Spec] = &[
         page: Page::Appearance,
         group: "Theme",
         title: "Theme",
-        description: "`volna` follows the system's light or dark setting; `volna-dark` and `volna-light` pin one; `volna-mixed` is a light window with dark waves and pipeline, whatever the system. Also One Dark, Dracula, Catppuccin, GitHub or VS Code, or any palette JSON dropped into the `themes` directory beside `settings.json`. Palettes reload when the file changes.",
+        description: "`volna` follows the system's light or dark setting; `volna-dark` and `volna-light` pin one; `volna-mixed` is a light window with dark waves and pipeline, whatever the system. `volna-islands-dark` uses rounded dark islands on lighter chrome. Also One Dark, Dracula, Catppuccin, GitHub or VS Code, or any palette JSON dropped into the `themes` directory beside `settings.json`. Palettes reload when the file changes.",
         keywords: &[
             "dark",
             "light",

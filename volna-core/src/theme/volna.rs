@@ -76,6 +76,26 @@ impl Sheet {
 
 impl Theme<Color> {
     #[must_use]
+    pub fn islands_dark() -> Self {
+        let mut t = Self::volna(true);
+        let s = Sheet::new(true);
+        t.islands = Some(super::Islands {
+            background: t.elevated.bg,
+            ocean: [
+                s.color("chrome-ocean-blue"),
+                s.color("chrome-ocean-teal"),
+                t.elevated.bg,
+            ],
+            radius: 10.0,
+            gap: 4.0,
+        });
+        t.panel.bg = t.editor.bg;
+        t.bar.bg = t.editor.bg;
+        t.statusbar_height = 32.0;
+        t
+    }
+
+    #[must_use]
     pub fn volna(dark: bool) -> Self {
         let s = Sheet::new(dark);
         let col = |name: &str| s.color(name);

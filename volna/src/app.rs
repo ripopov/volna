@@ -7,6 +7,7 @@ mod tests;
 use std::collections::HashMap;
 use std::time::Duration;
 
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, App, Context, CursorStyle, Entity, FocusHandle, Focusable,
@@ -1525,9 +1526,9 @@ impl Workspace {
             .pl(left_pad)
             .when(right_controls.is_none(), gpui_kit::Styled::pr_2)
             .gap_2()
-            .bg(t.bar.bg)
+            .bg(crate::theme::chrome_background(cx))
             .border_b_1()
-            .border_color(t.border)
+            .border_color(crate::theme::chrome_border(cx))
             .font_family(t.ui_font)
             .text_size(px(t.ui_size))
             .when_some(left_controls, gpui_kit::ParentElement::child)
@@ -1643,7 +1644,13 @@ impl Workspace {
             .flex_col()
             .flex_none()
             .h_full()
-            .w(t.px(self.app.sidebar_width))
+            .map(|el| {
+                if t.islands.is_some() {
+                    el.w_full()
+                } else {
+                    el.w(t.px(self.app.sidebar_width))
+                }
+            })
             .bg(t.panel.bg)
             .child(
                 div()
@@ -2249,10 +2256,16 @@ impl Workspace {
             .w_full()
             .px_2()
             .overflow_hidden()
-            .bg(t.bar.bg)
+            .bg(crate::theme::chrome_background(cx))
             .border_t_1()
-            .border_color(t.border)
+            .border_color(crate::theme::chrome_border(cx))
             .font_family(t.ui_font)
+            .when(t.islands.is_some(), |el| {
+                el.border_t_0()
+                    .px(t.px(12.0))
+                    .py(t.px(4.0))
+                    .line_height(t.px(16.0))
+            })
             .child(left)
             .child(message)
             .child(right)
@@ -2534,20 +2547,65 @@ impl Render for Workspace {
                 },
             ));
         }
+        if let Some(i) = t.islands {
+            root = root
+                .relative()
+                .bg(i.background)
+                .child(crate::islands::background());
+        }
         if !self.embedded {
             root = root.child(self.render_titlebar(window, cx));
         }
-        let sidebar = sidebar_visible.then(|| self.render_sidebar(window, cx).into_any_element());
+        let island_insets = t
+            .islands
+            .map(|i| crate::islands::insets(t.scale(i.gap), window.scale_factor()));
+        let sidebar = sidebar_visible.then(|| {
+            let sidebar = self.render_sidebar(window, cx).into_any_element();
+            if let Some(insets) = island_insets {
+                div()
+                    .flex_none()
+                    .h_full()
+                    .w(t.px(self.app.sidebar_width))
+                    .paddings(insets)
+                    .child(crate::islands::rounded(sidebar, cx))
+                    .into_any_element()
+            } else {
+                sidebar
+            }
+        });
         let center = self.render_center(window, cx);
+        let center = if let Some(insets) = island_insets
+            && !matches!(self.app.trace_state(), TraceState::Loaded(_))
+        {
+            div()
+                .size_full()
+                .paddings(insets)
+                .child(crate::islands::rounded(center, cx))
+                .into_any_element()
+        } else {
+            center
+        };
         root.child(
             div()
                 .flex()
                 .flex_1()
                 .min_h_0()
                 .w_full()
+                .when_some(t.islands, |el, _| {
+                    el.paddings({
+                        let p = island_insets.unwrap();
+                        gpui_kit::Edges {
+                            left: p.right,
+                            right: p.left,
+                            top: p.bottom,
+                            bottom: p.top,
+                        }
+                    })
+                })
                 .when_some(sidebar, |el, sidebar| {
                     el.child(sidebar).child(
                         Splitter::new("sidebar-split", SplitterAxis::Vertical)
+                            .line_width(if t.islands.is_some() { 0.0 } else { 1.0 })
                             .dragging(drag == Some(ChromeDrag::Sidebar))
                             .on_drag_start(cx.listener(|this, _, window, cx| {
                                 this.dispatch(

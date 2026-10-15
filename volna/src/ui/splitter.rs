@@ -16,6 +16,7 @@ pub struct Splitter {
     id: ElementId,
     axis: SplitterAxis,
     dragging: bool,
+    line_width: f32,
     on_drag_start: Option<Box<DragStartHandler>>,
 }
 
@@ -25,8 +26,14 @@ impl Splitter {
             id: id.into(),
             axis,
             dragging: false,
+            line_width: 1.0,
             on_drag_start: None,
         }
+    }
+
+    pub fn line_width(mut self, width: f32) -> Self {
+        self.line_width = width;
+        self
     }
 
     pub fn dragging(mut self, dragging: bool) -> Self {
@@ -59,9 +66,19 @@ impl RenderOnce for Splitter {
         } else {
             highlight
         };
+        let thickness = if t.islands.is_some() {
+            crate::islands::resize_thickness(self.dragging, cx)
+        } else {
+            px(1.0)
+        };
+        let highlight = if t.islands.is_some() {
+            highlight.rounded(thickness / 2.0)
+        } else {
+            highlight
+        };
         let highlight = match self.axis {
-            SplitterAxis::Vertical => highlight.w(px(1.0)).h_full(),
-            SplitterAxis::Horizontal => highlight.h(px(1.0)).w_full(),
+            SplitterAxis::Vertical => highlight.w(thickness).h_full(),
+            SplitterAxis::Horizontal => highlight.h(thickness).w_full(),
         };
         let mut grab_zone = div()
             .id(self.id)
@@ -81,14 +98,15 @@ impl RenderOnce for Splitter {
             grab_zone = grab_zone.on_mouse_down(MouseButton::Left, f);
         }
         let line = div().bg(base_color);
+        let width = px(self.line_width);
         let line = match self.axis {
-            SplitterAxis::Vertical => line.w(px(1.0)).h_full(),
-            SplitterAxis::Horizontal => line.h(px(1.0)).w_full(),
+            SplitterAxis::Vertical => line.w(width).h_full(),
+            SplitterAxis::Horizontal => line.h(width).w_full(),
         };
         let zone = div().relative().flex_none();
         let zone = match self.axis {
-            SplitterAxis::Vertical => zone.w(px(1.0)).h_full(),
-            SplitterAxis::Horizontal => zone.h(px(1.0)).w_full(),
+            SplitterAxis::Vertical => zone.w(width).h_full(),
+            SplitterAxis::Horizontal => zone.h(width).w_full(),
         };
         zone.child(line).child(deferred(grab_zone).with_priority(1))
     }

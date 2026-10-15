@@ -6,6 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{Result, bail, ensure};
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::dock as base;
 use gpui_kit::component::dock::{DockSkin, Panel, panel_handle};
 use gpui_kit::component::{
@@ -156,6 +157,8 @@ impl DockHost {
                 DockRenderer {
                     skin,
                     single: single.clone(),
+                    area: cx.weak_entity(),
+                    resize: crate::islands::DockResize::default(),
                 },
             ))
         });
@@ -1091,10 +1094,15 @@ impl Render for CanvasPanelView {
 struct DockRenderer {
     skin: Rc<DockSkin>,
     single: Rc<Cell<bool>>,
+    area: WeakEntity<base::DockArea>,
+    resize: crate::islands::DockResize,
 }
 impl base::DockAreaRenderer for DockRenderer {
     fn frame(&self, w: &mut Window, cx: &mut App) -> Stateful<Div> {
-        self.skin.frame(w, cx)
+        let t = *crate::theme::theme(cx);
+        self.skin
+            .frame(w, cx)
+            .when_some(t.islands, |el, _| el.bg(gpui_kit::transparent_black()))
     }
     fn center_frame(&self, w: &mut Window, cx: &mut App) -> Stateful<Div> {
         self.skin.center_frame(w, cx)
@@ -1106,7 +1114,11 @@ impl base::DockAreaRenderer for DockRenderer {
         w: &mut Window,
         cx: &mut App,
     ) -> Stateful<Div> {
-        self.skin.split_frame(node, axis, w, cx)
+        self.skin
+            .split_frame(node, axis, w, cx)
+            .when(crate::theme::theme(cx).islands.is_some(), |el| {
+                el.bg(gpui_kit::transparent_black())
+            })
     }
     fn render_split_handle(
         &self,
@@ -1114,6 +1126,9 @@ impl base::DockAreaRenderer for DockRenderer {
         w: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
+        if crate::theme::theme(cx).islands.is_some() {
+            return Some(crate::islands::resize_handle(handle, cx));
+        }
         self.skin.render_split_handle(handle, w, cx)
     }
     fn render_dock(
@@ -1123,8 +1138,13 @@ impl base::DockAreaRenderer for DockRenderer {
         w: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        self.skin.render_dock(dock, content, w, cx)
+        if crate::theme::theme(cx).islands.is_some() {
+            self.resize.render(dock, content, self.area.clone())
+        } else {
+            self.skin.render_dock(dock, content, w, cx)
+        }
     }
+
     fn build_placeholder(
         &self,
         state: &base::PanelState,
@@ -1137,16 +1157,22 @@ impl base::DockAreaRenderer for DockRenderer {
         Rc::new(TabRenderer {
             skin: self.skin.tab_group_renderer(),
             single: self.single.clone(),
+            islands: crate::islands::Tabs::default(),
         })
     }
 }
 struct TabRenderer {
+    islands: crate::islands::Tabs,
     skin: Rc<dyn base::TabGroupRenderer>,
     single: Rc<Cell<bool>>,
 }
 impl base::TabGroupRenderer for TabRenderer {
     fn frame(&self, group: &base::TabGroupContext, w: &mut Window, cx: &mut App) -> Stateful<Div> {
-        self.skin.frame(group, w, cx)
+        let t = *crate::theme::theme(cx);
+        self.skin.frame(group, w, cx).when_some(t.islands, |el, i| {
+            el.bg(gpui_kit::transparent_black())
+                .paddings(crate::islands::insets(t.scale(i.gap), w.scale_factor()))
+        })
     }
     fn content_frame(
         &self,
@@ -1154,7 +1180,12 @@ impl base::TabGroupRenderer for TabRenderer {
         w: &mut Window,
         cx: &mut App,
     ) -> Stateful<Div> {
-        self.skin.content_frame(group, w, cx)
+        let t = *crate::theme::theme(cx);
+        self.skin
+            .content_frame(group, w, cx)
+            .when(t.islands.is_some(), |el| {
+                el.relative().pt_0().bg(t.panel.bg)
+            })
     }
     fn render_tab_bar(
         &self,
@@ -1164,6 +1195,8 @@ impl base::TabGroupRenderer for TabRenderer {
     ) -> AnyElement {
         if self.single.get() {
             Empty.into_any_element()
+        } else if crate::theme::theme(cx).islands.is_some() {
+            self.islands.render(group, w, cx)
         } else {
             self.skin.render_tab_bar(group, w, cx)
         }
@@ -1175,7 +1208,22 @@ impl base::TabGroupRenderer for TabRenderer {
         w: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        self.skin.render_active_panel(panel, group, w, cx)
+        let content = self.skin.render_active_panel(panel, group, w, cx);
+        if crate::theme::theme(cx).islands.is_none() {
+            return content;
+        }
+        if self.single.get() {
+            return crate::islands::rounded(content, cx);
+        }
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(content)
+            .child(crate::islands::corners(false, cx))
+            .into_any_element()
     }
     fn render_drop_indicator(
         &self,
@@ -1183,6 +1231,24 @@ impl base::TabGroupRenderer for TabRenderer {
         w: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
+        use crate::theme::ThemePx;
+        let t = *crate::theme::theme(cx);
+        if let Some(i) = t.islands {
+            let target = indicator.to();
+            return Some(
+                div()
+                    .absolute()
+                    .left(target.origin().x)
+                    .top(target.origin().y)
+                    .w(target.size().width)
+                    .h(target.size().height)
+                    .rounded(t.px(i.radius))
+                    .bg(t.selection.bg.opacity(0.8))
+                    .border_1()
+                    .border_color(t.border_focused)
+                    .into_any_element(),
+            );
+        }
         self.skin.render_drop_indicator(indicator, w, cx)
     }
     fn render_empty(

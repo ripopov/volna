@@ -602,21 +602,24 @@ fn theme_changes_preserve_trace_and_interaction_state(cx: &mut TestAppContext) {
             )
         })
         .unwrap();
-    for appearance in [
+    let host_themes = [
         crate::theme::Appearance::Light,
         crate::theme::Appearance::Dark,
         crate::theme::Appearance::HighContrastDark,
         crate::theme::Appearance::HighContrastLight,
-    ] {
-        cx.update(|cx| {
-            crate::theme::install(
-                crate::theme::CoreTheme::from_host(&crate::theme::HostPalette {
-                    appearance,
-                    ..Default::default()
-                }),
-                cx,
-            );
-        });
+    ]
+    .map(|appearance| {
+        crate::theme::Themes::uniform(crate::theme::CoreTheme::from_host(
+            &crate::theme::HostPalette {
+                appearance,
+                ..Default::default()
+            },
+        ))
+    });
+    let builtins = volna_core::theme::builtin::choices()
+        .map(|(id, _)| volna_core::theme::builtin::resolve(id, true).unwrap());
+    for themes in host_themes.into_iter().chain(builtins) {
+        cx.update(|cx| crate::theme::install_themes(themes, cx));
         cx.run_until_parked();
         window
             .update(cx, |ws, _, _| {
@@ -4324,6 +4327,15 @@ fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut T
 
 #[gpui_kit::test]
 fn transaction_right_dock_tracks_native_moves_resize_visibility_and_undo(cx: &mut TestAppContext) {
+    check_dock_interactions(cx, false);
+}
+
+#[gpui_kit::test]
+fn islands_docking_and_live_switching_preserve_panel_identity(cx: &mut TestAppContext) {
+    check_dock_interactions(cx, true);
+}
+
+fn check_dock_interactions(cx: &mut TestAppContext, islands: bool) {
     use gpui_kit::base::dock::{DockPlacement, InsertTarget};
     use gpui_kit::{VisualTestContext, size};
     use volna_core::panels::{PanelsCommand, Placement};
@@ -4377,6 +4389,106 @@ fn transaction_right_dock_tracks_native_moves_resize_visibility_and_undo(cx: &mu
         })
         .unwrap();
     vcx.run_until_parked();
+    if islands {
+        let snapshot = |ws: &Workspace, cx: &gpui_kit::App| {
+            let area = ws.dock.as_ref().unwrap().area.read(cx);
+            let regions = [DockPlacement::Center, DockPlacement::Right].map(|region| {
+                let tree = area.layout(region).unwrap();
+                (tree.node_ids(), tree.panels().collect::<Vec<_>>())
+            });
+            (ws.app.panels.layout().clone(), regions)
+        };
+        let before = window
+            .update(&mut vcx, |ws, _, cx| snapshot(ws, cx))
+            .unwrap();
+        for (id, _) in
+            volna_core::theme::builtin::choices().chain(std::iter::once(("volna-islands-dark", "")))
+        {
+            vcx.update(|_, cx| {
+                crate::theme::install_themes(
+                    volna_core::theme::builtin::resolve(id, true).unwrap(),
+                    cx,
+                );
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            window
+                .update(&mut vcx, |ws, _, cx| {
+                    assert_eq!(snapshot(ws, cx), before, "{id}");
+                    assert_eq!(
+                        ws.app
+                            .panels
+                            .transaction(detail)
+                            .unwrap()
+                            .shown()
+                            .unwrap()
+                            .id,
+                        TransactionRef(33)
+                    );
+                })
+                .unwrap();
+        }
+    }
+    if islands {
+        use gpui_kit::{Modifiers, MouseButton, point};
+        let (start, width) = window
+            .update(&mut vcx, |ws, _, cx| {
+                let area = ws.dock.as_ref().unwrap().area.read(cx);
+                let width = area.dock_size(DockPlacement::Right).unwrap();
+                (
+                    point(
+                        area.bounds().right() - width + px(1.),
+                        area.bounds().center().y,
+                    ),
+                    width,
+                )
+            })
+            .unwrap();
+        let modifiers = Modifiers::default();
+        vcx.simulate_mouse_move(start, None, modifiers);
+        vcx.simulate_mouse_down(start, MouseButton::Left, modifiers);
+        for delta in [10., 40., 80.] {
+            vcx.simulate_mouse_move(
+                start - point(px(delta), px(0.)),
+                Some(MouseButton::Left),
+                modifiers,
+            );
+            vcx.run_until_parked();
+        }
+        let end = start - point(px(80.), px(0.));
+        vcx.simulate_mouse_up(end, MouseButton::Left, modifiers);
+        vcx.run_until_parked();
+        let resized = window
+            .update(&mut vcx, |ws, _, cx| {
+                let area = ws.dock.as_ref().unwrap().area.read(cx);
+                let resized = area.dock_size(DockPlacement::Right).unwrap();
+                assert!(
+                    resized > width + px(60.),
+                    "drag must continue outside the original hit band"
+                );
+                assert_eq!(
+                    ws.app.panels.layout().right.as_ref().unwrap().width,
+                    f32::from(resized)
+                );
+                resized
+            })
+            .unwrap();
+        vcx.simulate_mouse_move(start, None, modifiers);
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, _, cx| {
+                assert_eq!(
+                    ws.dock
+                        .as_ref()
+                        .unwrap()
+                        .area
+                        .read(cx)
+                        .dock_size(DockPlacement::Right),
+                    Some(resized)
+                );
+            })
+            .unwrap();
+    }
     let resized_node = window
         .update(&mut vcx, |ws, window, cx| {
             assert_eq!(

@@ -2512,7 +2512,7 @@ impl App {
             }
             _ => return,
         };
-        if focused && self.panels.len() > 1 {
+        if focused && self.panels.len() > 1 && theme.islands.is_none() {
             scene.quad(
                 bounds,
                 crate::Color::TRANSPARENT,
