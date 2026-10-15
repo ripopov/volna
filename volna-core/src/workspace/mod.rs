@@ -165,6 +165,7 @@ impl Workspace {
         supersedes: Option<String>,
     ) -> Result<Self> {
         ensure!(app.doc.is_loaded(), "no trace open");
+        app.panels.validate()?;
         let mut traces = Vec::new();
         for slot in app.doc.traces().iter() {
             let Some(session) = slot.session() else {
