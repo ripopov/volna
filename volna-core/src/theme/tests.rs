@@ -379,6 +379,8 @@ fn every_theme() -> Vec<(String, Theme)> {
     let mut out = vec![
         ("volna-dark".to_owned(), Theme::volna(true)),
         ("volna-light".to_owned(), Theme::volna(false)),
+        ("volna-islands-dark".to_owned(), Theme::islands_dark()),
+        ("volna-islands-light".to_owned(), Theme::islands_light()),
         ("one-dark".to_owned(), Theme::one_dark()),
     ];
     for b in BUILTIN {

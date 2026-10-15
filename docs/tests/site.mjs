@@ -86,6 +86,25 @@ try {
   assert.equal((await downloadPromise).suggestedFilename(), 'landing.vtr.volna.json');
   await page.getByRole('button', { name: 'Load sample' }).click();
   await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
+  const selectedTransaction = () => page.evaluate(() => window.volnaCurrentState
+    .split('\n').find(line => line.startsWith('panel=3 transaction ')));
+  const islandTransaction = await selectedTransaction();
+  assert.match(islandTransaction, /ready record=Some/);
+  for (const [theme, width, zoom] of [
+    ['light', 1440, 1], ['light', 1440, 1.25], ['light', 360, 1], ['dark', 1440, 1],
+  ]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(async ({ base, theme, zoom }) => {
+      (await import(`${base}viewer/pkg/volna.js`)).set_settings(JSON.stringify({
+        'appearance.theme': `volna-islands-${theme}`, 'appearance.zoom': zoom,
+      }));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }, { base, theme, zoom });
+    assert.equal(await selectedTransaction(), islandTransaction,
+      'switching Islands appearance and interface zoom must preserve the selected transaction');
+    await page.screenshot({ path: `${results}/islands-${theme}-${width}-${zoom}.png` });
+  }
+  report.behavior.push('Islands light and dark switching preserves the selected transaction at desktop, narrow width, and 125% zoom');
   await page.mouse.move(1130, 632);
   await page.mouse.down();
   await page.mouse.move(1180, 632, { steps: 3 });

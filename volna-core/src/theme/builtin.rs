@@ -35,12 +35,14 @@ pub const VOLNA_DARK: &str = "volna-dark";
 pub const VOLNA_LIGHT: &str = "volna-light";
 pub const VOLNA_MIXED: &str = "volna-mixed";
 pub const VOLNA_ISLANDS_DARK: &str = "volna-islands-dark";
+pub const VOLNA_ISLANDS_LIGHT: &str = "volna-islands-light";
 pub const ONE_DARK: &str = "one-dark";
 
-const CODED: [(&str, &str); 6] = [
+const CODED: [(&str, &str); 7] = [
     (VOLNA, "Volna"),
     (VOLNA_DARK, "Volna Dark"),
     (VOLNA_ISLANDS_DARK, "Volna Islands Dark"),
+    (VOLNA_ISLANDS_LIGHT, "Volna Islands Light"),
     (VOLNA_LIGHT, "Volna Light"),
     (VOLNA_MIXED, "Volna Mixed"),
     (ONE_DARK, "One Dark"),
@@ -63,6 +65,7 @@ pub fn resolve(id: &str, system_dark: bool) -> Option<Themes> {
     Some(match id {
         VOLNA => Themes::uniform(volna(system_dark)),
         VOLNA_ISLANDS_DARK => Themes::uniform(Theme::islands_dark()),
+        VOLNA_ISLANDS_LIGHT => Themes::uniform(Theme::islands_light()),
         VOLNA_DARK => Themes::uniform(volna(true)),
         VOLNA_LIGHT => Themes::uniform(volna(false)),
         VOLNA_MIXED => Themes {
@@ -92,35 +95,57 @@ mod tests {
 
     #[test]
     fn islands_preserves_data_semantics_at_every_zoom() {
-        let dark = resolve(VOLNA_DARK, true).unwrap().chrome;
-        for system_dark in [false, true] {
-            let islands = resolve(VOLNA_ISLANDS_DARK, system_dark).unwrap();
-            for zoom in [0.75, 1.0, 1.25, 2.0] {
-                let t = islands.chrome.zoomed(zoom);
-                let style = t.islands.unwrap();
-                assert!(super::super::contrast(t.panel.bg, style.background) >= 1.2);
-                assert!(style.background.l > t.panel.bg.l);
-                for background in style.ocean {
-                    assert!(super::super::contrast(t.bar.text, background) >= 4.5);
-                    assert!(super::super::contrast(t.bar.text_muted, background) >= 4.5);
-                    assert!(super::super::contrast(t.bar.icon, background) >= 3.0);
+        use super::super::{contrast, over};
+
+        let variants = [
+            (VOLNA_ISLANDS_DARK, VOLNA_DARK, true),
+            (VOLNA_ISLANDS_LIGHT, VOLNA_LIGHT, false),
+        ];
+        for (id, base_id, dark) in variants {
+            let base = resolve(base_id, dark).unwrap().chrome;
+            for system_dark in [false, true] {
+                let islands = resolve(id, system_dark).unwrap();
+                assert_eq!(islands.chrome.appearance, base.appearance);
+                assert_eq!(islands.canvas.appearance, base.appearance);
+                assert_eq!(islands.canvas.editor.bg, base.editor.bg);
+                for zoom in [0.75, 1.0, 1.25, 2.0] {
+                    let t = islands.chrome.zoomed(zoom);
+                    let style = t.islands.unwrap();
+                    assert!(contrast(t.panel.bg, style.background) >= 1.2, "{id}");
+                    assert_eq!(style.background.l > t.panel.bg.l, dark);
+                    for pair in style.ocean.windows(2) {
+                        for step in 0..=10 {
+                            let horizontal = over(pair[1].with_alpha(step as f32 / 10.), pair[0]);
+                            for fade in 0..=10 {
+                                let background = over(
+                                    style.background.with_alpha(fade as f32 / 10.),
+                                    horizontal,
+                                );
+                                assert!(contrast(t.bar.text, background) >= 4.5, "{id}");
+                                assert!(contrast(t.bar.text_muted, background) >= 4.5, "{id}");
+                                assert!(contrast(t.bar.icon, background) >= 3.0, "{id}");
+                            }
+                        }
+                    }
+                    assert_eq!(t.panel.bg, t.editor.bg);
+                    assert_eq!(t.bar.bg, t.panel.bg);
+                    assert_eq!(t.wave_signal, base.wave_signal);
+                    assert_eq!(t.wave_undef, base.wave_undef);
+                    assert_eq!(t.wave_highimp, base.wave_highimp);
+                    assert_eq!(t.wave_dontcare, base.wave_dontcare);
+                    assert_eq!(t.stages, base.stages);
+                    for (a, b) in t.markers.iter().zip(base.markers) {
+                        assert_eq!(a.stroke, b.stroke);
+                        assert_eq!(a.background, b.background);
+                    }
+                    let reset = t.zoomed(1.0);
+                    assert_eq!(reset.scale(style.gap), style.gap);
+                    assert_eq!(reset.row_height, base.row_height);
                 }
-                assert_eq!(t.panel.bg, t.editor.bg);
-                assert_eq!(t.bar.bg, t.panel.bg);
-                assert_eq!(t.wave_signal, dark.wave_signal);
-                assert_eq!(t.wave_undef, dark.wave_undef);
-                assert_eq!(t.wave_highimp, dark.wave_highimp);
-                assert_eq!(t.wave_dontcare, dark.wave_dontcare);
-                assert_eq!(t.stages, dark.stages);
-                for (a, b) in t.markers.iter().zip(dark.markers) {
-                    assert_eq!(a.stroke, b.stroke);
-                    assert_eq!(a.background, b.background);
-                }
-                let reset = t.zoomed(1.0);
-                assert_eq!(reset.scale(style.gap), style.gap);
-                assert_eq!(reset.row_height, dark.row_height);
             }
-            for (id, _) in choices().filter(|(id, _)| *id != VOLNA_ISLANDS_DARK) {
+        }
+        for system_dark in [false, true] {
+            for (id, _) in choices().filter(|(id, _)| !variants.iter().any(|v| v.0 == *id)) {
                 let themes = resolve(id, system_dark).unwrap();
                 assert!(themes.chrome.islands.is_none(), "{id}");
                 assert!(themes.canvas.islands.is_none(), "{id}");

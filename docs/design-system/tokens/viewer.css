@@ -1,7 +1,7 @@
 /* Shared Volna viewer theme for waveform and pipeline canvases. */
 
 :root,[data-theme="dark"]{
-  --viewer-chrome-ocean-blue:#203e56;--viewer-chrome-ocean-teal:#245158;
+  --viewer-chrome-background:#2f343e;--viewer-chrome-ocean-blue:#203e56;--viewer-chrome-ocean-teal:#245158;
   --viewer-canvas:#1f2228;--viewer-panel:#282c33;--viewer-bar:#1f2228;--viewer-elevated:#2f343e;--viewer-border:#3b414d;--viewer-border-subtle:#2f343e;--viewer-text:#eceef1;--viewer-text-muted:#b9bfc9;--viewer-text-faint:#8f94a4;--viewer-selection:#1f2f45;--viewer-hover:#363c46;--viewer-accent:#74ade8;--viewer-on-accent:#1f2228;
   --viewer-signal:#7ad59c;--viewer-undef:#f66d67;--viewer-highimp:#eec469;--viewer-dontcare:#d285cb;--viewer-weak:#8c929f;--viewer-event:#d2f6dd;--viewer-relation-out:#f7a062;--viewer-diff:#968dfd;--viewer-diff-fill:rgb(150 141 253 / 0.16);
   --viewer-high-fill:rgb(122 213 156 / 0.1);--viewer-undef-fill:rgb(246 109 103 / 0.12);--viewer-dense:rgb(122 213 156 / 0.55);--viewer-grid:rgb(236 238 241 / 0.12);--viewer-row-selected:rgb(116 173 232 / 0.12);--viewer-row-hover:rgb(236 238 241 / 0.04);--viewer-outside:rgb(0 0 0 / 0.25);--viewer-flush:rgb(246 109 103 / 0.1);
@@ -9,7 +9,7 @@
   --viewer-stage-text:#16181c;--viewer-stage-hue-from:265;--viewer-stage-hue-to:30;--viewer-stage-l:0.86;--viewer-stage-l-alt:0.68;--viewer-stage-c:0.1;--viewer-stage-edge-dl:-0.2;
 }
 [data-theme="light"]{
-  --viewer-chrome-ocean-blue:#dceaf4;--viewer-chrome-ocean-teal:#dcf0ec;
+  --viewer-chrome-background:#e6e9ef;--viewer-chrome-ocean-blue:#dceaf4;--viewer-chrome-ocean-teal:#dcf0ec;
   --viewer-canvas:#ffffff;--viewer-panel:#f4f5f7;--viewer-bar:#f4f5f7;--viewer-elevated:#ffffff;--viewer-border:#d4d8df;--viewer-border-subtle:#e2e5ea;--viewer-text:#1f2228;--viewer-text-muted:#555c69;--viewer-text-faint:#646b78;--viewer-selection:#e3edf8;--viewer-hover:#eceef1;--viewer-accent:#2d6cb0;--viewer-on-accent:#ffffff;
   --viewer-signal:#008455;--viewer-undef:#a30018;--viewer-highimp:#9f6700;--viewer-dontcare:#9c3b96;--viewer-weak:#6c727e;--viewer-event:#00442a;--viewer-relation-out:#be5a0a;--viewer-diff:#4f48bf;--viewer-diff-fill:rgb(79 72 191 / 0.11);
   --viewer-high-fill:rgb(0 132 85 / 0.1);--viewer-undef-fill:rgb(163 0 24 / 0.1);--viewer-dense:rgb(0 132 85 / 0.55);--viewer-grid:rgb(31 34 40 / 0.13);--viewer-row-selected:rgb(45 108 176 / 0.1);--viewer-row-hover:rgb(31 34 40 / 0.04);--viewer-outside:rgb(0 0 0 / 0.05);--viewer-flush:rgb(163 0 24 / 0.08);

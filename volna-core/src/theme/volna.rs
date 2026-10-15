@@ -77,14 +77,24 @@ impl Sheet {
 impl Theme<Color> {
     #[must_use]
     pub fn islands_dark() -> Self {
-        let mut t = Self::volna(true);
-        let s = Sheet::new(true);
+        Self::islands(true)
+    }
+
+    #[must_use]
+    pub fn islands_light() -> Self {
+        Self::islands(false)
+    }
+
+    fn islands(dark: bool) -> Self {
+        let mut t = Self::volna(dark);
+        let s = Sheet::new(dark);
+        let background = s.color("chrome-background");
         t.islands = Some(super::Islands {
-            background: t.elevated.bg,
+            background,
             ocean: [
                 s.color("chrome-ocean-blue"),
                 s.color("chrome-ocean-teal"),
-                t.elevated.bg,
+                background,
             ],
             radius: 10.0,
             gap: 4.0,

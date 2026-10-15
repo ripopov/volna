@@ -50,6 +50,8 @@ The launcher accepts VTR or FST paths, multiple traces, and saved
 
 **Volna Islands Dark** is the default theme. It uses rounded tab-group islands on
 continuous surrounding chrome. Choose another theme in Settings → Appearance.
+**Volna Islands Light** pairs the same layout with Volna Light's data palette,
+white islands, and a soft blue-to-sea-glass backdrop.
 See [geometry and implementation](ISLANDS.md).
 
 ## GPU transaction example

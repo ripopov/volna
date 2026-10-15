@@ -340,8 +340,10 @@ impl Tabs {
                     .when(active, gpui_kit::Styled::border_b_0)
                     .bg(if active {
                         t.panel.bg
-                    } else {
+                    } else if t.appearance.is_dark() {
                         t.panel.bg.blend(gpui_kit::black().opacity(0.12))
+                    } else {
+                        t.bar_hover.bg
                     })
                     .text_color(if active && focused {
                         t.panel.text

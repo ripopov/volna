@@ -4381,15 +4381,21 @@ fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut T
 
 #[gpui_kit::test]
 fn transaction_right_dock_tracks_native_moves_resize_visibility_and_undo(cx: &mut TestAppContext) {
-    check_dock_interactions(cx, false);
+    check_dock_interactions(cx, None);
 }
 
 #[gpui_kit::test]
 fn islands_docking_and_live_switching_preserve_panel_identity(cx: &mut TestAppContext) {
-    check_dock_interactions(cx, true);
+    check_dock_interactions(cx, Some("volna-islands-dark"));
 }
 
-fn check_dock_interactions(cx: &mut TestAppContext, islands: bool) {
+#[gpui_kit::test]
+fn islands_light_docking_and_live_switching_preserve_panel_identity(cx: &mut TestAppContext) {
+    check_dock_interactions(cx, Some("volna-islands-light"));
+}
+
+fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'static str>) {
+    let islands = island_theme.is_some();
     use gpui_kit::base::dock::{DockPlacement, InsertTarget};
     use gpui_kit::{VisualTestContext, size};
     use volna_core::panels::{PanelsCommand, Placement};
@@ -4443,7 +4449,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, islands: bool) {
         })
         .unwrap();
     vcx.run_until_parked();
-    if islands {
+    if let Some(island_theme) = island_theme {
         let snapshot = |ws: &Workspace, cx: &gpui_kit::App| {
             let area = ws.dock.as_ref().unwrap().area.read(cx);
             let regions = [DockPlacement::Center, DockPlacement::Right].map(|region| {
@@ -4456,7 +4462,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, islands: bool) {
             .update(&mut vcx, |ws, _, cx| snapshot(ws, cx))
             .unwrap();
         for (id, _) in
-            volna_core::theme::builtin::choices().chain(std::iter::once(("volna-islands-dark", "")))
+            volna_core::theme::builtin::choices().chain(std::iter::once((island_theme, "")))
         {
             vcx.update(|_, cx| {
                 crate::theme::install_themes(

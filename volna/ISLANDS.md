@@ -1,20 +1,24 @@
-# Volna Islands Dark
+# Volna Islands
 
 **Volna Islands Dark** is the default theme. Select it in Settings → Appearance,
 or set `"appearance.theme": "volna-islands-dark"`. Choose `volna` to follow the
-system appearance. There is no Islands light variant or density setting.
+system appearance. Select **Volna Islands Light** or set
+`"appearance.theme": "volna-islands-light"` for the light variant. Neither variant
+has a separate density setting.
 
 ## Appearance and ownership
 
-The core theme registry resolves this theme through the same settings and
-persistence path as every other built-in theme. `Theme::islands_dark` starts from
-Volna Dark and changes only workspace surfaces and the optional typed `Islands`
-style. It reuses Instrument's viewer canvas (`#1f2228`) for islands and viewer
-elevated (`#2f343e`) for surrounding chrome. Waveform states, markers, pipeline
-stages, fonts, and data row sizes retain their Volna Dark values.
+The core theme registry resolves both variants through the same settings and
+persistence path as every other built-in theme. `Theme::islands_dark` and
+`Theme::islands_light` start from Volna Dark and Volna Light respectively, changing
+only workspace surfaces and the optional typed `Islands` style. Dark islands use
+Instrument's viewer canvas (`#1f2228`) on neutral chrome (`#2f343e`); light islands
+use the white viewer canvas on pale blue-gray chrome (`#e6e9ef`). Waveform states,
+markers, pipeline stages, fonts, and data row sizes retain their base theme values.
 
 One window-wide backdrop blends shared `chrome-ocean-blue` and
-`chrome-ocean-teal` viewer tokens into the surrounding chrome. The glow is
+`chrome-ocean-teal` viewer tokens into the shared `chrome-background` token. The
+light palette uses soft sky blue and sea glass with a neutral fade. The glow is
 anchored near the upper-left corner, peaks at 200 logical px horizontally, and
 fades to neutral by 900 px horizontally and 280 px vertically. These distances
 follow interface zoom. Transparent title/status bars and dock gutters reveal
@@ -33,7 +37,8 @@ selected tabs carry the active group's focus treatment instead.
 
 Theme switching does not reconstruct the dock layout or panel entities. Tabs sit
 edge-to-edge with rounded upper corners. The selected tab joins the panel surface;
-unselected tabs use a 12% black tint over that surface and a subtle bottom border.
+unselected tabs use a 12% black tint in dark mode or the viewer hover surface in
+light mode, with a subtle bottom border.
 The focused group's selected title uses the primary text color; inactive titles
 are muted. Keyboard focus has its own accent outline. Losing window focus mutes
 the selected title without dimming data colors.
@@ -43,9 +48,11 @@ the selected title without dimming data colors.
 [JetBrains's official Islands specification](https://plugins.jetbrains.com/docs/intellij/supporting-islands-theme.html)
 defines normal-mode `Island.arc = 20` as a rendered **10 logical px radius**, and
 `Island.borderWidth = 5` as a **4 logical px visible gap**. It also recommends
-islands darker than surrounding chrome, at least **1.20:1** background contrast,
-and no noticeable island border. The chosen Instrument pair has approximately
-**1.28:1** contrast.
+dark islands darker than surrounding chrome, at least **1.20:1** background
+contrast, and no noticeable island border. The dark Instrument pair has
+approximately **1.28:1** contrast. Light islands reverse the surface hierarchy:
+white content sits above slightly darker chrome with approximately **1.22:1**
+contrast. Both variants share the same geometry.
 
 Other dimensions below are Volna choices or retained toolkit/application values,
 not undocumented JetBrains measurements. Values are at 100% interface zoom;
