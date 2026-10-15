@@ -17,6 +17,7 @@ mod sidebar;
 mod start_panel;
 #[cfg(target_arch = "wasm32")]
 mod table_clipboard;
+mod table_columns;
 mod table_panel;
 pub mod theme;
 mod traces;
@@ -43,6 +44,7 @@ pub fn init_app(cx: &mut App) {
         });
     }
     table_panel::init(cx);
+    table_columns::init(cx);
     theme::set(theme::CoreTheme::islands_dark(), cx);
     if let Err(e) = assets::load_fonts(cx) {
         log::warn!("failed to load bundled fonts: {e:#}");

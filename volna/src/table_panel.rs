@@ -9,13 +9,11 @@ use gpui_kit::component::{
     Disableable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     input::{Input, InputState},
-    menu::{DropdownMenu, PopupMenu, PopupMenuItem},
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, Context, Empty, Focusable, Window, div, px};
 use volna_core::Command;
 use volna_core::icons::IconName;
-use volna_core::table::columns::{ColumnSet, TransactionColumn};
 use volna_core::table::{TableCommand, TableState};
 
 gpui_kit::actions!(
@@ -50,7 +48,7 @@ impl CanvasPanelView {
 
     pub(crate) fn render_table(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(owner) = self.ws.upgrade() else {
@@ -70,32 +68,22 @@ impl CanvasPanelView {
         let failed = matches!(table.state, TableState::Failed(_) | TableState::Refused(_))
             || table.sort_error.is_some();
         let loading = matches!(table.state, TableState::Loading) || table.sorting();
-        let column_items: Vec<(String, bool, TableCommand)> = match table.columns.get() {
-            ColumnSet::Transactions(visible) => TransactionColumn::ALL
-                .iter()
-                .map(|&column| {
-                    (
-                        column.title().into(),
-                        visible.contains(&column),
-                        TableCommand::ToggleTransactionColumn(column),
+        let picker = self
+            .table_columns
+            .get_or_insert_with(|| {
+                cx.new(|cx| {
+                    crate::table_columns::ColumnPicker::new(
+                        self.ws.clone(),
+                        self.id,
+                        self.generation,
+                        window,
+                        cx,
                     )
                 })
-                .collect(),
-            ColumnSet::Signals { time, visible } => {
-                std::iter::once(("Time".into(), *time, TableCommand::ToggleSignalColumn(0)))
-                    .chain(visible.iter().enumerate().map(|(index, &visible)| {
-                        (
-                            table.column_title(index + 1).to_owned(),
-                            visible,
-                            TableCommand::ToggleSignalColumn(index + 1),
-                        )
-                    }))
-                    .collect()
-            }
-        };
+            })
+            .clone();
         let id = self.id;
         let generation = self.generation;
-        let columns_owner = owner.clone();
         let mut toolbar = div()
             .flex()
             .items_center()
@@ -158,55 +146,7 @@ impl CanvasPanelView {
                     .small()
                     .on_click(cx.listener(|view, _, window, cx| view.table_go_to(window, cx))),
             )
-            .child(
-                action_button(
-                    "table-columns",
-                    gpui_kit::component::Icon::empty().path(IconName::TableColumns.path()),
-                    cx,
-                )
-                .label("Columns")
-                .ghost()
-                .dropdown_menu_with_anchor(
-                    gpui_kit::Anchor::TopLeft,
-                    move |menu: PopupMenu, _, _| {
-                        let menu =
-                            column_items
-                                .iter()
-                                .fold(menu, |menu, (label, checked, command)| {
-                                    let owner = columns_owner.clone();
-                                    let command = command.clone();
-                                    menu.item(
-                                        PopupMenuItem::new(label.clone())
-                                            .checked(*checked)
-                                            .on_click(move |_, window, cx| {
-                                                owner.update(cx, |ws, cx| {
-                                                    ws.dispatch_if_current(
-                                                        generation,
-                                                        Command::Table(id, command.clone()),
-                                                        Some(window),
-                                                        cx,
-                                                    );
-                                                });
-                                            }),
-                                    )
-                                });
-                        let owner = columns_owner.clone();
-                        menu.separator()
-                            .item(PopupMenuItem::new("Reset to defaults").on_click(
-                                move |_, window, cx| {
-                                    owner.update(cx, |ws, cx| {
-                                        ws.dispatch_if_current(
-                                            generation,
-                                            Command::Table(id, TableCommand::ResetColumns),
-                                            Some(window),
-                                            cx,
-                                        );
-                                    });
-                                },
-                            ))
-                    },
-                ),
-            )
+            .child(crate::table_columns::ColumnPicker::popover(picker, cx))
             .child(
                 action_button(
                     "table-details",
@@ -248,9 +188,26 @@ impl CanvasPanelView {
             .flex()
             .flex_col()
             .track_focus(&self.focus)
-            .key_context("Waves Table")
+            .key_context(
+                if self
+                    .table_columns
+                    .as_ref()
+                    .is_some_and(|picker| picker.read(cx).is_open())
+                {
+                    "TableColumns"
+                } else {
+                    "Waves Table"
+                },
+            )
             .on_key_down(
                 cx.listener(|view, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if view
+                        .table_columns
+                        .as_ref()
+                        .is_some_and(|picker| picker.read(cx).is_open())
+                    {
+                        return;
+                    }
                     let key = event.keystroke.key.as_str();
                     let modifiers = crate::app::to_modifiers(event.keystroke.modifiers);
                     let command = match key {

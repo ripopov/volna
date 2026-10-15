@@ -1,6 +1,6 @@
-//! Fixed compile-time column catalogues for the two baseline row domains.
+//! Column identity, visibility and order for transaction and signal tables.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionColumn {
     Label,
@@ -10,6 +10,7 @@ pub enum TransactionColumn {
     Id,
     Status,
     Attributes,
+    Attribute(String),
 }
 
 impl TransactionColumn {
@@ -30,20 +31,15 @@ impl TransactionColumn {
         Self::Attributes,
     ];
 
-    #[must_use]
-    pub fn key(self) -> &'static str {
+    pub(super) fn canonical(self) -> Self {
         match self {
-            Self::Label => "label",
-            Self::Begin => "begin",
-            Self::Duration => "duration",
-            Self::End => "end",
-            Self::Id => "id",
-            Self::Status => "status",
-            Self::Attributes => "attributes",
+            Self::Attribute(key) if key == "vtr.label" => Self::Label,
+            column => column,
         }
     }
+
     #[must_use]
-    pub fn title(self) -> &'static str {
+    pub fn title(&self) -> &str {
         match self {
             Self::Label => "Label · vtr.label",
             Self::Begin => "Begin",
@@ -52,10 +48,11 @@ impl TransactionColumn {
             Self::Id => "ID",
             Self::Status => "Status",
             Self::Attributes => "Attributes · preview",
+            Self::Attribute(key) => key,
         }
     }
     #[must_use]
-    pub fn width(self) -> f32 {
+    pub fn width(&self) -> f32 {
         match self {
             Self::Label => 210.0,
             Self::Begin | Self::End => 120.0,
@@ -63,20 +60,132 @@ impl TransactionColumn {
             Self::Id => 100.0,
             Self::Status => 90.0,
             Self::Attributes => 360.0,
+            Self::Attribute(_) => 160.0,
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TransactionColumns {
+    entries: Vec<(TransactionColumn, bool)>,
+    order: Vec<usize>,
+}
+
+impl Default for TransactionColumns {
+    fn default() -> Self {
+        Self {
+            entries: TransactionColumn::ALL
+                .into_iter()
+                .map(|column| {
+                    let visible = TransactionColumn::DEFAULT.contains(&column);
+                    (column, visible)
+                })
+                .collect(),
+            order: (0..TransactionColumn::ALL.len()).collect(),
+        }
+    }
+}
+
+impl TransactionColumns {
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    #[must_use]
+    pub fn column(&self, index: usize) -> Option<&TransactionColumn> {
+        self.entries.get(index).map(|(column, _)| column)
+    }
+    #[must_use]
+    pub fn visible(&self, column: &TransactionColumn) -> bool {
+        self.entries
+            .iter()
+            .any(|(c, visible)| c == column && *visible)
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &TransactionColumn, bool)> {
+        self.order.iter().map(|&index| {
+            let (column, visible) = &self.entries[index];
+            (index, column, *visible)
+        })
+    }
+    fn toggle(&mut self, column: TransactionColumn) -> bool {
+        let column = column.canonical();
+        if let Some(index) = self.entries.iter().position(|(c, _)| c == &column) {
+            if self.entries[index].1 && self.entries.iter().filter(|(_, v)| *v).count() == 1 {
+                return false;
+            }
+            self.entries[index].1 = !self.entries[index].1;
+        } else {
+            let index = self.entries.len();
+            self.entries.push((column, true));
+            let before = self
+                .order
+                .iter()
+                .position(|&i| self.entries[i].0 == TransactionColumn::Attributes)
+                .unwrap_or(self.order.len());
+            self.order.insert(before, index);
+        }
+        true
+    }
+    pub fn move_before(&mut self, source: usize, before: Option<usize>) -> bool {
+        if before == Some(source) || source >= self.len() || before.is_some_and(|i| i >= self.len())
+        {
+            return false;
+        }
+        self.order.retain(|&i| i != source);
+        let position = before.map_or(self.order.len(), |before| {
+            self.order
+                .iter()
+                .position(|&i| i == before)
+                .expect("column order")
+        });
+        self.order.insert(position, source);
+        true
+    }
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.entries.capacity() * std::mem::size_of::<(TransactionColumn, bool)>()
+            + self.order.capacity() * std::mem::size_of::<usize>()
+            + self
+                .entries
+                .iter()
+                .map(|(column, _)| match column {
+                    TransactionColumn::Attribute(key) => key.capacity(),
+                    _ => 0,
+                })
+                .sum::<usize>()
+    }
+    #[must_use]
+    pub fn validate(&self) -> bool {
+        let n = self.len();
+        n >= TransactionColumn::ALL.len()
+            && self.order.len() == n
+            && (0..n).all(|i| self.order.iter().filter(|&&j| j == i).count() == 1)
+            && self.entries.iter().any(|(_, visible)| *visible)
+            && self.entries.iter().enumerate().all(|(i, (column, _))| {
+                if i < TransactionColumn::ALL.len() {
+                    column == &TransactionColumn::ALL[i]
+                } else {
+                    matches!(column, TransactionColumn::Attribute(key) if key != "vtr.label")
+                        && !self.entries[..i].iter().any(|(c, _)| c == column)
+                }
+            })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ColumnSet {
-    Transactions(Vec<TransactionColumn>),
+    Transactions(TransactionColumns),
     Signals { time: bool, visible: Vec<bool> },
 }
 
 impl ColumnSet {
     #[must_use]
     pub fn transactions_default() -> Self {
-        Self::Transactions(TransactionColumn::DEFAULT.to_vec())
+        Self::Transactions(TransactionColumns::default())
     }
     #[must_use]
     pub fn signals(count: usize) -> Self {
@@ -87,22 +196,37 @@ impl ColumnSet {
     }
     #[must_use]
     pub fn transaction_visible(&self, column: TransactionColumn) -> bool {
-        matches!(self, Self::Transactions(v) if v.contains(&column))
+        matches!(self, Self::Transactions(columns) if columns.visible(&column.canonical()))
     }
     pub fn toggle_transaction(&mut self, column: TransactionColumn) -> bool {
-        let Self::Transactions(visible) = self else {
-            return false;
-        };
-        if let Some(index) = visible.iter().position(|&c| c == column) {
-            if visible.len() == 1 {
-                return false;
-            }
-            visible.remove(index);
-        } else {
-            visible.push(column);
-            visible.sort_by_key(|c| TransactionColumn::ALL.iter().position(|x| x == c));
+        match self {
+            Self::Transactions(columns) => columns.toggle(column),
+            Self::Signals { .. } => false,
         }
-        true
+    }
+    pub fn move_transaction(&mut self, source: usize, before: Option<usize>) -> bool {
+        match self {
+            Self::Transactions(columns) => columns.move_before(source, before),
+            Self::Signals { .. } => false,
+        }
+    }
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Transactions(columns) => columns.len(),
+            Self::Signals { visible, .. } => visible.len() + 1,
+        }
+    }
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        match self {
+            Self::Transactions(columns) => columns.bytes(),
+            Self::Signals { visible, .. } => visible.capacity(),
+        }
     }
     pub fn toggle_signal(&mut self, index: usize) -> bool {
         let Self::Signals { time, visible } = self else {
@@ -125,10 +249,9 @@ impl ColumnSet {
         }
         true
     }
-
     pub fn reset(&mut self) {
         match self {
-            Self::Transactions(v) => *v = TransactionColumn::DEFAULT.to_vec(),
+            Self::Transactions(columns) => *columns = TransactionColumns::default(),
             Self::Signals { time, visible } => {
                 *time = true;
                 visible.fill(true);

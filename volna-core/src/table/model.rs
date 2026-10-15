@@ -124,8 +124,16 @@ pub enum TableCommand {
     Next,
     Page(i8),
     ToggleTransactionColumn(TransactionColumn),
+    ShowTransactionColumn(TransactionColumn),
     ToggleSignalColumn(usize),
-    ResizeColumn { source_index: usize, width: f32 },
+    MoveColumn {
+        source_index: usize,
+        before: Option<usize>,
+    },
+    ResizeColumn {
+        source_index: usize,
+        width: f32,
+    },
     ResetColumns,
     ClearSelection,
     Cancel,
@@ -149,6 +157,7 @@ pub struct TableModel {
     sort_order: Option<super::sort::Order>,
     sort_job: Option<(u64, super::sort::Job)>,
     sort_revision: u64,
+    reveal_column: Option<usize>,
     drag: Option<TableDrag>,
     rows: Rows,
     axis_build: Option<SignalAxisBuild>,
@@ -188,6 +197,7 @@ impl TableModel {
             sort_order: None,
             sort_job: None,
             sort_revision: 0,
+            reveal_column: None,
             drag: None,
             rows: Rows::None,
             axis_build: None,
@@ -669,7 +679,12 @@ impl TableModel {
             && let Some(sort) = self.sort_requested
         {
             let source = match &self.rows {
-                Rows::Generator(g) => super::sort::Source::Generator(g.clone()),
+                Rows::Generator(g) => super::sort::Source::Generator(
+                    g.clone(),
+                    self.transaction_column(sort.column)
+                        .expect("sort column")
+                        .clone(),
+                ),
                 Rows::Signals {
                     histories,
                     axis,
@@ -901,9 +916,40 @@ impl TableModel {
                 };
                 self.select(doc, panel, target, now)
             }
-            TableCommand::ToggleTransactionColumn(column) => {
-                self.edit_columns(|columns| columns.toggle_transaction(column))
+            TableCommand::ShowTransactionColumn(column) => {
+                let column = column.canonical();
+                if !self.columns.transaction_visible(column.clone()) {
+                    self.edit_columns(|columns| columns.toggle_transaction(column.clone()));
+                }
+                if let ColumnSet::Transactions(columns) = self.columns.get() {
+                    self.reveal_column = columns
+                        .iter()
+                        .find(|(_, c, _)| *c == &column)
+                        .map(|(i, _, _)| i);
+                }
+                self.reveal_column.is_some()
             }
+            TableCommand::ToggleTransactionColumn(column) => {
+                let column = column.canonical();
+                let showing = matches!(column, TransactionColumn::Attribute(_))
+                    && !self.columns.transaction_visible(column.clone());
+                let changed =
+                    self.edit_columns(|columns| columns.toggle_transaction(column.clone()));
+                if showing
+                    && changed
+                    && let ColumnSet::Transactions(columns) = self.columns.get()
+                {
+                    self.reveal_column = columns
+                        .iter()
+                        .find(|(_, c, _)| *c == &column)
+                        .map(|(i, _, _)| i);
+                }
+                changed
+            }
+            TableCommand::MoveColumn {
+                source_index,
+                before,
+            } => self.edit_columns(|columns| columns.move_transaction(source_index, before)),
             TableCommand::ToggleSignalColumn(index) => {
                 self.edit_columns(|columns| columns.toggle_signal(index))
             }
@@ -951,10 +997,36 @@ impl TableModel {
         }
     }
 
+    #[must_use]
+    pub fn transaction_column(&self, index: usize) -> Option<&TransactionColumn> {
+        match self.columns.get() {
+            ColumnSet::Transactions(columns) => columns.column(index),
+            ColumnSet::Signals { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn loaded_generator(&self) -> Option<&Arc<LoadedGenerator>> {
+        match &self.rows {
+            Rows::Generator(generator) => Some(generator),
+            _ => None,
+        }
+    }
+
     fn edit_columns(&mut self, f: impl FnOnce(&mut ColumnSet) -> bool) -> bool {
         let mut columns = self.columns.get().clone();
         if !f(&mut columns) || !self.columns.set(columns) {
             return false;
+        }
+        let count = self.columns.len();
+        self.widths.update(|widths| widths.resize(count, None));
+        if self
+            .sort_requested
+            .into_iter()
+            .chain(self.applied_sort())
+            .any(|s| s.column >= count)
+        {
+            self.reset_sort();
         }
         self.invalidate_window();
         true
@@ -1045,6 +1117,20 @@ impl TableModel {
 
     pub(crate) fn swap_columns(&mut self, columns: ColumnSet) -> ColumnSet {
         let old = self.columns.swap(columns);
+        if self
+            .sort_requested
+            .into_iter()
+            .chain(self.applied_sort())
+            .any(|sort| {
+                let previous = match &old {
+                    ColumnSet::Transactions(c) => c.column(sort.column),
+                    ColumnSet::Signals { .. } => None,
+                };
+                previous != self.transaction_column(sort.column)
+            })
+        {
+            self.reset_sort();
+        }
         self.invalidate_window();
         old
     }
@@ -1267,7 +1353,7 @@ impl TableModel {
         let fixed_width = widths.iter().map(|(_, width)| width * zoom).sum::<f32>();
         if let Some((_, width)) = widths.iter_mut().find(|(index, _)| {
             matches!(self.source, TableSource::Generator(_))
-                && TransactionColumn::ALL[*index] == TransactionColumn::Attributes
+                && self.transaction_column(*index) == Some(&TransactionColumn::Attributes)
                 && self.widths[*index].is_none()
         }) {
             let other_width = fixed_width - *width * zoom;
@@ -1276,6 +1362,21 @@ impl TableModel {
                 .min(MAX_COLUMN_WIDTH);
         }
         let content_width = widths.iter().map(|(_, width)| *width * zoom).sum::<f32>();
+        if let Some(target) = self.reveal_column.take() {
+            let mut left = 0.0;
+            for (index, width) in &widths {
+                let right = left + width * zoom;
+                if *index == target {
+                    if left < self.horizontal {
+                        self.horizontal = left;
+                    } else if right > self.horizontal + body.width() {
+                        self.horizontal = (right - body.width()).max(0.0);
+                    }
+                    break;
+                }
+                left = right;
+            }
+        }
         self.horizontal = self
             .horizontal
             .clamp(0.0, (content_width - body.width()).max(0.0));
@@ -1378,11 +1479,10 @@ impl TableModel {
 
     fn visible_column_widths(&self) -> Vec<(usize, f32)> {
         match self.columns.get() {
-            ColumnSet::Transactions(visible) => TransactionColumn::ALL
+            ColumnSet::Transactions(columns) => columns
                 .iter()
-                .enumerate()
-                .filter(|(_, c)| visible.contains(c))
-                .map(|(i, c)| (i, self.widths[i].unwrap_or_else(|| c.width())))
+                .filter(|(_, _, visible)| *visible)
+                .map(|(i, c, _)| (i, self.widths[i].unwrap_or_else(|| c.width())))
                 .collect(),
             ColumnSet::Signals { time, visible } => {
                 std::iter::once((0, self.widths[0].unwrap_or(130.0)))
@@ -1402,8 +1502,8 @@ impl TableModel {
     #[must_use]
     pub fn column_title(&self, source_index: usize) -> &str {
         match &self.source {
-            TableSource::Generator(_) => TransactionColumn::ALL
-                .get(source_index)
+            TableSource::Generator(_) => self
+                .transaction_column(source_index)
                 .map_or("", |c| c.title()),
             TableSource::Signals(signals) => {
                 if source_index == 0 {
@@ -1468,11 +1568,20 @@ impl TableModel {
                     .map(|column| PreparedCell {
                         text: transaction_cell(
                             tx,
-                            TransactionColumn::ALL[column.source_index],
+                            self.transaction_column(column.source_index)
+                                .expect("visible column"),
                             column.preview_bytes,
                         ),
                         changed: false,
-                        missing: false,
+                        missing: match self.transaction_column(column.source_index) {
+                            Some(TransactionColumn::Attribute(key)) => {
+                                !tx.attributes.iter().any(|a| &a.key == key)
+                            }
+                            Some(TransactionColumn::Label) => {
+                                !tx.attributes.iter().any(|a| a.key == "vtr.label")
+                            }
+                            _ => false,
+                        },
                     })
                     .collect();
                 Some(PreparedRow {
@@ -1542,7 +1651,7 @@ impl TableModel {
                 let tx = generator.transactions().get(self.source_index(ordinal)?)?;
                 Some(transaction_cell(
                     tx,
-                    *TransactionColumn::ALL.get(source_index)?,
+                    self.transaction_column(source_index)?,
                     limit,
                 ))
             }
@@ -1676,8 +1785,13 @@ impl Drop for TableModel {
     }
 }
 
-fn transaction_cell(tx: &Transaction, column: TransactionColumn, limit: usize) -> String {
+fn transaction_cell(tx: &Transaction, column: &TransactionColumn, limit: usize) -> String {
     match column {
+        TransactionColumn::Attribute(key) => tx
+            .attributes
+            .iter()
+            .find(|a| &a.key == key)
+            .map_or_else(|| "—".into(), |a| format_attribute(&a.value, limit)),
         TransactionColumn::Label => tx
             .attributes
             .iter()
@@ -1804,7 +1918,7 @@ impl Prop {
     }
     pub(crate) fn bytes(&self) -> usize {
         match self {
-            Self::Columns(_) => 64,
+            Self::Columns(columns) => columns.bytes(),
             Self::Widths(widths) => widths.len() * std::mem::size_of::<Option<f32>>(),
         }
     }
@@ -2104,6 +2218,82 @@ mod tests {
         }
         assert!(model.sort_error.is_none(), "{:?}", model.sort_error);
         model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &Theme::one_dark());
+    }
+
+    #[test]
+    fn attribute_columns_keep_exact_values_missing_cells_and_identity_after_reorder() {
+        let mut records = (1..=4)
+            .map(|i| transaction(i, i, "row"))
+            .collect::<Vec<_>>();
+        records[0].attributes[1].value = AttributeValue::U64(u64::MAX);
+        records[1].attributes[1].value = AttributeValue::U64(u64::MAX - 1);
+        records[2].attributes.pop();
+        records[3].attributes[1].value = AttributeValue::Null;
+        let mut model = generator_model(records);
+        let attribute = TransactionColumn::Attribute("addr".into());
+        assert!(model.edit_columns(|c| c.toggle_transaction(attribute.clone())));
+        let slot = 7;
+        model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &Theme::one_dark());
+        let cell = model
+            .layout
+            .columns
+            .iter()
+            .position(|c| c.source_index == slot)
+            .unwrap();
+        assert_eq!(model.window.rows[0].cells[cell].text, u64::MAX.to_string());
+        assert!(model.window.rows[2].cells[cell].missing);
+        assert_eq!(model.window.rows[2].cells[cell].text, "—");
+        assert!(!model.window.rows[3].cells[cell].missing);
+        assert_eq!(model.window.rows[3].cells[cell].text, "null");
+        model.resize_column(slot, 240.0);
+        model.edit_columns(|c| c.move_transaction(slot, Some(1)));
+        model.edit_columns(|c| c.toggle_transaction(attribute.clone()));
+        model.edit_columns(|c| c.toggle_transaction(attribute.clone()));
+        assert_eq!(model.widths[slot], Some(240.0));
+        let ColumnSet::Transactions(columns) = model.columns.get() else {
+            panic!()
+        };
+        assert_eq!(columns.iter().nth(1).unwrap().0, slot);
+        assert_eq!(
+            columns.iter().filter(|(_, c, _)| *c == &attribute).count(),
+            1
+        );
+        for expected in [[2, 1, 4, 3], [1, 2, 4, 3]] {
+            model.cycle_sort(slot);
+            finish_sort(&mut model);
+            assert_eq!(
+                (0..4)
+                    .map(|i| match model.identity_and_time(i).unwrap().0 {
+                        RowIdentity::Transaction(id) => id.0,
+                        RowIdentity::SignalTime(_) => panic!(),
+                    })
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        let before = model.columns.get().clone();
+        model.edit_columns(|c| {
+            c.reset();
+            true
+        });
+        assert_eq!(model.sort_requested, None);
+        model.columns.take_before();
+        model.swap_columns(before);
+        assert_eq!(model.column_title(slot), "addr");
+        model.edit_columns(|c| {
+            c.toggle_transaction(TransactionColumn::Attribute("vtr.label".into()))
+        });
+        assert_eq!(model.columns.len(), 8);
+        assert!(!model.columns.transaction_visible(TransactionColumn::Label));
+        model.command(
+            &mut Document::new(),
+            crate::panels::PanelId(1),
+            TableCommand::ShowTransactionColumn(TransactionColumn::Attribute("vtr.label".into())),
+            Instant::now(),
+        );
+        assert!(model.columns.transaction_visible(TransactionColumn::Label));
+        assert_eq!(model.columns.len(), 8);
+        assert_eq!(model.reveal_column, Some(0));
     }
 
     #[test]
@@ -2505,7 +2695,7 @@ mod tests {
 
         let mut record = transaction(1, 0, "row");
         record.attributes[1].key = "α".repeat(1000);
-        let preview = transaction_cell(&record, TransactionColumn::Attributes, 32);
+        let preview = transaction_cell(&record, &TransactionColumn::Attributes, 32);
         assert!(preview.ends_with('…'));
         assert!(preview.len() <= 32);
     }

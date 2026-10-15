@@ -236,6 +236,10 @@ pub enum Command {
     ShowTransaction {
         from: PanelId,
     },
+    ShowAttributeColumn {
+        from: PanelId,
+        key: String,
+    },
     PanToTransactionStart {
         panel: PanelId,
         row: usize,
@@ -1153,6 +1157,9 @@ impl App {
                 cursor,
             } => self.select_transaction(panel, track, id, cursor),
             Command::ShowTransaction { from } => self.show_transaction(from),
+            Command::ShowAttributeColumn { from, key } => {
+                self.show_attribute_column(from, key, now);
+            }
             Command::PanToTransactionStart { panel, row } => {
                 if let Some(pipeline) = self.panels.pipeline_mut(panel)
                     && pipeline.pan_to_row_start(&mut self.doc, row, now)
@@ -1667,6 +1674,64 @@ impl App {
                 self.changed();
             }
         }
+    }
+
+    fn show_attribute_column(&mut self, from: PanelId, key: String, now: Instant) {
+        let Some(track) = self
+            .panels
+            .transaction(from)
+            .and_then(|model| model.shown())
+            .and_then(|shown| shown.track.track())
+        else {
+            return;
+        };
+        let existing = self
+            .panels
+            .iter()
+            .find(|panel| {
+                panel
+                    .kind
+                    .table()
+                    .is_some_and(|t| t.source.generator_track() == Some(track))
+            })
+            .map(|p| p.id);
+        let panel = if let Some(panel) = existing {
+            drop(self.panels.focus(panel));
+            panel
+        } else {
+            let Ok(source) = self.track_table(track) else {
+                return;
+            };
+            self.open_table_source(source, self.panels.focused_id());
+            let Some(panel) = self
+                .panels
+                .iter()
+                .find(|panel| {
+                    panel
+                        .kind
+                        .table()
+                        .is_some_and(|t| t.source.generator_track() == Some(track))
+                })
+                .map(|p| p.id)
+            else {
+                return;
+            };
+            panel
+        };
+        let column = if key == "vtr.label" {
+            crate::table::columns::TransactionColumn::Label
+        } else {
+            crate::table::columns::TransactionColumn::Attribute(key)
+        };
+        if let Some(table) = self.panels.get_mut(panel).and_then(|p| p.kind.table_mut()) {
+            table.command(
+                &mut self.doc,
+                panel,
+                crate::table::TableCommand::ShowTransactionColumn(column),
+                now,
+            );
+        }
+        self.changed();
     }
 
     fn open_table_source(&mut self, source: crate::table::TableSource, beside: PanelId) {

@@ -4798,3 +4798,264 @@ fn check_dock_interactions(cx: &mut TestAppContext, islands: bool) {
         })
         .unwrap();
 }
+
+#[gpui_kit::test]
+fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+    use volna_core::{
+        panels::PanelsCommand,
+        table::{TableCommand, columns::TransactionColumn},
+    };
+    use volna_trace::data::Member;
+    init(cx);
+    for dark in [true, false] {
+        for width in [1000.0, 360.0] {
+            let mut workspace = None;
+            let root = cx.add_window(|window, cx| {
+                let ws = cx.new(|cx| Workspace::new(window, cx));
+                workspace = Some(ws.clone());
+                gpui_kit::component::Root::new(ws, window, cx)
+            });
+            let window = RootWindow {
+                root,
+                workspace: workspace.unwrap(),
+            };
+            let mut vcx = VisualTestContext::from_window(root.into(), cx);
+            vcx.simulate_resize(size(px(width), px(700.0)));
+            let panel = window
+                .update(&mut vcx, |ws, window, cx| {
+                    ws.set_session(
+                        OpenSpec::Path(
+                            concat!(
+                                env!("CARGO_MANIFEST_DIR"),
+                                "/examples/pipeline_showcase.vtr"
+                            )
+                            .into(),
+                        )
+                        .open()
+                        .unwrap(),
+                        cx,
+                    );
+                    ws.app.sidebar_visible = false;
+                    let origin = ws.app.panels.focused_id();
+                    ws.dispatch(
+                        Command::OpenTable {
+                            selected: a_all(vec![Member::Generator(0)]),
+                            clicked: None,
+                        },
+                        Some(window),
+                        cx,
+                    );
+                    let panel = ws.app.panels.focused_id();
+                    ws.dispatch(
+                        Command::Panels(PanelsCommand::Close(origin)),
+                        Some(window),
+                        cx,
+                    );
+                    crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                    panel
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            let (key, selected) = window
+                .update(&mut vcx, |ws, window, cx| {
+                    ws.dispatch(
+                        Command::Table(panel, TableCommand::Select(0)),
+                        Some(window),
+                        cx,
+                    );
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    let key = table
+                        .loaded_generator()
+                        .unwrap()
+                        .attribute_catalogue()
+                        .iter()
+                        .find(|a| a.key != "vtr.label")
+                        .unwrap()
+                        .key
+                        .clone();
+                    (key, table.selected.clone())
+                })
+                .unwrap();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let columns = vcx.debug_bounds("table-columns").expect("Columns button");
+            vcx.simulate_click(columns.center(), Modifiers::default());
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            vcx.simulate_keystrokes("down space");
+            vcx.simulate_event(gpui_kit::KeyUpEvent {
+                keystroke: gpui_kit::Keystroke::parse("space").unwrap(),
+            });
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    assert!(
+                        !ws.app
+                            .panels
+                            .get(panel)
+                            .unwrap()
+                            .kind
+                            .table()
+                            .unwrap()
+                            .columns
+                            .transaction_visible(TransactionColumn::Label)
+                    );
+                })
+                .unwrap();
+            vcx.simulate_keystrokes("space");
+            vcx.simulate_event(gpui_kit::KeyUpEvent {
+                keystroke: gpui_kit::Keystroke::parse("space").unwrap(),
+            });
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let add = vcx
+                .debug_bounds("add-attribute-columns")
+                .expect("Add attribute columns action");
+            vcx.simulate_click(add.center(), Modifiers::default());
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            vcx.simulate_input("unavailable attribute");
+            vcx.simulate_keystrokes("enter");
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    assert_eq!(
+                        ws.app
+                            .panels
+                            .get(panel)
+                            .unwrap()
+                            .kind
+                            .table()
+                            .unwrap()
+                            .columns
+                            .len(),
+                        7
+                    );
+                })
+                .unwrap();
+            vcx.simulate_keystrokes("ctrl-a backspace");
+            vcx.simulate_input(&key);
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            vcx.simulate_keystrokes("enter");
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert!(
+                        table
+                            .columns
+                            .transaction_visible(TransactionColumn::Attribute(key.clone()))
+                    );
+                    assert_eq!(table.selected, selected);
+                    assert!(ws.app.panels.iter().all(|p| p.kind.transaction().is_none()));
+                    assert!(ws.app.take_requests().is_empty());
+                })
+                .unwrap();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let picker = vcx
+                .debug_bounds("table-column-picker")
+                .expect("picker stays open after selection");
+            assert!(picker.left() >= px(0.0) && picker.right() <= px(width));
+            vcx.simulate_keystrokes("down space");
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    assert!(
+                        !ws.app
+                            .panels
+                            .get(panel)
+                            .unwrap()
+                            .kind
+                            .table()
+                            .unwrap()
+                            .columns
+                            .transaction_visible(TransactionColumn::Attribute(key.clone()))
+                    );
+                })
+                .unwrap();
+            vcx.simulate_keystrokes("space escape");
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(vcx.debug_bounds("table-column-picker").is_none());
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert!(
+                        table
+                            .columns
+                            .transaction_visible(TransactionColumn::Attribute(key.clone()))
+                    );
+                    assert_eq!(table.selected, selected);
+                })
+                .unwrap();
+            if width == 1000.0 {
+                let (from, to) = window
+                    .update(&mut vcx, |ws, _, _| {
+                        let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                        let point = |index, fraction| {
+                            let rect = table
+                                .layout
+                                .columns
+                                .iter()
+                                .find(|c| c.source_index == index)
+                                .unwrap()
+                                .rect;
+                            gpui_kit::point(
+                                px(rect.left() + rect.width() * fraction),
+                                px(rect.top() + rect.height() * 0.5),
+                            )
+                        };
+                        (point(7, 0.5), point(1, 0.25))
+                    })
+                    .unwrap();
+                vcx.simulate_mouse_down(from, gpui_kit::MouseButton::Left, Modifiers::default());
+                vcx.simulate_mouse_move(
+                    from + gpui_kit::point(px(12.0), px(0.0)),
+                    Some(gpui_kit::MouseButton::Left),
+                    Modifiers::default(),
+                );
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                vcx.simulate_mouse_move(
+                    to,
+                    Some(gpui_kit::MouseButton::Left),
+                    Modifiers::default(),
+                );
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                vcx.simulate_mouse_up(to, gpui_kit::MouseButton::Left, Modifiers::default());
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                let header = window
+                    .update(&mut vcx, |ws, _, _| {
+                        let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                        let volna_core::table::columns::ColumnSet::Transactions(columns) =
+                            table.columns.get()
+                        else {
+                            panic!()
+                        };
+                        assert_eq!(columns.iter().nth(1).unwrap().0, 7);
+                        assert_eq!(table.sort_requested, None);
+                        let rect = table
+                            .layout
+                            .columns
+                            .iter()
+                            .find(|c| c.source_index == 7)
+                            .unwrap()
+                            .rect;
+                        gpui_kit::point(
+                            px(rect.left() + rect.width() * 0.5),
+                            px(rect.top() + rect.height() * 0.5),
+                        )
+                    })
+                    .unwrap();
+                vcx.simulate_mouse_down(header, gpui_kit::MouseButton::Right, Modifiers::default());
+                vcx.simulate_mouse_up(header, gpui_kit::MouseButton::Right, Modifiers::default());
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                vcx.simulate_keystrokes("down enter");
+                window
+                    .update(&mut vcx, |ws, _, _| {
+                        let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                        assert!(
+                            !table
+                                .columns
+                                .transaction_visible(TransactionColumn::Attribute(key.clone()))
+                        );
+                        assert_eq!(table.selected, selected);
+                    })
+                    .unwrap();
+            }
+        }
+    }
+}

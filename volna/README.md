@@ -138,9 +138,20 @@ including the edge after Attributes.
 Dragging resizes one column and moves the columns that follow it. Double-click
 fits the header and visible values; a focused divider supports Left, Right, and
 Enter. Attributes initially fills the remaining width, and its bounded preview
-grows with the column. Table panel schema version 3 stores widths per column,
-including hidden columns. **Columns → Reset to defaults** restores column
-visibility and automatic widths.
+grows with the column. Table panel schema version 4 stores column keys, visibility,
+order, and widths, including hidden columns. **Columns → Reset to defaults** restores column
+visibility, order, and automatic widths.
+
+**Columns → Add attribute columns…** opens a searchable checklist of transaction
+attributes. Keys and observed types are collected during track loading; searching
+uses that catalogue without scanning transactions. Checkboxes update the table
+immediately and keep the picker open. `vtr.label` controls the existing Label
+column. New attribute columns appear before the Attributes preview. Headers can
+be dragged to reorder columns, and their context menu offers **Hide column**.
+Hidden columns retain their widths and positions. Attribute cells distinguish
+missing values (`—`) from explicit `null`. The Transaction panel’s attribute
+context menu offers **Show as table column**, reusing a table for the same
+generator or opening one.
 
 ### Table sorting
 

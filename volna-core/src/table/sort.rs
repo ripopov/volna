@@ -15,7 +15,7 @@ pub struct Sort {
 
 #[derive(Clone)]
 pub(super) enum Source {
-    Generator(Arc<LoadedGenerator>),
+    Generator(Arc<LoadedGenerator>, TransactionColumn),
     Signals {
         histories: Vec<Arc<dyn SignalHistory>>,
         axis: Option<Arc<[u64]>>,
@@ -31,15 +31,23 @@ impl Source {
             } => axis
                 .as_ref()
                 .map_or_else(|| histories[0].time(row as usize), |a| a[row as usize]),
-            Self::Generator(_) => unreachable!(),
+            Self::Generator(..) => unreachable!(),
         }
     }
 
     pub(super) fn compare(&self, sort: Sort, a: u64, b: u64) -> Ordering {
         let (order, missing) = match self {
-            Self::Generator(g) => {
+            Self::Generator(g, column) => {
                 let (a, b) = (&g.transactions()[a as usize], &g.transactions()[b as usize]);
-                match TransactionColumn::ALL[sort.column] {
+                match column {
+                    TransactionColumn::Attribute(key) => {
+                        let a = a.attributes.iter().find(|a| &a.key == key);
+                        let b = b.attributes.iter().find(|a| &a.key == key);
+                        match (a, b) {
+                            (Some(a), Some(b)) => attributes(&a.value, &b.value),
+                            (a, b) => nullable((a.is_none(), b.is_none()), Ordering::Equal),
+                        }
+                    }
                     TransactionColumn::Id => (a.id.0.cmp(&b.id.0), false),
                     TransactionColumn::Begin => (a.begin.cmp(&b.begin), false),
                     TransactionColumn::End | TransactionColumn::Duration => {

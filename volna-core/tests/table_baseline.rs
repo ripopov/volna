@@ -160,18 +160,18 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
     )
     .unwrap();
     let bytes = saved.to_bytes().unwrap();
-    fn contains_table_v3(value: &serde_json::Value) -> bool {
+    fn contains_table_v4(value: &serde_json::Value) -> bool {
         match value {
             serde_json::Value::Object(object) => {
                 (object.get("kind").and_then(|value| value.as_str()) == Some("table")
-                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(3))
-                    || object.values().any(contains_table_v3)
+                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(4))
+                    || object.values().any(contains_table_v4)
             }
-            serde_json::Value::Array(values) => values.iter().any(contains_table_v3),
+            serde_json::Value::Array(values) => values.iter().any(contains_table_v4),
             _ => false,
         }
     }
-    assert!(contains_table_v3(&serde_json::from_slice(&bytes).unwrap()));
+    assert!(contains_table_v4(&serde_json::from_slice(&bytes).unwrap()));
     let parsed = Workspace::parse(&bytes).unwrap();
     let plan = parsed
         .prepare(
@@ -228,4 +228,171 @@ fn single_signal_table_ignores_out_of_range_rows_and_next_starts_at_the_first() 
     app.handle_at(Command::Table(panel, TableCommand::Next), now);
     let table = app.panels.get(panel).unwrap().kind.table().unwrap();
     assert_eq!(table.selected_ordinal(), Some(0));
+}
+
+#[test]
+fn attribute_layout_roundtrips_hidden_keys_widths_order_and_undo() {
+    let mut app = App::new();
+    app.set_session(fixture());
+    app.handle(Command::OpenTable {
+        selected: a_all(vec![Member::Generator(0)]),
+        clicked: None,
+    });
+    let panel = app.panels.focused_id();
+    pump(&mut app);
+    let key = app
+        .panels
+        .get(panel)
+        .unwrap()
+        .kind
+        .table()
+        .unwrap()
+        .loaded_generator()
+        .unwrap()
+        .attribute_catalogue()
+        .iter()
+        .find(|a| a.key != "vtr.label")
+        .unwrap()
+        .key
+        .clone();
+    let attribute = TransactionColumn::Attribute(key);
+    app.handle(Command::Table(
+        panel,
+        TableCommand::ToggleTransactionColumn(attribute.clone()),
+    ));
+    app.handle(Command::Table(
+        panel,
+        TableCommand::ResizeColumn {
+            source_index: 7,
+            width: 257.0,
+        },
+    ));
+    app.handle(Command::Table(
+        panel,
+        TableCommand::MoveColumn {
+            source_index: 7,
+            before: Some(1),
+        },
+    ));
+    app.handle(Command::Table(
+        panel,
+        TableCommand::ToggleTransactionColumn(attribute.clone()),
+    ));
+    let expected = app
+        .panels
+        .get(panel)
+        .unwrap()
+        .kind
+        .table()
+        .unwrap()
+        .columns
+        .get()
+        .clone();
+    let bytes = Workspace::capture(
+        &app,
+        volna_core::testing::paths("file:///tmp/trace.vtr"),
+        None,
+    )
+    .unwrap()
+    .to_bytes()
+    .unwrap();
+    let saved = Workspace::parse(&bytes).unwrap();
+    saved
+        .prepare(
+            &app,
+            "file:///tmp/trace.vtr",
+            "file:///tmp/session.volna.json",
+        )
+        .unwrap()
+        .commit(&mut app)
+        .unwrap();
+    pump(&mut app);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.columns.get(), &expected);
+    assert_eq!(table.widths[7], Some(257.0));
+    app.handle(Command::Table(
+        panel,
+        TableCommand::ToggleTransactionColumn(attribute.clone()),
+    ));
+    app.handle(Command::Undo);
+    assert!(
+        !app.panels
+            .get(panel)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .columns
+            .transaction_visible(attribute.clone())
+    );
+    app.handle(Command::Redo);
+    frame(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert!(table.columns.transaction_visible(attribute));
+    assert_eq!(table.layout.columns[1].source_index, 7);
+    assert_eq!(table.layout.columns[1].rect.width(), 257.0);
+    app.handle(Command::Table(panel, TableCommand::ResetColumns));
+    app.handle(Command::Undo);
+    frame(&mut app, panel);
+    assert_eq!(
+        app.panels.get(panel).unwrap().kind.table().unwrap().widths[7],
+        Some(257.0)
+    );
+}
+
+#[test]
+fn transaction_attribute_shortcut_reuses_a_table_and_never_toggles_it_off() {
+    let mut app = App::new();
+    app.set_session(fixture());
+    app.handle(Command::OpenTable {
+        selected: a_all(vec![Member::Generator(0)]),
+        clicked: None,
+    });
+    let table_panel = app.panels.focused_id();
+    pump(&mut app);
+    app.handle(Command::Table(table_panel, TableCommand::Select(0)));
+    app.handle(Command::ShowTransaction { from: table_panel });
+    let inspector = app
+        .panels
+        .iter()
+        .find(|p| p.kind.transaction().is_some())
+        .unwrap()
+        .id;
+    for _ in 0..2 {
+        app.handle(Command::ShowAttributeColumn {
+            from: inspector,
+            key: "status".into(),
+        });
+        assert_eq!(app.panels.focused_id(), table_panel);
+        assert_eq!(
+            app.panels
+                .iter()
+                .filter(|p| p.kind.table().is_some())
+                .count(),
+            1
+        );
+        let table = app.panels.get(table_panel).unwrap().kind.table().unwrap();
+        assert!(
+            table
+                .columns
+                .transaction_visible(TransactionColumn::Attribute("status".into()))
+        );
+        assert!(table.columns.transaction_visible(TransactionColumn::Status));
+    }
+    app.handle(Command::Panels(volna_core::panels::PanelsCommand::Close(
+        table_panel,
+    )));
+    app.handle(Command::ShowAttributeColumn {
+        from: inspector,
+        key: "vtr.label".into(),
+    });
+    pump(&mut app);
+    let table = app
+        .panels
+        .focused()
+        .kind
+        .table()
+        .expect("opens a table from details");
+    assert!(table.columns.transaction_visible(TransactionColumn::Label));
+    assert_eq!(table.columns.len(), 7);
 }

@@ -8,7 +8,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     dock::Panel,
     input::{Input, InputEvent, InputState},
-    menu::PopupMenu,
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     scroll::ScrollableElement,
     tooltip::Tooltip,
 };
@@ -996,6 +996,8 @@ impl TransactionPanelView {
                 .into_any_element(),
             None => value.into_any_element(),
         };
+        let owner = cx.entity().downgrade();
+        let key = row.key.clone();
         div()
             .flex()
             .items_start()
@@ -1014,6 +1016,24 @@ impl TransactionPanelView {
                     .when_some(row.phase, |element, phase| element.child(tag(t, phase))),
             )
             .child(value)
+            .context_menu(move |menu, _, _| {
+                let owner = owner.clone();
+                let key = key.clone();
+                menu.item(PopupMenuItem::new("Show as table column").on_click(
+                    move |_, window, cx| {
+                        drop(owner.update(cx, |view, cx| {
+                            view.send(
+                                Command::ShowAttributeColumn {
+                                    from: view.id,
+                                    key: key.clone(),
+                                },
+                                window,
+                                cx,
+                            );
+                        }));
+                    },
+                ))
+            })
             .into_any_element()
     }
 

@@ -1,9 +1,6 @@
 //! The table panel's workspace schema, capture, validation and resolution.
 
-use super::{
-    SignalSource, TableModel, TableSource,
-    columns::{ColumnSet, TransactionColumn},
-};
+use super::{SignalSource, TableModel, TableSource, columns::ColumnSet};
 use crate::panels::{Panel, PanelId, PanelKind, workspace::RestoreContext};
 use crate::pipeline::TrackSource;
 use crate::trace::{TraceId, Traced};
@@ -13,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use volna_trace::data::source::Lookup;
 
-pub(crate) const VERSION: u32 = 3;
+pub(crate) const VERSION: u32 = 4;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -44,7 +41,7 @@ struct TablePanel {
     version: u32,
     title: Option<String>,
     source: SavedTableSource,
-    columns: Vec<String>,
+    columns: ColumnSet,
     widths: Vec<Option<f32>>,
     link: Link,
 }
@@ -70,33 +67,13 @@ pub(crate) fn save(
                 .collect(),
         },
     };
-    let columns = match table.columns.get() {
-        ColumnSet::Transactions(visible) => visible
-            .iter()
-            .map(|column| column.key().to_owned())
-            .collect(),
-        ColumnSet::Signals { time, visible } => {
-            let mut keys = Vec::new();
-            if *time {
-                keys.push("time".into());
-            }
-            keys.extend(
-                visible
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, visible)| **visible)
-                    .map(|(index, _)| format!("signal:{index}")),
-            );
-            keys
-        }
-    };
     Ok(serde_json::value::to_raw_value(&TablePanel {
         id,
         kind: "table".into(),
         version: VERSION,
         title,
         source,
-        columns,
+        columns: table.columns.get().clone(),
         widths: table.widths.get().clone(),
         link: table.nav.link,
     })?)
@@ -160,7 +137,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     };
     let mut table = TableModel::new(source, saved.link, ctx.budget.clone());
     ensure!(
-        saved.widths.len() == table.widths.len(),
+        saved.widths.len() == saved.columns.len(),
         "invalid table column widths"
     );
     ensure!(
@@ -169,31 +146,17 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         "invalid table column width"
     );
     table.widths.restore(saved.widths);
-    let mut columns = table.columns.get().clone();
-    match &mut columns {
-        ColumnSet::Transactions(visible) => {
-            *visible = TransactionColumn::ALL
-                .into_iter()
-                .filter(|column| saved.columns.iter().any(|key| key == column.key()))
-                .collect();
-            if visible.is_empty() {
-                *visible = TransactionColumn::DEFAULT.to_vec();
-            }
+    match (&table.source, &saved.columns) {
+        (TableSource::Generator(_), ColumnSet::Transactions(columns)) => {
+            ensure!(columns.validate(), "invalid transaction columns");
         }
-        ColumnSet::Signals { time, visible } => {
-            *time = saved.columns.iter().any(|key| key == "time");
-            for (index, value) in visible.iter_mut().enumerate() {
-                *value = saved
-                    .columns
-                    .iter()
-                    .any(|key| key == &format!("signal:{index}"));
-            }
-            if !*time && !visible.iter().any(|value| *value) {
-                *time = true;
-            }
-        }
+        (TableSource::Signals(signals), ColumnSet::Signals { time, visible }) => ensure!(
+            visible.len() == signals.len() && (*time || visible.iter().any(|v| *v)),
+            "invalid signal columns"
+        ),
+        _ => anyhow::bail!("table columns do not match source"),
     }
-    table.columns.restore(columns);
+    table.columns.restore(saved.columns);
     Ok(Panel {
         id: saved.id,
         title: crate::history::Journaled::new(saved.title),

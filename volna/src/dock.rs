@@ -645,6 +645,7 @@ fn panel_id(state: &base::PanelState) -> Result<PanelId> {
 }
 
 pub(crate) struct CanvasPanelView {
+    pub(crate) table_columns: Option<Entity<crate::table_columns::ColumnPicker>>,
     pub(crate) ws: WeakEntity<Workspace>,
     pub(crate) id: PanelId,
     pub(crate) generation: u64,
@@ -738,6 +739,7 @@ impl CanvasPanelView {
             generation,
             name,
             focus,
+            table_columns: None,
         }
     }
 }

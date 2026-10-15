@@ -3,7 +3,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::transactions::{Relation, TrackRef, Transaction, TransactionRef};
+use super::transactions::{
+    AttributeSummary, AttributeType, Relation, TrackRef, Transaction, TransactionRef,
+};
 
 const SCAN_LEAVES: usize = 32;
 
@@ -26,6 +28,7 @@ pub struct LoadedGenerator {
     pub(crate) reservation: Option<crate::remote::memory::Reservation>,
     generator: TrackRef,
     transactions: Vec<Transaction>,
+    attributes: Vec<AttributeSummary>,
     by_id: HashMap<TransactionRef, usize>,
     parents: HashMap<TransactionRef, TransactionLocation>,
     children: HashMap<TransactionLocation, Vec<TransactionRef>>,
@@ -44,8 +47,12 @@ impl LoadedGenerator {
     }
 
     pub fn resident_bytes(&self) -> u64 {
-        let fixed = (self.transactions.capacity() as u64)
-            .saturating_mul(std::mem::size_of::<Transaction>() as u64)
+        let catalogue = self.attribute_catalogue_bytes();
+        let fixed = catalogue
+            .saturating_add(
+                (self.transactions.capacity() as u64)
+                    .saturating_mul(std::mem::size_of::<Transaction>() as u64),
+            )
             .saturating_add((self.by_id.capacity() as u64).saturating_mul(
                 (std::mem::size_of::<TransactionRef>() + std::mem::size_of::<usize>()) as u64,
             ))
@@ -131,8 +138,21 @@ impl LoadedGenerator {
     ) -> anyhow::Result<Self> {
         let mut by_id = HashMap::with_capacity(transactions.len());
         let mut previous = None;
+        let mut attributes: HashMap<&str, (AttributeType, usize)> = HashMap::new();
         for (index, tx) in transactions.iter().enumerate() {
             checkpoint().await;
+            for attribute in &tx.attributes {
+                checkpoint().await;
+                let kind = AttributeType::of(&attribute.value);
+                attributes
+                    .entry(&attribute.key)
+                    .and_modify(|(seen, _)| {
+                        if *seen != kind {
+                            *seen = AttributeType::Mixed;
+                        }
+                    })
+                    .or_insert((kind, index));
+            }
             let key = (tx.begin, tx.end, tx.id.0);
             anyhow::ensure!(
                 previous.is_none_or(|last| last <= key),
@@ -225,8 +245,18 @@ impl LoadedGenerator {
             checkpoint().await;
             max_end[i] = max_end[i * 2].max(max_end[i * 2 + 1]);
         }
+        let mut attributes: Vec<_> = attributes
+            .into_iter()
+            .map(|(key, (value_type, example_row))| AttributeSummary {
+                key: key.to_owned(),
+                value_type,
+                example_row,
+            })
+            .collect();
+        attributes.sort_unstable_by(|a, b| a.key.cmp(&b.key));
         Ok(Self {
             reservation: None,
+            attributes,
             generator,
             transactions,
             by_id,
@@ -237,6 +267,20 @@ impl LoadedGenerator {
             max_end,
             leaves,
         })
+    }
+
+    #[must_use]
+    pub fn attribute_catalogue(&self) -> &[AttributeSummary] {
+        &self.attributes
+    }
+
+    pub(crate) fn attribute_catalogue_bytes(&self) -> u64 {
+        (self.attributes.capacity() * std::mem::size_of::<AttributeSummary>()) as u64
+            + self
+                .attributes
+                .iter()
+                .map(|a| a.key.capacity() as u64)
+                .sum::<u64>()
     }
 
     #[must_use]
@@ -425,6 +469,51 @@ mod tests {
             events: vec![],
             stages: vec![],
         }
+    }
+
+    #[test]
+    fn catalogue_includes_late_keys_merges_types_and_points_to_sorted_examples() {
+        use crate::data::transactions::{AttributeValue, TransactionAttribute};
+        let mut late = tx(2, 500, 510);
+        late.attributes = vec![
+            TransactionAttribute {
+                key: "z.late".into(),
+                value: AttributeValue::Bool(true),
+            },
+            TransactionAttribute {
+                key: "mixed".into(),
+                value: AttributeValue::Text("text".into()),
+            },
+        ];
+        let mut early = tx(1, 1, 2);
+        early.attributes = vec![
+            TransactionAttribute {
+                key: "mixed".into(),
+                value: AttributeValue::U64(9),
+            },
+            TransactionAttribute {
+                key: "a.map".into(),
+                value: AttributeValue::Map(vec![("nested".into(), AttributeValue::Null)]),
+            },
+        ];
+        let loaded =
+            LoadedGenerator::new(TrackRef(1), vec![late, early], HashMap::new(), vec![]).unwrap();
+        let catalogue = loaded.attribute_catalogue();
+        assert_eq!(
+            catalogue.iter().map(|a| a.key.as_str()).collect::<Vec<_>>(),
+            ["a.map", "mixed", "z.late"]
+        );
+        assert_eq!(catalogue[1].value_type, AttributeType::Mixed);
+        assert_eq!(
+            loaded.transactions()[catalogue[1].example_row].id,
+            TransactionRef(1)
+        );
+        assert_eq!(catalogue[2].value_type, AttributeType::Bool);
+        assert_eq!(
+            loaded.transactions()[catalogue[2].example_row].id,
+            TransactionRef(2)
+        );
+        assert!(loaded.resident_bytes() >= loaded.attribute_catalogue_bytes());
     }
 
     #[test]

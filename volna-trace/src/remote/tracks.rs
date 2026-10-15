@@ -338,6 +338,20 @@ mod tests {
             );
             assert!(chunks.next().is_none());
             assert_eq!(loaded.generators.len(), 2);
+            let expected_keys: std::collections::BTreeSet<_> = sample().generators[0]
+                .transactions
+                .iter()
+                .flat_map(|tx| tx.attributes.iter().map(|a| a.key.as_str()))
+                .map(str::to_owned)
+                .collect();
+            assert_eq!(
+                loaded.generators[0]
+                    .attribute_catalogue()
+                    .iter()
+                    .map(|a| a.key.clone())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                expected_keys
+            );
             let mut overlap = Vec::new();
             loaded.generators[0]
                 .visit_window(20, 20, |tx| {

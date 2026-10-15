@@ -236,7 +236,13 @@ impl TrackPayload {
                 &mut checkpoint,
             )
             .await?;
-            generator.reservation = payload.reservation;
+            if let Some(mut reservation) = payload.reservation {
+                reservation.grow_object(
+                    "transaction attribute catalogue",
+                    generator.attribute_catalogue_bytes(),
+                )?;
+                generator.reservation = Some(reservation);
+            }
             result.push(Arc::new(generator));
         }
         anyhow::ensure!(seen == expected, "incomplete stream payload");

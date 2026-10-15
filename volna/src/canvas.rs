@@ -1,5 +1,6 @@
 //! Core-painted panels with native GPUI interaction overlays.
 
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, CursorStyle, DispatchPhase, Element,
@@ -76,6 +77,27 @@ fn presence_image(
         }
     }
     gpui_kit::RenderImage::new(vec![image::Frame::new(image)])
+}
+
+#[derive(Clone)]
+struct TableColumnDrag {
+    panel: volna_core::panels::PanelId,
+    source_index: usize,
+    title: String,
+}
+
+impl gpui_kit::Render for TableColumnDrag {
+    fn render(&mut self, _: &mut Window, cx: &mut gpui_kit::Context<Self>) -> impl IntoElement {
+        let t = *theme(cx);
+        div()
+            .px_3()
+            .py_1()
+            .rounded_sm()
+            .bg(t.elevated.bg)
+            .text_color(t.elevated.text)
+            .font_family(t.mono_font)
+            .child(SharedString::from(self.title.clone()))
+    }
 }
 
 pub struct PanelCanvas {
@@ -735,6 +757,34 @@ impl PanelCanvas {
             });
             let enabled = table.can_sort_column(source_index);
             let key_owner = sort_owner.clone();
+            let context_owner = self.ws.clone();
+            let drop_owner = self.ws.clone();
+            let title = table.column_title(source_index).to_owned();
+            let header_hint = title.clone();
+            let (hide_command, next) = match table.columns.get() {
+                volna_core::table::columns::ColumnSet::Transactions(columns) => {
+                    let order: Vec<_> = columns.iter().map(|(i, _, _)| i).collect();
+                    let position = order
+                        .iter()
+                        .position(|&i| i == source_index)
+                        .expect("visible column");
+                    (
+                        volna_core::table::TableCommand::ToggleTransactionColumn(
+                            columns
+                                .column(source_index)
+                                .expect("visible column")
+                                .clone(),
+                        ),
+                        order.get(position + 1).copied(),
+                    )
+                }
+                volna_core::table::columns::ColumnSet::Signals { .. } => (
+                    volna_core::table::TableCommand::ToggleSignalColumn(source_index),
+                    None,
+                ),
+            };
+            let center = column.rect.left() + column.rect.width() * 0.5;
+            let draggable = table.source.generator_track().is_some();
             edges = edges.child(
                 div()
                     .id(("table-sort", source_index))
@@ -787,6 +837,72 @@ impl PanelCanvas {
                                 cx,
                             );
                         });
+                    })
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(header_hint.clone())
+                            .build(window, cx)
+                    })
+                    .when(draggable, |el| {
+                        el.on_drag(
+                            TableColumnDrag {
+                                panel,
+                                source_index,
+                                title,
+                            },
+                            |drag, _, _, cx| cx.new(|_| drag.clone()),
+                        )
+                        .drag_over::<TableColumnDrag>(move |style, drag, window, _| {
+                            if drag.panel != panel {
+                                return style;
+                            }
+                            if f32::from(window.mouse_position().x) > center {
+                                style.border_r_2().border_color(t.border_focused)
+                            } else {
+                                style.border_l_2().border_color(t.border_focused)
+                            }
+                        })
+                        .on_drop(
+                            move |drag: &TableColumnDrag, window, cx| {
+                                if drag.panel != panel {
+                                    return;
+                                }
+                                let before = if f32::from(window.mouse_position().x) > center {
+                                    next
+                                } else {
+                                    Some(source_index)
+                                };
+                                drop_owner.update(cx, |ws, cx| {
+                                    ws.dispatch_if_current(
+                                        generation,
+                                        Command::Table(
+                                            panel,
+                                            volna_core::table::TableCommand::MoveColumn {
+                                                source_index: drag.source_index,
+                                                before,
+                                            },
+                                        ),
+                                        Some(window),
+                                        cx,
+                                    );
+                                });
+                            },
+                        )
+                    })
+                    .context_menu(move |menu, _, _| {
+                        let owner = context_owner.clone();
+                        let command = hide_command.clone();
+                        menu.item(PopupMenuItem::new("Hide column").on_click(
+                            move |_, window, cx| {
+                                owner.update(cx, |ws, cx| {
+                                    ws.dispatch_if_current(
+                                        generation,
+                                        Command::Table(panel, command.clone()),
+                                        Some(window),
+                                        cx,
+                                    );
+                                });
+                            },
+                        ))
                     }),
             );
             if column.resize.right() <= header.left() || column.resize.left() >= header.right() {

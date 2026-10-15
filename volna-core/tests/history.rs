@@ -624,7 +624,8 @@ impl Driver {
                 let command = match self.rng.below(3) {
                     0 => TableCommand::ToggleSignalColumn(self.rng.below(3)),
                     1 => TableCommand::ToggleTransactionColumn(
-                        TransactionColumn::ALL[self.rng.below(TransactionColumn::ALL.len())],
+                        TransactionColumn::ALL[self.rng.below(TransactionColumn::ALL.len())]
+                            .clone(),
                     ),
                     _ => TableCommand::ResetColumns,
                 };
