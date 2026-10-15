@@ -200,6 +200,20 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
     ));
     app.handle(Command::Table(panel, TableCommand::ToggleSignalColumn(1)));
 
+    let filter = volna_core::table::filter::ColumnFilter {
+        query: ">= 0".into(),
+        mode: volna_core::table::filter::FilterMode::Expression,
+        ..Default::default()
+    };
+    app.handle(Command::Table(
+        panel,
+        TableCommand::SetFilter {
+            source_index: 0,
+            filter: Some(filter.clone()),
+        },
+    ));
+    app.handle(Command::Table(panel, TableCommand::ToggleFilters));
+
     let saved = Workspace::capture(
         &app,
         volna_core::testing::paths("file:///tmp/trace.vtr"),
@@ -207,18 +221,27 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
     )
     .unwrap();
     let bytes = saved.to_bytes().unwrap();
-    fn contains_table_v5(value: &serde_json::Value) -> bool {
+    fn contains_table_v6(value: &serde_json::Value) -> bool {
         match value {
             serde_json::Value::Object(object) => {
                 (object.get("kind").and_then(|value| value.as_str()) == Some("table")
-                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(5))
-                    || object.values().any(contains_table_v5)
+                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(6))
+                    || object.values().any(contains_table_v6)
             }
-            serde_json::Value::Array(values) => values.iter().any(contains_table_v5),
+            serde_json::Value::Array(values) => values.iter().any(contains_table_v6),
             _ => false,
         }
     }
-    assert!(contains_table_v5(&serde_json::from_slice(&bytes).unwrap()));
+    let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(contains_table_v6(&raw));
+    let table = raw["panels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "table")
+        .unwrap();
+    assert_eq!(table["filters_visible"], true);
+    assert_eq!(table["filters"][0], serde_json::to_value(&filter).unwrap());
     let parsed = Workspace::parse(&bytes).unwrap();
     let plan = parsed
         .prepare(

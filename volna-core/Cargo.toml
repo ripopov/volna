@@ -24,6 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 num-rational = "0.4"
 num-traits = "0.2"
+regex = "1"
 
 [features]
 testing = ["volna-trace/testing"]

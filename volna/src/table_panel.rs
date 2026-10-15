@@ -6,7 +6,7 @@ use crate::ui::action_button;
 #[cfg(not(target_arch = "wasm32"))]
 use gpui_kit::ClipboardItem;
 use gpui_kit::component::{
-    Disableable, Sizable, WindowExt,
+    Disableable, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     input::{Input, InputState},
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
@@ -173,9 +173,24 @@ impl CanvasPanelView {
         let t = *theme(cx);
         let has_selection = table.selected.is_some();
         let failed = matches!(table.state, TableState::Failed(_) | TableState::Refused(_))
-            || table.sort_error.is_some();
-        let loading = matches!(table.state, TableState::Loading) || table.sorting();
+            || table.query_error.is_some();
+        let loading = matches!(table.state, TableState::Loading) || table.querying();
         let number_format = table.number_format();
+        let filters_visible = table.filters_visible;
+        let filter_count = table.active_filter_count();
+        let filters = self
+            .table_filters
+            .get_or_insert_with(|| {
+                cx.new(|cx| {
+                    crate::table_filters::FilterRow::new(
+                        self.ws.clone(),
+                        self.id,
+                        self.generation,
+                        cx,
+                    )
+                })
+            })
+            .clone();
         let picker = self
             .table_columns
             .get_or_insert_with(|| {
@@ -258,6 +273,42 @@ impl CanvasPanelView {
             .child(crate::table_columns::ColumnPicker::popover(picker, cx))
             .child(
                 action_button(
+                    "table-filter",
+                    gpui_kit::component::Icon::empty().path(IconName::ListFilter.path()),
+                    cx,
+                )
+                .label(if filter_count == 0 {
+                    "Filter".to_owned()
+                } else {
+                    format!("Filter · {filter_count}")
+                })
+                .ghost()
+                .selected(filters_visible)
+                .toggled(filters_visible)
+                .accessibility_label(if filters_visible {
+                    "Hide column filters"
+                } else {
+                    "Show column filters"
+                })
+                .tooltip("Show or hide column filters; applied filters stay active")
+                .debug_selector(|| "table-filter".into())
+                .on_click(cx.listener(|view, _, window, cx| {
+                    view.table_command(TableCommand::ToggleFilters, window, cx);
+                })),
+            )
+            .when(filter_count > 0, |el| {
+                el.child(
+                    Button::new("table-clear-filters")
+                        .label("Clear filters")
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.table_command(TableCommand::ClearFilters, window, cx);
+                        })),
+                )
+            })
+            .child(
+                action_button(
                     "table-number-format",
                     gpui_kit::component::Icon::empty().path(IconName::Hash.path()),
                     cx,
@@ -305,7 +356,7 @@ impl CanvasPanelView {
 
         let canvas = div().flex_1().min_h_0().overflow_hidden().child(
             crate::canvas::PanelCanvas::new(owner.clone(), id, generation)
-                .table(self.focus.clone()),
+                .table(self.focus.clone(), filters),
         );
         let body = div().flex().flex_1().min_h_0().child(canvas);
 
@@ -332,6 +383,13 @@ impl CanvasPanelView {
                         .table_columns
                         .as_ref()
                         .is_some_and(|picker| picker.read(cx).is_open())
+                    {
+                        return;
+                    }
+                    if view
+                        .table_filters
+                        .as_ref()
+                        .is_some_and(|row| row.read(cx).contains_focus(window, cx))
                     {
                         return;
                     }

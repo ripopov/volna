@@ -16,6 +16,7 @@ pub fn paint(
     let layout = &model.layout;
     scene.fill(layout.bounds, theme.editor.bg);
     scene.fill(layout.header, theme.panel.bg);
+    scene.fill(layout.filter_row, theme.panel.bg);
     scene.fill(layout.gutter, theme.panel.bg);
     scene.fill(layout.status, theme.panel.bg);
     scene.fill(layout.vertical_bar, theme.panel.bg);

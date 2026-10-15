@@ -2,10 +2,12 @@
 //! histories.
 
 pub mod columns;
+pub mod filter;
 pub mod format;
 pub mod layout;
 pub mod model;
 pub mod paint;
+pub mod query;
 pub mod sort;
 pub mod source;
 

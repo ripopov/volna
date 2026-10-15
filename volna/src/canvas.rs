@@ -109,6 +109,7 @@ pub struct PanelCanvas {
     panel: volna_core::panels::PanelId,
     generation: u64,
     table_focus: Option<gpui_kit::FocusHandle>,
+    table_filters: Option<Entity<crate::table_filters::FilterRow>>,
     waves: bool,
 }
 
@@ -119,6 +120,7 @@ impl PanelCanvas {
             panel,
             generation,
             table_focus: None,
+            table_filters: None,
             waves: false,
         }
     }
@@ -149,8 +151,13 @@ impl PanelCanvas {
         self
     }
 
-    pub fn table(mut self, focus: gpui_kit::FocusHandle) -> Self {
+    pub fn table(
+        mut self,
+        focus: gpui_kit::FocusHandle,
+        filters: Entity<crate::table_filters::FilterRow>,
+    ) -> Self {
         self.table_focus = Some(focus);
+        self.table_filters = Some(filters);
         self
     }
 }
@@ -729,7 +736,7 @@ impl PanelCanvas {
             header.left(),
             header.top(),
             header.width(),
-            header.height() + table.layout.body.height(),
+            header.height() + table.layout.filter_row.height() + table.layout.body.height(),
         );
         let t = canvas_theme(cx).map(hsla);
         let mut edges = div()
@@ -741,6 +748,20 @@ impl PanelCanvas {
             .w(px(bounds.width()))
             .h(px(bounds.height()))
             .overflow_hidden();
+        if table.filters_visible
+            && let Some(filters) = &self.table_filters
+        {
+            edges = edges.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top(px(header.height()))
+                    .w_full()
+                    .h(px(table.layout.filter_row.height()))
+                    .occlude()
+                    .child(filters.clone()),
+            );
+        }
         for column in &table.layout.columns {
             if column.rect.right() <= header.left() || column.rect.left() >= header.right() {
                 continue;
@@ -1158,6 +1179,16 @@ impl PanelCanvas {
                     MouseButton::Navigate(_) => return,
                 };
                 if ws.read(cx).app.doc.generation() != generation {
+                    return;
+                }
+                if ws
+                    .read(cx)
+                    .app
+                    .panels
+                    .get(panel)
+                    .and_then(|p| p.kind.table())
+                    .is_some_and(|table| table.layout.filter_row.contains(cpoint(ev.position)))
+                {
                     return;
                 }
                 ws.update(cx, |ws, cx| ws.commit_rename(window, cx));

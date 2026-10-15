@@ -18,6 +18,7 @@ mod start_panel;
 #[cfg(target_arch = "wasm32")]
 mod table_clipboard;
 mod table_columns;
+mod table_filters;
 mod table_panel;
 pub mod theme;
 mod traces;
@@ -39,11 +40,12 @@ pub fn init_app(cx: &mut App) {
     #[cfg(not(test))]
     {
         let executor = cx.background_executor().clone();
-        volna_core::table::sort::set_executor(move |work| {
+        volna_core::table::query::set_executor(move |work| {
             executor.spawn(async move { work() }).detach();
         });
     }
     table_panel::init(cx);
+    table_filters::init(cx);
     table_columns::init(cx);
     theme::set(theme::CoreTheme::islands_dark(), cx);
     if let Err(e) = assets::load_fonts(cx) {

@@ -4081,7 +4081,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
                 let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
                 assert!(!table.can_sort_column(0));
                 assert_eq!(table.sort_requested, None);
-                assert!(!table.sorting());
+                assert!(!table.querying());
             })
             .unwrap();
         budget.set_limit(previous_limit);
@@ -4104,8 +4104,8 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
                             expected,
                             "one header click must cycle once"
                         );
-                        assert!(table.sort_error.is_none(), "{:?}", table.sort_error);
-                        table.sorting()
+                        assert!(table.query_error.is_none(), "{:?}", table.query_error);
+                        table.querying()
                     })
                     .unwrap();
                 if !sorting {
@@ -5356,6 +5356,146 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
                     })
                     .unwrap();
             }
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn column_filters_keep_input_focus_and_table_shortcuts_out_of_edits(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+    use gpui_kit::{Modifiers, VisualTestContext, point, size};
+    use volna_core::{panels::PanelsCommand, table::TableCommand};
+    use volna_trace::data::Member;
+    init(cx);
+    for dark in [true, false] {
+        for width in [900.0, 360.0] {
+            let mut workspace = None;
+            let root = cx.add_window(|window, cx| {
+                let ws = cx.new(|cx| Workspace::new(window, cx));
+                workspace = Some(ws.clone());
+                gpui_kit::component::Root::new(ws, window, cx)
+            });
+            let window = RootWindow {
+                root,
+                workspace: workspace.unwrap(),
+            };
+            let mut vcx = VisualTestContext::from_window(root.into(), cx);
+            vcx.simulate_resize(size(px(width), px(700.0)));
+            let panel = window
+                .update(&mut vcx, |ws, window, cx| {
+                    ws.set_session(
+                        OpenSpec::Path(
+                            concat!(
+                                env!("CARGO_MANIFEST_DIR"),
+                                "/examples/pipeline_showcase.vtr"
+                            )
+                            .into(),
+                        )
+                        .open()
+                        .unwrap(),
+                        cx,
+                    );
+                    ws.app.sidebar_visible = false;
+                    let origin = ws.app.panels.focused_id();
+                    ws.dispatch(
+                        Command::OpenTable {
+                            selected: a_all(vec![Member::Generator(0)]),
+                            clicked: None,
+                        },
+                        Some(window),
+                        cx,
+                    );
+                    let panel = ws.app.panels.focused_id();
+                    ws.dispatch(
+                        Command::Panels(PanelsCommand::Close(origin)),
+                        Some(window),
+                        cx,
+                    );
+                    crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                    panel
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(vcx.debug_bounds("filter-cell-0").is_none());
+            let toggle = vcx.debug_bounds("table-filter").unwrap();
+            vcx.simulate_click(toggle.center(), Modifiers::default());
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let field = vcx.debug_bounds("filter-cell-0").unwrap();
+            vcx.simulate_click(
+                point(field.left() + px(70.0), field.center().y),
+                Modifiers::default(),
+            );
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            assert!(vcx.update(WindowExt::has_focused_input));
+            vcx.simulate_input("lw");
+            vcx.simulate_keystrokes("enter");
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert_eq!(
+                        table.filters[0].as_ref().map(|f| f.query.as_str()),
+                        Some("lw")
+                    );
+                    assert_eq!(table.selected, None);
+                    assert_eq!(
+                        ws.app.panels.len(),
+                        1,
+                        "Enter in a filter must not open details"
+                    );
+                    assert!(ws.app.doc.markers().is_empty());
+                })
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let working = window
+                    .update(&mut vcx, |ws, _, _| {
+                        ws.app.tick(volna_core::Instant::now());
+                        ws.app
+                            .panels
+                            .get(panel)
+                            .unwrap()
+                            .kind
+                            .table()
+                            .unwrap()
+                            .querying()
+                    })
+                    .unwrap();
+                if !working {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+                "cmd-a"
+            } else {
+                "ctrl-a"
+            });
+            vcx.simulate_input("m 1");
+            vcx.simulate_keystrokes("escape enter");
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert_eq!(table.filters[0].as_ref().unwrap().query, "lw");
+                    assert!(ws.app.doc.markers().is_empty());
+                })
+                .unwrap();
+            window
+                .update(&mut vcx, |ws, window, cx| {
+                    ws.dispatch(
+                        Command::Table(panel, TableCommand::ToggleFilters),
+                        Some(window),
+                        cx,
+                    );
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert!(!table.filters_visible);
+                    assert_eq!(table.active_filter_count(), 1);
+                })
+                .unwrap();
         }
     }
 }

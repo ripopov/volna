@@ -117,6 +117,12 @@ enum TableDrag {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TableCommand {
+    ToggleFilters,
+    SetFilter {
+        source_index: usize,
+        filter: Option<super::filter::ColumnFilter>,
+    },
+    ClearFilters,
     SortColumn(usize),
     NumberFormat(String),
     ColumnFormat {
@@ -155,6 +161,9 @@ pub struct TableModel {
     pub widths: crate::history::Journaled<Vec<Option<f32>>>,
     pub formats: crate::history::Journaled<TableFormats>,
     translators: Translators,
+    pub filters_visible: bool,
+    pub filters: Vec<Option<super::filter::ColumnFilter>>,
+    filter_unit: crate::trace::Unit,
     pub viewport: RowViewport,
     pub selected: Option<RowIdentity>,
     pub nav: NavState,
@@ -163,10 +172,10 @@ pub struct TableModel {
     pub layout: TableLayout,
     pub request: u64,
     pub sort_requested: Option<super::sort::Sort>,
-    pub sort_error: Option<String>,
-    sort_order: Option<super::sort::Order>,
-    sort_job: Option<(u64, super::sort::Job)>,
-    sort_revision: u64,
+    pub query_error: Option<String>,
+    query_order: Option<super::query::Order>,
+    query_job: Option<(u64, super::query::Job)>,
+    query_revision: u64,
     reveal_column: Option<usize>,
     drag: Option<TableDrag>,
     rows: Rows,
@@ -202,6 +211,12 @@ impl TableModel {
             widths: crate::history::Journaled::new(vec![None; count]),
             formats: crate::history::Journaled::new(TableFormats::new(count)),
             translators,
+            filters_visible: false,
+            filters: vec![None; count],
+            filter_unit: crate::trace::Unit {
+                timescale: -9,
+                name: None,
+            },
             viewport: RowViewport::default(),
             selected: None,
             nav,
@@ -210,10 +225,10 @@ impl TableModel {
             layout: TableLayout::default(),
             request: 0,
             sort_requested: None,
-            sort_error: None,
-            sort_order: None,
-            sort_job: None,
-            sort_revision: 0,
+            query_error: None,
+            query_order: None,
+            query_job: None,
+            query_revision: 0,
             reveal_column: None,
             drag: None,
             rows: Rows::None,
@@ -237,6 +252,8 @@ impl TableModel {
         clone.widths = self.widths.clone();
         clone.formats = self.formats.clone();
         clone.sort_requested = self.sort_requested;
+        clone.filters.clone_from(&self.filters);
+        clone.filters_visible = self.filters_visible;
         clone
     }
 
@@ -300,7 +317,7 @@ impl TableModel {
     }
 
     pub fn detach(&mut self, doc: &mut Document) {
-        self.reset_sort();
+        self.reset_query();
         if !self.attached {
             return;
         }
@@ -352,6 +369,15 @@ impl TableModel {
     }
 
     pub fn refresh(&mut self, doc: &Document) {
+        let base = doc.time_base();
+        let unit = crate::trace::Unit {
+            timescale: base.timescale,
+            name: base.unit.map(str::to_owned),
+        };
+        if self.filter_unit != unit {
+            self.filter_unit = unit;
+            self.query_changed();
+        }
         if matches!(self.state, TableState::Refused(_)) || !self.attached {
             return;
         }
@@ -380,7 +406,7 @@ impl TableModel {
                             if Arc::ptr_eq(previous, &generator) {
                                 return;
                             }
-                            self.reset_sort();
+                            self.reset_query();
                         }
                         let empty = generator.transactions().is_empty();
                         self.rows = Rows::Generator(generator);
@@ -547,9 +573,9 @@ impl TableModel {
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {
-        let changed = self.nav.tick(now) | self.poll_sort();
+        let changed = self.nav.tick(now) | self.poll_query();
         if self.axis_build.is_none() {
-            return changed || self.sorting();
+            return changed || self.querying();
         }
         match self.advance_signal_axis(4096) {
             Ok(Some(empty)) => {
@@ -572,7 +598,7 @@ impl TableModel {
 
     #[must_use]
     pub fn is_animating(&self) -> bool {
-        self.axis_build.is_some() || self.nav.is_animating() || self.sorting()
+        self.axis_build.is_some() || self.nav.is_animating() || self.querying()
     }
 
     fn invalidate_window(&mut self) {
@@ -581,7 +607,7 @@ impl TableModel {
     }
 
     fn source_index(&self, ordinal: u64) -> Option<usize> {
-        if let Some(order) = &self.sort_order {
+        if let Some(order) = &self.query_order {
             return usize::try_from(order.source_row(ordinal)?).ok();
         }
         usize::try_from(ordinal).ok()
@@ -589,28 +615,96 @@ impl TableModel {
 
     #[must_use]
     pub fn applied_sort(&self) -> Option<super::sort::Sort> {
-        self.sort_order.as_ref().map(|o| o.sort)
+        self.query_order.as_ref().and_then(|o| o.sort)
     }
 
     #[must_use]
-    pub fn sorting(&self) -> bool {
-        if self.sort_job.is_some() {
+    pub fn querying(&self) -> bool {
+        if self.query_job.is_some() {
             return true;
         }
-        self.sort_error.is_none()
-            && self.sort_requested != self.applied_sort()
+        self.query_error.is_none()
+            && (self.sort_requested != self.applied_sort() || !self.filters_applied())
             && matches!(self.state, TableState::Ready | TableState::Empty)
     }
 
-    fn reset_sort(&mut self) {
-        self.sort_revision = self.sort_revision.wrapping_add(1);
+    fn reset_query(&mut self) {
+        self.query_revision = self.query_revision.wrapping_add(1);
         self.sort_requested = None;
-        self.sort_error = None;
-        if let Some((_, job)) = &self.sort_job {
+        self.query_error = None;
+        if let Some((_, job)) = &self.query_job {
             job.cancel();
         }
-        if let Some(order) = self.sort_order.take() {
-            super::sort::retire(order);
+        if let Some(order) = self.query_order.take() {
+            super::query::retire(order);
+        }
+    }
+
+    #[must_use]
+    pub fn active_filter_count(&self) -> usize {
+        self.filters.iter().filter(|f| f.is_some()).count()
+    }
+
+    #[must_use]
+    pub fn applied_filter(&self, column: usize) -> Option<&super::filter::ColumnFilter> {
+        self.query_order.as_ref()?.filters.get(column)?.as_ref()
+    }
+
+    fn filters_applied(&self) -> bool {
+        self.query_order.as_ref().map_or_else(
+            || self.active_filter_count() == 0,
+            |o| {
+                super::filter::same_filters(&o.filters, &self.filters)
+                    && (self.active_filter_count() == 0 || o.unit == self.filter_unit)
+            },
+        )
+    }
+
+    fn query_changed(&mut self) {
+        self.query_revision = self.query_revision.wrapping_add(1);
+        self.query_error = None;
+        if let Some((_, job)) = &self.query_job {
+            job.cancel();
+        }
+        if self.sort_requested.is_none() && self.active_filter_count() == 0 {
+            if let Some(order) = self.query_order.take() {
+                super::query::retire(order);
+            }
+            self.invalidate_window();
+        }
+    }
+
+    #[must_use]
+    pub fn default_filter_mode(&self, column: usize) -> super::filter::FilterMode {
+        use super::filter::FilterMode;
+        match self.transaction_column(column) {
+            Some(
+                TransactionColumn::Begin
+                | TransactionColumn::End
+                | TransactionColumn::Duration
+                | TransactionColumn::Id,
+            ) => FilterMode::Expression,
+            Some(TransactionColumn::Attribute(key))
+                if self.loaded_generator().is_some_and(|g| {
+                    g.attribute_catalogue().iter().any(|a| {
+                        &a.key == key
+                            && matches!(
+                                a.value_type,
+                                AttributeType::I64
+                                    | AttributeType::U64
+                                    | AttributeType::F64
+                                    | AttributeType::Pointer
+                                    | AttributeType::Fixed
+                                    | AttributeType::UFixed
+                                    | AttributeType::Time
+                            )
+                    })
+                }) =>
+            {
+                FilterMode::Expression
+            }
+            None if column == 0 => FilterMode::Expression,
+            _ => FilterMode::Contains,
         }
     }
 
@@ -621,19 +715,37 @@ impl TableModel {
         {
             return false;
         }
-        // Restoring source order frees the existing index and requires no allocation.
-        if self
+        let clearing = self
             .sort_requested
-            .is_some_and(|sort| sort.column == column && sort.descending)
-        {
+            .is_some_and(|sort| sort.column == column && sort.descending);
+        let filtered = self.active_filter_count() != 0;
+        if clearing && !filtered {
             return true;
         }
-        if self.sort_error.is_some() {
+        if self.query_error.is_some() {
             return false;
         }
-        super::sort::required_bytes(self.len()).is_some_and(|bytes| {
-            bytes <= self.budget.object_limit()
-                && bytes <= self.budget.limit().saturating_sub(self.budget.used())
+        let matches = if self.filters_applied() {
+            self.len()
+        } else {
+            self.source_len()
+        };
+        let sort_bytes = if clearing {
+            Some(0)
+        } else {
+            super::query::index_bytes(self.source_len(), matches)
+        };
+        let bitmap_bytes = if filtered {
+            super::filter::index::required_bytes(self.source_len())
+        } else {
+            Some(0)
+        };
+        sort_bytes.zip(bitmap_bytes).is_some_and(|(sort, bitmap)| {
+            sort <= self.budget.object_limit()
+                && bitmap <= self.budget.object_limit()
+                && sort.checked_add(bitmap).is_some_and(|bytes| {
+                    bytes <= self.budget.limit().saturating_sub(self.budget.used())
+                })
         })
     }
 
@@ -652,34 +764,24 @@ impl TableModel {
                 descending: false,
             }),
         };
-        self.sort_revision = self.sort_revision.wrapping_add(1);
-        self.sort_error = None;
-        if let Some((_, job)) = &self.sort_job {
-            job.cancel();
-        }
-        if self.sort_requested.is_none() {
-            if let Some(order) = self.sort_order.take() {
-                super::sort::retire(order);
-            }
-            self.invalidate_window();
-        }
+        self.query_changed();
         true
     }
 
-    fn poll_sort(&mut self) -> bool {
+    fn poll_query(&mut self) -> bool {
         let mut changed = false;
         if let Some((revision, result)) = self
-            .sort_job
+            .query_job
             .as_mut()
             .and_then(|(r, job)| job.poll().map(|result| (*r, result)))
         {
-            self.sort_job = None;
+            self.query_job = None;
             changed = true;
-            if revision == self.sort_revision {
+            if revision == self.query_revision {
                 match result {
                     Ok(order) => {
-                        if let Some(old) = self.sort_order.replace(order) {
-                            super::sort::retire(old);
+                        if let Some(old) = self.query_order.replace(order) {
+                            super::query::retire(old);
                         }
                         if let Some(rank) = self.selected_ordinal() {
                             self.viewport.reveal(
@@ -691,21 +793,19 @@ impl TableModel {
                         }
                         self.invalidate_window();
                     }
-                    Err(error) => self.sort_error = Some(format!("{error:#}")),
+                    Err(error) => self.query_error = Some(format!("{error:#}")),
                 }
             } else if let Ok(order) = result {
-                super::sort::retire(order);
+                super::query::retire(order);
             }
         }
-        if self.sort_job.is_none()
-            && self.sorting()
-            && let Some(sort) = self.sort_requested
-        {
+        if self.query_job.is_none() && self.querying() {
+            let sort = self.sort_requested;
             let source = match &self.rows {
                 Rows::Generator(g) => super::sort::Source::Generator(
                     g.clone(),
-                    self.transaction_column(sort.column)
-                        .expect("sort column")
+                    self.transaction_column(sort.map_or(0, |s| s.column))
+                        .expect("query column")
                         .clone(),
                 ),
                 Rows::Signals {
@@ -719,9 +819,33 @@ impl TableModel {
                 },
                 Rows::None => return changed,
             };
-            match super::sort::Job::start(source, self.len(), sort, self.budget.clone()) {
-                Ok(job) => self.sort_job = Some((self.sort_revision, job)),
-                Err(error) => self.sort_error = Some(format!("{error:#}")),
+            let columns = self
+                .filters
+                .iter()
+                .enumerate()
+                .filter_map(|(i, f)| {
+                    let column = match &self.source {
+                        TableSource::Generator(_) => {
+                            super::filter::Column::Transaction(self.transaction_column(i)?.clone())
+                        }
+                        TableSource::Signals(_) if i == 0 => super::filter::Column::Time,
+                        TableSource::Signals(_) => super::filter::Column::Signal {
+                            index: i - 1,
+                            name: self.column_title(i).to_owned(),
+                        },
+                    };
+                    Some((column, f.as_ref()?.clone()))
+                })
+                .collect();
+            let query = super::query::Query {
+                sort,
+                filters: self.filters.clone(),
+                columns,
+                unit: self.filter_unit.clone(),
+            };
+            match super::query::Job::start(source, self.source_len(), query, self.budget.clone()) {
+                Ok(job) => self.query_job = Some((self.query_revision, job)),
+                Err(error) => self.query_error = Some(format!("{error:#}")),
             }
             changed = true;
         }
@@ -730,6 +854,13 @@ impl TableModel {
 
     #[must_use]
     pub fn len(&self) -> u64 {
+        self.query_order
+            .as_ref()
+            .map_or_else(|| self.source_len(), super::query::Order::len)
+    }
+
+    #[must_use]
+    pub fn source_len(&self) -> u64 {
         match &self.rows {
             Rows::None => 0,
             Rows::Generator(generator) => generator.transactions().len() as u64,
@@ -749,14 +880,29 @@ impl TableModel {
 
     #[must_use]
     pub fn status(&self) -> String {
-        if let Some(error) = &self.sort_error {
-            return format!("Sort failed: {error} · previous order retained");
+        if let Some(error) = &self.query_error {
+            return format!("Query failed: {error} · previous results retained");
         }
-        if self.sorting() {
+        if self.querying() && !self.filters_applied() {
+            return format!(
+                "{} of {} rows · filtering… previous results shown",
+                self.len(),
+                self.source_len()
+            );
+        }
+        if self.querying() {
             return format!("{} rows · sorting… previous order shown", self.len());
         }
         match &self.state {
             TableState::Loading => "Loading source…".into(),
+            TableState::Ready
+                if self
+                    .query_order
+                    .as_ref()
+                    .is_some_and(|o| o.filters.iter().any(Option::is_some)) =>
+            {
+                format!("{} of {} rows", self.len(), self.source_len())
+            }
             TableState::Ready => format!("{} rows", self.len()),
             TableState::Empty => "Source is empty".into(),
             TableState::Failed(error) => format!("Load failed: {error}"),
@@ -812,7 +958,7 @@ impl TableModel {
             ),
             _ => None,
         }?;
-        if let Some(order) = &self.sort_order {
+        if let Some(order) = &self.query_order {
             return order.rank(source_row);
         }
         Some(source_row)
@@ -903,6 +1049,43 @@ impl TableModel {
         now: Instant,
     ) -> bool {
         match command {
+            TableCommand::ToggleFilters => {
+                self.filters_visible = !self.filters_visible;
+                true
+            }
+            TableCommand::SetFilter {
+                source_index,
+                filter,
+            } => {
+                if source_index >= self.filters.len() {
+                    return false;
+                }
+                if filter
+                    .as_ref()
+                    .is_some_and(|f| f.query.len() > super::filter::MAX_QUERY_BYTES)
+                {
+                    self.query_error = Some(format!(
+                        "Filter exceeds {} bytes",
+                        super::filter::MAX_QUERY_BYTES
+                    ));
+                    return true;
+                }
+                let filter = filter.filter(super::filter::ColumnFilter::active);
+                if self.filters[source_index] == filter && self.query_error.is_none() {
+                    return false;
+                }
+                self.filters[source_index] = filter;
+                self.query_changed();
+                true
+            }
+            TableCommand::ClearFilters => {
+                if self.active_filter_count() == 0 {
+                    return false;
+                }
+                self.filters.fill(None);
+                self.query_changed();
+                true
+            }
             TableCommand::SortColumn(column) => self.cycle_sort(column),
             TableCommand::NumberFormat(translator) => {
                 if !format::number_translators(&self.translators)
@@ -1027,13 +1210,18 @@ impl TableModel {
                 changed
             }
             TableCommand::Cancel => {
-                if self.sorting() {
-                    self.sort_requested = self.sort_order.as_ref().map(|o| o.sort);
-                    self.sort_revision = self.sort_revision.wrapping_add(1);
-                    if let Some((_, job)) = &self.sort_job {
+                if self.querying() {
+                    self.sort_requested = self.applied_sort();
+                    self.filters = self
+                        .query_order
+                        .as_ref()
+                        .map_or_else(|| vec![None; self.filters.len()], |o| o.filters.clone());
+                    self.filters.resize(self.columns.len(), None);
+                    self.query_revision = self.query_revision.wrapping_add(1);
+                    if let Some((_, job)) = &self.query_job {
                         job.cancel();
                     }
-                    self.sort_error = None;
+                    self.query_error = None;
                     return true;
                 }
                 self.detach(doc);
@@ -1041,8 +1229,8 @@ impl TableModel {
                 true
             }
             TableCommand::Retry => {
-                if self.sort_error.is_some() {
-                    self.sort_error = None;
+                if self.query_error.is_some() {
+                    self.query_error = None;
                     true
                 } else {
                     self.retry(doc)
@@ -1199,13 +1387,23 @@ impl TableModel {
         let count = self.columns.len();
         self.widths.update(|widths| widths.resize(count, None));
         self.formats.update(|f| f.columns.resize(count, None));
+        if self.filters.len() != count {
+            let removed = self
+                .filters
+                .get(count..)
+                .is_some_and(|tail| tail.iter().any(Option::is_some));
+            self.filters.resize(count, None);
+            if removed {
+                self.query_changed();
+            }
+        }
         if self
             .sort_requested
             .into_iter()
             .chain(self.applied_sort())
             .any(|s| s.column >= count)
         {
-            self.reset_sort();
+            self.reset_query();
         }
         self.invalidate_window();
         true
@@ -1230,7 +1428,10 @@ impl TableModel {
     }
 
     fn column_edge_at(&self, position: Point) -> Option<&super::layout::ColumnRect> {
-        if !self.layout.header.contains(position) && !self.layout.body.contains(position) {
+        if !self.layout.header.contains(position)
+            && !self.layout.filter_row.contains(position)
+            && !self.layout.body.contains(position)
+        {
             return None;
         }
         self.layout
@@ -1314,6 +1515,23 @@ impl TableModel {
 
     pub(crate) fn swap_columns(&mut self, columns: ColumnSet) -> ColumnSet {
         let old = self.columns.swap(columns);
+        let previous = self.filters.clone();
+        self.filters = (0..self.columns.len())
+            .map(|i| {
+                let column = self.transaction_column(i);
+                let previous_index = match &old {
+                    ColumnSet::Transactions(columns) => columns
+                        .iter()
+                        .find(|(_, c, _)| Some(*c) == column)
+                        .map(|(j, _, _)| j),
+                    ColumnSet::Signals { .. } => Some(i),
+                };
+                previous_index.and_then(|j| previous.get(j).cloned().flatten())
+            })
+            .collect();
+        if !super::filter::same_filters(&previous, &self.filters) {
+            self.query_changed();
+        }
         if self
             .sort_requested
             .into_iter()
@@ -1326,7 +1544,7 @@ impl TableModel {
                 previous != self.transaction_column(sort.column)
             })
         {
-            self.reset_sort();
+            self.reset_query();
         }
         self.invalidate_window();
         old
@@ -1523,6 +1741,11 @@ impl TableModel {
         let zoom = theme.zoom;
         let row_height = ROW_HEIGHT * zoom;
         let header_height = HEADER_HEIGHT * zoom;
+        let filter_height = if self.filters_visible {
+            super::layout::FILTER_HEIGHT * zoom
+        } else {
+            0.0
+        };
         let gutter_width = 64.0 * zoom;
         let bar = 12.0 * zoom;
         let status_height = row_height;
@@ -1532,11 +1755,17 @@ impl TableModel {
             (bounds.width() - gutter_width - bar).max(0.0),
             header_height,
         );
-        let body = Rect::from_xywh(
+        let filter_row = Rect::from_xywh(
             header.left(),
             header.bottom(),
             header.width(),
-            (bounds.height() - header_height - status_height - bar).max(0.0),
+            filter_height,
+        );
+        let body = Rect::from_xywh(
+            header.left(),
+            filter_row.bottom(),
+            header.width(),
+            (bounds.height() - header_height - filter_height - status_height - bar).max(0.0),
         );
         let gutter = Rect::from_xywh(bounds.left(), body.top(), gutter_width, body.height());
         let vertical_bar = Rect::from_xywh(body.right(), body.top(), bar, body.height());
@@ -1603,7 +1832,7 @@ impl TableModel {
                         rect.right() - 1.0 - theme.splitter_grab / 2.0,
                         header.top(),
                         theme.splitter_grab,
-                        header_height + body.height(),
+                        header_height + filter_height + body.height(),
                     ),
                     header: ColumnHeader::new(
                         rect,
@@ -1657,6 +1886,7 @@ impl TableModel {
             (bar - 4.0).max(0.0),
         );
         self.layout = TableLayout {
+            filter_row,
             bounds,
             header,
             body,
@@ -2000,11 +2230,11 @@ impl TableModel {
 
 impl Drop for TableModel {
     fn drop(&mut self) {
-        if let Some((_, job)) = &self.sort_job {
+        if let Some((_, job)) = &self.query_job {
             job.cancel();
         }
-        if let Some(order) = self.sort_order.take() {
-            super::sort::retire(order);
+        if let Some(order) = self.query_order.take() {
+            super::query::retire(order);
         }
     }
 }
@@ -2431,6 +2661,355 @@ mod tests {
         model
     }
 
+    fn set_filter(
+        model: &mut TableModel,
+        column: usize,
+        mode: super::super::filter::FilterMode,
+        query: &str,
+    ) {
+        assert!(model.command(
+            &mut Document::new(),
+            crate::panels::PanelId(1),
+            TableCommand::SetFilter {
+                source_index: column,
+                filter: Some(super::super::filter::ColumnFilter {
+                    mode,
+                    query: query.into(),
+                    ..Default::default()
+                })
+            },
+            Instant::now()
+        ));
+    }
+
+    #[test]
+    #[ignore = "10M resident transactions; run in release mode"]
+    fn ten_million_transactions_filter_on_background_worker() {
+        use super::super::filter::FilterMode;
+        let rows = (0..10_000_000)
+            .map(|i| Transaction {
+                id: TransactionRef(i + 1),
+                generator: volna_trace::data::transactions::TrackRef(7),
+                begin: i,
+                end: i + 1,
+                status: TxStatus::Ok,
+                kind: TxKind::Producer,
+                parent: None,
+                attributes: vec![],
+                events: vec![],
+                stages: vec![],
+            })
+            .collect();
+        let mut model = generator_model(rows);
+        set_filter(&mut model, 1, FilterMode::Expression, "> 5000000");
+        set_filter(&mut model, 4, FilterMode::Expression, "<= 9000000");
+        let start = std::time::Instant::now();
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 3_999_999);
+        assert_eq!(model.row_time(0), Some(5_000_001));
+        assert_eq!(model.row_time(model.len() - 1), Some(8_999_999));
+        assert_eq!(model.budget.used(), 1_406_256);
+        eprintln!(
+            "10M resident transactions, two numeric predicates: {:?}, {} index bytes",
+            start.elapsed(),
+            model.budget.used()
+        );
+    }
+
+    #[test]
+    fn filters_combine_raw_values_preserve_sort_and_selected_identity() {
+        use super::super::filter::FilterMode;
+        let mut records: Vec<_> = (1..=40)
+            .map(|i| {
+                transaction(
+                    i,
+                    i * 10,
+                    if i % 2 == 0 {
+                        "cache_load_miss"
+                    } else {
+                        "store"
+                    },
+                )
+            })
+            .collect();
+        records[19].attributes[1].value = AttributeValue::U64(9_007_199_254_740_993);
+        records[21].attributes[1].value = AttributeValue::U64(9_007_199_254_740_992);
+        let mut model = generator_model(records);
+        model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Attribute("addr".into())));
+        model.cycle_sort(1);
+        model.cycle_sort(1);
+        finish_sort(&mut model);
+        model.selected = Some(RowIdentity::Transaction(TransactionRef(20)));
+        set_filter(&mut model, 0, FilterMode::Wildcard, "*LOAD*");
+        set_filter(&mut model, 1, FilterMode::Expression, "> 100 AND < 300");
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 9);
+        assert_eq!(model.row_time(0), Some(280));
+        assert_eq!(model.selected_ordinal(), Some(4));
+        assert!(model.applied_sort().unwrap().descending);
+        set_filter(&mut model, 7, FilterMode::Expression, "= 9007199254740993");
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 1);
+        assert_eq!(model.row_time(0), Some(200));
+        assert_eq!(model.selected_ordinal(), Some(0));
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        model.command(&mut doc, panel, TableCommand::ToggleFilters, Instant::now());
+        model.command(&mut doc, panel, TableCommand::ToggleFilters, Instant::now());
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::NumberFormat("udec".into()),
+            Instant::now(),
+        );
+        assert_eq!(model.len(), 1);
+        assert!(!model.filters_visible);
+        model.command(&mut doc, panel, TableCommand::ClearFilters, Instant::now());
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 40);
+        assert_eq!(model.row_time(0), Some(400));
+    }
+
+    #[test]
+    fn aggregate_missing_filters_do_not_treat_null_leaves_as_missing_columns() {
+        use super::super::filter::{ColumnFilter, FilterMode, Missing};
+        let mut records: Vec<_> = (1..=4).map(|i| transaction(i, i, "row")).collect();
+        records[0].attributes.truncate(1);
+        records[1].attributes[1].value = AttributeValue::List(vec![AttributeValue::Null]);
+        records[2].attributes[1].value = AttributeValue::Null;
+        records[3].attributes[1].value =
+            AttributeValue::Map(vec![("nested".into(), AttributeValue::Null)]);
+        let mut model = generator_model(records);
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        for (missing, query) in [(Missing::Only, ""), (Missing::Include, "no match")] {
+            model.command(
+                &mut doc,
+                panel,
+                TableCommand::SetFilter {
+                    source_index: 6,
+                    filter: Some(ColumnFilter {
+                        missing,
+                        query: query.into(),
+                        mode: FilterMode::Contains,
+                        ..Default::default()
+                    }),
+                },
+                Instant::now(),
+            );
+            finish_sort(&mut model);
+            assert_eq!(model.len(), 1);
+            assert_eq!(model.row_time(0), Some(1));
+        }
+        model.command(&mut doc, panel, TableCommand::ClearFilters, Instant::now());
+        model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Attribute("addr".into())));
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::SetFilter {
+                source_index: 7,
+                filter: Some(ColumnFilter {
+                    missing: Missing::Only,
+                    ..Default::default()
+                }),
+            },
+            Instant::now(),
+        );
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 2);
+        assert_eq!(model.row_time(0), Some(1));
+        assert_eq!(model.row_time(1), Some(3));
+    }
+
+    #[test]
+    fn filtered_sort_admission_includes_bitmap_and_retained_index() {
+        use super::super::filter::FilterMode;
+        let mut model = generator_model((1..=100).map(|i| transaction(i, i, "row")).collect());
+        set_filter(&mut model, 4, FilterMode::Expression, ">= 99");
+        finish_sort(&mut model);
+        let bitmap = super::super::filter::index::required_bytes(100).unwrap();
+        assert_eq!(model.budget.used(), bitmap);
+        model.budget.set_limit(bitmap + 8);
+        assert!(
+            !model.can_sort_column(1),
+            "a sparse sort still needs the source bitmap"
+        );
+        model.budget.set_limit(bitmap * 2 + 8);
+        assert!(model.cycle_sort(1));
+        finish_sort(&mut model);
+        model.budget.set_limit(128);
+        assert!(model.cycle_sort(1));
+        finish_sort(&mut model);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while model.budget.used() != 8 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        model.budget.set_limit(8);
+        assert!(
+            !model.can_sort_column(1),
+            "returning filtered rows to source order needs a bitmap"
+        );
+        model.budget.set_limit(8 + bitmap);
+        assert!(model.cycle_sort(1));
+        finish_sort(&mut model);
+        assert_eq!(model.applied_sort(), None);
+        assert_eq!(model.len(), 2);
+    }
+
+    #[test]
+    fn reentering_a_failed_filter_retries_and_rejected_drafts_do_not_poison_results() {
+        use super::super::filter::{ColumnFilter, FilterMode, MAX_QUERY_BYTES};
+        let mut model = generator_model((1..=100).map(|i| transaction(i, i, "row")).collect());
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        model.budget.set_limit(0);
+        set_filter(&mut model, 1, FilterMode::Expression, "> 50");
+        model.tick(Instant::now());
+        assert!(model.query_error.is_some());
+        model.budget.set_limit(1024);
+        set_filter(&mut model, 1, FilterMode::Expression, "> 50");
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 50);
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::SetFilter {
+                source_index: 1,
+                filter: Some(ColumnFilter {
+                    query: "x".repeat(MAX_QUERY_BYTES + 1),
+                    ..Default::default()
+                }),
+            },
+            Instant::now(),
+        );
+        assert!(model.query_error.is_some());
+        set_filter(&mut model, 1, FilterMode::Expression, "> 50");
+        finish_sort(&mut model);
+        assert!(model.query_error.is_none());
+        assert_eq!(model.len(), 50);
+    }
+
+    #[test]
+    fn invalid_newer_and_refused_filters_keep_the_previous_result() {
+        use super::super::filter::{ColumnFilter, FilterMode};
+        let mut model = generator_model((1..=12_347).map(|i| transaction(i, i, "row")).collect());
+        set_filter(&mut model, 1, FilterMode::Expression, "> 100");
+        model.tick(Instant::now());
+        set_filter(&mut model, 1, FilterMode::Expression, "> 12000");
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 347);
+        assert_eq!(model.row_time(0), Some(12001));
+        set_filter(&mut model, 0, FilterMode::Regex, "[");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while model.querying() {
+            model.tick(Instant::now());
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(model.query_error.as_ref().unwrap().contains("Label"));
+        assert_eq!(model.len(), 347);
+        model.command(
+            &mut Document::new(),
+            crate::panels::PanelId(1),
+            TableCommand::SetFilter {
+                source_index: 0,
+                filter: None,
+            },
+            Instant::now(),
+        );
+        finish_sort(&mut model);
+        let retained = model.budget.used();
+        model.budget.set_limit(retained);
+        set_filter(&mut model, 1, FilterMode::Expression, "> 12200");
+        model.tick(Instant::now());
+        assert!(model.query_error.is_some());
+        assert_eq!(model.len(), 347);
+        assert_eq!(model.budget.used(), retained);
+        model.budget.set_limit(1024 * 1024);
+        model.command(
+            &mut Document::new(),
+            crate::panels::PanelId(1),
+            TableCommand::Retry,
+            Instant::now(),
+        );
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 147);
+        set_filter(&mut model, 1, FilterMode::Expression, "< 10000");
+        model.tick(Instant::now());
+        model.command(
+            &mut Document::new(),
+            crate::panels::PanelId(1),
+            TableCommand::Cancel,
+            Instant::now(),
+        );
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 147);
+        assert_eq!(
+            model.filters[1],
+            Some(ColumnFilter {
+                mode: FilterMode::Expression,
+                query: "> 12200".into(),
+                ..Default::default()
+            })
+        );
+        let budget = model.budget.clone();
+        drop(model);
+        while budget.used() != 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn missing_values_signal_axes_and_filter_row_geometry_are_consistent() {
+        use super::super::filter::{ColumnFilter, FilterMode, Missing};
+        let mut model = signal_model(MemoryBudget::new(1024 * 1024));
+        model
+            .build_signal_rows(vec![
+                history(&[2, 5, 9], &["1", "0", "1"]),
+                history(&[5, 8], &["1", "0"]),
+            ])
+            .unwrap();
+        model.state = TableState::Ready;
+        set_filter(&mut model, 0, FilterMode::Expression, "> 2");
+        set_filter(&mut model, 1, FilterMode::Expression, "= 1");
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 1);
+        assert_eq!(model.row_time(0), Some(9));
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        model.command(&mut doc, panel, TableCommand::ClearFilters, Instant::now());
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::SetFilter {
+                source_index: 2,
+                filter: Some(ColumnFilter {
+                    missing: Missing::Only,
+                    ..Default::default()
+                }),
+            },
+            Instant::now(),
+        );
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 1);
+        assert_eq!(model.row_time(0), Some(2));
+        model.filters_visible = true;
+        for mut theme in [Theme::one_dark(), Theme::volna(false)] {
+            for zoom in [1.0, 1.5, 2.0] {
+                theme.zoom = zoom;
+                model.layout(Rect::from_xywh(0.0, 0.0, 360.0, 500.0), &theme);
+                assert_eq!(model.layout.header.bottom(), model.layout.filter_row.top());
+                assert_eq!(model.layout.filter_row.bottom(), model.layout.body.top());
+                assert_eq!(
+                    model.layout.filter_row.height(),
+                    super::super::layout::FILTER_HEIGHT * zoom
+                );
+            }
+        }
+    }
+
     #[test]
     fn column_formats_override_defaults_without_changing_selection_or_sort() {
         let mut model = generator_model((1..=30).map(|i| transaction(i, i, "row")).collect());
@@ -2569,12 +3148,12 @@ mod tests {
 
     fn finish_sort(model: &mut TableModel) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while model.sorting() {
+        while model.querying() {
             model.tick(Instant::now());
             assert!(std::time::Instant::now() < deadline, "sort did not finish");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        assert!(model.sort_error.is_none(), "{:?}", model.sort_error);
+        assert!(model.query_error.is_none(), "{:?}", model.query_error);
         model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &Theme::one_dark());
     }
 
@@ -2764,7 +3343,7 @@ mod tests {
         let blocker = model.budget.reserve(400).unwrap();
         model.tick(Instant::now());
         assert!(
-            model.sort_error.is_some(),
+            model.query_error.is_some(),
             "admission must recheck after the click"
         );
         assert_eq!(model.applied_sort(), None);
@@ -2866,8 +3445,8 @@ mod tests {
         model.budget.set_limit(1);
         assert!(!model.can_sort_column(1));
         assert!(!model.cycle_sort(1));
-        assert!(!model.sorting());
-        assert!(model.sort_error.is_none());
+        assert!(!model.querying());
+        assert!(model.query_error.is_none());
         assert_eq!(
             model.identity_and_time(0).unwrap().0,
             RowIdentity::Transaction(TransactionRef(1999))
@@ -3069,7 +3648,7 @@ mod tests {
         ] {
             let previous = arrow(&model);
             assert!(model.cycle_sort(4));
-            if model.sorting() {
+            if model.querying() {
                 assert_eq!(arrow(&model), previous);
             }
             finish_sort(&mut model);

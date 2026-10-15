@@ -182,11 +182,13 @@ its replacement is built. Allocation failures preserve the previous order.
 
 When there is insufficient budget for a new index, the header's sort icons turn
 gray and mouse/keyboard sorting is refused. Returning a descending column to
-source order remains available because it frees memory. Sorting becomes
-available again when budget permits; after an allocation error, use Retry. No
+source order without filters remains available because it frees memory. With
+filters active, returning to source order requires admission for a new bitmap.
+Sorting becomes available again when budget permits; after an allocation error,
+use Retry. No
 sort files or memory mappings are used.
-Rank access is O(1); locating a selected source row is O(log N). Source rows must
-also fit in RAM. Native and web use the same engine on GPUI's background executor.
+Access to a sorted row is O(1); locating a selected source row is O(log N). Source
+rows must also fit in RAM. Native and web use the same engine on GPUI's background executor.
 The browser uses shared-memory Web Workers; it never runs a sort on the UI thread.
 WASM32 has a 4 GiB address-space ceiling shared by source data, indices, and runtime,
 so its maximum dataset size is lower than native even on machines with more RAM.
@@ -214,6 +216,58 @@ It measures the sorter, independently of trace loading and frame latency:
 
 ```sh
 cargo test --release -p volna-core --lib hundred_million_rows -- --ignored --nocapture
+```
+
+### Column filtering
+
+In a Table panel, **Filter** after **Columns** shows an entry row below the
+headers. Enter applies a column's draft; Escape restores its applied query.
+Collapsing the row preserves the rules, and the button shows the active count.
+Clear filters removes every rule, including rules on hidden columns. Filter
+rules and row visibility are saved with the table; workspace table schema is v6.
+
+The mode button in each editor offers contains, exact, wildcard (`*`, `?`, and
+backslash escaping), fuzzy subsequence, regular expression, and numeric expression
+matching. Text defaults to case insensitive; Match case is an explicit override.
+Fuzzy matches query characters in order, so `clm` matches `cache_load_miss`.
+Regex uses Rust's bounded, non-backtracking engine. Missing values can be excluded,
+included, or selected alone. Rules on different columns combine with AND.
+The Attributes preview column searches attribute keys and complete leaf values.
+
+Numeric expressions support `=`, `!=`, `<`, `<=`, `>`, `>=`, inclusive `100..500`
+ranges, AND/OR, and `&&`/`||` (AND has precedence). Decimal, hexadecimal, negative,
+and scientific literals are accepted. Unitless time comparisons use raw trace
+ticks; explicit `fs`, `ps`, `ns`, `us`/`µs`, `ms`, and `s` suffixes use the trace's
+timescale. Named time units (such as cycles) accept raw ticks and reject SI
+suffixes. Integer and fixed-point comparisons stay exact, independently of the
+chosen number translator. Real values use floating-point comparisons; NaN and
+infinity do not match numeric expressions. Logic values compare numerically when
+they contain only binary digits and fit in 64 bits. Open transaction end/duration,
+null attributes, and unavailable signal samples are missing values.
+
+Query compilation, scanning, sorting matches, index allocation, and index disposal
+run on the same background executor as sorting, including Web Workers in the
+browser. Input is applied explicitly rather than scanning on every keystroke.
+Newer requests cancel older work; only a result for the current request is
+published. The previous result stays usable while filtering, on invalid syntax,
+and on admission failure. Cancel restores its rules and ordering; Retry repeats a
+failed query. Queries are limited to 4096 bytes per column.
+
+Unsorted matches use a rank/select bitmap with one bit per source row and one
+64-bit prefix per 512 rows: 1,406,256 bytes for 10M rows. A scan is O(N), with
+short-circuiting column predicates and borrowed text; it never formats cells.
+Only visible rows are prepared for rendering. Sorting a filtered table allocates
+an index for the M matches and uses O(M log M) work; source ordinal width determines
+whether entries use 32 or 64 bits. The shared memory budget admits both the old
+and replacement result, including temporary bitmap/index overlap. Source data
+must still fit in the native or browser memory limits described above.
+
+The scale checks exercise a bitmap scan, a background wildcard/numeric query over
+procedural histories, and filtering 10M resident transactions. They exclude trace
+loading and require release mode:
+
+```sh
+cargo test --release -p volna-core --lib ten_million -- --ignored --nocapture
 ```
 
 ### Marker shortcuts

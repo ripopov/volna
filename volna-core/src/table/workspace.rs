@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use volna_trace::data::source::Lookup;
 
-pub(crate) const VERSION: u32 = 5;
+pub(crate) const VERSION: u32 = 6;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -45,6 +45,8 @@ struct TablePanel {
     widths: Vec<Option<f32>>,
     formats: super::format::TableFormats,
     link: Link,
+    filters_visible: bool,
+    filters: Vec<Option<super::filter::ColumnFilter>>,
 }
 
 pub(crate) fn save(
@@ -78,6 +80,8 @@ pub(crate) fn save(
         widths: table.widths.get().clone(),
         formats: table.formats.get().clone(),
         link: table.nav.link,
+        filters_visible: table.filters_visible,
+        filters: table.filters.clone(),
     })?)
 }
 
@@ -182,6 +186,20 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             .all(|id| ctx.doc.translators.get(id).is_some()),
         "unknown table column translator"
     );
+    ensure!(
+        saved.filters.len() == saved.columns.len(),
+        "invalid table filter columns"
+    );
+    ensure!(
+        saved
+            .filters
+            .iter()
+            .flatten()
+            .all(|f| f.query.len() <= super::filter::MAX_QUERY_BYTES && f.active()),
+        "invalid table filter"
+    );
+    table.filters = saved.filters;
+    table.filters_visible = saved.filters_visible;
     table.formats.restore(saved.formats);
     table.columns.restore(saved.columns);
     Ok(Panel {

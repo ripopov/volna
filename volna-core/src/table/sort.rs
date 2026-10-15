@@ -24,7 +24,7 @@ pub(super) enum Source {
 }
 
 impl Source {
-    fn time(&self, row: u64) -> u64 {
+    pub(super) fn time(&self, row: u64) -> u64 {
         match self {
             Self::Signals {
                 histories, axis, ..
@@ -254,9 +254,6 @@ fn decimal(a: i128, scale_a: i32, b: i128, scale_b: i32) -> Ordering {
     if a < 0 { order.reverse() } else { order }
 }
 
-mod worker;
-pub(super) use worker::{Job, Order, required_bytes, retire};
-
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
@@ -312,32 +309,5 @@ mod tests {
             .0,
             Ordering::Less
         );
-    }
-}
-
-/// Installs the host's background executor before any table sorting starts.
-/// The executor must run CPU work off the UI thread and retain detached jobs.
-pub fn set_executor(spawn: impl Fn(Box<dyn FnOnce() + Send>) + Send + Sync + 'static) {
-    drop(EXECUTOR.set(Box::new(spawn)));
-}
-
-type Spawn = Box<dyn Fn(Box<dyn FnOnce() + Send>) + Send + Sync>;
-static EXECUTOR: std::sync::OnceLock<Spawn> = std::sync::OnceLock::new();
-
-fn spawn(work: impl FnOnce() + Send + 'static) -> anyhow::Result<()> {
-    if let Some(executor) = EXECUTOR.get() {
-        executor(Box::new(work));
-        return Ok(());
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        std::thread::Builder::new()
-            .name("table-worker".into())
-            .spawn(work)?;
-        Ok(())
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        anyhow::bail!("Background executor is unavailable")
     }
 }

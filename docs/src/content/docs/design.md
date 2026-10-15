@@ -86,6 +86,15 @@ an unsorted column. These controls scale with interface zoom.
 Time columns retain their time representation, and format changes preserve row
 selection, scroll position, and sorting. These preferences are saved with the table.
 
+The Table toolbar's Filter button follows Columns. It reveals a 36px entry row
+below the headers, with each editor aligned to the same column geometry as the
+cells. Its count remains visible when the row is collapsed. Each editor exposes
+matching modes, case sensitivity, and missing-value handling through its compact
+mode button. Enter applies the draft; Escape restores the applied query. Clear
+filters removes the rules without collapsing the entry row. The previous results
+remain visible while the background worker evaluates a new query.
+
+
 Each column has a 1px divider with an 8px grab area extending through the header
 and body, including the trailing Attributes edge. Hover and drag use the
 focused-border role and GPUI's column resize cursor. Dragging changes that

@@ -4,6 +4,7 @@ use crate::geometry::Rect;
 
 pub const ROW_HEIGHT: f32 = 24.0;
 pub const HEADER_HEIGHT: f32 = 40.0;
+pub const FILTER_HEIGHT: f32 = 36.0;
 pub const MAX_PREPARED_ROWS: u64 = 256;
 pub const MIN_COLUMN_WIDTH: f32 = 48.0;
 pub const MAX_COLUMN_WIDTH: f32 = 16_384.0;
@@ -154,6 +155,7 @@ pub struct TableLayout {
     pub bounds: Rect,
     pub header: Rect,
     pub body: Rect,
+    pub filter_row: Rect,
     pub gutter: Rect,
     pub vertical_bar: Rect,
     pub vertical_thumb: Rect,

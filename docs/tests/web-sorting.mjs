@@ -42,6 +42,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   await context.addInitScript(() => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 }));
   const page = await context.newPage();
+  page.setDefaultTimeout(30000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
@@ -96,7 +97,7 @@ try {
   await page.mouse.click(350, 108);
   await sorting();
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await page.mouse.click(614, 84); // Cancel in the table toolbar.
+  await page.mouse.click(678, 84); // Cancel in the table toolbar.
   await settled();
   assert.match(await state(), /column: 0, descending: false/, 'cancel retains the applied order');
 
@@ -125,6 +126,43 @@ try {
   await page.waitForFunction(() => window.volnaCurrentState?.includes('sort=None'));
   assert.match(await state(), /first_time=Some\(0\)/);
   console.log('1M rows: worker sorting, responsive frames, cancellation, newest query, selection, RAM refusal, and keyboard cycling passed');
+  await page.evaluate(() => {
+    window.filterFrames = 0;
+    const frame = () => {
+      if (window.volnaCurrentState?.includes('filtering…')) window.filterFrames++;
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  });
+  await page.mouse.click(485, 80); // Filter follows Columns.
+  await page.waitForTimeout(100);
+  await page.mouse.click(535, 150); // Begin's filter input, below its header.
+  await page.waitForTimeout(60);
+  await page.keyboard.type('> 500000');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.volnaCurrentState?.includes('status=499999 of 1000000 rows'));
+  assert.match(await state(), /first_time=Some\(500001\)/);
+  assert.ok(await page.evaluate(() => window.filterFrames) >= 1, 'frames must continue during the worker scan');
+  await page.screenshot({ path: `${results}/filtered-dark.png` });
+  await page.mouse.click(485, 80); // Collapsing preserves the result.
+  await page.waitForTimeout(60);
+  assert.match(await state(), /rows=499999/);
+  await page.mouse.click(485, 80);
+  await page.waitForTimeout(60);
+  await page.mouse.click(500, 108); // Sort matches by Begin.
+  await page.waitForFunction(() => /column: 1, descending: false.*status=499999 of 1000000 rows$/.test(window.volnaCurrentState));
+  await page.mouse.click(535, 150);
+  await page.waitForTimeout(60);
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.type('>= 999990');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.volnaCurrentState?.includes('status=10 of 1000000 rows'));
+  assert.match(await state(), /first_time=Some\(999990\)/);
+  await page.mouse.click(565, 80); // Clear filters preserves sorting.
+  await settled();
+  assert.match(await state(), /column: 1, descending: false.*first_time=Some\(0\)/);
+  console.log('1M rows: background filtering, responsive frames, collapsed state, exact ranges, sorting matches, and clearing passed');
+
   assert.deepEqual(errors, []);
   await context.close();
 
