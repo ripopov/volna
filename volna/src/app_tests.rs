@@ -4934,7 +4934,11 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
                     );
                 })
                 .unwrap();
-            vcx.simulate_keystrokes("ctrl-a backspace");
+            vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+                "cmd-a backspace"
+            } else {
+                "ctrl-a backspace"
+            });
             vcx.simulate_input(&key);
             vcx.update(|window, cx| window.draw(cx).clear(cx));
             vcx.simulate_keystrokes("enter");
