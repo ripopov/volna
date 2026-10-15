@@ -27,6 +27,7 @@ use volna_trace::session::Session;
 
 use crate::theme::{ThemePx, theme};
 use crate::ui::icon::icon_svg;
+use crate::ui::message_dialog::open_message_dialog;
 use crate::ui::text_input::TextInputEvent;
 use crate::ui::{
     Icon, IconName, Side, Splitter, SplitterAxis, TextInput, app_draws_controls, icon_button,
@@ -1951,7 +1952,10 @@ impl Workspace {
             .when_some(error, |el, e| {
                 el.child(
                     div()
+                        .id("trace-error")
                         .mt_1()
+                        .max_w_full()
+                        .min_w_0()
                         .flex()
                         .items_center()
                         .gap_2()
@@ -1967,7 +1971,16 @@ impl Workspace {
                                 .size(t.px(14.0))
                                 .color(t.panel.error),
                         )
-                        .child(e),
+                        .child(div().flex_1().min_w_0().whitespace_normal().child(
+                            gpui_kit::base::SelectableText::new("trace-error-text", e.clone()),
+                        ))
+                        .child(
+                            Button::new("trace-error-details")
+                                .label("Details")
+                                .on_click(move |_, window, cx| {
+                                    open_message_dialog("Trace error", e.clone(), window, cx);
+                                }),
+                        ),
                 )
             })
             .child(
@@ -2153,10 +2166,15 @@ impl Workspace {
             message = message.child(sep());
         }
         if let Some(notice) = status.workspace_notice {
-            let details = self.app.workspace.notices.clone();
+            let mut details = self.app.workspace.notices.clone();
+            if !details.contains(&notice) {
+                details.push(notice.clone());
+            }
+            let details = details.join("\n\n");
             message = message.child(
                 div()
                     .id("workspace-notice")
+                    .debug_selector(|| "workspace-notice".into())
                     .flex_none()
                     .cursor(CursorStyle::PointingHand)
                     .text_color(t.editor.error)
@@ -2164,54 +2182,31 @@ impl Workspace {
                     .child("Workspace notice")
                     .tooltip(move |w, cx| Tooltip::new(notice.clone()).build(w, cx))
                     .on_click(move |_, window, cx| {
-                        use gpui_kit::component::WindowExt;
-                        let details = details.clone();
-                        window.open_dialog(cx, move |dialog, _, _| {
-                            let details = details.clone();
-                            dialog
-                                .title("Workspace details")
-                                .footer(
-                                    Button::new("close-workspace-details")
-                                        .label("Close")
-                                        .on_click(|_, window, cx| window.close_dialog(cx)),
-                                )
-                                .child(
-                                    gpui_kit::uniform_list(
-                                        "workspace-details",
-                                        details.len(),
-                                        move |range, _, _| {
-                                            range
-                                                .map(|index| {
-                                                    div()
-                                                        .id(("workspace-detail", index))
-                                                        .h(t.px(28.0))
-                                                        .text_ellipsis()
-                                                        .child(details[index].clone())
-                                                        .tooltip({
-                                                            let text = details[index].clone();
-                                                            move |w, cx| {
-                                                                Tooltip::new(text.clone())
-                                                                    .build(w, cx)
-                                                            }
-                                                        })
-                                                })
-                                                .collect::<Vec<_>>()
-                                        },
-                                    )
-                                    .h(t.px(280.0)),
-                                )
-                        });
+                        open_message_dialog("Workspace details", details.clone(), window, cx);
                     }),
             );
         }
+        let notice_details = |id: &'static str, text: String| {
+            let details = text.clone();
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .min_w_0()
+                .cursor(CursorStyle::PointingHand)
+                .child(crop(text, colors.text_muted, false))
+                .tooltip(|w, cx| Tooltip::new("Click for message details").build(w, cx))
+                .on_click(move |_, window, cx| {
+                    open_message_dialog("Message details", details.clone(), window, cx);
+                })
+        };
         if let Some(hover) = status.hover {
             message = message.child(crop(hover, colors.text_muted, true));
         }
         if let Some(notice) = status.sidebar_notice {
-            message = message.child(crop(notice, colors.text_muted, false));
+            message = message.child(notice_details("sidebar-notice", notice));
         }
         if let Some(announcement) = status.announcement {
-            message = message.child(crop(announcement, colors.text_muted, false));
+            message = message.child(notice_details("announcement", announcement));
         }
 
         let has_nav = status.px_per.is_some();

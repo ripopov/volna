@@ -5,6 +5,7 @@ pub mod button;
 pub mod header;
 pub mod icon;
 pub mod menu;
+pub(crate) mod message_dialog;
 pub mod splitter;
 pub mod text_input;
 pub mod window_controls;

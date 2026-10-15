@@ -255,6 +255,120 @@ fn desktop_startup_hosts_workspace_and_dialogs(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn workspace_details_wrap_scroll_and_copy_complete_errors(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+
+    init(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let first = format!(
+        "Workspace restore failed; autosave paused: /{}trace.vtr: invalid start panel",
+        "long_directory_name/".repeat(80)
+    );
+    let second = "Missing trace: /tmp/волна.vtr\nCaused by: file not found\n".repeat(20);
+    for dark in [true, false] {
+        for width in [900.0, 360.0] {
+            for scheduler_only in [false, true] {
+                let mut workspace = None;
+                let root = cx.add_window(|window, cx| {
+                    let ws = cx.new(|cx| Workspace::new(window, cx));
+                    workspace = Some(ws.clone());
+                    gpui_kit::component::Root::new(ws, window, cx)
+                });
+                let workspace = RootWindow {
+                    root,
+                    workspace: workspace.unwrap(),
+                };
+                let mut vcx = VisualTestContext::from_window(root.into(), cx);
+                vcx.simulate_resize(size(px(width), px(480.0)));
+                let expected = if scheduler_only {
+                    first.clone()
+                } else {
+                    format!("{first}\n\n{second}")
+                };
+                workspace
+                    .update(&mut vcx, |ws, _, cx| {
+                        crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                        if scheduler_only {
+                            ws.app.workspace.scheduler.suspend(first.clone());
+                        } else {
+                            ws.app.workspace.notices = vec![first.clone(), second.clone()];
+                        }
+                        cx.notify();
+                    })
+                    .unwrap();
+                vcx.run_until_parked();
+                vcx.update(gpui_kit::test::TestWindowExt::render_frame);
+                let notice = vcx.debug_bounds("workspace-notice").unwrap();
+                vcx.simulate_click(notice.center(), Modifiers::default());
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    window.render_frame(cx);
+                    let text = window
+                        .focused_input(cx)
+                        .expect("message is focused")
+                        .as_textarea()
+                        .expect("selectable diagnostic text")
+                        .clone();
+                    assert_eq!(text.read(cx).value().as_ref(), expected);
+                    let bounds = text.read(cx).input_bounds();
+                    assert!(bounds.left() >= px(0.0) && bounds.right() <= px(width));
+                    assert!(bounds.top() >= px(0.0) && bounds.bottom() <= px(480.0));
+                    let close = window.find("close-message").bounds();
+                    assert!(close.top() >= bounds.bottom() && close.bottom() <= px(480.0));
+
+                    #[cfg(target_os = "macos")]
+                    let (start, end, select_all, copy) = ("cmd-up", "cmd-down", "cmd-a", "cmd-c");
+                    #[cfg(not(target_os = "macos"))]
+                    let (start, end, select_all, copy) =
+                        ("ctrl-home", "ctrl-end", "ctrl-a", "ctrl-c");
+                    window.press(start, cx);
+                    let first_caret = text.read(cx).cursor_layout().unwrap().0;
+                    window.press("down", cx);
+                    let next_caret = text.read(cx).cursor_layout().unwrap().0;
+                    assert!(next_caret.top() > first_caret.top());
+                    assert!(text.read(cx).cursor() < first.find('\n').unwrap_or(first.len()));
+                    window.drag(first_caret.center(), next_caret.center(), cx);
+                    let selection = text.read(cx).selected_range();
+                    assert!(!selection.is_empty());
+                    window.press(copy, cx);
+                    assert_eq!(
+                        cx.read_from_clipboard().unwrap().text().unwrap(),
+                        expected[selection]
+                    );
+                    window.press(end, cx);
+                    assert!(text.read(cx).scroll_offset().y < px(0.0));
+                    assert_eq!(text.read(cx).scroll_offset().x, px(0.0));
+                    window.press(select_all, cx);
+                    window.press(copy, cx);
+                    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected);
+                    window.press("backspace", cx);
+                    window.input("replacement", cx);
+                    assert_eq!(text.read(cx).value().as_ref(), expected);
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("old".into()));
+                    window.click("copy-message", cx);
+                    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected);
+                    window.click("close-message", cx);
+                });
+                vcx.run_until_parked();
+                assert!(vcx.debug_bounds("message-details").is_none());
+                let notice = vcx.debug_bounds("workspace-notice").unwrap();
+                vcx.simulate_click(notice.center(), Modifiers::default());
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    window.render_frame(cx);
+                    assert_eq!(
+                        window.focused_input(cx).unwrap().value(cx).as_ref(),
+                        expected
+                    );
+                });
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn desktop_window_matches_shell_identity(cx: &mut TestAppContext) {
     cx.update(|cx| {
         let options = crate::window_options(cx);
@@ -1268,6 +1382,7 @@ fn status_bar_memory_meter_tracks_the_budget(cx: &mut TestAppContext) {
 fn status_bar_groups_stay_put_under_long_messages(cx: &mut TestAppContext) {
     use gpui_kit::{VisualTestContext, px, size};
     init(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
     let mut workspace = None;
     let root = cx.add_window(|window, cx| {
         let ws = cx.new(|cx| Workspace::new(window, cx));
@@ -1306,7 +1421,7 @@ fn status_bar_groups_stay_put_under_long_messages(cx: &mut TestAppContext) {
     let meter = bounds(&mut vcx, "status-memory");
     let right = bounds(&mut vcx, "status-right");
     let long = "#123 · X cycles 4–5 (1 cycle) ".repeat(40);
-    set_message(&mut vcx, Some(long));
+    set_message(&mut vcx, Some(long.clone()));
     assert_eq!(bounds(&mut vcx, "status-memory"), meter, "meter moved");
     assert_eq!(bounds(&mut vcx, "status-right"), right, "right group moved");
     let slot = bounds(&mut vcx, "status-message");
@@ -1315,6 +1430,16 @@ fn status_bar_groups_stay_put_under_long_messages(cx: &mut TestAppContext) {
     assert!(slot.right() <= right.left(), "{slot:?} before {right:?}");
     let bar = slot.size.height;
     assert!(f32::from(bar) <= 24.0, "one line: {slot:?}");
+    let notice = bounds(&mut vcx, "sidebar-notice");
+    vcx.simulate_click(notice.center(), gpui_kit::Modifiers::default());
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        use gpui_kit::test::TestWindowExt as _;
+        window.render_frame(cx);
+        window.click("copy-message", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), long);
+        window.click("close-message", cx);
+    });
 
     vcx.simulate_resize(size(px(560.0), px(700.0)));
     let right = bounds(&mut vcx, "status-right");
