@@ -91,7 +91,7 @@ mod tests {
     use crate::theme::Appearance;
 
     #[test]
-    fn islands_is_opt_in_and_preserves_data_semantics_at_every_zoom() {
+    fn islands_preserves_data_semantics_at_every_zoom() {
         let dark = resolve(VOLNA_DARK, true).unwrap().chrome;
         for system_dark in [false, true] {
             let islands = resolve(VOLNA_ISLANDS_DARK, system_dark).unwrap();

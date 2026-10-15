@@ -43,7 +43,7 @@ pub fn init_app(cx: &mut App) {
         });
     }
     table_panel::init(cx);
-    theme::set(theme::CoreTheme::one_dark(), cx);
+    theme::set(theme::CoreTheme::islands_dark(), cx);
     if let Err(e) = assets::load_fonts(cx) {
         log::warn!("failed to load bundled fonts: {e:#}");
     }

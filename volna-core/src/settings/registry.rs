@@ -305,7 +305,7 @@ pub static REGISTRY: &[Spec] = &[
         page: Page::Appearance,
         group: "Theme",
         title: "Theme",
-        description: "`volna` follows the system's light or dark setting; `volna-dark` and `volna-light` pin one; `volna-mixed` is a light window with dark waves and pipeline, whatever the system. `volna-islands-dark` uses rounded dark islands on lighter chrome. Also One Dark, Dracula, Catppuccin, GitHub or VS Code, or any palette JSON dropped into the `themes` directory beside `settings.json`. Palettes reload when the file changes.",
+        description: "The default `volna-islands-dark` uses rounded dark islands on lighter chrome. `volna` follows the system's light or dark setting; `volna-dark` and `volna-light` pin one; `volna-mixed` is a light window with dark waves and pipeline, whatever the system. Also One Dark, Dracula, Catppuccin, GitHub or VS Code, or any palette JSON dropped into the `themes` directory beside `settings.json`. Palettes reload when the file changes.",
         keywords: &[
             "dark",
             "light",
@@ -321,7 +321,7 @@ pub static REGISTRY: &[Spec] = &[
             "vscode",
         ],
         kind: Kind::Theme,
-        default: Literal::Text(crate::theme::builtin::VOLNA),
+        default: Literal::Text(crate::theme::builtin::VOLNA_ISLANDS_DARK),
         apply: Apply::Live,
         hosts: Hosts::NATIVE_WEB,
     },

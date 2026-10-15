@@ -1,9 +1,8 @@
 # Volna Islands Dark
 
-Select **Volna Islands Dark** in Settings → Appearance, or set
-`"appearance.theme": "volna-islands-dark"`. The default remains `volna`, which
-follows the system appearance. There is no Islands light variant or density
-setting.
+**Volna Islands Dark** is the default theme. Select it in Settings → Appearance,
+or set `"appearance.theme": "volna-islands-dark"`. Choose `volna` to follow the
+system appearance. There is no Islands light variant or density setting.
 
 ## Appearance and ownership
 
