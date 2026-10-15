@@ -657,6 +657,7 @@ impl Panels {
 
     pub fn validate(&self) -> Result<()> {
         self.layout.validate(&self.ids())?;
+        self.validate_start_placement(&self.layout)?;
         ensure!(
             self.layout.active_for(self.focused) == Some(self.focused),
             "focused panel is not an active tab"
@@ -664,6 +665,16 @@ impl Panels {
         ensure!(
             self.content_count() > 0,
             "workspace requires a content panel"
+        );
+        Ok(())
+    }
+
+    fn validate_start_placement(&self, layout: &DockLayout) -> Result<()> {
+        ensure!(
+            self.iter()
+                .filter(|p| p.kind.is_start())
+                .all(|p| layout.placement(p.id) == Some(Placement::Center)),
+            "the start panel belongs in the center"
         );
         Ok(())
     }
@@ -679,6 +690,7 @@ impl Panels {
     pub fn set_layout(&mut self, layout: DockLayout, from_revision: u64) -> Result<bool> {
         ensure!(from_revision == self.revision, "stale layout proposal");
         layout.validate(&self.ids())?;
+        self.validate_start_placement(&layout)?;
         let layout = layout.normalized().expect("validated nonempty tree");
         layout.validate(&self.ids())?;
         if layout == self.layout {
@@ -892,7 +904,19 @@ impl Panels {
         ensure!(self.panels.contains_key(&id), "unknown panel");
         let new = self.unused_id()?;
         let mut layout = self.layout.clone();
-        layout.replace(id, new);
+        if kind.is_start() && layout.placement(id) == Some(Placement::Right) {
+            layout.remove(id);
+            layout = layout.normalized().unwrap_or(DockLayout {
+                center: None,
+                right: None,
+            });
+            layout.insert(new, Placement::Center);
+            if self.focused != id {
+                layout.activate(self.focused);
+            }
+        } else {
+            layout.replace(id, new);
+        }
         let mut ids = self.ids();
         ids.remove(&id);
         ids.insert(new);
@@ -978,16 +1002,19 @@ impl Panels {
             .partition(|(other, _)| *other == id);
         self.panels = kept.into_iter().collect();
         let mut tabs = vec![id];
+        let in_right = self.layout.placement(id) == Some(Placement::Right);
         if let Some(start) = start {
             self.next_id = start.0 + 1;
             self.panels
                 .insert(start, Panel::new(start, PanelKind::Start));
-            tabs.push(start);
+            if !in_right {
+                tabs.push(start);
+            }
         }
         let kept = Layout::Tabs { tabs, active: id };
-        self.layout = if self.layout.placement(id) == Some(Placement::Right) {
+        self.layout = if in_right {
             DockLayout {
-                center: None,
+                center: start.map(Layout::single),
                 right: Some(SideDock {
                     layout: kept,
                     width: self.layout.right.as_ref().unwrap().width,

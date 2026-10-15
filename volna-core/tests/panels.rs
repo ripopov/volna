@@ -511,6 +511,104 @@ fn the_start_panel_gives_way_to_content_and_returns_when_the_last_panel_closes()
 }
 
 #[test]
+fn closing_the_last_sidebar_content_returns_to_a_central_start_panel() {
+    use volna_core::panels::Placement;
+    for settings_placement in [None, Some(Placement::Center), Some(Placement::Right)] {
+        let mut app = linked_app();
+        let content = app.panels.focused_id();
+        panel(
+            &mut app,
+            PanelsCommand::Move {
+                panel: content,
+                placement: Placement::Right,
+            },
+        );
+        if let Some(placement) = settings_placement {
+            app.handle(Command::Settings(SettingsCommand::Open));
+            let settings = app.panels.settings_id().unwrap();
+            panel(
+                &mut app,
+                PanelsCommand::Move {
+                    panel: settings,
+                    placement,
+                },
+            );
+        }
+        let before = app.panels.saved_view().0;
+        panel(&mut app, PanelsCommand::Close(content));
+        let start = app.panels.first_start().unwrap();
+        assert!(app.panels.get(content).is_none());
+        assert_eq!(
+            app.panels.layout().placement(start),
+            Some(Placement::Center)
+        );
+        assert_eq!(
+            app.panels.layout().right.is_some(),
+            settings_placement == Some(Placement::Right)
+        );
+        app.panels.validate().unwrap();
+        let closed = app.panels.saved_view().0;
+        app.handle(Command::Undo);
+        assert_eq!(app.panels.saved_view().0, before);
+        app.panels.validate().unwrap();
+        app.handle(Command::Redo);
+        assert_eq!(app.panels.saved_view().0, closed);
+        if let Some(placement) = settings_placement {
+            let settings = app.panels.settings_id().unwrap();
+            assert_eq!(app.panels.layout().placement(settings), Some(placement));
+        }
+        app.panels.validate().unwrap();
+    }
+}
+
+#[test]
+fn keeping_only_sidebar_settings_puts_the_start_panel_in_the_center() {
+    use volna_core::panels::Placement;
+    let mut app = linked_app();
+    app.handle(Command::Settings(SettingsCommand::Open));
+    let settings = app.panels.settings_id().unwrap();
+    panel(
+        &mut app,
+        PanelsCommand::Move {
+            panel: settings,
+            placement: Placement::Right,
+        },
+    );
+    panel(&mut app, PanelsCommand::CloseOthers(settings));
+    let start = app.panels.first_start().unwrap();
+    assert_eq!(app.panels.len(), 2);
+    assert_eq!(app.panels.focused_id(), settings);
+    assert_eq!(app.panels.layout().center, Some(Layout::single(start)));
+    assert_eq!(
+        app.panels.layout().right.as_ref().unwrap().layout,
+        Layout::single(settings)
+    );
+    app.panels.validate().unwrap();
+}
+
+#[test]
+fn moving_the_start_panel_to_the_sidebar_is_rejected_without_changing_the_layout() {
+    use volna_core::panels::{DockLayout, Placement, SideDock};
+    let mut panels = Panels::new();
+    let start = panels.focused_id();
+    let before = panels.layout().clone();
+    let revision = panels.revision();
+    assert!(panels.move_panel(start, Placement::Right).is_err());
+    let proposal = DockLayout {
+        center: None,
+        right: Some(SideDock {
+            layout: Layout::single(start),
+            width: 420.0,
+            open: true,
+        }),
+    };
+    assert!(panels.set_layout(proposal, revision).is_err());
+    assert_eq!(panels.layout(), &before);
+    assert_eq!(panels.revision(), revision);
+    panels.validate().unwrap();
+}
+
+#[test]
 fn dock_moves_allow_an_empty_center_and_reject_duplicate_membership_atomically() {
     use volna_core::panels::{Placement, SideDock};
     let mut panels = wave_panels();
