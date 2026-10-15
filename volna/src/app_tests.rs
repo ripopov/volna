@@ -4942,7 +4942,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
     use volna_trace::data::Member;
     init(cx);
     for dark in [true, false] {
-        for width in [1000.0, 360.0] {
+        for (width, zoom) in [(1000.0, 1.0), (360.0, 1.0), (1000.0, 1.5), (360.0, 1.5)] {
             let mut workspace = None;
             let root = cx.add_window(|window, cx| {
                 let ws = cx.new(|cx| Workspace::new(window, cx));
@@ -4995,6 +4995,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
                         ws.dispatch(Command::Table(panel, command), Some(window), cx);
                     }
                     crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                    crate::theme::set_zoom(zoom, cx);
                     panel
                 })
                 .unwrap();
@@ -5018,6 +5019,11 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
                 })
                 .unwrap();
             vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let format_bounds = vcx.debug_bounds("table-format-4").unwrap();
+            let sort_bounds = vcx.debug_bounds("table-sort-4").unwrap();
+            assert!(sort_bounds.right() < format_bounds.left());
+            assert_eq!(sort_bounds.center().y, format_bounds.center().y);
+            assert!(format_bounds.size.height >= px(26.0 * zoom));
             let click = |vcx: &mut VisualTestContext, selector: &'static str| {
                 let bounds = vcx.debug_bounds(selector).expect(selector);
                 assert!(

@@ -2,10 +2,17 @@
 
 use super::model::{RowIdentity, TableModel};
 use crate::geometry::{Rect, point};
-use crate::scene::{FontRole, Scene};
+use crate::icons::IconName;
+use crate::scene::{FontRole, Scene, TextCache, TextMeasure};
 use crate::theme::Theme;
 
-pub fn paint(model: &TableModel, theme: &Theme, scene: &mut Scene) {
+pub fn paint(
+    model: &TableModel,
+    theme: &Theme,
+    cache: &mut TextCache,
+    measure: &mut dyn TextMeasure,
+    scene: &mut Scene,
+) {
     let layout = &model.layout;
     scene.fill(layout.bounds, theme.editor.bg);
     scene.fill(layout.header, theme.panel.bg);
@@ -32,52 +39,54 @@ pub fn paint(model: &TableModel, theme: &Theme, scene: &mut Scene) {
 
     scene.clipped(layout.header, |scene| {
         for column in &layout.columns {
-            label(
-                scene,
-                Rect::from_xywh(
-                    column.rect.left(),
-                    column.rect.top(),
-                    (column
-                        .format
-                        .map_or(column.rect.right() - 22.0 * theme.zoom, |rect| rect.left())
-                        - column.rect.left())
-                    .max(0.0),
-                    column.rect.height(),
-                ),
+            let title = fit_title(
                 model.column_title(column.source_index),
-                theme.panel.text,
+                column.header.title.width(),
+                theme,
+                cache,
+                measure,
             );
+            scene.clipped(column.header.title, |scene| {
+                scene.text(
+                    column.header.title.origin,
+                    column.header.title.height(),
+                    title,
+                    FontRole::Mono,
+                    theme.mono_size,
+                    theme.panel.text,
+                );
+            });
             let enabled = model.can_sort_column(column.source_index);
             let active = model
                 .applied_sort()
                 .filter(|sort| sort.column == column.source_index);
-            let x = column.rect.right() - 14.0 * theme.zoom;
-            let y = column.rect.top() + column.rect.height() * 0.5;
-            let d = 3.0 * theme.zoom;
-            for (descending, offset) in [(false, -4.0), (true, 4.0)] {
-                let selected = active.is_some_and(|sort| sort.descending == descending);
-                let tip = y + offset * theme.zoom;
-                let base = tip + if descending { -d } else { d };
-                scene.lines(
-                    vec![
-                        [point(x - d, base), point(x, tip)],
-                        [point(x, tip), point(x + d, base)],
-                    ],
-                    if !enabled {
-                        theme.panel.text_muted.with_alpha(0.45)
-                    } else if selected {
-                        theme.panel.icon_accent
+            scene.icon(
+                active.map_or(IconName::ArrowUpDown, |sort| {
+                    if sort.descending {
+                        IconName::ArrowDown
                     } else {
-                        theme.panel.text
-                    },
-                    if selected {
-                        2.0 * theme.zoom
-                    } else {
-                        theme.zoom
-                    },
-                );
-            }
+                        IconName::ArrowUp
+                    }
+                }),
+                column.header.sort_icon,
+                if !enabled {
+                    theme.panel.text_muted.with_alpha(0.45)
+                } else if active.is_some() {
+                    theme.panel.icon_accent
+                } else {
+                    theme.panel.text_muted
+                },
+            );
         }
+        scene.fill(
+            Rect::from_xywh(
+                layout.header.left(),
+                layout.header.bottom() - theme.zoom,
+                layout.header.width(),
+                theme.zoom,
+            ),
+            theme.border,
+        );
     });
 
     let selected = model.selected.as_ref();
@@ -142,4 +151,29 @@ pub fn paint(model: &TableModel, theme: &Theme, scene: &mut Scene) {
         &format!("{}{}", model.status(), selected_text),
         theme.panel.text_muted,
     );
+}
+
+fn fit_title(
+    text: &str,
+    width: f32,
+    theme: &Theme,
+    cache: &mut TextCache,
+    measure: &mut dyn TextMeasure,
+) -> String {
+    if cache.width(measure, text, FontRole::Mono, theme.mono_size) <= width {
+        return text.into();
+    }
+    if cache.width(measure, "…", FontRole::Mono, theme.mono_size) > width {
+        return String::new();
+    }
+    let cuts: Vec<_> = text.char_indices().map(|(i, _)| i).collect();
+    let end = cuts.partition_point(|&cut| {
+        cache.width(
+            measure,
+            &format!("{}…", &text[..cut]),
+            FontRole::Mono,
+            theme.mono_size,
+        ) <= width
+    });
+    format!("{}…", &text[..cuts[end.saturating_sub(1)]])
 }

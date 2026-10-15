@@ -75,9 +75,14 @@ controls.
 The sample viewer's Table panel is the specimen for native column dividers.
 Its numeric-format toolbar button pairs a number-sign icon with the current mode
 (for example, `hex`) and defaults numeric data to hexadecimal.
-Enable the ID column or a numeric attribute in Columns to expose its format badge.
-The badge opens compatible translators with sample values; choosing a format
-overrides the table default for that column. Use table default restores inheritance.
+Headers use a 40px row with a centered title, sort arrow, and format chip.
+Enable the ID column or a numeric attribute in Columns to expose its format chip.
+Inherited formats use a neutral chip; explicit column overrides use an accent
+border and a pin. The chip opens compatible translators with sample values;
+Use table default restores inheritance. Long titles end in an ellipsis, and
+columns retain enough width for the sort arrow, format chip, and resize handle.
+An upward or downward arrow marks the applied sort direction; paired arrows mark
+an unsorted column. These controls scale with interface zoom.
 Time columns retain their time representation, and format changes preserve row
 selection, scroll position, and sorting. These preferences are saved with the table.
 

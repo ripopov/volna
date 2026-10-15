@@ -159,7 +159,10 @@ generator or opening one.
 
 Click a column header to cycle ascending, descending, and source order. Tab to a
 header and use Enter or Space for the same action; divider shortcuts still resize
-columns. Blue chevrons show the **applied** direction. While sorting, the status
+columns. An accent arrow shows the **applied** direction; paired arrows mark
+unsorted columns. The 40px header aligns titles, arrows, and format chips. Long
+titles truncate, while format controls retain their width. A pin and accent
+border distinguish column overrides from inherited formats. While sorting, the status
 bar labels the previous order and offers Cancel. Selection follows the record,
 including after sorting, Go to, and copying. Sort choices are local to the open
 view and are not saved in workspace files.

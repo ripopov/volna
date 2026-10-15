@@ -2,7 +2,7 @@
 
 use gpui_kit::component::{
     Sizable,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonCustomVariant, ButtonVariants},
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::prelude::*;
@@ -731,7 +731,7 @@ impl PanelCanvas {
             header.width(),
             header.height() + table.layout.body.height(),
         );
-        let t = *theme(cx);
+        let t = canvas_theme(cx).map(hsla);
         let mut edges = div()
             .id(("table-column-edges", self.panel.0))
             .tab_group()
@@ -789,10 +789,11 @@ impl PanelCanvas {
             };
             let center = column.rect.left() + column.rect.width() * 0.5;
             let draggable = table.source.generator_track().is_some();
-            let has_format = column.format.is_some();
+            let has_format = column.header.format.is_some();
             edges = edges.child(
                 div()
                     .id(("table-sort", source_index))
+                    .debug_selector(move || format!("table-sort-{source_index}"))
                     .occlude()
                     .when(enabled, gpui_kit::Styled::cursor_pointer)
                     .role(gpui_kit::accesskit::Role::Button)
@@ -801,11 +802,9 @@ impl PanelCanvas {
                     .focus(move |style| style.border_1().border_color(t.border_focused))
                     .absolute()
                     .top_0()
-                    .left(px(
-                        column.rect.left() - header.left() + column.resize.width() * 0.5
-                    ))
-                    .w(px((column.rect.width() - column.resize.width()).max(0.0)))
-                    .h(px(header.height()))
+                    .left(px(column.header.sort_target.left() - header.left()))
+                    .w(px(column.header.sort_target.width()))
+                    .h(px(column.header.sort_target.height()))
                     .aria_label(format!(
                         "Sort {}: {direction}",
                         table.column_title(source_index)
@@ -897,13 +896,14 @@ impl PanelCanvas {
                         if has_format {
                             let owner = context_owner.clone();
                             menu = menu
-                                .submenu("Format", window, cx, move |menu, _, cx| {
+                                .submenu("Format", window, cx, move |menu, window, cx| {
                                     crate::table_panel::format_menu(
                                         menu,
                                         &owner,
                                         panel,
                                         generation,
                                         Some(source_index),
+                                        window,
                                         cx,
                                     )
                                 })
@@ -925,10 +925,15 @@ impl PanelCanvas {
                         ))
                     }),
             );
-            if let Some(rect) = column.format {
+            if let Some(rect) = column.header.format {
                 let translator = table.column_translator(source_index).expect("format badge");
                 let owner = self.ws.clone();
                 let inherited = table.formats.columns[source_index].is_none();
+                let foreground = if inherited {
+                    t.panel.text_muted
+                } else {
+                    t.panel.icon_accent
+                };
                 let hint = format!(
                     "Format {}: {} · {}",
                     table.column_title(source_index),
@@ -949,24 +954,62 @@ impl PanelCanvas {
                         .occlude()
                         .child(
                             Button::new(("table-format", source_index))
-                                .label(translator.badge())
-                                .dropdown_caret(rect.width() >= 40.0 * t.zoom)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(4.0 * t.zoom))
+                                        .font_family(t.mono_font)
+                                        .text_size(px(12.0 * t.zoom))
+                                        .when(!inherited, |el| {
+                                            el.child(
+                                                crate::ui::Icon::new(
+                                                    volna_core::icons::IconName::Pin,
+                                                )
+                                                .inherit_color()
+                                                .size(px(12.0 * t.zoom)),
+                                            )
+                                        })
+                                        .child(translator.badge())
+                                        .child(
+                                            crate::ui::Icon::new(
+                                                volna_core::icons::IconName::ChevronDown,
+                                            )
+                                            .inherit_color()
+                                            .size(px(12.0 * t.zoom)),
+                                        ),
+                                )
                                 .accessibility_label(hint.clone())
                                 .tooltip(hint)
                                 .debug_selector(move || format!("table-format-{source_index}"))
-                                .xsmall()
+                                .with_size(px(26.0 * t.zoom))
                                 .compact()
-                                .ghost()
-                                .w_full()
-                                .h_full()
+                                .custom(
+                                    ButtonCustomVariant::new(cx)
+                                        .color(if inherited {
+                                            t.editor.bg
+                                        } else {
+                                            t.selection.bg
+                                        })
+                                        .foreground(foreground)
+                                        .hover(t.hover.bg)
+                                        .active(t.selection.bg),
+                                )
+                                .border_1()
+                                .border_color(if inherited { t.border } else { foreground })
+                                .rounded(px(4.0 * t.zoom))
+                                .px(px(6.0 * t.zoom))
+                                .w(px(rect.width()))
+                                .h(px(rect.height()))
                                 .tab_index((source_index * 3 + 1) as isize)
-                                .dropdown_menu(move |menu, _, cx| {
+                                .dropdown_menu(move |menu, window, cx| {
                                     crate::table_panel::format_menu(
                                         menu,
                                         &owner,
                                         panel,
                                         generation,
                                         Some(source_index),
+                                        window,
                                         cx,
                                     )
                                 }),

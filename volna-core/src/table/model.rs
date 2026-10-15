@@ -8,7 +8,8 @@ use web_time::Instant;
 use super::columns::{ColumnSet, TransactionColumn};
 use super::format::{self, FormatChoice, TableFormats};
 use super::layout::{
-    MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, MIN_COLUMN_WIDTH, ROW_HEIGHT, RowViewport, TableLayout,
+    ColumnHeader, HEADER_HEIGHT, MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, ROW_HEIGHT, RowViewport,
+    TableLayout,
 };
 use super::source::TableSource;
 use crate::data::loaded_tracks::LoadedGenerator;
@@ -1214,8 +1215,9 @@ impl TableModel {
         if source_index >= self.widths.len() || !width.is_finite() {
             return false;
         }
+        let minimum = ColumnHeader::minimum_width(self.column_translator(source_index).is_some());
         self.widths.update(|widths| {
-            widths[source_index] = Some(width.clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH));
+            widths[source_index] = Some(width.clamp(minimum, MAX_COLUMN_WIDTH));
         })
     }
 
@@ -1246,14 +1248,15 @@ impl TableModel {
         if source_index >= self.widths.len() {
             return None;
         }
+        let has_format = self.column_translator(source_index).is_some();
         let mut width = measure.text_width(
             self.column_title(source_index),
             FontRole::Mono,
             theme.mono_size,
-        ) + if self.column_translator(source_index).is_some() {
-            70.0
+        ) + if has_format {
+            32.0 + ColumnHeader::FORMAT_WIDTH
         } else {
-            22.0
+            24.0
         } * theme.zoom;
         let end = self
             .viewport
@@ -1269,7 +1272,10 @@ impl TableModel {
                 width = width.max(measure.text_width(&text, FontRole::Mono, theme.mono_size));
             }
         }
-        Some((width / theme.zoom + 14.0).clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH))
+        Some(
+            (width / theme.zoom + 16.0)
+                .clamp(ColumnHeader::minimum_width(has_format), MAX_COLUMN_WIDTH),
+        )
     }
 
     pub(crate) fn take_edits(
@@ -1402,10 +1408,7 @@ impl TableModel {
                 .layout
                 .columns
                 .iter()
-                .find(|column| {
-                    column.rect.contains(position)
-                        && !column.format.is_some_and(|rect| rect.contains(position))
-                })
+                .find(|column| column.header.sort_target.contains(position))
                 .map(|column| column.source_index)
                 .is_some_and(|column| self.cycle_sort(column)),
             PointerEvent::Down {
@@ -1519,6 +1522,7 @@ impl TableModel {
     pub fn layout(&mut self, bounds: Rect, theme: &Theme) -> &TableLayout {
         let zoom = theme.zoom;
         let row_height = ROW_HEIGHT * zoom;
+        let header_height = HEADER_HEIGHT * zoom;
         let gutter_width = 64.0 * zoom;
         let bar = 12.0 * zoom;
         let status_height = row_height;
@@ -1526,13 +1530,13 @@ impl TableModel {
             bounds.left() + gutter_width,
             bounds.top(),
             (bounds.width() - gutter_width - bar).max(0.0),
-            row_height,
+            header_height,
         );
         let body = Rect::from_xywh(
             header.left(),
             header.bottom(),
             header.width(),
-            (bounds.height() - row_height - status_height - bar).max(0.0),
+            (bounds.height() - header_height - status_height - bar).max(0.0),
         );
         let gutter = Rect::from_xywh(bounds.left(), body.top(), gutter_width, body.height());
         let vertical_bar = Rect::from_xywh(body.right(), body.top(), bar, body.height());
@@ -1544,6 +1548,11 @@ impl TableModel {
             status_height,
         );
         let mut widths = self.visible_column_widths();
+        for (index, width) in &mut widths {
+            *width = width.max(ColumnHeader::minimum_width(
+                self.column_translator(*index).is_some(),
+            ));
+        }
         let fixed_width = widths.iter().map(|(_, width)| width * zoom).sum::<f32>();
         if let Some((_, width)) = widths.iter_mut().find(|(index, _)| {
             matches!(self.source, TableSource::Generator(_))
@@ -1584,7 +1593,7 @@ impl TableModel {
         let mut columns = Vec::new();
         for (source_index, width) in widths {
             let width = width * zoom;
-            let rect = Rect::from_xywh(x, header.top(), width, row_height);
+            let rect = Rect::from_xywh(x, header.top(), width, header_height);
             if rect.right() >= body.left() && rect.left() <= body.right() {
                 columns.push(super::layout::ColumnRect {
                     source_index,
@@ -1594,17 +1603,13 @@ impl TableModel {
                         rect.right() - 1.0 - theme.splitter_grab / 2.0,
                         header.top(),
                         theme.splitter_grab,
-                        row_height + body.height(),
+                        header_height + body.height(),
                     ),
-                    format: self.column_translator(source_index).map(|_| {
-                        let badge_width = (width - 20.0 * zoom).min(44.0 * zoom).max(0.0);
-                        Rect::from_xywh(
-                            rect.right() - 20.0 * zoom - badge_width,
-                            rect.top() + 2.0 * zoom,
-                            badge_width,
-                            row_height - 4.0 * zoom,
-                        )
-                    }),
+                    header: ColumnHeader::new(
+                        rect,
+                        self.column_translator(source_index).is_some(),
+                        zoom,
+                    ),
                     preview_bytes: ((width / (theme.mono_size * 0.5).max(1.0)).ceil() as usize * 4)
                         .max(PREVIEW_BYTES)
                         .next_power_of_two()
@@ -2157,6 +2162,7 @@ mod tests {
     use crate::geometry::point;
     use crate::pipeline::TrackSource;
     use crate::table::SignalSource;
+    use crate::table::layout::MIN_COLUMN_WIDTH;
     use volna_trace::data::history::VecHistory;
     use volna_trace::data::transactions::{AttributeValue, TransactionAttribute, TxKind, TxStatus};
     use volna_trace::data::{SignalShape, WaveValue};
@@ -2953,6 +2959,138 @@ mod tests {
     }
 
     #[test]
+    fn header_controls_remain_separate_at_minimum_width_after_scrolling_and_zooming() {
+        use crate::scene::{MonoMeasure, Prim, Scene, TextCache};
+
+        let key = "gpu.ενεργές_μονάδες".repeat(8);
+        let mut record = transaction(1, 0, "row");
+        record.attributes[1].key = key.clone();
+        let mut model = generator_model(vec![record]);
+        model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Attribute(key.clone())));
+        model.edit_columns(|c| c.move_transaction(7, Some(0)));
+        model.resize_column(7, 1.0);
+        for zoom in [0.75, 1.0, 1.5, 2.0] {
+            for horizontal in [0.0, 20.0] {
+                let theme = Theme::volna(true).zoomed(zoom);
+                model.horizontal = horizontal;
+                model.layout(Rect::from_xywh(0.0, 0.0, 360.0, 400.0), &theme);
+                let column = model.layout.columns[0];
+                let header = column.header;
+                let format = header.format.unwrap();
+                assert!(header.title.right() < header.sort_icon.left());
+                assert!(header.sort_icon.right() < format.left());
+                assert!(format.right() < column.resize.left());
+                assert_eq!(
+                    format.top() + format.height() * 0.5,
+                    column.rect.top() + column.rect.height() * 0.5,
+                );
+                let mut scene = Scene::default();
+                super::super::paint::paint(
+                    &model,
+                    &theme,
+                    &mut TextCache::default(),
+                    &mut MonoMeasure,
+                    &mut scene,
+                );
+                let title = scene
+                    .prims
+                    .iter()
+                    .find_map(|prim| match prim {
+                        Prim::Text { origin, text, .. } if *origin == header.title.origin => {
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(title.ends_with('…'));
+                assert!(
+                    MonoMeasure.text_width(title, FontRole::Mono, theme.mono_size)
+                        <= header.title.width()
+                );
+                let center = point(
+                    format.left() + format.width() * 0.5,
+                    format.top() + format.height() * 0.5,
+                );
+                assert!(!model.pointer(
+                    &mut Document::new(),
+                    crate::panels::PanelId(1),
+                    PointerEvent::Down {
+                        position: center,
+                        button: MouseButton::Left,
+                        modifiers: Default::default()
+                    },
+                    Instant::now(),
+                ));
+                assert!(model.sort_requested.is_none());
+                assert!(!model.dragging());
+            }
+        }
+    }
+
+    #[test]
+    fn header_arrows_follow_applied_sort_without_moving_the_format_control() {
+        use crate::icons::IconName;
+        use crate::scene::{MonoMeasure, Prim, Scene, TextCache};
+
+        let mut model = generator_model(vec![transaction(2, 0, "row"), transaction(1, 1, "row")]);
+        model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Id));
+        let theme = Theme::volna(true);
+        model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &theme);
+        let header = model
+            .layout
+            .columns
+            .iter()
+            .find(|c| c.source_index == 4)
+            .unwrap()
+            .header;
+        let arrow = |model: &TableModel| {
+            let mut scene = Scene::default();
+            super::super::paint::paint(
+                model,
+                &theme,
+                &mut TextCache::default(),
+                &mut MonoMeasure,
+                &mut scene,
+            );
+            scene
+                .prims
+                .into_iter()
+                .find_map(|prim| match prim {
+                    Prim::Icon { name, rect, .. } if rect == header.sort_icon => Some(name),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(arrow(&model), IconName::ArrowUpDown);
+        for (expected, first_id) in [
+            (IconName::ArrowUp, 1),
+            (IconName::ArrowDown, 2),
+            (IconName::ArrowUpDown, 2),
+        ] {
+            let previous = arrow(&model);
+            assert!(model.cycle_sort(4));
+            if model.sorting() {
+                assert_eq!(arrow(&model), previous);
+            }
+            finish_sort(&mut model);
+            assert_eq!(arrow(&model), expected);
+            assert_eq!(
+                model.window.rows[0].identity,
+                RowIdentity::Transaction(TransactionRef(first_id))
+            );
+            let current = model
+                .layout
+                .columns
+                .iter()
+                .find(|c| c.source_index == 4)
+                .unwrap()
+                .header;
+            assert_eq!(current.format, header.format);
+            assert_eq!(current.sort_icon, header.sort_icon);
+        }
+    }
+
+    #[test]
     fn trailing_column_fills_space_until_dragged_and_reset_restores_auto_width() {
         let mut model = generator_model(vec![transaction(1, 0, "row")]);
         let theme = Theme::one_dark().zoomed(1.5);
@@ -3058,7 +3196,7 @@ mod tests {
             transaction(1, 0, "short"),
             transaction(2, 1, &"x".repeat(300)),
         ]);
-        let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 84.0);
+        let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 100.0);
         let theme = Theme::one_dark();
         model.layout(bounds, &theme);
         let short = model
@@ -3071,7 +3209,7 @@ mod tests {
             .unwrap();
         assert!(long > 2100.0);
         let zoomed = theme.zoomed(2.0);
-        model.layout(Rect::from_xywh(0.0, 0.0, 2000.0, 168.0), &zoomed);
+        model.layout(Rect::from_xywh(0.0, 0.0, 2000.0, 200.0), &zoomed);
         let zoomed_width = model
             .column_fit_width(0, &zoomed, &mut crate::scene::MonoMeasure)
             .unwrap();

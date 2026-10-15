@@ -73,7 +73,7 @@ try {
   const sorting = () => page.waitForFunction(() => window.volnaCurrentState?.includes('sorting…'), {}, { timeout: 10000 });
   const settled = () => page.waitForFunction(() => /panel=4 table .*rows=1000000.*status=1000000 rows$/.test(window.volnaCurrentState), {}, { timeout: 30000 });
   await settled();
-  await page.mouse.click(350, 132);
+  await page.mouse.click(350, 148);
   const selected = (await state()).match(/selected=(.*?) sort=/)[1];
   assert.notEqual(selected, 'None');
   await page.evaluate(() => {

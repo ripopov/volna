@@ -2573,7 +2573,7 @@ impl App {
                 p.last_layout().bounds
             }
             PanelKind::Table(table) => {
-                crate::table::paint::paint(table, theme, scene);
+                crate::table::paint::paint(table, theme, &mut self.text, measure, scene);
                 table.layout.bounds
             }
             _ => return,

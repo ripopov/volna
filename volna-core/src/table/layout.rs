@@ -3,9 +3,64 @@
 use crate::geometry::Rect;
 
 pub const ROW_HEIGHT: f32 = 24.0;
+pub const HEADER_HEIGHT: f32 = 40.0;
 pub const MAX_PREPARED_ROWS: u64 = 256;
 pub const MIN_COLUMN_WIDTH: f32 = 48.0;
 pub const MAX_COLUMN_WIDTH: f32 = 16_384.0;
+
+#[derive(Clone, Copy, Debug)]
+pub struct ColumnHeader {
+    pub title: Rect,
+    pub sort_icon: Rect,
+    pub sort_target: Rect,
+    pub format: Option<Rect>,
+}
+
+impl ColumnHeader {
+    pub const FORMAT_WIDTH: f32 = 76.0;
+
+    #[must_use]
+    pub fn minimum_width(has_format: bool) -> f32 {
+        if has_format { 144.0 } else { MIN_COLUMN_WIDTH }
+    }
+
+    pub(super) fn new(rect: Rect, has_format: bool, zoom: f32) -> Self {
+        let pad = 8.0 * zoom;
+        let center_y = rect.top() + rect.height() * 0.5;
+        let right = rect.right() - pad;
+        let format = has_format.then(|| {
+            Rect::from_xywh(
+                right - Self::FORMAT_WIDTH * zoom,
+                center_y - 13.0 * zoom,
+                Self::FORMAT_WIDTH * zoom,
+                26.0 * zoom,
+            )
+        });
+        let sort_right = format.map_or(right, |format| format.left() - pad);
+        let sort_icon = Rect::from_xywh(
+            sort_right - 16.0 * zoom,
+            center_y - 8.0 * zoom,
+            16.0 * zoom,
+            16.0 * zoom,
+        );
+        Self {
+            title: Rect::from_xywh(
+                rect.left() + pad,
+                rect.top(),
+                (sort_icon.left() - pad - rect.left() - pad).max(0.0),
+                rect.height(),
+            ),
+            sort_icon,
+            sort_target: Rect::from_xywh(
+                rect.left() + 4.0 * zoom,
+                rect.top(),
+                (sort_right - rect.left() - 4.0 * zoom).max(0.0),
+                rect.height(),
+            ),
+            format,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RowViewport {
@@ -90,7 +145,7 @@ pub struct ColumnRect {
     pub prepared_index: usize,
     pub rect: Rect,
     pub resize: Rect,
-    pub format: Option<Rect>,
+    pub header: ColumnHeader,
     pub preview_bytes: usize,
 }
 

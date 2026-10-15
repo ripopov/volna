@@ -23,6 +23,7 @@ pub(crate) fn format_menu(
     panel: volna_core::panels::PanelId,
     generation: u64,
     column: Option<usize>,
+    window: &Window,
     cx: &App,
 ) -> PopupMenu {
     let ws = owner.read(cx);
@@ -32,16 +33,30 @@ pub(crate) fn format_menu(
     let Some(table) = ws.app.panels.get(panel).and_then(|p| p.kind.table()) else {
         return menu;
     };
-    let choices = if let Some(column) = column {
+    let t = theme(cx);
+    let available = (window.viewport_size().width - px(32.0 * t.zoom)).max(px(0.0));
+    let menu_width = px(340.0).min(available);
+    let content_width = (menu_width - px(56.0 * t.zoom)).max(px(0.0));
+    let (heading, choices) = if let Some(column) = column {
         let Some(format) = table.column_formats(column) else {
             return menu;
         };
-        menu = menu.label(format!("Format · {}", table.column_title(column)));
-        format
+        (format!("Format · {}", table.column_title(column)), format)
     } else {
-        menu = menu.label("Default number format");
-        table.number_formats()
+        ("Default number format".into(), table.number_formats())
     };
+    menu = menu.item(
+        PopupMenuItem::element(move |_, cx| {
+            div()
+                .id("table-format-heading")
+                .w(content_width)
+                .truncate()
+                .text_color(theme(cx).panel.text_muted)
+                .aria_label(heading.clone())
+                .child(heading.clone())
+        })
+        .disabled(true),
+    );
     for (index, choice) in choices.into_iter().enumerate() {
         if column.is_some() && index == 1 {
             menu = menu.separator();
@@ -66,9 +81,13 @@ pub(crate) fn format_menu(
                     .id(("table-format-choice", index))
                     .debug_selector(move || selector)
                     .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .w(content_width)
+                    .max_w(content_width)
                     .items_center()
                     .gap_2()
-                    .w_full()
                     .aria_label(format!("{} {}", choice.label, choice.preview))
                     .child(
                         div()
@@ -80,7 +99,7 @@ pub(crate) fn format_menu(
                     .when(!choice.preview.is_empty(), |el| {
                         el.child(
                             div()
-                                .max_w(px(110.0 * t.zoom))
+                                .max_w(px(110.0 * t.zoom).min(content_width * 0.45))
                                 .truncate()
                                 .font_family(t.mono_font)
                                 .text_color(t.panel.text_muted)
@@ -101,7 +120,7 @@ pub(crate) fn format_menu(
             }),
         );
     }
-    menu.min_w(px(230.0)).max_w(px(340.0))
+    menu.min_w(menu_width).max_w(menu_width)
 }
 
 gpui_kit::actions!(
@@ -250,7 +269,9 @@ impl CanvasPanelView {
                 .debug_selector(|| "table-number-format".into())
                 .dropdown_menu({
                     let owner = owner.clone();
-                    move |menu, _, cx| format_menu(menu, &owner, id, generation, None, cx)
+                    move |menu, window, cx| {
+                        format_menu(menu, &owner, id, generation, None, window, cx)
+                    }
                 }),
             )
             .child(
