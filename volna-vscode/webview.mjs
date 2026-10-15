@@ -93,6 +93,6 @@ try {
   themes.start();
 } catch (error) {
   status.hidden = false;
-  status.textContent = `Volna could not start: ${error.message}`;
+  status.textContent = `Volna could not start: ${error?.message ?? String(error)}`;
   send({ type: "notice", text: status.textContent });
 }

@@ -487,9 +487,9 @@ pub mod web {
         }
         let memory = js_sys::WebAssembly::Memory::from(wasm_bindgen::memory());
         let atomics = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("Atomics"))?;
-        if !memory
-            .buffer()
-            .is_instance_of::<js_sys::SharedArrayBuffer>()
+        // VS Code hides the global SharedArrayBuffer constructor but exposes shared Wasm memory.
+        let buffer = js_sys::Object::from(memory.buffer());
+        if buffer.to_string() != "[object SharedArrayBuffer]"
             || !js_sys::Reflect::get(&atomics, &JsValue::from_str("waitAsync"))?.is_function()
         {
             return Err(JsValue::from_str(
