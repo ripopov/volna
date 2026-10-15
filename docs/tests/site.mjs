@@ -102,9 +102,11 @@ try {
     }, { base, theme, zoom });
     assert.equal(await selectedTransaction(), islandTransaction,
       'switching Islands appearance and interface zoom must preserve the selected transaction');
-    await page.screenshot({ path: `${results}/islands-${theme}-${width}-${zoom}.png` });
+    const screenshot = await page.screenshot({ path: `${results}/islands-${theme}-${width}-${zoom}.png` });
+    if (width === 1440 && zoom === 1) await verifySampleIslandContour(page, screenshot);
   }
   report.behavior.push('Islands light and dark switching preserves the selected transaction at desktop, narrow width, and 125% zoom');
+  report.behavior.push('Islands tab headers meet their content and match the untabbed sidebar without an outer border');
   await page.mouse.move(1130, 632);
   await page.mouse.down();
   await page.mouse.move(1180, 632, { steps: 3 });
@@ -319,6 +321,22 @@ try {
 async function writeReport() {
   const { writeFile } = await import('node:fs/promises');
   await writeFile(`${results}/report.json`, JSON.stringify(report, null, 2) + '\n');
+}
+
+async function verifySampleIslandContour(page, screenshot) {
+  const colors = await page.evaluate(async bytes => {
+    const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/png' }));
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext('2d');
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const points = { untabbed: [4, 50], headerLeft: [194, 50], contentLeft: [194, 70], headerTop: [210, 36] };
+    return Object.fromEntries(Object.entries(points).map(([name, [x, y]]) =>
+      [name, [...context.getImageData(x, y, 1, 1).data]]));
+  }, [...screenshot]);
+  for (const edge of ['headerLeft', 'contentLeft', 'headerTop']) {
+    assert.deepEqual(colors[edge], colors.untabbed, `${edge}: tabbed and untabbed island contours must match`);
+  }
 }
 
 async function verifyDiagrams(page) {

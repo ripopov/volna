@@ -278,6 +278,7 @@ impl Tabs {
         cx: &mut App,
     ) -> AnyElement {
         let t = *theme(cx);
+        let radius = t.px(t.islands.expect("island tabs").radius);
         let focused = window.is_window_active()
             && group
                 .active_panel()
@@ -312,7 +313,13 @@ impl Tabs {
                     .flex_none()
                     .whitespace_nowrap()
                     .tab_stop(true)
-                    .focus_visible(move |s| s.border_color(t.border_focused))
+                    .focus_visible(move |s| {
+                        s.border_color(t.border_focused).shadow(vec![
+                            gpui_kit::BoxShadow::new(px(0.), px(0.), t.border_focused)
+                                .spread_radius(px(1.))
+                                .inset(),
+                        ])
+                    })
                     .hover(move |s| s.bg(t.panel.bg).text_color(t.panel.text))
                     .on_key_down({
                         let group = group.clone();
@@ -334,8 +341,10 @@ impl Tabs {
                     })
                     .child(title)
                     .selected(active)
-                    .rounded_t(t.px(10.0))
+                    .rounded_t(radius)
                     .border_1()
+                    .border_t_0()
+                    .when(position == 0, gpui_kit::Styled::border_l_0)
                     .border_color(t.border_variant)
                     .when(active, gpui_kit::Styled::border_b_0)
                     .bg(if active {

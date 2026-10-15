@@ -38,9 +38,12 @@ selected tabs carry the active group's focus treatment instead.
 Theme switching does not reconstruct the dock layout or panel entities. Tabs sit
 edge-to-edge with rounded upper corners. The selected tab joins the panel surface;
 unselected tabs use a 12% black tint in dark mode or the viewer hover surface in
-light mode, with a subtle bottom border.
+light mode, with a subtle bottom border. Tab strokes stay on internal edges;
+the island's outer top and left edges use the same borderless contour as an
+island without tabs.
 The focused group's selected title uses the primary text color; inactive titles
-are muted. Keyboard focus has its own accent outline. Losing window focus mutes
+are muted. Keyboard focus has its own inset accent outline that does not change
+tab geometry. Losing window focus mutes
 the selected title without dimming data colors.
 
 ## Geometry
