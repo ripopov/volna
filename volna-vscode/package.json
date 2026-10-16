@@ -1,7 +1,7 @@
 {
   "name": "volna",
   "displayName": "Volna Waveform Viewer",
-  "description": "View VTR recordings with the GPUI waveform viewer and a bundled trace server.",
+  "description": "View VTR, FST, and Kanata recordings with the GPUI waveform viewer, bundled trace server, and converter.",
   "version": "0.1.2",
   "publisher": "vtr",
   "license": "MIT",
@@ -187,6 +187,24 @@
         "selector": [
           {
             "filenamePattern": "*.vtr"
+          },
+          {
+            "filenamePattern": "*.fst"
+          },
+          {
+            "filenamePattern": "*.fst.gz"
+          },
+          {
+            "filenamePattern": "*.kanata"
+          },
+          {
+            "filenamePattern": "*.kanata.gz"
+          },
+          {
+            "filenamePattern": "*.log"
+          },
+          {
+            "filenamePattern": "*.log.gz"
           }
         ],
         "priority": "default"
@@ -459,7 +477,7 @@
   "scripts": {
     "settings": "node scripts/settings.mjs",
     "check": "npm run check:format && node scripts/settings.mjs --check",
-    "test": "node --test commands.test.cjs workspace.test.cjs trace-host.test.cjs theme.test.mjs",
+    "test": "node --test commands.test.cjs workspace.test.cjs trace-host.test.cjs conversion.test.cjs theme.test.mjs",
     "test:package": "python3 -m unittest discover -s . -p test_package_vsix.py",
     "test:vsix": "node --test vsix.test.mjs",
     "build": "node scripts/build.mjs",

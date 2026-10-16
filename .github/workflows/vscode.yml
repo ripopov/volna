@@ -2,9 +2,9 @@ name: VS Code extension
 
 on:
   push:
-    paths: ['volna-vscode/**', 'volna/**', 'volna-core/**', 'volna-trace/**', 'volna-server/**', 'vtr/**', 'docs/design-system/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', '.github/workflows/vscode.yml']
+    paths: ['volna-vscode/**', 'volna/**', 'volna-core/**', 'volna-trace/**', 'volna-server/**', 'vtr/**', 'vtr-cli/**', 'vtr-convert/**', 'vtr-progress/**', 'docs/design-system/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', '.github/workflows/vscode.yml']
   pull_request:
-    paths: ['volna-vscode/**', 'volna/**', 'volna-core/**', 'volna-trace/**', 'volna-server/**', 'vtr/**', 'docs/design-system/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', '.github/workflows/vscode.yml']
+    paths: ['volna-vscode/**', 'volna/**', 'volna-core/**', 'volna-trace/**', 'volna-server/**', 'vtr/**', 'vtr-cli/**', 'vtr-convert/**', 'vtr-progress/**', 'docs/design-system/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', '.github/workflows/vscode.yml']
   workflow_dispatch:
 
 permissions:
@@ -101,7 +101,7 @@ jobs:
           sudo chown root:root "$RUNNER_TEMP/volna-code/chrome-sandbox"
           sudo chmod 4755 "$RUNNER_TEMP/volna-code/chrome-sandbox"
           echo "VOLNA_CODE=$RUNNER_TEMP/volna-code/bin/code" >> "$GITHUB_ENV"
-      - name: Test installed VSIX with VTR
+      - name: Test installed VSIX with VTR, FST, and Kanata
         if: matrix.target == 'linux-x64'
         run: node --test volna-vscode/vsix.test.mjs
       - name: Upload installed-extension screenshots

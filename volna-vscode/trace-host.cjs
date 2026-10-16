@@ -1,5 +1,6 @@
 const { spawn } = require("node:child_process");
 const path = require("node:path");
+const { prepareTrace } = require("./conversion.cjs");
 
 const HEADER = 12;
 const MAX_FRAME = 1024 * 1024;
@@ -72,8 +73,21 @@ function createTraceHost(vscode, context, panel, uri, spawnChild = spawn) {
     const previous = active;
     active = undefined;
     if (previous) {
-      previous.child.stdin.destroy();
-      previous.child.kill();
+      previous.controller.abort();
+      previous.ready();
+      previous.child?.stdin.destroy();
+      previous.child?.kill();
+      const cleanup = previous.child
+        ? previous.closed.then(() => previous.recording.dispose())
+        : previous.preparation.then(
+            (recording) => recording.dispose(),
+            () => {},
+          );
+      return cleanup.catch((error) =>
+        vscode.window.showWarningMessage(
+          `Volna temporary file cleanup failed: ${error.message}`,
+        ),
+      );
     }
   }
   function post(message) {
@@ -89,7 +103,7 @@ function createTraceHost(vscode, context, panel, uri, spawnChild = spawn) {
     );
   }
 
-  function start(connection) {
+  async function start(connection) {
     if (disposed) throw new Error("trace host is closed");
     if (
       typeof connection !== "string" ||
@@ -102,6 +116,39 @@ function createTraceHost(vscode, context, panel, uri, spawnChild = spawn) {
         `Remote trace loading does not support ${uri.scheme}: resources`,
       );
     stop();
+    const state = {
+      controller: new AbortController(),
+      connection,
+      awaitingClient: false,
+      pendingWrites: 0,
+      diagnostics: "",
+    };
+    state.writes = new Promise((resolve) => {
+      state.ready = resolve;
+    });
+    active = state;
+    try {
+      state.preparation = prepareTrace(
+        vscode,
+        context,
+        uri,
+        state.controller.signal,
+        spawnChild,
+      );
+      const recording = await state.preparation;
+      if (active !== state || disposed) {
+        await recording.dispose();
+        return;
+      }
+      state.recording = recording;
+      launchServer(state, recording.path);
+    } catch (error) {
+      fail(state, error.message);
+    }
+  }
+
+  function launchServer(state, recordingPath) {
+    const connection = state.connection;
     const configured = vscode.workspace
       .getConfiguration("volna", uri)
       .get("remote.serverPath", "");
@@ -112,20 +159,13 @@ function createTraceHost(vscode, context, panel, uri, spawnChild = spawn) {
         "bin",
         process.platform === "win32" ? "volna-server.exe" : "volna-server",
       );
-    const child = spawnChild(executable, [uri.fsPath], {
+    const child = spawnChild(executable, [recordingPath], {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: false,
     });
-    const state = {
-      child,
-      connection,
-      awaitingClient: false,
-      pendingWrites: 0,
-      writes: Promise.resolve(),
-      diagnostics: "",
-    };
-    active = state;
+    state.child = child;
+    state.closed = new Promise((resolve) => child.once("close", resolve));
     const reader = new FrameReader((frame) => {
       if (disposed || active !== state) return;
       if (state.awaitingClient)
@@ -164,7 +204,7 @@ function createTraceHost(vscode, context, panel, uri, spawnChild = spawn) {
     child.on("error", (error) =>
       fail(state, `Cannot start Volna server: ${error.message}`),
     );
-    child.on("exit", (code, signal) => {
+    child.on("close", (code, signal) => {
       let detail = state.diagnostics.trim();
       try {
         reader.end();
@@ -173,12 +213,13 @@ function createTraceHost(vscode, context, panel, uri, spawnChild = spawn) {
       }
       fail(state, detail || `Volna server disconnected (${signal || code})`);
     });
+    state.ready();
   }
 
   async function receive(message) {
     if (message.type === "traceStart") {
       try {
-        return start(message.connection);
+        return await start(message.connection);
       } catch (error) {
         return post({
           type: "traceError",
@@ -188,7 +229,7 @@ function createTraceHost(vscode, context, panel, uri, spawnChild = spawn) {
       }
     }
     if (message.type === "traceStop") {
-      if (active?.connection === message.connection) stop();
+      if (active?.connection === message.connection) return stop();
       return;
     }
     if (message.type !== "traceRequest") return;
@@ -227,7 +268,7 @@ function createTraceHost(vscode, context, panel, uri, spawnChild = spawn) {
 
   function dispose() {
     disposed = true;
-    stop();
+    return stop();
   }
   return { receive, dispose };
 }

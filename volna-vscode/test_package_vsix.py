@@ -38,7 +38,7 @@ class PackageTests(unittest.TestCase):
         cls.notices_temp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.notices_temp.cleanup)
         cls.notices_dir = Path(cls.notices_temp.name)
-        packager.notices.collect(cls.notices_dir, {"volna", "volna-server"})
+        packager.notices.collect(cls.notices_dir, {"volna", "volna-server", "vtr-cli"})
 
     def add_notices(self, archive):
         for file in self.notices_dir.rglob("*"):
@@ -77,14 +77,20 @@ class PackageTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "does not match"):
                         packager.check_binary(binary(target), wrong)
 
-    def test_vsix_rejects_untagged_or_wrong_server(self):
+    def test_vsix_rejects_missing_wrong_or_mismatched_executables(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             server = root / "volna-server"
             server.write_bytes(binary("linux-x64"))
+            converter = root / "vtr"
+            converter.write_bytes(binary("linux-x64") + b"converter")
+            binaries = {"volna-server": server, "vtr": converter}
             vsix = root / "volna.vsix"
 
-            def write_vsix(target, bundled, notices=True):
+            def write_vsix(
+                target, bundled, notices=True, converter_bytes=None,
+                include_converter=True, executable=True,
+            ):
                 identity = f' TargetPlatform="{target}"' if target else ""
                 manifest = f'<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"><Metadata><Identity Version="0.1.0"{identity}/></Metadata></PackageManifest>'
                 with zipfile.ZipFile(vsix, "w") as archive:
@@ -96,21 +102,42 @@ class PackageTests(unittest.TestCase):
                         json.dumps({"version": "0.1.0", "main": "./extension.js"}),
                     )
                     archive.writestr("extension/extension.js", b"host")
-                    archive.writestr("extension/bin/volna-server", bundled)
+                    executables = {"volna-server": bundled}
+                    if include_converter:
+                        executables["vtr"] = (
+                            converter.read_bytes() if converter_bytes is None
+                            else converter_bytes
+                        )
+                    for name, data in executables.items():
+                        info = zipfile.ZipInfo(f"extension/bin/{name}")
+                        info.external_attr = (0o100755 if executable else 0o100644) << 16
+                        archive.writestr(info, data)
                     for item in packager.MEDIA:
                         archive.writestr(f"extension/media/{item}", b"content")
 
             write_vsix(None, server.read_bytes())
             with self.assertRaisesRegex(ValueError, "targetPlatform"):
-                packager.verify_vsix(vsix, "linux-x64", server)
+                packager.verify_vsix(vsix, "linux-x64", binaries)
             write_vsix("linux-x64", binary("linux-arm64"))
             with self.assertRaisesRegex(ValueError, "does not match"):
-                packager.verify_vsix(vsix, "linux-x64", server)
+                packager.verify_vsix(vsix, "linux-x64", binaries)
             write_vsix("linux-x64", server.read_bytes())
-            packager.verify_vsix(vsix, "linux-x64", server)
+            packager.verify_vsix(vsix, "linux-x64", binaries)
+            for converter_bytes, include_converter, executable, error in (
+                (None, False, True, "unexpected executables"),
+                (binary("linux-arm64"), True, True, "does not match"),
+                (binary("linux-x64"), True, True, "vtr differs"),
+                (None, True, False, "not executable"),
+            ):
+                write_vsix(
+                    "linux-x64", server.read_bytes(), converter_bytes=converter_bytes,
+                    include_converter=include_converter, executable=executable,
+                )
+                with self.assertRaisesRegex(ValueError, error):
+                    packager.verify_vsix(vsix, "linux-x64", binaries)
             write_vsix("linux-x64", server.read_bytes(), notices=False)
             with self.assertRaises(KeyError):
-                packager.verify_vsix(vsix, "linux-x64", server)
+                packager.verify_vsix(vsix, "linux-x64", binaries)
 
     def test_notices_reject_missing_files(self):
         files = {
@@ -135,6 +162,9 @@ class PackageTests(unittest.TestCase):
             root = Path(directory)
             server = root / "volna-server"
             server.write_bytes(binary("linux-x64"))
+            converter = root / "vtr"
+            converter.write_bytes(binary("linux-x64") + b"converter")
+            binaries = {"volna-server": server, "vtr": converter}
             vsix = root / "volna.vsix"
             with zipfile.ZipFile(vsix, "w") as archive:
                 self.add_notices(archive)
@@ -147,7 +177,10 @@ class PackageTests(unittest.TestCase):
                     json.dumps({"version": "0.1.1", "main": "./extension.js"}),
                 )
                 archive.writestr("extension/extension.js", b"host")
-                archive.writestr("extension/bin/volna-server", server.read_bytes())
+                for name, built in binaries.items():
+                    info = zipfile.ZipInfo(f"extension/bin/{name}")
+                    info.external_attr = 0o100755 << 16
+                    archive.writestr(info, built.read_bytes())
                 for item in ("webview.mjs", "webview.css", "design/styles.css"):
                     archive.writestr(f"extension/media/{item}", b"content")
                 archive.writestr(
@@ -161,7 +194,7 @@ class PackageTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError, "missing media/snippets/generated/src/table_clipboard.mjs"
             ):
-                packager.verify_vsix(vsix, "linux-x64", server)
+                packager.verify_vsix(vsix, "linux-x64", binaries)
             with zipfile.ZipFile(vsix, "a") as archive:
                 archive.writestr(
                     "extension/media/snippets/generated/src/table_clipboard.mjs",
@@ -170,13 +203,13 @@ class PackageTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError, "missing media/snippets/generated/copy.mjs"
             ):
-                packager.verify_vsix(vsix, "linux-x64", server)
+                packager.verify_vsix(vsix, "linux-x64", binaries)
             with zipfile.ZipFile(vsix, "a") as archive:
                 archive.writestr(
                     "extension/media/snippets/generated/copy.mjs",
                     "export function copyTableText() {}",
                 )
-            packager.verify_vsix(vsix, "linux-x64", server)
+            packager.verify_vsix(vsix, "linux-x64", binaries)
 
 
 if __name__ == "__main__":

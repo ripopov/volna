@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { gzipSync } from "node:zlib";
 import {
   access,
   copyFile,
@@ -31,8 +32,8 @@ async function freePort() {
 }
 
 test(
-  "installed VSIX opens and renders VTR with its bundled server",
-  { timeout: 180000 },
+  "installed VSIX opens VTR, FST, and Kanata with its bundled tools",
+  { timeout: 300000 },
   async (t) => {
     assert.equal(
       process.platform,
@@ -120,8 +121,13 @@ test(
       join(ext, "test-support.cjs"),
       join(probe, "test-support.cjs"),
     );
-    for (const { name, source } of traces) {
-      await copyFile(join(ext, "..", source), join(root, name));
+    for (const { name, source, gzip } of traces) {
+      if (gzip)
+        await writeFile(
+          join(root, name),
+          gzipSync(await readFile(join(ext, "..", source))),
+        );
+      else await copyFile(join(ext, "..", source), join(root, name));
     }
     await exec(
       code,

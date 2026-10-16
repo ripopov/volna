@@ -11,6 +11,28 @@ const traces = [
     theme: "Default Light Modern",
     viewport: [5, 20],
   },
+  {
+    name: "values.fst",
+    source: "vtr-convert/tests/fixtures/values.fst",
+    theme: "Default Dark Modern",
+    viewport: [5, 20],
+    converted: true,
+  },
+  {
+    name: "pipeline.kanata",
+    source: "vtr-convert/tests/fixtures/pipeline.kanata",
+    theme: "Default Light Modern",
+    viewport: [100, 106],
+    converted: true,
+  },
+  {
+    name: "pipeline.log.gz",
+    source: "vtr-convert/tests/fixtures/pipeline.kanata",
+    gzip: true,
+    theme: "Default Dark Modern",
+    viewport: [100, 106],
+    converted: true,
+  },
 ];
 
 async function until(check, description, timeout = 30000) {

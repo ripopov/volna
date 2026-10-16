@@ -135,7 +135,7 @@ test("old child callbacks and requests cannot affect a replacement", async () =>
   const old = f.children[0];
   await f.host.receive({ type: "traceStart", connection: "B" });
   assert.ok(old.killed);
-  old.emit("exit", 1);
+  old.emit("close", 1);
   old.stdout.emit("data", frame());
   old.emit("error", new Error("old"));
   await f.host.receive({
@@ -168,7 +168,7 @@ test("partial child output and invalid client packets report failures", async ()
   const f = fixture();
   await f.host.receive({ type: "traceStart", connection: "A" });
   f.children[0].stdout.emit("data", frame().subarray(0, 13));
-  f.children[0].emit("exit", 1);
+  f.children[0].emit("close", 1);
   await tick();
   assert.match(f.messages[0].message, /inside a frame/);
   assert.throws(() => packetBytes([1, 2, -1]), /invalid client/);
