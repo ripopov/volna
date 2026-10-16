@@ -592,6 +592,8 @@ Fixed-width integers are little-endian. `varint` means unsigned base-128;
 the concatenated column streams. All columns must be consumed exactly.
 Unknown columns or invalid lengths are errors for this format version.
 
+![A RECORD_BLOCK segment contains one column set: framing gives column count and byte lengths, followed by time, ID, parent, duration, and five argument streams.](diagrams/transaction-columns.drawio.svg)
+
 Delta state resets to zero at each segment, or at the beginning of a TX_BLOCK.
 Signed ID, parent, and time differences use wrapping 64-bit subtraction,
 interpreted as signed, with inverse wrapping addition on decode. This permits
@@ -635,6 +637,8 @@ are omitted from records.
 A RECORD_BLOCK may contain any combination of EVENT, STAGE, and LOG generators.
 Each segment contains records from one generator, whose declared kind selects
 the time, parent, and duration encodings. No per-record kind tag is stored.
+
+![A RECORD_BLOCK has uncompressed headers and independently compressed pages. Page 0 holds segments for generators 18 and 19; page 1 holds segments for generators 18 and 20. Generator 18 spans both pages.](diagrams/transaction-pages.drawio.svg)
 
 The section payload has the following layout:
 
@@ -838,6 +842,8 @@ build a transient parent-to-record index while decoding a block and reuse it
 for later expansions. The format does not contain an owner-to-page index;
 uncached owner expansion may read every page containing EVENT or STAGE segments
 in each referenced block.
+
+![Owner 42 lists child blocks 12 and 15. The reader visits those RECORD_BLOCKs and selects EVENT and STAGE records whose parent is 42, excluding LOG and other owners' records.](diagrams/transaction-child-blocks.drawio.svg)
 
 Global ID lookup filters block ID ranges and, for paged blocks, segment ID
 ranges. Relation lookup uses TX_BLOCK endpoint ranges. Ranges can overlap,
