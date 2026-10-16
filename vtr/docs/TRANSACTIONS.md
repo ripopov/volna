@@ -107,9 +107,12 @@ are independent of the writer's waveform time.
 
 Hierarchy parentage describes design structure. Transaction parentage describes
 runtime ownership. Neither implies the other, and runtime ownership does not
-require temporal containment. Parent relationships must be acyclic. Physical
-record order does not determine ownership, and references may point forward
-in the file.
+require temporal containment. Every present parent must be an ordinary
+transaction that is active when the child is created. Parentage is fixed at
+creation, so the parent ID is smaller than the child ID and cycles are
+impossible. Ending a parent does not finalize its ordinary child transactions.
+Physical record order does not determine ownership, and references may point
+forward in the file.
 
 ## 2. Generators and declarations
 
@@ -208,6 +211,11 @@ different schemas.
 Metadata, optional transaction attributes, unlocated record attributes, and
 relation attributes are lists of unique string keys and typed values. A writer
 rejects duplicate keys within an item. Readers preserve unknown keys.
+
+In the proposed format, the value tags and payloads in this section replace
+SPEC.md section 5.3 throughout the file, including META and attributes of every
+HIERARCHY node kind. Attribute-list framing remains a varint count followed by
+string-ID keys and tagged values.
 
 ```rust
 type Attributes = Vec<(StringId, Value)>;
@@ -452,8 +460,9 @@ EVENT records are valid and must remain individually accessible.
 ## 5. Logs
 
 A LOG generator represents a logging call site. Its name is the message format
-string. Its argument schema supplies argument names and types in placeholder
-order. Producers without argument names use `"0"`, `"1"`, and so on.
+string. Its argument schema supplies argument names and types in argument index
+order, starting at zero. Producers without argument names use `"0"`, `"1"`, and
+so on. Placeholders may repeat or reorder these indexes.
 
 | Metadata | Type | Meaning |
 |---|---|---|
@@ -482,11 +491,21 @@ kind `unspecified`. They can participate in relations and be resolved through
 global ID lookup.
 They have no embedded events, stages, or located child block locators.
 
-Format strings support `{}` placeholders, explicit indexes such as `{2}`,
-format specifications such as `{:#010x}` and `{:>8.3}`, and escaped braces
-`{{` and `}}`. Argument count is determined by the schema, not by parsing the
-format. A missing placeholder argument renders as `{?}`. Readers expose the
-typed named arguments independently of message formatting.
+Placeholders are `{}`, `{N}`, `{:spec}`, or `{N:spec}`, where `N` is a zero-based
+decimal argument index. An omitted index uses the next automatic index, starting
+at zero; an explicit index does not advance it. `{{` and `}}` render literal
+braces. For example, `"{1} {} {}"` uses argument indexes 1, 0, and 1.
+
+Format specifications such as `#010x` and `>8.3` are reader-defined presentation;
+the reference formatter's conventions are described in
+[LOGGING.md](LOGGING.md#format-strings). Writers store format strings verbatim
+without validating their syntax. Malformed formats and unsupported format
+specifications do not invalidate a file; their rendering is reader-defined.
+
+Argument count is determined by the schema, not by parsing the format. A
+placeholder index outside the schema renders as `{?}`; a missing record argument
+is still a writer error. Readers expose the original format and typed named
+arguments independently of message formatting.
 
 Text arguments are deduplicated within each generator segment. Use `text` for
 dynamic or repeated message strings, `str` for strings explicitly interned in
@@ -549,7 +568,7 @@ running at file close. Stretches of the same clock never share an edge:
 each begins after the preceding stretch's last edge.
 
 A stretch with period `p` has edges `begin + k*p`, for
-`k = 0 .. (end - begin)/p`. The first recorded edge is cycle zero; numbering
+`0 <= k <= (end - begin)/p`. The first recorded edge is cycle zero; numbering
 continues across stretches in chronological order. At time `t`, the cycle
 is the number of the last edge at or before `t`, or absent before the first
 edge. Cycle numbers are computed rather than stored.
@@ -560,8 +579,9 @@ means no declared clock. Clock generators are normally named after the clock
 net and placed in its scope to permit path-based waveform matching.
 
 Writers should place a clock's stretches in blocks containing only that
-generator. At close, an active stretch ends at its last recorded edge at or
-before the writer's current time.
+generator. At close, an active stretch ends at its last edge at or before
+`max(begin, current_waveform_time)`. If writer time precedes the first edge,
+the result is a single-edge stretch at `begin`.
 
 ## 8. Storage
 
@@ -606,7 +626,8 @@ interpreted as signed. A present parent cannot equal the record's ID because
 self-parentage is a cycle. The nonzero difference distinguishes a parent
 reference from absence. Decoding a nonzero value subtracts its inverse ZigZag
 value from the record ID with wrapping arithmetic; the resolved parent must be
-nonzero. Writers reject a present zero or self parent before encoding.
+nonzero and smaller than the record ID. Writers require an active ordinary
+parent as specified in section 1.
 This encoding applies to ordinary transactions
 and logs. Located events and stages use the mandatory parent delta column in
 section 8.2.
@@ -683,9 +704,10 @@ length must agree with both the blob framing and the decompressed length.
 Segment offsets refer to decompressed bytes in their page. The segment table
 is ordered by page index and then raw offset. Segments partition each page
 without gaps or overlaps, and each segment contains exactly one column set.
-Repeated entries for a generator are allowed. Their table order defines its
-record sequence within the block. Counts, offsets, and length arithmetic must
-fit their encoded fields and remain within the containing page or section.
+Repeated entries for a generator are allowed and need not be adjacent, as in
+the illustration. Their table order defines its record sequence within the
+block. Counts, offsets, and length arithmetic must fit their encoded fields and
+remain within the containing page or section.
 
 Every segment uses nine columns. The generator kind determines their contents:
 
@@ -902,9 +924,10 @@ details and relations also count toward its memory budget.
 
 Encoding gathers records into generator buckets in first-occurrence order,
 preserving order within each bucket. This linear pass requires no ID or
-timestamp sorting. The encoder splits buckets into segments and packs pages
-as specified in section 8.2. Grouping and encoding state, including argument
-dictionaries and pending pages, is discarded after the block is encoded.
+timestamp sorting. The encoder splits buckets into segments, emits each
+bucket's segments consecutively, and fills pages in that order as specified
+in section 8.2. Grouping and encoding state, including argument dictionaries
+and pending pages, is discarded after the block is encoded.
 
 At file close, unfinished ordinary transactions receive status `open` and end
 `max(begin, current_waveform_time)`. Their active located stages close at that
