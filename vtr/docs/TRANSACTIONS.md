@@ -13,6 +13,36 @@ by generator and packed into independently compressed pages. Each owner lists
 the blocks containing its children. The recommended writer settings are 64 KiB
 pages and Zstandard level 1. Section 12 gives the performance rationale.
 
+## Notation and common types
+
+Rust-style declarations describe the logical data model. They do not prescribe
+a programming interface, memory layout, or serialization order. Section 8
+defines the byte layout.
+
+`u8`, `u32`, and `u64` are unsigned integers of the indicated width; `i64` is a
+signed 64-bit integer. `bool` is Boolean and `f64` is IEEE 754 binary64.
+`Vec<T>` is an ordered, variable-length sequence of `T`; `Option<T>` is either
+absent or one `T`. `(A, B)` is a pair. Collections may be empty unless a
+constraint says otherwise. An `enum` selects one named variant and its payload.
+
+```rust
+type TransactionId = u64;
+type NodeId = u32;
+type GeneratorId = NodeId;
+type StringId = u32;
+type Timestamp = u64;
+type BlockNumber = u64;
+type Bytes = Vec<u8>;
+type Utf8Text = Vec<u8>;
+```
+
+`TransactionId` and `BlockNumber` are nonzero identifiers in separate
+namespaces. `NodeId` indexes the container hierarchy; `GeneratorId` identifies
+a generator node in that hierarchy. `StringId` indexes the file string table.
+Hierarchy and string indexes are zero-based. `Timestamp` uses the file's time
+units. `Bytes` is opaque data; `Utf8Text` must contain valid UTF-8.
+Record-specific types and their constraints are defined below.
+
 ## Problem statement
 
 A trace viewer must efficiently display both transactions and the pipeline
@@ -80,11 +110,24 @@ in the file.
 
 ## 2. Generators and declarations
 
-A generator is a hierarchy node with a node ID, name, optional parent scope,
-kind string, metadata attributes, and ordered argument schema. It may be a
-root or a child of an ordinary scope. Its hierarchical path identifies its
-source or design location. Declarations are immutable and must precede blocks
-that use them. Additional generators may be declared during a run.
+A generator is a hierarchy node whose path identifies a source or design
+location. It may be a root or a child of an ordinary scope. Declarations are
+immutable and must precede blocks that use them. Additional generators may
+be declared during a run.
+
+```rust
+struct Generator {
+    id: GeneratorId,
+    name: StringId,
+    parent_scope: Option<NodeId>,
+    kind: StringId,
+    metadata: Attributes,
+    arguments: Vec<ArgumentDeclaration>,
+}
+```
+
+`Attributes` is defined in section 2.2. `parent_scope`, when present, must
+identify an ordinary scope.
 
 | Generator kind | Records | Storage |
 |---|---|---|
@@ -105,24 +148,34 @@ not copied into individual records and is not a default for missing arguments.
 
 ### 2.1 Mandatory arguments
 
-Every generator declares an ordered list of `(name, type)` pairs. An empty
-list is valid. Names are unique within the schema. Each record supplies exactly
+```rust
+type ArgumentType = u8;
+
+struct ArgumentDeclaration {
+    name: StringId,
+    value_type: ArgumentType,
+}
+```
+
+Every generator declares an ordered list of arguments. An empty list is
+valid. Names are unique within the schema. Each record supplies exactly
 one value of the declared type for every argument, in declaration order.
 There are no optional positions or implicit default values.
 
-The argument type set is:
+`ArgumentType` accepts only the tags below. Values use the corresponding
+`Value` variant from section 2.2.
 
-| Tag | Type | Meaning |
-|---|---|---|
-| 1 | bool | Boolean |
-| 2 | i64 | Signed 64-bit integer |
-| 3 | u64 | Unsigned 64-bit integer |
-| 4 | f64 | IEEE binary64 |
-| 5 | str | Interned string ID |
-| 6 | bytes | Opaque byte sequence |
-| 10 | time | Unsigned value in file time units |
-| 12 | pointer | Unsigned address |
-| 17 | text | UTF-8 text, deduplicated within one column set (section 8.1) |
+| Tag | Type | Value variant | Meaning |
+|---|---|---|---|
+| 1 | bool | `Bool` | Boolean |
+| 2 | i64 | `I64` | Signed 64-bit integer |
+| 3 | u64 | `U64` | Unsigned 64-bit integer |
+| 4 | f64 | `F64` | IEEE binary64 |
+| 5 | str | `Str` | Interned string ID |
+| 6 | bytes | `Bytes` | Opaque byte sequence |
+| 10 | time | `Time` | Unsigned value in file time units |
+| 12 | pointer | `Pointer` | Unsigned address |
+| 17 | text | `Text` | UTF-8 text, deduplicated within one column set (section 8.1) |
 
 The generator-specific hierarchy payload is `varint kind_string_id`, then
 `varint argument_count`, then that many `{varint name_string_id, u8 type_tag}`
@@ -145,6 +198,36 @@ different schemas.
 Metadata, optional transaction attributes, unlocated record attributes, and
 relation attributes are lists of unique string keys and typed values. A writer
 rejects duplicate keys within an item. Readers preserve unknown keys.
+
+```rust
+type Attributes = Vec<(StringId, Value)>;
+
+enum Value {
+    Null,
+    Bool(bool),
+    I64(i64),
+    U64(u64),
+    F64(f64),
+    Str(StringId),
+    Bytes(Bytes),
+    Bits { width: u64, packed: Bytes },
+    Logic { width: u64, packed: Bytes },
+    Logic9 { width: u64, packed: Bytes },
+    Time(u64),
+    Enum { value: i64, literal: StringId },
+    Pointer(u64),
+    Fixed { raw: i64, scale: i64 },
+    Ufixed { raw: u64, scale: i64 },
+    List(Vec<Value>),
+    Map(Attributes),
+    Text(Utf8Text),
+}
+```
+
+`Time` holds a timestamp or duration in file time units, according to the
+field's meaning. `Pointer` holds an unsigned address. `Bits`, `Logic`, and
+`Logic9` hold packed signal states; `width` counts signal bits. Their packed
+lengths and the wire tags for all variants are defined below.
 
 | Tag | Value | Payload after tag |
 |---|---|---|
@@ -180,22 +263,27 @@ relation uses its kind. Labels carry no color, layout, or ordering semantics.
 
 ## 3. Ordinary transactions
 
-An ordinary transaction contains:
+```rust
+type TransactionStatus = u8;
+type SpanKind = u8;
 
-```text
-transaction ID
-generator ID
-begin timestamp
-end timestamp
-status
-span kind
-optional parent transaction ID
-argument values, in declared order
-optional keyed attributes
-unlocated events: [(timestamp, name, attributes), ...]
-unlocated stages: [(name, lane, begin, optional end, attributes), ...]
-located child blocks: [block number, ...]
+struct Transaction {
+    id: TransactionId,
+    generator: GeneratorId,
+    begin: Timestamp,
+    end: Timestamp,
+    status: TransactionStatus,
+    span_kind: SpanKind,
+    parent: Option<TransactionId>,
+    arguments: Vec<Value>,
+    attributes: Attributes,
+    events: Vec<UnlocatedEvent>,
+    stages: Vec<UnlocatedStage>,
+    child_blocks: Vec<BlockNumber>,
+}
 ```
+
+`TransactionStatus` accepts only the following codes:
 
 | Status | Code | Meaning |
 |---|---|---|
@@ -205,7 +293,7 @@ located child blocks: [block number, ...]
 | aborted | 3 | Cancelled, squashed, or flushed |
 | open | 4 | Unfinished when the file closed |
 
-Span kinds are `unspecified` (0), `internal` (1), `server` (2), `client` (3),
+`SpanKind` accepts `unspecified` (0), `internal` (1), `server` (2), `client` (3),
 `producer` (4), and `consumer` (5). They classify an individual operation and
 are independent of the generator's kind string. Child and optional attribute
 lists may be empty; the argument list must match the generator's schema.
@@ -214,11 +302,25 @@ locators cover only EVENT and STAGE records.
 
 ### 3.1 Unlocated events and stages
 
-An unlocated event belongs to one ordinary transaction and contains a time,
-name, and keyed attributes. An unlocated stage contains a name, lane name,
-begin, optional end, and keyed attributes. Names and lanes are interned
-strings. A lane groups stage intervals within a transaction; it is not a
-hierarchy node or an independently queryable generator.
+```rust
+struct UnlocatedEvent {
+    time: Timestamp,
+    name: StringId,
+    attributes: Attributes,
+}
+
+struct UnlocatedStage {
+    name: StringId,
+    lane: StringId,
+    begin: Timestamp,
+    end: Option<Timestamp>,
+    attributes: Attributes,
+}
+```
+
+Each unlocated event or stage belongs to one ordinary transaction. Names and
+lanes are interned strings. A lane groups stage intervals within a transaction;
+it is not a hierarchy node or an independently queryable generator.
 
 These records have no independent transaction ID. They cannot be relation
 endpoints or runtime parents. Their order preserves insertion order rather
@@ -259,26 +361,28 @@ how readers retrieve an owner's children.
 
 ## 4. Located events and stages
 
-An EVENT record contains:
+```rust
+struct LocatedEvent {
+    id: TransactionId,
+    generator: GeneratorId,
+    time: Timestamp,
+    parent: TransactionId,
+    arguments: Vec<Value>,
+}
 
-```text
-transaction ID
-generator ID
-timestamp
-mandatory parent transaction ID
-argument values, in declared order
+struct LocatedStage {
+    id: TransactionId,
+    generator: GeneratorId,
+    begin: Timestamp,
+    end: Timestamp,
+    parent: TransactionId,
+    arguments: Vec<Value>,
+}
 ```
 
-A STAGE record contains:
-
-```text
-transaction ID
-generator ID
-begin timestamp
-end timestamp
-mandatory parent transaction ID
-argument values, in declared order
-```
+`LocatedEvent` uses an EVENT generator; `LocatedStage` uses a STAGE generator.
+Both require an ordinary transaction as their parent. Arguments follow the
+generator's declared schema.
 
 Each generator represents a specific design location. Repeated activity at
 that location produces separate records. A general transaction interface
@@ -319,11 +423,21 @@ order. Producers without argument names use `"0"`, `"1"`, and so on.
 Other severity values rank numerically. Source metadata identifies the log
 call site. Design-source mappings and presentation remain outside VTR.
 
-A log record contains its transaction ID, generator ID, timestamp, optional
-parent transaction ID, and argument values in declaration order. A parent
-identifies the operation during which the message was produced. Logs have
-zero duration, implied status `unset`, and implied span kind `unspecified`.
-They can participate in relations and be resolved through global ID lookup.
+```rust
+struct Log {
+    id: TransactionId,
+    generator: GeneratorId,
+    time: Timestamp,
+    parent: Option<TransactionId>,
+    arguments: Vec<Value>,
+}
+```
+
+`generator` identifies a LOG generator, and arguments follow its declared
+schema. A parent identifies the operation during which the message was
+produced. Logs have zero duration, implied status `unset`, and implied span
+kind `unspecified`. They can participate in relations and be resolved through
+global ID lookup.
 They have no embedded events, stages, or located child block locators.
 
 Format strings support `{}` placeholders, explicit indexes such as `{2}`,
@@ -357,10 +471,20 @@ unknown ending and is reported as recovered.
 
 ## 6. Relations
 
-A relation contains a kind string, source transaction ID, destination
-transaction ID, and keyed attributes. It is a directed edge. Either endpoint
-may be zero to mean outside the file; every nonzero endpoint refers to any
-of the globally identified record types. Relations have no separate
+```rust
+type RelationEndpoint = u64;
+
+struct Relation {
+    kind: StringId,
+    source: RelationEndpoint,
+    destination: RelationEndpoint,
+    attributes: Attributes,
+}
+```
+
+A relation is a directed edge. A `RelationEndpoint` is either zero, meaning
+outside the file, or a nonzero `TransactionId` referring to any of the globally
+identified record types. Relations have no separate
 transaction ID or timestamp and are stored in TX_BLOCK independently of
 ordinary transaction records.
 
@@ -371,10 +495,10 @@ Relations may refer to records stored later in the file.
 
 ## 7. Clocks
 
-A CLOCK generator records steady stretches of rising edges as ordinary
-transaction records. Its schema is empty. A stretch begins at its first edge
-and ends at its last edge. For multiple edges, `vtr.period` is a positive
-`time` attribute and `end - begin` must be an exact multiple of the period.
+A CLOCK generator records steady stretches of rising edges using the
+`Transaction` structure from section 3. Its schema is empty. A stretch begins
+at its first edge and ends at its last edge. For multiple edges, `vtr.period`
+is a positive `time` attribute and `end - begin` must be an exact multiple of the period.
 A single-edge stretch has equal begin and end and omits the period.
 
 A stretch has no parent, events, stages, or located child block locators. Its
