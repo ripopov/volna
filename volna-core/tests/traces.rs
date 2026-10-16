@@ -206,7 +206,7 @@ fn closing_a_trace_takes_its_rows_and_panels_in_one_step() {
         var(&app, b(), "soc.cpu0.pc"),
     ]));
     app.handle(Command::AddToWaves(vec![Traced::new(b(), generator)]));
-    let pipeline = app.pipeline_streams()[1].1;
+    let pipeline = app.pipeline_generators()[1].1;
     assert_eq!(pipeline.trace, b());
     app.handle(Command::OpenPipeline { track: pipeline });
     pump(&mut app);

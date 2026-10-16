@@ -2595,7 +2595,7 @@ impl App {
     }
 
     #[must_use]
-    pub fn pipeline_streams(&self) -> Vec<(String, Traced<TrackRef>)> {
+    pub fn pipeline_generators(&self) -> Vec<(String, Traced<TrackRef>)> {
         use volna_trace::data::transactions::TrackKind;
         let traces = self.doc.traces();
         traces
@@ -2604,7 +2604,9 @@ impl App {
                 session
                     .tracks()
                     .iter()
-                    .filter(|t| matches!(&t.kind, TrackKind::Stream { kind } if kind == "PIPELINE"))
+                    .filter(
+                        |t| matches!(&t.kind, TrackKind::Generator { kind } if kind == "PIPELINE"),
+                    )
                     .map(move |t| {
                         let path = t.path.join(".");
                         let label = if traces.is_combined() {
@@ -2638,7 +2640,7 @@ impl App {
             time_range: self.time_range_text(),
             variables: sessions().map(|s| s.hierarchy().var_count()).sum(),
             tracks: sessions().map(|s| s.tracks().len()).sum(),
-            pipelines: self.pipeline_streams(),
+            pipelines: self.pipeline_generators(),
         })
     }
 

@@ -162,7 +162,7 @@ pub fn scope_pages<'a>(h: &'a Hierarchy, sizes: &'a ScopeSizes) -> impl Iterator
         let mut builder = ColumnBuilder::default();
         for &id in &ids {
             let s = h.scope(id as usize);
-            builder.push_scope(s.name, s.kind, s.component, s.parent, s.role);
+            builder.push_scope(s.name, s.kind, s.component, s.parent);
         }
         let sizes = ids
             .iter()
@@ -308,10 +308,6 @@ impl PageDecoder {
                             c[3][i] == NONE || c[3][i] < page.ids[i],
                             "invalid hierarchy parent reference"
                         );
-                        anyhow::ensure!(
-                            c[4][i] <= 1 && (c[4][i] != 0 || c[5][i] == 0),
-                            "invalid hierarchy scope role"
-                        );
                         let size = page.sizes[i];
                         anyhow::ensure!(
                             size.scopes > 0
@@ -402,13 +398,6 @@ impl HierarchySource for RemoteHierarchy {
             kind: p.name(c[1][i]),
             component: p.name(c[2][i]),
             parent: (c[3][i] != NONE).then_some(c[3][i] as usize),
-            role: if c[4][i] == 0 {
-                crate::data::ScopeRole::Scope
-            } else {
-                crate::data::ScopeRole::Stream {
-                    track: crate::data::transactions::TrackRef(c[5][i]),
-                }
-            },
             children: self.links.children(id),
             vars: self.links.vars(id),
             generators: self.links.generators(id),
@@ -594,8 +583,8 @@ impl Assembly {
                 }
                 for g in &assembly.header.generators {
                     r.checkpoint().await;
-                    anyhow::ensure!(g.stream < scopes, "invalid generator stream");
-                    links.generator_offsets[g.stream + 1] += 1;
+                    anyhow::ensure!(g.scope < scopes, "invalid generator scope");
+                    links.generator_offsets[g.scope + 1] += 1;
                 }
                 for i in 0..scopes {
                     r.checkpoint().await;
@@ -631,7 +620,7 @@ impl Assembly {
                 copy_offsets(&r, &mut cursor, &links.generator_offsets[..scopes]).await;
                 for (id, g) in assembly.header.generators.iter().enumerate() {
                     r.checkpoint().await;
-                    let pos = &mut cursor[g.stream];
+                    let pos = &mut cursor[g.scope];
                     links.generators[*pos as usize] = id as u32;
                     *pos += 1;
                 }
@@ -731,7 +720,6 @@ impl Assembly {
     }
 }
 async fn validate_catalog(metadata: &Metadata, r: &Reader) -> anyhow::Result<()> {
-    use crate::data::ScopeRole;
     use crate::data::transactions::TrackKind;
     let mut tracks = std::collections::HashMap::new();
     r.charge((metadata.tracks.len() + metadata.hierarchy.generators.len()) * 128)?;
@@ -742,32 +730,12 @@ async fn validate_catalog(metadata: &Metadata, r: &Reader) -> anyhow::Result<()>
             "duplicate track identity"
         );
     }
-    for t in &metadata.tracks {
-        r.checkpoint().await;
-        if let TrackKind::Generator { stream } = t.kind {
-            anyhow::ensure!(
-                matches!(tracks.get(&stream), Some(TrackKind::Stream { .. })),
-                "invalid generator stream"
-            );
-        }
-    }
     let mut seen = std::collections::HashSet::new();
-    for s in metadata.hierarchy.scopes() {
-        r.checkpoint().await;
-        if let ScopeRole::Stream { track } = s.role {
-            anyhow::ensure!(seen.insert(track), "duplicate hierarchy track");
-            anyhow::ensure!(
-                matches!(tracks.get(&track),Some(TrackKind::Stream {kind}) if kind==s.kind),
-                "invalid hierarchy stream"
-            );
-        }
-    }
     for g in metadata.hierarchy.generators.iter() {
         r.checkpoint().await;
         anyhow::ensure!(seen.insert(g.track), "duplicate hierarchy generator");
-        let role = metadata.hierarchy.scope(g.stream).role;
         anyhow::ensure!(
-            matches!(tracks.get(&g.track),Some(TrackKind::Generator {stream}) if role==ScopeRole::Stream {track:*stream}),
+            matches!(tracks.get(&g.track),Some(TrackKind::Generator {kind}) if **kind == g.kind),
             "invalid hierarchy generator"
         );
     }

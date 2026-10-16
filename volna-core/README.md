@@ -50,8 +50,7 @@ their containing pixel. Open, aborted, error and unset records all contribute.
 Aborted rows also leave ticks in the label column. Aggregate hover has no unique
 record identity; zooming in restores stage colors, labels, lanes and selection.
 
-Each immutable prepared generator owns a row hierarchy, shared by stream and
-generator panels. Sixteen-row leaves and internal nodes retain closed geometry
+Each immutable prepared generator owns a row hierarchy, shared by panels displaying that generator. Sixteen-row leaves and internal nodes retain closed geometry
 bounds, lifetime counts and optional exact unions capped at 32 fragments. A
 summary is used only when its entire row range fits one physical pixel inside
 the clip. A nonempty geometry bound alone can establish presence only when both

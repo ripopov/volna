@@ -393,7 +393,7 @@ impl Workspace {
                             t.hover,
                             cx,
                         )
-                        .tooltip("Search everywhere: variables, generators and streams")
+                        .tooltip("Search everywhere: variables and generators")
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
                                 this.dispatch(

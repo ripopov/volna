@@ -40,9 +40,13 @@ fn kanata_cycles_threads_stages_labels_relations_and_open_instructions() {
     let timeline = r.clock(clock.id).unwrap();
     let stretch = &timeline.stretches()[0];
     assert_eq!((stretch.begin, stretch.end, stretch.period), (100, 106, 1));
-    let streams: Vec<_> = r.streams().filter(|s| *s != clock.stream).collect();
+    let streams: Vec<_> = r.generators().filter(|s| *s != clock.generator).collect();
     assert_eq!(streams.len(), 2);
-    assert!(streams.iter().all(|s| r.stream_clock(*s) == Some(clock.id)));
+    assert!(
+        streams
+            .iter()
+            .all(|s| r.generator_clock(*s) == Some(clock.id))
+    );
     let all = r.transactions(&TxQuery::default()).unwrap();
     let find = |id| {
         all.iter()

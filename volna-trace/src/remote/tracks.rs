@@ -239,45 +239,36 @@ mod tests {
             })
             .collect();
         TrackPayload {
-            track: TrackRef(0),
-            generators: vec![
-                GeneratorPayload {
-                    reservation: None,
-                    generator: TrackRef(1),
-                    transactions,
-                    parents: (1..30)
-                        .map(|id| {
-                            (
-                                TransactionRef(id),
-                                TransactionLocation {
-                                    transaction: TransactionRef(0),
-                                    generator: TrackRef(1),
-                                },
-                            )
-                        })
-                        .collect(),
-                    relations: (0..2)
-                        .map(|id| LoadedRelation {
-                            id,
-                            from_generator: TrackRef(1),
-                            to_generator: TrackRef(3),
-                            relation: Relation {
-                                kind: "parallel".into(),
-                                from: TransactionRef(0),
-                                to: TransactionRef(100),
-                                attributes: vec![("real".into(), AttributeValue::F64(f64::NAN))],
+            track: TrackRef(1),
+            generators: vec![GeneratorPayload {
+                reservation: None,
+                generator: TrackRef(1),
+                transactions,
+                parents: (1..30)
+                    .map(|id| {
+                        (
+                            TransactionRef(id),
+                            TransactionLocation {
+                                transaction: TransactionRef(0),
+                                generator: TrackRef(1),
                             },
-                        })
-                        .collect(),
-                },
-                GeneratorPayload {
-                    reservation: None,
-                    generator: TrackRef(2),
-                    transactions: vec![],
-                    parents: vec![],
-                    relations: vec![],
-                },
-            ],
+                        )
+                    })
+                    .collect(),
+                relations: (0..2)
+                    .map(|id| LoadedRelation {
+                        id,
+                        from_generator: TrackRef(1),
+                        to_generator: TrackRef(3),
+                        relation: Relation {
+                            kind: "parallel".into(),
+                            from: TransactionRef(0),
+                            to: TransactionRef(100),
+                            attributes: vec![("real".into(), AttributeValue::F64(f64::NAN))],
+                        },
+                    })
+                    .collect(),
+            }],
         }
     }
 
@@ -286,27 +277,10 @@ mod tests {
             .map(|id| Track {
                 id: TrackRef(id),
                 path: vec![id.to_string()],
-                kind: if id == 0 {
-                    TrackKind::Stream { kind: "raw".into() }
-                } else {
-                    TrackKind::Generator {
-                        stream: TrackRef(0),
-                    }
-                },
+                kind: TrackKind::Generator { kind: "raw".into() },
                 attributes: vec![],
             })
             .collect();
-        let mut catalog = catalog;
-        catalog[3].kind = TrackKind::Generator {
-            stream: TrackRef(4),
-        };
-        catalog.push(Track {
-            id: TrackRef(4),
-            path: vec!["external".into()],
-            kind: TrackKind::Stream { kind: "raw".into() },
-            attributes: vec![],
-        });
-
         let local = crate::testing::ProceduralTrace::session(1);
         let mut metadata = crate::remote::objects::Metadata::from_session(local.as_ref());
         metadata.tracks = catalog;
@@ -337,7 +311,7 @@ mod tests {
                 bytes
             );
             assert!(chunks.next().is_none());
-            assert_eq!(loaded.generators.len(), 2);
+            assert_eq!(loaded.generators.len(), 1);
             let expected_keys: std::collections::BTreeSet<_> = sample().generators[0]
                 .transactions
                 .iter()
@@ -360,14 +334,13 @@ mod tests {
                 })
                 .unwrap();
             assert_eq!(overlap, [TransactionRef(0), TransactionRef(20)]);
-            assert!(loaded.generators[1].transactions().is_empty());
             assert_eq!(loaded.generators[0].relations().len(), 2);
             let total = budget.used();
             assert!(total > 0);
-            let retained_empty = Arc::clone(&loaded.generators[1]);
+            let retained_generator = Arc::clone(&loaded.generators[0]);
             drop(loaded);
-            assert!(budget.used() > 0 && budget.used() < total);
-            drop(retained_empty);
+            assert_eq!(budget.used(), total);
+            drop(retained_generator);
             assert_eq!(budget.used(), 0);
         }
     }

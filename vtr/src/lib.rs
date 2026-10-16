@@ -23,7 +23,7 @@ pub mod writer;
 pub mod xform;
 
 pub use census::{Census, Contributions, ScopeSizes};
-pub use clock::STREAM_KIND as CLOCK_STREAM_KIND;
+pub use clock::GENERATOR_KIND as CLOCK_GENERATOR_KIND;
 pub use clock::{ClockId, ClockInfo, ClockTimeline, CycleAt, Stretch};
 pub use codec::{Codec, Compression};
 pub use ending::Ending;
@@ -32,7 +32,7 @@ pub use hierarchy::{
     Direction, Hierarchy, Node, NodeData, NodeId, NodeKind, ScopeType, SignalId, SignalKind,
     VarType,
 };
-pub use logblock::STREAM_KIND as LOG_STREAM_KIND;
+pub use logblock::GENERATOR_KIND as LOG_GENERATOR_KIND;
 pub use logblock::{LogArg, LogArgType, LogRecord, LogSite, LogSiteId, LogSiteSpec, Severity};
 pub use reader::{LogQuery, ReadOptions, Reader, SignalData, TxQuery};
 pub use sections::{Blackout, FileType, Meta, Timescale};

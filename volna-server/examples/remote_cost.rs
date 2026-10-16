@@ -207,7 +207,7 @@ fn main() -> anyhow::Result<()> {
                     session
                         .tracks()
                         .iter()
-                        .filter(|t| matches!(t.kind, TrackKind::Stream { .. }))
+                        .filter(|t| matches!(t.kind, TrackKind::Generator { .. }))
                         .map(|t| t.id)
                         .collect()
                 };

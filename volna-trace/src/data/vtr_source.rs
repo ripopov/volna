@@ -7,7 +7,7 @@ use anyhow::Context as _;
 use vtr::{NodeData, Reader, SignalData, SignalKind, SignalValue};
 
 use super::history::SignalHistory;
-use super::source::{Generator, Hierarchy, ScopeRole, SignalRef, TraceInfo};
+use super::source::{Generator, Hierarchy, SignalRef, TraceInfo};
 use super::transactions::TrackRef;
 use super::value::{Bit, SignalShape, WaveValue};
 use crate::session::Session;
@@ -100,6 +100,7 @@ struct ReaderHierarchy {
     roots: Vec<u32>,
     root_owner: Option<usize>,
     root_vars: Vec<u32>,
+    root_generators: Vec<u32>,
     top: Option<usize>,
 }
 impl std::fmt::Debug for ReaderHierarchy {
@@ -133,40 +134,27 @@ impl super::source::HierarchySource for ReaderHierarchy {
     }
     fn scope(&self, id: usize) -> super::source::ScopeView<'_> {
         use super::source::ScopeView;
-        let (name, kind, component, role) = if Some(id) == self.top {
-            ("(top)", "module", "", ScopeRole::Scope)
+        let (name, kind, component) = if Some(id) == self.top {
+            ("(top)", "module", "")
         } else {
             let node = self.node(id);
-            let (kind, component, role) = match self.reader.hierarchy().node_data(node) {
+            let (kind, component) = match self.reader.hierarchy().node_data(node) {
                 NodeData::Scope {
                     scope_type,
                     component,
-                } => (
-                    scope_type.name(),
-                    self.reader.str(component),
-                    ScopeRole::Scope,
-                ),
-                NodeData::Stream { kind } => (
-                    self.reader.str(kind),
-                    "",
-                    ScopeRole::Stream {
-                        track: TrackRef(node.0),
-                    },
-                ),
+                } => (scope_type.name(), self.reader.str(component)),
                 _ => unreachable!(),
             };
             (
                 self.reader.str(self.reader.hierarchy().name(node)),
                 kind,
                 component,
-                role,
             )
         };
         ScopeView {
             name,
             kind,
             component,
-            role,
             parent: if Some(id) == self.top {
                 None
             } else {
@@ -190,8 +178,8 @@ impl super::source::HierarchySource for ReaderHierarchy {
                     self.vars.children(self.reader.hierarchy(), self.node(id)),
                 )
             },
-            generators: if Some(id) == self.top {
-                super::source::Ids::default()
+            generators: if Some(id) == self.root_owner {
+                super::source::Ids::from_slice(&self.root_generators)
             } else {
                 super::source::Ids::reader(
                     self.generators
@@ -261,20 +249,33 @@ impl super::source::HierarchySource for ReaderHierarchy {
 fn build_hierarchy(reader: Arc<Reader>) -> Hierarchy {
     use vtr::{NodeKind, hierarchy_index::NodeIndex};
     let h = reader.hierarchy();
-    let scopes = NodeIndex::new(h, &[NodeKind::Scope, NodeKind::Stream]);
+    let scopes = NodeIndex::new(h, &[NodeKind::Scope]);
     let vars = NodeIndex::new(h, &[NodeKind::Var]);
     let generator_index = NodeIndex::new(h, &[NodeKind::Generator]);
     let mut root_vars: Vec<_> = h
         .roots()
         .filter_map(|id| vars.ordinal(id).map(|id| id as u32))
         .collect();
-    let first_root_var = root_vars.first().map(|&id| vars.node(id as usize));
+    let mut root_generators: Vec<_> = h
+        .roots()
+        .filter_map(|id| generator_index.ordinal(id).map(|id| id as u32))
+        .collect();
+    let first_root_member = root_vars
+        .first()
+        .map(|&id| vars.node(id as usize))
+        .into_iter()
+        .chain(
+            root_generators
+                .first()
+                .map(|&id| generator_index.node(id as usize)),
+        )
+        .min();
     let existing_top = h
         .roots()
-        .filter(|&node| first_root_var.is_some_and(|first| node.0 < first.0))
+        .filter(|&node| first_root_member.is_some_and(|first| node.0 < first.0))
         .find(|&node| scopes.ordinal(node).is_some() && reader.str(h.name(node)) == "(top)")
         .and_then(|node| scopes.ordinal(node));
-    let top = first_root_var
+    let top = first_root_member
         .filter(|_| existing_top.is_none())
         .map(|first| {
             (0..scopes.len())
@@ -297,13 +298,29 @@ fn build_hierarchy(reader: Arc<Reader>) -> Hierarchy {
     if let Some(id) = existing_top {
         root_vars.extend(vars.children(h, scopes.node(id)).iter().map(|id| id as u32));
         root_vars.sort_unstable();
+        root_generators.extend(
+            generator_index
+                .children(h, scopes.node(id))
+                .iter()
+                .map(|id| id as u32),
+        );
+        root_generators.sort_unstable();
     }
     let generators: Vec<_> = (0..generator_index.len())
         .map(|id| {
             let node = generator_index.node(id);
             Generator {
                 name: reader.str(h.name(node)).into(),
-                stream: scope_id(h.parent(node).expect("stream")).expect("stream scope"),
+                scope: h
+                    .parent(node)
+                    .and_then(scope_id)
+                    .or(root_owner)
+                    .expect("generator scope"),
+                root: h.parent(node).is_none(),
+                kind: match h.node_data(node) {
+                    NodeData::Generator { kind } => reader.str(kind).into(),
+                    _ => unreachable!(),
+                },
                 track: TrackRef(node.0),
                 attributes: h
                     .attrs(node)
@@ -327,6 +344,7 @@ fn build_hierarchy(reader: Arc<Reader>) -> Hierarchy {
             roots,
             root_owner,
             root_vars,
+            root_generators,
             top,
         }),
         generators: Arc::new(generators),

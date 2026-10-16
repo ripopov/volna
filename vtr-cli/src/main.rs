@@ -64,7 +64,7 @@ enum Command {
     Transactions {
         file: PathBuf,
         #[arg(long, conflicts_with = "id")]
-        stream: Option<String>,
+        scope: Option<String>,
         #[command(flatten)]
         window: Window,
         #[arg(long, default_value_t = 100)]
@@ -75,14 +75,14 @@ enum Command {
     Logs {
         file: PathBuf,
         #[arg(long)]
-        stream: Option<String>,
+        scope: Option<String>,
         #[command(flatten)]
         window: Window,
         #[arg(long, default_value_t = 100)]
         max: usize,
         #[arg(long, default_value = "trace", value_parser = parse_severity)]
         severity: vtr::Severity,
-        #[arg(long, conflicts_with_all = ["stream", "from", "to", "max", "severity"])]
+        #[arg(long, conflicts_with_all = ["scope", "from", "to", "max", "severity"])]
         sites: bool,
     },
     Clocks {
@@ -223,21 +223,21 @@ fn run(cli: Cli) -> Result<u8> {
         }
         Command::Transactions {
             file,
-            stream,
+            scope,
             window,
             max,
             id,
-        } => inspect::transactions(&file, stream.as_deref(), window.checked()?, max, &id)?,
+        } => inspect::transactions(&file, scope.as_deref(), window.checked()?, max, &id)?,
         Command::Logs {
             file,
-            stream,
+            scope,
             window,
             max,
             severity,
             sites,
         } => inspect::logs(
             &file,
-            stream.as_deref(),
+            scope.as_deref(),
             window.checked()?,
             max,
             severity,

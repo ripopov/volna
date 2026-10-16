@@ -26,7 +26,7 @@ Whole-file compression was rejected because it would defeat local random access.
 
 An interned string table and typed node attributes generalize FTR's dictionary
 idea. Explicit parent IDs avoid positional hierarchy attributes. Scope and
-variable type codes retain FST numbering; streams and generators share the same
+variable type codes retain FST numbering; generators share the same
 hierarchy. Chunked declarations allow scopes and signals to appear during a
 run. Each block's signal counts already determine whether a late signal existed,
 so a separate per-signal creation timestamp would duplicate stored information.
@@ -48,7 +48,7 @@ while a reader exists.
 
 ## Transactions, logs, and clocks
 
-FTR inspires streams, generators, typed attributes, and cross-stream relations.
+FTR inspires generators, typed attributes, and relations between transactions.
 Kanata supplies stage/lane and instruction-lifecycle concepts; OpenTelemetry
 supplies span kinds, events, links, and status. These are runtime data, not
 viewer layout or pipeline-color rules.
@@ -58,6 +58,12 @@ NanoLog and binlog. Per-block text dictionaries borrow CLP's repeated-variable
 idea. Records share transaction IDs and relation semantics while using a
 specialized column encoding. A reader reconstructs text and can query typed
 arguments without parsing formatted output.
+
+Generators identify record sources and carry their own kinds and attributes.
+They can be roots or children of ordinary scopes. A separate stream node would
+force an extra parent onto standalone sources without contributing record data;
+ordinary scopes already group related sources. Clocks are generators of kind
+`CLOCK`, and clock associations belong to the generators that use them.
 
 Declared clocks use ordinary transactions for steady edge stretches. They need
 no extra section or value tag, and cycle numbering is derived from the stretches.

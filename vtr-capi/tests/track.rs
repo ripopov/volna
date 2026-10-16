@@ -23,15 +23,11 @@ fn dump(path: &Path) -> String {
     };
     let mut out = String::new();
     for t in &txs {
-        let stream = r
-            .generator_stream(t.generator)
-            .map(|s| r.full_path(s, "."))
-            .unwrap_or_default();
+        let path = r.full_path(t.generator, ".");
         write!(
             out,
-            "{} {stream}/{} [{}..{}] {}",
+            "{} {path} [{}..{}] {}",
             t.id,
-            r.name(t.generator),
             t.begin,
             t.end,
             t.status.name()
@@ -119,20 +115,20 @@ WARN2 vtr_trace: TOP.tb.core.u_vtr.bus: clock TOP.tb.core.u_vtr.nope is not decl
     assert_eq!(stdout, want);
 
     let a = "\
-1 cpu.pipeline/instruction [10..15] ok
+1 cpu.pipeline [10..15] ok
   pc=0x1000
   vtr.label=\"one\"
   event replay@14
   ID@ 10..11
   IR@ 11..12
   IQ@ 12..15
-2 cpu.pipeline/instruction [10..15] ok
+2 cpu.pipeline [10..15] ok
   pc=0x1000
   event replay@14
   ID@ 10..11
   IR@ 11..12
   IQ@ 12..15
-3 cpu.pipeline/instruction [10..20] open
+3 cpu.pipeline [10..20] open
   pc=0x2000
   ID@ 10..11
   IR@ 11..12
@@ -140,23 +136,23 @@ WARN2 vtr_trace: TOP.tb.core.u_vtr.bus: clock TOP.tb.core.u_vtr.nope is not decl
   EX@ 13..20
   DC@mem 13..14
   -> wakeup 6
-4 cpu.pipeline/instruction [13..15] aborted
+4 cpu.pipeline [13..15] aborted
   ID@ 13..15
-5 cpu.pipeline/instruction [13..15] aborted
+5 cpu.pipeline [13..15] aborted
   ID@ 13..15
-6 cpu.pipeline/instruction [16..17] aborted
+6 cpu.pipeline [16..17] aborted
   ID@ 16..17
-7 cpu.lsu/request [16..19] ok parent=3
+7 cpu.lsu [16..19] ok parent=3
   Q@ 16..19
-8 cpu.pipeline/instruction [16..17] aborted
+8 cpu.pipeline [16..17] aborted
   ID@ 16..17
-9 cpu.pipeline/instruction [16..18] aborted
+9 cpu.pipeline [16..18] aborted
   ID@ 16..18
-10 cpu.pipeline/instruction [17..18] aborted
+10 cpu.pipeline [17..18] aborted
   ID@ 17..18
-11 cpu.lsu/request [19..19] aborted
+11 cpu.lsu [19..19] aborted
   Q@ 19..19
-12 cpu.lsu/request [19..19] aborted
+12 cpu.lsu [19..19] aborted
   Q@ 19..19
 ";
     assert_eq!(dump(&out_dir.join("track_a.vtr")), a);
@@ -177,33 +173,33 @@ WARN2 vtr_trace: TOP.tb.core.u_vtr.bus: clock TOP.tb.core.u_vtr.nope is not decl
     );
 
     let b1 = "\
-1 TOP.tb.core.clk/edges [50..150] open
+1 TOP.tb.core.clk [50..150] open
   vtr.period=10t
-2 TOP.tb.core.pipeline/instruction [100..130] ok
+2 TOP.tb.core.pipeline [100..130] ok
   pc=0x80
   F@ 100..120
   D@ 120..130
-3 TOP.tb.core.pipeline/instruction [110..150] open
+3 TOP.tb.core.pipeline [110..150] open
   vtr.label=\"two\"
   F@ 110..150
 ";
     assert_eq!(dump(&out_dir.join("track_b1.vtr")), b1);
     let r = Reader::open(out_dir.join("track_b1.vtr")).unwrap();
     let stream = r
-        .streams()
+        .generators()
         .find(|&s| r.full_path(s, ".") == "TOP.tb.core.pipeline")
         .unwrap();
     let clock = r
-        .stream_clock(stream)
+        .generator_clock(stream)
         .expect("pipeline counted in TOP.tb.core.clk");
     assert_eq!(Some(clock), r.find_clock("TOP.tb.core.clk"));
 
     let b2 = "\
-1 TOP.tb.core.clk/edges [50..210] open
+1 TOP.tb.core.clk [50..210] open
   vtr.period=10t
-2 TOP.tb.core.pipeline/instruction [200..210] open
+2 TOP.tb.core.pipeline [200..210] open
   F@ 200..210
-3 TX.core0.events/event [200..210] open
+3 TX.core0.events [200..210] open
   E@ 200..210
 ";
     assert_eq!(dump(&out_dir.join("track_b2.vtr")), b2);

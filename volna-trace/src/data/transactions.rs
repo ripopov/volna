@@ -116,8 +116,7 @@ pub type Attributes = Vec<(String, AttributeValue)>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TrackKind {
-    Stream { kind: String },
-    Generator { stream: TrackRef },
+    Generator { kind: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

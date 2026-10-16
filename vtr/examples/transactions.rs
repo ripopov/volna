@@ -10,8 +10,8 @@ fn main() -> vtr::Result<()> {
     );
     let mut w = Writer::create(&path)?;
     let core = w.add_scope(None, "cpu", ScopeType::Core, "")?;
-    let pipe = w.add_stream(Some(core), "pipe", "PIPELINE")?;
-    let insn = w.add_generator(pipe, "instruction")?;
+    let pipe = w.add_scope(Some(core), "pipe", vtr::ScopeType::Generic, "")?;
+    let insn = w.add_generator(Some(pipe), "instruction", "PIPELINE")?;
     let (k_pc, k_dep, lane, st_f, st_x) = (
         w.intern("pc"),
         w.intern("depends_on"),

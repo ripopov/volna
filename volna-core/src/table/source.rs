@@ -82,17 +82,11 @@ impl TableSource {
             matches!(declaration.kind, TrackKind::Generator { .. }),
             "Choose one generator, or only signals."
         );
-        let member = hierarchy
-            .generators()
-            .iter()
-            .find(|g| g.track == track.item)
-            .ok_or_else(|| anyhow::anyhow!("selected generator declaration is missing"))?;
-        let mut path = hierarchy
-            .scope_path(member.stream)
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        path.push(member.name.clone());
+        anyhow::ensure!(
+            hierarchy.generators().iter().any(|g| g.track == track.item),
+            "selected generator declaration is missing"
+        );
+        let path = declaration.path.clone();
         Ok(Self::Generator(TrackSource::Resolved { track, path }))
     }
 

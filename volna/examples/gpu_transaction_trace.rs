@@ -1,4 +1,4 @@
-//! Hardware streams and cross-stream workload provenance for a synthetic SIMT GPU.
+//! Hardware generators and cross-generator workload provenance for a synthetic SIMT GPU.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -101,24 +101,28 @@ struct Hardware {
 fn scope(w: &mut Writer, parent: NodeId, name: &str) -> vtr::Result<NodeId> {
     w.add_scope(Some(parent), name, ScopeType::Generic, "")
 }
-fn stream<const N: usize>(
+fn group<const N: usize>(
     w: &mut Writer,
     parent: NodeId,
     name: &str,
     generators: [&str; N],
 ) -> vtr::Result<[NodeId; N]> {
-    let s = transaction_stream(w, parent, name)?;
+    let s = transaction_scope(w, parent, name)?;
     let mut ids = [NodeId(0); N];
     for (id, name) in ids.iter_mut().zip(generators) {
-        *id = w.add_generator(s, name)?;
+        *id = generator(w, s, name)?;
     }
     Ok(ids)
 }
-fn transaction_stream(w: &mut Writer, parent: NodeId, name: &str) -> vtr::Result<NodeId> {
-    let stream = w.add_stream(Some(parent), name, "TRANSACTION")?;
+fn transaction_scope(w: &mut Writer, parent: NodeId, name: &str) -> vtr::Result<NodeId> {
+    let group = w.add_scope(Some(parent), name, vtr::ScopeType::Generic, "")?;
+    Ok(group)
+}
+fn generator(w: &mut Writer, scope: NodeId, name: &str) -> vtr::Result<NodeId> {
+    let node = w.add_generator(Some(scope), name, "TRANSACTION")?;
     let path = w.intern(CLOCK_PATH);
-    w.node_attr(stream, "vtr.clock", Value::Str(path))?;
-    Ok(stream)
+    w.node_attr(node, "vtr.clock", Value::Str(path))?;
+    Ok(node)
 }
 fn cache(
     w: &mut Writer,
@@ -128,13 +132,13 @@ fn cache(
     last: bool,
 ) -> vtr::Result<Cache> {
     let c = scope(w, parent, name)?;
-    let requests = transaction_stream(w, c, "requests")?;
-    let packet = w.add_generator(requests, "MemoryPacket")?;
-    let fill = w.add_generator(requests, "CacheFill")?;
+    let requests = transaction_scope(w, c, "requests")?;
+    let packet = generator(w, requests, "MemoryPacket")?;
+    let fill = generator(w, requests, "CacheFill")?;
     let writeback = if last {
         None
     } else {
-        Some(w.add_generator(requests, "Writeback")?)
+        Some(generator(w, requests, "Writeback")?)
     };
     Ok(Cache {
         packet,
@@ -148,24 +152,24 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
     let clock = w.add_clock(Some(gpu), "clock")?;
     w.clock_run(clock, 0, 1)?;
     let cp = scope(w, gpu, "command_processor")?;
-    let queue = stream(
+    let queue = group(
         w,
         cp,
         "queue[0]",
         ["CommandStream", "Grid", "Wait", "Signal"],
     )?;
-    let [assignment] = stream(w, cp, "work_distributor", ["WorkgroupAssignment"])?;
+    let [assignment] = group(w, cp, "work_distributor", ["WorkgroupAssignment"])?;
     let cluster = scope(w, gpu, "compute_cluster[0]")?;
     let mut sms = Vec::new();
     for sm in 0..SMS {
         let s = scope(w, cluster, &format!("sm[{sm}]"))?;
-        let [workgroup] = stream(w, s, "workgroup_slot[0]", ["Workgroup"])?;
+        let [workgroup] = group(w, s, "workgroup_slot[0]", ["Workgroup"])?;
         let mut slots = Vec::new();
         let mut alu = Vec::new();
         for p in 0..PARTITIONS {
             let partition = scope(w, s, &format!("simt_partition[{p}]"))?;
             for slot in 0..SLOTS {
-                let [warp, instruction] = stream(
+                let [warp, instruction] = group(
                     w,
                     partition,
                     &format!("warp_slot[{slot}]"),
@@ -173,11 +177,11 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
                 )?;
                 slots.push(Slot { warp, instruction });
             }
-            alu.push(stream(w, partition, "alu_pipeline[0]", ["InstructionExecution"])?[0]);
+            alu.push(group(w, partition, "alu_pipeline[0]", ["InstructionExecution"])?[0]);
         }
         let lsu = scope(w, s, "load_store_unit")?;
-        let [request] = stream(w, lsu, "request_port[0]", ["MemoryRequest"])?;
-        let [tlb] = stream(w, lsu, "tlb", ["Translation"])?;
+        let [request] = group(w, lsu, "request_port[0]", ["MemoryRequest"])?;
+        let [tlb] = group(w, lsu, "tlb", ["Translation"])?;
         let l1 = cache(
             w,
             s,
@@ -187,10 +191,10 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
         )?;
         let shared = scope(w, s, "shared_memory")?;
         let banks = (0..2)
-            .map(|b| stream(w, shared, &format!("bank[{b}]"), ["BankAccess"]).map(|x| x[0]))
+            .map(|b| group(w, shared, &format!("bank[{b}]"), ["BankAccess"]).map(|x| x[0]))
             .collect::<vtr::Result<Vec<_>>>()?;
-        let matrix = stream(w, s, "matrix_engine[0]", ["MatrixJob", "MatrixTile"])?;
-        let dma = stream(
+        let matrix = group(w, s, "matrix_engine[0]", ["MatrixJob", "MatrixTile"])?;
+        let dma = group(
             w,
             s,
             "tensor_dma_engine[0]",
@@ -199,7 +203,7 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
         let dma_endpoint = w.intern(&format!(
             "gpu.compute_cluster[0].sm[{sm}].tensor_dma_engine[0]"
         ));
-        let [barrier] = stream(w, s, "barrier_unit", ["WorkgroupBarrier"])?;
+        let [barrier] = group(w, s, "barrier_unit", ["WorkgroupBarrier"])?;
         sms.push(Sm {
             workgroup,
             slots,
@@ -215,9 +219,9 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
         });
     }
     let fabric_scope = scope(w, gpu, "memory_fabric")?;
-    let [fabric] = stream(w, fabric_scope, "port[0]", ["MemoryPacket"])?;
+    let [fabric] = group(w, fabric_scope, "port[0]", ["MemoryPacket"])?;
     let memory = scope(w, gpu, "memory_subsystem")?;
-    let [walker] = stream(w, memory, "page_walker[0]", ["PageWalk"])?;
+    let [walker] = group(w, memory, "page_walker[0]", ["PageWalk"])?;
     let l2 = cache(
         w,
         memory,
@@ -233,8 +237,8 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
         true,
     )?;
     let mc = scope(w, memory, "memory_controller[0]")?;
-    let [controller] = stream(w, mc, "requests", ["MemoryTransaction"])?;
-    let [dram] = stream(w, mc, "dram_channel[0]", ["DramCommand"])?;
+    let [controller] = group(w, mc, "requests", ["MemoryTransaction"])?;
+    let [dram] = group(w, mc, "dram_channel[0]", ["DramCommand"])?;
     let dram_endpoint = w.intern("gpu.memory_subsystem.memory_controller[0]");
     Ok(Hardware {
         clock,
@@ -1238,14 +1242,14 @@ fn readback(path: &Path) -> anyhow::Result<()> {
         },
     )?;
     let clock = rd.find_clock(CLOCK_PATH).context("GPU clock is missing")?;
-    for stream in rd.hierarchy().nodes_of_kind(NodeKind::Stream) {
-        if let NodeData::Stream { kind } = rd.hierarchy().node_data(stream)
+    for group in rd.hierarchy().nodes_of_kind(NodeKind::Generator) {
+        if let NodeData::Generator { kind } = rd.hierarchy().node_data(group)
             && rd.str(kind) == "TRANSACTION"
         {
             ensure!(
-                rd.stream_clock(stream) == Some(clock),
+                rd.generator_clock(group) == Some(clock),
                 "{} does not use the GPU clock",
-                rd.full_path(stream, ".")
+                rd.full_path(group, ".")
             );
         }
     }
@@ -1322,11 +1326,11 @@ fn readback(path: &Path) -> anyhow::Result<()> {
     let slot = rd
         .hierarchy()
         .parent(warp_gen)
-        .context("warp generator has no stream")?;
+        .context("warp generator has no group")?;
     let mut instruction = None;
     rd.visit_transactions(
         &TxQuery {
-            stream: Some(slot),
+            scope: Some(slot),
             ..TxQuery::default()
         },
         |tx| {
@@ -1364,7 +1368,7 @@ fn readback(path: &Path) -> anyhow::Result<()> {
         rd.tx_counts().0,
         std::fs::metadata(path)?.len()
     );
-    println!("Illustrative L3 packet -> command-stream ancestry (actual TX parents):");
+    println!("Illustrative L3 packet -> command-group ancestry (actual TX parents):");
     let mut id = packet.context("no illustrative L3 packet")?;
     let mut names = Vec::new();
     for _ in 0..20 {
@@ -1372,15 +1376,15 @@ fn readback(path: &Path) -> anyhow::Result<()> {
             .transaction(id)?
             .context("missing ancestry transaction")?;
         let name = generator_name(&rd, &tx);
-        let stream = rd
+        let group = rd
             .hierarchy()
             .parent(tx.generator)
-            .context("generator has no stream")?;
+            .context("generator has no group")?;
         println!(
             "  TX {} | {} | {} | {}",
             tx.id,
             name,
-            rd.full_path(stream, "."),
+            rd.full_path(group, "."),
             label(&rd, &tx)
         );
         names.push(name);

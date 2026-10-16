@@ -133,7 +133,7 @@ pub(crate) fn commands(app: &CoreApp, query: &str) -> Vec<(String, Box<dyn Actio
             all.push((format!("Close Trace {what}"), verb(app::TraceVerb::Close)));
         }
     }
-    for (path, track) in app::pipeline_streams(app) {
+    for (path, track) in app::pipeline_generators(app) {
         all.push((
             format!("Open Pipeline: {path}"),
             Box::new(app::OpenPipelineTrack { track }),

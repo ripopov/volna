@@ -46,12 +46,16 @@ fn sample() -> (Vec<u8>, SignalId) {
             },
         )
         .unwrap();
-    let stream = w.add_stream(Some(top), "bus", "TRANSACTOR").unwrap();
-    let r#gen = w.add_generator(stream, "read").unwrap();
-    let log = w.add_stream(None, "log", LOG_STREAM_KIND).unwrap();
+    let stream = w
+        .add_scope(Some(top), "bus", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let r#gen = w.add_generator(Some(stream), "read", "TRANSACTOR").unwrap();
+    let log = w
+        .add_scope(None, "log", vtr::ScopeType::Generic, "")
+        .unwrap();
     let site = w
         .add_log_site(&LogSiteSpec::new(
-            log,
+            Some(log),
             Severity::Info,
             "step {}",
             &[LogArgType::U64],
@@ -228,10 +232,12 @@ fn finished_sections_reach_the_file_at_once() {
             },
         )
         .unwrap();
-    let log = w.add_stream(None, "log", LOG_STREAM_KIND).unwrap();
+    let log = w
+        .add_scope(None, "log", vtr::ScopeType::Generic, "")
+        .unwrap();
     let site = w
         .add_log_site(&LogSiteSpec::new(
-            log,
+            Some(log),
             Severity::Info,
             "step {}",
             &[LogArgType::U64],
@@ -355,10 +361,12 @@ fn commit_interval_flushes_pending_signal_and_log_records() {
                 },
             )
             .unwrap();
-        let log = w.add_stream(None, "log", LOG_STREAM_KIND).unwrap();
+        let log = w
+            .add_scope(None, "log", vtr::ScopeType::Generic, "")
+            .unwrap();
         let site = w
             .add_log_site(&LogSiteSpec::new(
-                log,
+                Some(log),
                 Severity::Info,
                 "step {}",
                 &[LogArgType::U64],

@@ -98,7 +98,6 @@ impl FstSession {
                         vtr::ScopeType::from_code(tpe as u16).name(),
                         &component,
                         scopes.last().copied(),
-                        super::source::ScopeRole::Scope,
                     );
                     scopes.push(id);
                     pending_enum = None;
@@ -136,13 +135,7 @@ impl FstSession {
                     }
                     let scope = scopes.last().copied().unwrap_or_else(|| {
                         *top.get_or_insert_with(|| {
-                            hierarchy.push_scope(
-                                "(top)",
-                                "module",
-                                "",
-                                None,
-                                super::source::ScopeRole::Scope,
-                            )
+                            hierarchy.push_scope("(top)", "module", "", None)
                         })
                     });
                     hierarchy.push_var(super::source::VariableView {

@@ -13,8 +13,12 @@ fn remote_metadata_queues_complete_tracks() {
 
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let stream = writer.add_stream(None, "bus", "tlm").unwrap();
-    let generator = writer.add_generator(stream, "requests").unwrap();
+    let stream = writer
+        .add_scope(None, "bus", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let generator = writer
+        .add_generator(Some(stream), "requests", "tlm")
+        .unwrap();
     let tx = writer.begin_tx(generator, 1).unwrap();
     writer.end_tx(tx, 100, TxStatus::Ok).unwrap();
     writer.close().unwrap();
@@ -34,7 +38,7 @@ fn remote_metadata_queues_complete_tracks() {
     for request in document.take_requests() {
         document.deliver(request.perform());
     }
-    let track = TrackRef(stream.0);
+    let track = TrackRef(generator.0);
     document.retain_track(in_a(track)).unwrap();
     document.retain_track(in_a(track)).unwrap();
     let mut requests = document.take_requests();
@@ -85,12 +89,16 @@ fn document_track_loads_coalesce_share_release_retry_and_reject_stale_results() 
     use volna_core::session::{LoadRequest, LoadResult};
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let stream = writer.add_stream(None, "stream", "transactions").unwrap();
-    let generator = writer.add_generator(stream, "generator").unwrap();
+    let stream = writer
+        .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let generator = writer
+        .add_generator(Some(stream), "generator", "transactions")
+        .unwrap();
     writer.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
     let track = TrackRef(generator.0);
-    let stream = TrackRef(stream.0);
+    let stream = TrackRef(generator.0);
     let mut doc = Document::new();
     doc.set_session(session.clone());
     for request in doc.take_requests() {

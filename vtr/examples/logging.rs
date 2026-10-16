@@ -16,16 +16,16 @@ fn main() -> vtr::Result<()> {
 
     let soc = w.add_scope(None, "soc", ScopeType::Generic, "")?;
     let cpu = w.add_scope(Some(soc), "cpu0", ScopeType::Core, "")?;
-    let cpu_log = w.add_stream(Some(cpu), "log", vtr::LOG_STREAM_KIND)?;
+    let cpu_log = w.add_scope(Some(cpu), "log", vtr::ScopeType::Generic, "")?;
     let dma = w.add_scope(Some(soc), "dma", ScopeType::Generic, "")?;
-    let dma_log = w.add_stream(Some(dma), "log", vtr::LOG_STREAM_KIND)?;
-    let dma_tx = w.add_stream(Some(dma), "transfers", "TLM")?;
-    let gen_xfer = w.add_generator(dma_tx, "transfer")?;
+    let dma_log = w.add_scope(Some(dma), "log", vtr::ScopeType::Generic, "")?;
+    let dma_tx = w.add_scope(Some(dma), "transfers", vtr::ScopeType::Generic, "")?;
+    let gen_xfer = w.add_generator(Some(dma_tx), "transfer", "TLM")?;
     let _ = soc;
 
     let s_fetch = w.add_log_site(
         &LogSiteSpec::new(
-            cpu_log,
+            Some(cpu_log),
             Severity::Debug,
             "fetch pc={:#010x} inst={:#010x}",
             &[LogArgType::U64, LogArgType::U64, LogArgType::Text],
@@ -35,7 +35,7 @@ fn main() -> vtr::Result<()> {
     )?;
     let s_retire = w.add_log_site(
         &LogSiteSpec::new(
-            cpu_log,
+            Some(cpu_log),
             Severity::Info,
             "retire pc={:#010x} rd=x{} value={:#x}",
             &[
@@ -50,7 +50,7 @@ fn main() -> vtr::Result<()> {
     )?;
     let s_stall = w.add_log_site(
         &LogSiteSpec::new(
-            cpu_log,
+            Some(cpu_log),
             Severity::Warn,
             "{} stalled {} cycles waiting for {}",
             &[
@@ -65,7 +65,7 @@ fn main() -> vtr::Result<()> {
     )?;
     let s_dma_start = w.add_log_site(
         &LogSiteSpec::new(
-            dma_log,
+            Some(dma_log),
             Severity::Info,
             "channel {} start {} bytes {:#x} -> {:#x}",
             &[
@@ -81,7 +81,7 @@ fn main() -> vtr::Result<()> {
     )?;
     let s_dma_done = w.add_log_site(
         &LogSiteSpec::new(
-            dma_log,
+            Some(dma_log),
             Severity::Info,
             "channel {} done in {:.2} us",
             &[LogArgType::U64, LogArgType::F64, LogArgType::Text],
@@ -91,7 +91,7 @@ fn main() -> vtr::Result<()> {
     )?;
     let s_dma_err = w.add_log_site(
         &LogSiteSpec::new(
-            dma_log,
+            Some(dma_log),
             Severity::Error,
             "channel {} bus error at {:#x} ({})",
             &[
@@ -232,7 +232,7 @@ fn main() -> vtr::Result<()> {
                     "{:>8} ns {:<5} {}: {}",
                     rec.time,
                     rec.severity().name(),
-                    r.full_path(rec.site.stream, "."),
+                    r.full_path(rec.site.scope.unwrap(), "."),
                     rec.format(r.strings())
                 );
             }
@@ -244,7 +244,7 @@ fn main() -> vtr::Result<()> {
     println!("\n-- log of the first DMA transfer --");
     let first = r
         .transactions(&TxQuery {
-            stream: Some(dma_tx),
+            scope: Some(dma_tx),
             ..Default::default()
         })?
         .into_iter()
@@ -252,7 +252,7 @@ fn main() -> vtr::Result<()> {
         .unwrap();
     r.visit_log(
         &LogQuery {
-            stream: Some(dma_log),
+            scope: Some(dma_log),
             window: Some((first.begin, first.end)),
             ..Default::default()
         },

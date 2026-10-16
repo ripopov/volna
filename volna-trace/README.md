@@ -60,7 +60,7 @@ sessions or objects borrowing their storage exist.
 | `info()` and `hierarchy()` | Recording time range, timescale, scopes, and variable declarations |
 | `capabilities()` and `tracks()` | Supported operations and the resident transaction catalog |
 | `load_signal()` and `load_signals()` | Complete immutable change histories; batched results follow request order |
-| `load_track()` | Complete records and incident relations for a stream or generator, including empty generators |
+| `load_track()` | Complete records and incident relations for a generator, including an empty generator |
 | `activity()` | A shared activity index, if one was found or built |
 
 Aliases refer to the same signal identity. A batched load can share their
@@ -104,7 +104,7 @@ and generations identify completions without entering the wire protocol.
 `RemoteClient`, rather than their blocking local query methods.
 
 The [server guide](../volna-server/README.md) describes process hosting and
-protocol version 6. Local and remote objects have the same data contract;
+protocol version 7. Local and remote objects have the same data contract;
 transport carries runtime facts. Viewport state, search, value translation,
 transaction layout, VDB design semantics, and annotations belong to consumers.
 

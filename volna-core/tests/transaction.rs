@@ -50,7 +50,7 @@ fn track(session: &dyn Session, path: &str) -> TrackRef {
     session
         .tracks()
         .iter()
-        .find(|t| t.path.join(".") == path)
+        .find(|t| t.path.join(".") == path || t.path[..t.path.len() - 1].join(".") == path)
         .unwrap_or_else(|| panic!("no track {path}"))
         .id
 }
@@ -308,7 +308,7 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
     let panel = show(&mut app, pipeline, insn, 33);
     let v = view(&app, panel);
-    assert_eq!(v.identity.stream, ["soc", "cpu0", "pipeline"]);
+    assert_eq!(v.identity.scope, ["soc", "cpu0", "pipeline"]);
     assert_eq!(v.identity.generator, "instruction");
     assert_eq!(
         v.identity.label.as_deref(),
@@ -573,6 +573,7 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     assert!(view(&app, panel).attributes.collapsed);
 
     select(&mut app, pipeline, write, unfinished.0);
+    pump(&mut app);
     let v = view(&app, panel);
     assert_eq!(v.identity.status, TxStatus::Open);
     assert_eq!((v.timing.end, v.timing.end_text.as_str()), (None, "open"));

@@ -992,7 +992,7 @@ pub unsafe extern "C" fn vtr_writer_add_enum_table(
 /// # Safety
 /// The caller must uphold the module's [pointer safety](self#pointer-safety) contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vtr_writer_add_stream(
+pub unsafe extern "C" fn vtr_writer_add_generator(
     w: *mut vtr_writer,
     parent: u32,
     name: *const c_char,
@@ -1002,24 +1002,7 @@ pub unsafe extern "C" fn vtr_writer_add_stream(
     unsafe {
         ffi_w(w, || {
             let (w, name) = decl_args!(w, name);
-            node_or_none(w.0.add_stream(parent_id(parent), name, cstr(kind).unwrap_or("")))
-        })
-    }
-}
-
-/// # Safety
-/// The caller must uphold the module's [pointer safety](self#pointer-safety) contract.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn vtr_writer_add_generator(
-    w: *mut vtr_writer,
-    stream: u32,
-    name: *const c_char,
-) -> u32 {
-    // SAFETY: Inputs and outputs satisfy the caller’s module-level pointer safety contract.
-    unsafe {
-        ffi_w(w, || {
-            let (w, name) = decl_args!(w, name);
-            node_or_none(w.0.add_generator(NodeId(stream), name))
+            node_or_none(w.0.add_generator(parent_id(parent), name, cstr(kind).unwrap_or("")))
         })
     }
 }
@@ -1437,7 +1420,7 @@ pub unsafe extern "C" fn vtr_writer_relate(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vtr_writer_add_log_site(
     w: *mut vtr_writer,
-    stream: u32,
+    scope: u32,
     severity: u8,
     fmt: *const c_char,
     file: *const c_char,
@@ -1481,7 +1464,7 @@ pub unsafe extern "C" fn vtr_writer_add_log_site(
                 }
             }
             let mut spec =
-                LogSiteSpec::new(NodeId(stream), Severity::from_code(severity), fmt, &types)
+                LogSiteSpec::new(parent_id(scope), Severity::from_code(severity), fmt, &types)
                     .names(&name_strs);
             spec.file = cstr(file).unwrap_or("");
             spec.line = line;
@@ -1628,11 +1611,14 @@ pub unsafe extern "C" fn vtr_writer_add_clock(
 /// # Safety
 /// The caller must uphold the module's [pointer safety](self#pointer-safety) contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vtr_writer_clock_stream(w: *const vtr_writer, clock: u32) -> u32 {
+pub unsafe extern "C" fn vtr_writer_clock_generator(w: *const vtr_writer, clock: u32) -> u32 {
     // SAFETY: Inputs and outputs satisfy the caller’s module-level pointer safety contract.
     unsafe {
         ffi_w(w, || match w.as_ref() {
-            Some(w) => w.0.clock_stream(ClockId(clock)).map_or(VTR_NONE, |n| n.0),
+            Some(w) => {
+                w.0.clock_generator(ClockId(clock))
+                    .map_or(VTR_NONE, |n| n.0)
+            }
             None => VTR_NONE,
         })
     }
@@ -1937,8 +1923,7 @@ pub unsafe extern "C" fn vtr_reader_node(
                     info.signal = signal.0;
                     info.is_alias = c_int::from(declares.is_none());
                 }
-                NodeData::Stream { kind } => info.aux_str = kind.0,
-                NodeData::Generator => {}
+                NodeData::Generator { kind } => info.aux_str = kind.0,
                 NodeData::EnumTable { entries } => info.entry_count = entries.len() as u32,
             }
             *out = info;
@@ -2622,7 +2607,7 @@ pub struct vtr_tx(Transaction);
 pub struct vtr_tx_info {
     pub id: u64,
     pub generator: u32,
-    pub stream: u32,
+    pub scope: u32,
     pub begin: u64,
     pub end: u64,
     pub status: u8,
@@ -2651,7 +2636,11 @@ pub unsafe extern "C" fn vtr_tx_get(
             *out = vtr_tx_info {
                 id: t.id,
                 generator: t.generator.0,
-                stream: r.0.generator_stream(t.generator).map_or(VTR_NONE, |s| s.0),
+                scope: r
+                    .0
+                    .hierarchy()
+                    .parent(t.generator)
+                    .map_or(VTR_NONE, |s| s.0),
                 begin: t.begin,
                 end: t.end,
                 status: t.status as u8,
@@ -2851,7 +2840,7 @@ pub type vtr_tx_cb =
 pub unsafe extern "C" fn vtr_reader_visit_transactions(
     r: *const vtr_reader,
     generator: u32,
-    stream: u32,
+    scope: u32,
     t0: u64,
     t1: u64,
     cb: vtr_tx_cb,
@@ -2868,10 +2857,10 @@ pub unsafe extern "C" fn vtr_reader_visit_transactions(
                 } else {
                     Some(NodeId(generator))
                 },
-                stream: if stream == VTR_NONE {
+                scope: if scope == VTR_NONE {
                     None
                 } else {
-                    Some(NodeId(stream))
+                    Some(NodeId(scope))
                 },
                 window: if t1 == 0 { None } else { Some((t0, t1)) },
             };
@@ -3053,7 +3042,7 @@ pub unsafe extern "C" fn vtr_reader_relations(
 #[repr(C)]
 pub struct vtr_log_site_info {
     pub node: u32,
-    pub stream: u32,
+    pub scope: u32,
     pub severity: u8,
     pub fmt: u32,
     pub file: u32,
@@ -3105,7 +3094,7 @@ pub unsafe extern "C" fn vtr_reader_log_site(
                 Some(s) => {
                     *out = vtr_log_site_info {
                         node: s.node.0,
-                        stream: s.stream.0,
+                        scope: s.scope.map_or(VTR_NONE, |n| n.0),
                         severity: s.severity.code(),
                         fmt: s.fmt.0,
                         file: s.file.map_or(VTR_NONE, |x| x.0),
@@ -3171,7 +3160,7 @@ pub struct vtr_log_rec {
     pub parent: u64,
     pub site: u32,
     pub generator: u32,
-    pub stream: u32,
+    pub scope: u32,
     pub severity: u8,
     pub arg_count: u32,
     inner: *const std::ffi::c_void,
@@ -3185,7 +3174,7 @@ pub type vtr_log_cb =
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vtr_reader_visit_log(
     r: *const vtr_reader,
-    stream: u32,
+    scope: u32,
     generator: u32,
     min_severity: u8,
     t0: u64,
@@ -3199,10 +3188,10 @@ pub unsafe extern "C" fn vtr_reader_visit_log(
             let r = need_ref!(r);
             let Some(cb) = cb else { return VTR_ERR_NULL };
             let q = LogQuery {
-                stream: if stream == VTR_NONE {
+                scope: if scope == VTR_NONE {
                     None
                 } else {
-                    Some(NodeId(stream))
+                    Some(NodeId(scope))
                 },
                 generator: if generator == VTR_NONE {
                     None
@@ -3219,7 +3208,7 @@ pub unsafe extern "C" fn vtr_reader_visit_log(
                     parent: rec.parent.unwrap_or(0),
                     site: rec.site.index,
                     generator: rec.site.node.0,
-                    stream: rec.site.stream.0,
+                    scope: rec.site.scope.map_or(VTR_NONE, |n| n.0),
                     severity: rec.site.severity.code(),
                     arg_count: rec.arg_count() as u32,
                     inner: std::ptr::from_ref::<LogRecord>(rec).cast::<std::ffi::c_void>(),
@@ -3313,7 +3302,6 @@ pub unsafe extern "C" fn vtr_log_rec_format(
 
 #[repr(C)]
 pub struct vtr_clock_info {
-    pub stream: u32,
     pub generator: u32,
 }
 
@@ -3346,7 +3334,6 @@ pub unsafe extern "C" fn vtr_reader_clock(
             match r.0.clocks().get(clock as usize) {
                 Some(c) => {
                     *out = vtr_clock_info {
-                        stream: c.stream.0,
                         generator: c.generator.0,
                     };
                     VTR_OK
@@ -3360,12 +3347,12 @@ pub unsafe extern "C" fn vtr_reader_clock(
 /// # Safety
 /// The caller must uphold the module's [pointer safety](self#pointer-safety) contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vtr_reader_stream_clock(r: *const vtr_reader, stream: u32) -> u32 {
+pub unsafe extern "C" fn vtr_reader_generator_clock(r: *const vtr_reader, scope: u32) -> u32 {
     // SAFETY: Inputs and outputs satisfy the caller’s module-level pointer safety contract.
     unsafe {
         ffi(|| match r.as_ref() {
-            Some(r) if (stream as usize) < r.0.hierarchy().len() => {
-                r.0.stream_clock(NodeId(stream)).map_or(VTR_NONE, |c| c.0)
+            Some(r) if (scope as usize) < r.0.hierarchy().len() => {
+                r.0.generator_clock(NodeId(scope)).map_or(VTR_NONE, |c| c.0)
             }
             _ => VTR_NONE,
         })

@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use super::Key;
 use crate::trace::{TraceId, TraceSet, Traced};
-use volna_trace::data::{Hierarchy, Member, ScopeId, ScopeRole, ScopeSize};
+use volna_trace::data::{Hierarchy, Member, ScopeId, ScopeSize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TreeNode {
@@ -260,11 +260,6 @@ impl ScopeTreeModel {
         };
         let has_children = Self::has_children(traces, sel);
         let expanded = self.is_expanded(sel);
-        let stream = sel.traced_scope().and_then(|scope| {
-            let h = traces.session(scope.trace)?.hierarchy();
-            matches!(h.scope(scope.item).role, ScopeRole::Stream { .. })
-                .then(|| scope.with(Member::Stream(scope.item)))
-        });
         let mut out = ScopeKeyOutcome::default();
         match key {
             Key::Down if pos + 1 < self.visible.len() => {
@@ -290,9 +285,6 @@ impl ScopeTreeModel {
             }
             Key::Enter | Key::Space if has_children => {
                 self.toggle(traces, sel);
-            }
-            Key::Enter | Key::Space if stream.is_some() => {
-                out.activate = stream;
             }
             _ => {}
         }

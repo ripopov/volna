@@ -157,14 +157,7 @@ fn transactions_clocks_logs_and_window_bounds() {
     assert!(ok(d, &["clocks", "run.vtr"]).contains("cpu.cycle"));
     let output = ok(
         d,
-        &[
-            "transactions",
-            "run.vtr",
-            "--stream",
-            "cpu.thread0",
-            "--from",
-            "104",
-        ],
+        &["transactions", "run.vtr", "--scope", "cpu", "--from", "104"],
     );
     assert!(output.contains("insn_id_in_sim = 12"));
     assert!(!output.contains("insn_id_in_sim = 10"));
@@ -176,18 +169,18 @@ fn transactions_clocks_logs_and_window_bounds() {
         Some(2)
     );
     assert_eq!(
-        run(d, &["transactions", "run.vtr", "--stream", "absent"])
+        run(d, &["transactions", "run.vtr", "--scope", "absent"])
             .status
             .code(),
         Some(2)
     );
     let mut w = vtr::Writer::create(d.join("logs.vtr")).unwrap();
     let stream = w
-        .add_stream(None, "messages", vtr::LOG_STREAM_KIND)
+        .add_scope(None, "messages", vtr::ScopeType::Generic, "")
         .unwrap();
     let site = w
         .add_log_site(&vtr::LogSiteSpec::new(
-            stream,
+            Some(stream),
             vtr::Severity::Warn,
             "hello {}",
             &[vtr::LogArgType::U64],

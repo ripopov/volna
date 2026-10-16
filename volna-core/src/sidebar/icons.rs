@@ -2,14 +2,14 @@
 
 use crate::icons::IconName;
 use crate::theme::Theme;
-use volna_trace::data::{Direction, Hierarchy, Member, ScopeRole, ScopeView};
+use volna_trace::data::{Direction, Hierarchy, Member, ScopeView};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tint {
     None,
     Pipeline,
     Log,
-    Stream,
+    Generator,
     In,
     Out,
     InOut,
@@ -21,25 +21,22 @@ impl Tint {
             Self::None | Self::In | Self::Out | Self::InOut => theme.panel.icon_muted,
             Self::Pipeline => theme.sidebar_tints[0],
             Self::Log => theme.sidebar_tints[1],
-            Self::Stream => theme.sidebar_tints[2],
+            Self::Generator => theme.sidebar_tints[2],
         }
     }
 }
 
 #[must_use]
-pub fn stream_icon(kind: &str) -> (IconName, Tint) {
+pub fn generator_icon(kind: &str) -> (IconName, Tint) {
     match kind {
         "PIPELINE" => (IconName::Workflow, Tint::Pipeline),
         "LOG" => (IconName::ScrollText, Tint::Log),
-        _ => (IconName::ChartNoAxesGantt, Tint::Stream),
+        _ => (IconName::ChartNoAxesGantt, Tint::Generator),
     }
 }
 
 #[must_use]
 pub fn scope_icon(scope: &ScopeView<'_>) -> (IconName, Tint) {
-    if matches!(scope.role, ScopeRole::Stream { .. }) {
-        return stream_icon(scope.kind);
-    }
     (scope_kind_icon(scope.kind), Tint::None)
 }
 
@@ -82,8 +79,7 @@ pub fn member_icon(h: &Hierarchy, member: Member) -> IconName {
             }
         }
         Member::Generator(_) if h.is_log(member) => IconName::MessageSquare,
-        Member::Generator(_) => IconName::CircleDot,
-        Member::Stream(id) => scope_icon(&h.scope(id)).0,
+        Member::Generator(id) => generator_icon(&h.generators()[id].kind).0,
     }
 }
 
@@ -95,10 +91,4 @@ pub fn direction_icon(direction: Direction) -> Option<(IconName, Tint)> {
         Direction::InOut => Some((IconName::ArrowLeftRight, Tint::InOut)),
         Direction::None => None,
     }
-}
-
-#[must_use]
-pub fn stream_tag<'a>(scope: &ScopeView<'a>) -> Option<&'a str> {
-    (matches!(scope.role, ScopeRole::Stream { .. }) && !matches!(scope.kind, "PIPELINE" | "LOG"))
-        .then_some(scope.kind)
 }

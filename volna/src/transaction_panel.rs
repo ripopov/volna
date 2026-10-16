@@ -391,8 +391,8 @@ impl TransactionPanelView {
             .text_size(px(t.ui_size_small))
             .text_color(muted)
             .child(Icon::new(IconName::Workflow).size(t.px(12.0)).color(muted));
-        if !identity.stream.is_empty() {
-            breadcrumb = breadcrumb.child(SharedString::from(identity.stream.join(".")));
+        if !identity.scope.is_empty() {
+            breadcrumb = breadcrumb.child(SharedString::from(identity.scope.join(".")));
             breadcrumb = breadcrumb.child("›");
         }
         breadcrumb = breadcrumb

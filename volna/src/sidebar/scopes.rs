@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 use volna_core::app::Command;
 use volna_core::data::sizes::ScopeSizeLabel;
-use volna_core::sidebar::icons::{scope_icon, stream_tag};
+use volna_core::sidebar::icons::scope_icon;
 use volna_core::sidebar::{Key, ScopeTreeModel, TreeNode};
 use volna_core::trace::Traced;
 
@@ -496,22 +496,6 @@ impl Workspace {
                                         })
                                         .child(name),
                                 )
-                                .when_some(stream_tag(&scope), |row, tag| {
-                                    row.child(
-                                        div()
-                                            .flex_none()
-                                            .max_w(t.px(90.0))
-                                            .overflow_hidden()
-                                            .whitespace_nowrap()
-                                            .text_ellipsis()
-                                            .px_1()
-                                            .rounded_sm()
-                                            .bg(t.badge.bg)
-                                            .text_color(t.badge.text)
-                                            .text_size(px(t.ui_size_small))
-                                            .child(SharedString::from(tag.to_owned())),
-                                    )
-                                })
                                 .when_some(activity, |row, a| {
                                     row.child(activity_meter(a, &t).debug_selector(move || {
                                         format!("scope-meter-{trace}-{id}")

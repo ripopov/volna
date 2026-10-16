@@ -22,3 +22,8 @@ Copied from `examples/verilator` in the prototype's Surfer fork, revision
 Run `cargo test -p vtr --test verilator_logs`. Format changes must update these
 fixtures and their assertions together. New Rust round-trip tests should create
 traces in temporary directories rather than add generated binary fixtures.
+
+The VTR fixtures use format 2.0. Their hierarchy declarations were re-encoded
+with generator kinds and ordinary grouping scopes; clock generators replace
+the former clock container and its edge source. Signal histories, transaction
+IDs, timing, and log arguments are preserved.

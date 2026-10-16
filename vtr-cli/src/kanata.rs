@@ -106,10 +106,10 @@ fn convert_reader(reader: impl BufRead, w: &mut Writer) -> Result<()> {
                     let r#gen = match threads.entry(tid) {
                         std::collections::hash_map::Entry::Occupied(e) => *e.get(),
                         std::collections::hash_map::Entry::Vacant(e) => {
-                            let stream =
-                                w.add_stream(Some(core), &format!("thread{tid}"), "PIPELINE")?;
-                            w.node_attr(stream, vtr::clock::KEY_CLOCK, Value::Str(clock_path))?;
-                            *e.insert(w.add_generator(stream, "instruction")?)
+                            let generator =
+                                w.add_generator(Some(core), &format!("thread{tid}"), "PIPELINE")?;
+                            w.node_attr(generator, vtr::clock::KEY_CLOCK, Value::Str(clock_path))?;
+                            *e.insert(generator)
                         }
                     };
                     if !start_set {

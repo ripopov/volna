@@ -38,7 +38,7 @@ to manage decoding and client admission; the host provides pipe I/O and scheduli
 | Command | Result |
 | --- | --- |
 | `Signals(ids)` | One complete history or explicit error per distinct signal, with at most 64 IDs per request |
-| `Track(id)` | Complete records and incident relations for a catalog stream or generator |
+| `Track(id)` | Complete records and incident relations for a catalog generator |
 | `Activity { build: false }` | An existing, validated raw activity sidecar, or an error |
 | `Activity { build: true }` | The sidecar, building it first if needed |
 | `Close` | Release the reader and exit |

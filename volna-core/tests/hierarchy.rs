@@ -3,13 +3,12 @@ use volna_core::app::{App, Command, Event};
 use volna_core::geometry::Modifiers;
 use volna_core::icons::IconName;
 use volna_core::sidebar::TreeNode;
-use volna_core::sidebar::icons::{Tint, member_icon, scope_icon, scope_kind_icon, stream_tag};
+use volna_core::sidebar::icons::{Tint, member_icon, scope_icon, scope_kind_icon};
 use volna_core::sidebar::members::log_site;
 use volna_core::sidebar::{Key, MemberListModel, ScopeTreeModel};
 use volna_core::testing::{a, hierarchy_document};
 use volna_trace::data::source::Lookup;
-use volna_trace::data::transactions::TrackRef;
-use volna_trace::data::{Hierarchy, Member, ScopeRole};
+use volna_trace::data::{Hierarchy, Member};
 use volna_trace::remote::objects::Metadata;
 use volna_trace::session::{OpenSpec, Session};
 
@@ -39,22 +38,32 @@ fn fixture() -> Arc<dyn Session> {
     let cpu = w
         .add_scope(Some(root), "cpu", vtr::ScopeType::Core, "")
         .unwrap();
-    let stream = w.add_stream(Some(cpu), "thread0", "PIPELINE").unwrap();
-    w.add_generator(stream, "instructions").unwrap();
-    let bus = w.add_stream(Some(root), "read_bus", "TRANSACTOR").unwrap();
-    w.add_generator(bus, "read_request").unwrap();
-    w.add_generator(bus, "write_request").unwrap();
-    let log = w
-        .add_stream(Some(root), "log", vtr::LOG_STREAM_KIND)
+    let stream = w
+        .add_scope(Some(cpu), "thread0", vtr::ScopeType::Generic, "")
         .unwrap();
-    let site = w.add_generator(log, "read_failed at pc=%x").unwrap();
+    w.add_generator(Some(stream), "instructions", "PIPELINE")
+        .unwrap();
+    let bus = w
+        .add_scope(Some(root), "read_bus", vtr::ScopeType::Generic, "")
+        .unwrap();
+    w.add_generator(Some(bus), "read_request", "TRANSACTOR")
+        .unwrap();
+    w.add_generator(Some(bus), "write_request", "TRANSACTOR")
+        .unwrap();
+    let log = w
+        .add_scope(Some(root), "log", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let site = w
+        .add_generator(Some(log), "read_failed at pc=%x", vtr::LOG_GENERATOR_KIND)
+        .unwrap();
     w.node_attr(site, "log.severity", vtr::Value::U64(4))
         .unwrap();
     let filename = w.intern("soc.sv");
     w.node_attr(site, "log.file", vtr::Value::Str(filename))
         .unwrap();
     w.node_attr(site, "log.line", vtr::Value::U64(42)).unwrap();
-    w.add_stream(Some(root), "empty", "otel.scope").unwrap();
+    w.add_scope(Some(root), "empty", vtr::ScopeType::Generic, "")
+        .unwrap();
     w.close().unwrap();
     if let Some(path) = std::env::var_os("VOLNA_HIERARCHY_FIXTURE") {
         std::fs::copy(file.path(), path).unwrap();
@@ -76,7 +85,7 @@ fn mixed_vtr_metadata_icons_and_log_provenance() {
     let pipeline = scope(h, &["soc", "cpu", "thread0"]);
     assert_eq!(
         scope_icon(&h.scope(pipeline)),
-        (IconName::Workflow, Tint::Pipeline)
+        (IconName::Folder, Tint::None)
     );
     assert_eq!(h.scope(0).component, "soc_top");
     let mut doc = volna_core::Document::new();
@@ -84,9 +93,9 @@ fn mixed_vtr_metadata_icons_and_log_provenance() {
     let traces = doc.traces();
     let mut list = MemberListModel::default();
     list.set_scope(traces, Some(a(pipeline)));
-    assert_eq!(list.title(traces), "Generators");
+    assert_eq!(list.title(traces), "Members");
     assert_eq!(list.rows, [a(Member::Generator(0))]);
-    assert_eq!(member_icon(h, list.rows[0].item), IconName::CircleDot);
+    assert_eq!(member_icon(h, list.rows[0].item), IconName::Workflow);
     assert_eq!(member_icon(h, Member::Var(0)), IconName::Tags);
     assert_eq!(
         h.find_generator(&["soc", "cpu", "thread0", "instructions"]),
@@ -106,20 +115,20 @@ fn mixed_vtr_metadata_icons_and_log_provenance() {
         assert_eq!(track.path.join("."), h.member_path(member));
     }
     let bus = scope(h, &["soc", "read_bus"]);
-    assert_eq!(stream_tag(&h.scope(bus)), Some("TRANSACTOR"));
+    assert_eq!(
+        h.generators()[h.scope(bus).generators.iter().next().unwrap()].kind,
+        "TRANSACTOR"
+    );
     let log = scope(h, &["soc", "log"]);
     list.set_scope(traces, Some(a(log)));
-    assert_eq!(list.title(traces), "Log sites");
+    assert_eq!(list.title(traces), "Members");
     let site = log_site(h, list.rows[0].item).unwrap();
     assert_eq!(
         (site.severity.as_str(), site.file, site.line),
         ("error", Some("soc.sv"), Some(42))
     );
     list.set_scope(traces, Some(a(scope(h, &["soc", "empty"]))));
-    assert_eq!(
-        list.placeholder(traces),
-        Some("This stream declares no generators")
-    );
+    assert_eq!(list.placeholder(traces), Some("No members in this scope"));
     Metadata::from_session(session.as_ref()).validate().unwrap();
 }
 
@@ -134,12 +143,7 @@ fn search_order_activation_keyboard_and_notices() {
     let members: Vec<Member> = rows.iter().map(|m| m.item).collect();
     assert!(matches!(
         members.as_slice(),
-        [
-            Member::Var(_),
-            Member::Generator(_),
-            Member::Generator(_),
-            Member::Stream(_)
-        ]
+        [Member::Var(_), Member::Generator(_), Member::Generator(_)]
     ));
     assert!(app.variables.show_scope());
     app.handle(Command::AddSelectedOrAllVars);
@@ -165,11 +169,13 @@ fn search_order_activation_keyboard_and_notices() {
     assert!(!app.variables.search_everywhere);
     app.handle(Command::SetFilter(String::new()));
     app.handle(Command::ScopesKey(Key::Enter));
+    assert_eq!(app.panels.len(), 3);
+    app.handle(Command::ActivateMembers(vec![a(Member::Generator(0))]));
     assert!(app.status().sidebar_notice.is_none());
     assert_eq!(app.panels.len(), 4);
     assert_eq!(
         app.panels.focused().kind.pipeline().unwrap().track.path(),
-        ["soc", "cpu", "thread0"]
+        ["soc", "cpu", "thread0", "instructions"]
     );
     app.handle(Command::ScopesKey(Key::Left));
     assert_eq!(
@@ -196,7 +202,7 @@ fn search_cap_counts_all_kinds_and_deep_trees_are_iterative() {
     assert!(list.truncated);
     h.vars.truncate(4996);
     list.rebuild(hierarchy_document(h).traces());
-    assert_eq!(list.rows.len(), 4999);
+    assert_eq!(list.rows.len(), 4998);
     assert!(!list.truncated);
     let mut h = volna_trace::data::HierarchyBuilder::default();
     let mut parent = None;
@@ -316,14 +322,12 @@ fn icons_have_assets_and_malformed_track_references_are_rejected() {
     let session = fixture();
     let mut metadata = Metadata::from_session(session.as_ref());
     let mut builder = metadata.hierarchy.to_builder();
-    builder.generators[0].stream = 0;
+    builder.generators[0].track = volna_trace::data::transactions::TrackRef(u32::MAX);
     metadata.hierarchy = builder.finish();
     assert!(metadata.validate().is_err());
     let mut metadata = Metadata::from_session(session.as_ref());
     let mut builder = metadata.hierarchy.to_builder();
-    builder.scopes[2].role = ScopeRole::Stream {
-        track: TrackRef(u32::MAX),
-    };
+    builder.generators[0].kind = "wrong-kind".into();
     metadata.hierarchy = builder.finish();
     assert!(metadata.validate().is_err());
 }

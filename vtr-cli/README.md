@@ -18,9 +18,9 @@ vtr convert --help
 | `hierarchy FILE [--vars] [--depth N] [--sizes]` | VTR | Declarations or scope counts; aliases count once per scope's signal total |
 | `value FILE SIGNAL TIME` | VTR | Signal value at a tick |
 | `changes FILE SIGNAL [--from T] [--to T] [--max N]` | VTR | Changes in an inclusive window |
-| `transactions FILE [--stream PATH] [--from T] [--to T] [--max N]` | VTR | Transactions, attributes, events, and stages |
+| `transactions FILE [--scope PATH] [--from T] [--to T] [--max N]` | VTR | Transactions, attributes, events, and stages |
 | `transactions FILE --id ID[,ID…]` | VTR | Selected transactions and their incoming/outgoing relations |
-| `logs FILE [--stream PATH] [--severity LEVEL] [--from T] [--to T] [--max N]` | VTR | Formatted messages; `--sites` lists declarations instead |
+| `logs FILE [--scope PATH] [--severity LEVEL] [--from T] [--to T] [--max N]` | VTR | Formatted messages; `--sites` lists declarations instead |
 | `clocks FILE` | VTR | Declared clocks and edge stretches |
 | `convert INPUT OUTPUT [--format kanata\|vcd\|fst]` | Kanata, VCD, FST | Create a VTR recording |
 | `to-vcd INPUT OUTPUT` | VTR | Export waveforms |
@@ -30,7 +30,7 @@ vtr convert --help
 
 Times are unsigned integer ticks in the file's time base, with both window
 ends included. An omitted bound means zero or the largest tick. Signal and
-stream paths use dots; quote paths containing spaces. Query output defaults to
+scope paths use dots; quote paths containing spaces. Query output defaults to
 100 records where `--max` is available. Text output is intended for terminal
 inspection, not as a stable serialization protocol.
 
@@ -51,7 +51,7 @@ process memory or the retained index. Keep recordings unchanged while reading.
   advance a nonnegative cycle; `I` creates an instruction; `L` labels the
   instruction, detail, or most recent stage; `S`/`E` delimit stages; `R` retires
   or flushes; `W` connects producer to consumer. Each thread is a pipeline
-  stream using the period-one `cpu.cycle` clock. Ticks are abstract cycles
+  generator using the period-one `cpu.cycle` clock. Ticks are abstract cycles
   (`time.unit=cycle`), not physical seconds. Repeated labels are newline joined.
   Instructions remain in memory until EOF for late labels and dependencies;
   unfinished instructions have Open status. Unknown commands, unsupported
@@ -88,7 +88,7 @@ cargo run -p vtr-cli --locked -- value "$work/waves.vtr" 'top.bus [3:0]' 5
 cargo run -p vtr-cli --locked -- active "$work/waves.vtr" --from 5 --to 7 --build
 cargo run -p vtr-cli --locked -- to-vcd "$work/waves.vtr" "$work/waves.vcd"
 cargo run -p vtr-cli --locked -- convert vtr-cli/tests/fixtures/pipeline.kanata "$work/pipeline.vtr"
-cargo run -p vtr-cli --locked -- transactions "$work/pipeline.vtr" --stream cpu.thread0
+cargo run -p vtr-cli --locked -- transactions "$work/pipeline.vtr" --scope cpu
 cargo run -p vtr-cli --locked -- clocks "$work/pipeline.vtr"
 ```
 

@@ -77,7 +77,9 @@ async fn metadata(r: &Reader) -> anyhow::Result<super::hierarchy::Header> {
         .vector(28, || async {
             Ok(Generator {
                 name: r.string().await?,
-                stream: r.usize().await?,
+                scope: r.usize().await?,
+                root: r.boolean().await?,
+                kind: r.string().await?,
                 track: TrackRef(r.u32().await?),
                 attributes: attributes(r, 0).await?,
             })
@@ -115,11 +117,8 @@ async fn track(r: &Reader) -> anyhow::Result<Track> {
         id: TrackRef(r.u32().await?),
         path: r.vector(8, || r.string()).await?,
         kind: match r.u32().await? {
-            0 => TrackKind::Stream {
+            0 => TrackKind::Generator {
                 kind: r.string().await?,
-            },
-            1 => TrackKind::Generator {
-                stream: TrackRef(r.u32().await?),
             },
             _ => anyhow::bail!("invalid track kind"),
         },
@@ -217,7 +216,7 @@ mod tests {
         metadata.tracks = vec![Track {
             id: TrackRef(0),
             path: vec!["top".into()],
-            kind: TrackKind::Stream { kind: "raw".into() },
+            kind: TrackKind::Generator { kind: "raw".into() },
             attributes: values
                 .into_iter()
                 .map(|value| ("attr".into(), value))

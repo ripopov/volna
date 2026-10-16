@@ -571,23 +571,24 @@ impl FileSink {
             });
             StrId(first + i as u32)
         };
-        let stream = NodeId(self.next_node);
-        let stream_node = Node {
+        let scope = NodeId(self.next_node);
+        let scope_node = Node {
             parent: None,
-            name: intern(ending::STREAM),
-            data: NodeData::Stream {
-                kind: intern(logblock::STREAM_KIND),
+            name: intern(ending::SCOPE),
+            data: NodeData::Scope {
+                scope_type: ScopeType::Generic,
+                component: StrId(0),
             },
             attrs: Vec::new(),
         };
         let spec = LogSiteSpec {
             names,
-            ..LogSiteSpec::new(stream, logblock::Severity::Fatal, fmt, types)
+            ..LogSiteSpec::new(Some(scope), logblock::Severity::Fatal, fmt, types)
         };
         let (name, attrs) = logblock::site_attrs(&spec, |s| {
             let s: &'static str = [
-                ending::STREAM,
-                logblock::STREAM_KIND,
+                ending::SCOPE,
+                logblock::GENERATOR_KIND,
                 fmt,
                 logblock::KEY_SEVERITY,
                 logblock::KEY_ARGS,
@@ -599,10 +600,11 @@ impl FileSink {
             .expect("constant");
             intern(s)
         })?;
+        let kind = intern(logblock::GENERATOR_KIND);
         let site_node = Node {
-            parent: Some(stream),
+            parent: Some(scope),
             name,
-            data: NodeData::Generator,
+            data: NodeData::Generator { kind },
             attrs,
         };
         let mut payload = Vec::new();
@@ -621,12 +623,12 @@ impl FileSink {
             )?;
             payload.clear();
         }
-        varint::put_u64(&mut payload, u64::from(stream.0));
+        varint::put_u64(&mut payload, u64::from(scope.0));
         varint::put_u64(&mut payload, 2);
-        stream_node.encode(stream.0, self.signals, &mut payload);
-        site_node.encode(stream.0 + 1, self.signals, &mut payload);
+        scope_node.encode(scope.0, self.signals, &mut payload);
+        site_node.encode(scope.0 + 1, self.signals, &mut payload);
         self.next_node += 2;
-        self.write_blob_section(SectionKind::Hierarchy, &payload, u64::from(stream.0), 2)?;
+        self.write_blob_section(SectionKind::Hierarchy, &payload, u64::from(scope.0), 2)?;
         let time = self.signal_time.unwrap_or(self.max_time);
         let mut rows = Vec::new();
         logblock::encode_row(&mut rows, 0, time, self.max_id + 1, 0, &args);
@@ -634,7 +636,7 @@ impl FileSink {
             rows,
             n: 1,
             sites: Arc::new(vec![LogSiteEnc {
-                node: stream.0 + 1,
+                node: scope.0 + 1,
                 args: types.to_vec(),
             }]),
         };
@@ -1004,7 +1006,6 @@ struct SigInfo {
 }
 
 struct ClockState {
-    stream: NodeId,
     r#gen: u32,
     running: Option<(u64, u64, u64)>,
     last_edge: Option<u64>,
@@ -1368,6 +1369,21 @@ impl Writer {
         scope_type: ScopeType,
         component: &str,
     ) -> Result<NodeId> {
+        if parent.is_none() && name == ending::SCOPE {
+            return Err(Error::invalid(
+                "the root scope vtr.run is reserved for the run's ending",
+            ));
+        }
+        self.push_scope(parent, name, scope_type, component)
+    }
+
+    fn push_scope(
+        &mut self,
+        parent: Option<NodeId>,
+        name: &str,
+        scope_type: ScopeType,
+        component: &str,
+    ) -> Result<NodeId> {
         self.check_parent(NodeKind::Scope, parent)?;
         let name = self.strings.intern(name);
         let component = self.strings.intern(component);
@@ -1502,34 +1518,19 @@ impl Writer {
         }))
     }
 
-    pub fn add_stream(&mut self, parent: Option<NodeId>, name: &str, kind: &str) -> Result<NodeId> {
-        if parent.is_none() && name == ending::STREAM {
-            return Err(Error::invalid(format!(
-                "the root stream {name:?} is reserved for the run's ending"
-            )));
-        }
-        self.push_stream(parent, name, kind)
-    }
-
-    fn push_stream(&mut self, parent: Option<NodeId>, name: &str, kind: &str) -> Result<NodeId> {
-        self.check_parent(NodeKind::Stream, parent)?;
+    pub fn add_generator(
+        &mut self,
+        parent: Option<NodeId>,
+        name: &str,
+        kind: &str,
+    ) -> Result<NodeId> {
+        self.check_parent(NodeKind::Generator, parent)?;
         let name = self.strings.intern(name);
         let kind = self.strings.intern(kind);
         Ok(self.push_node(Node {
             parent,
             name,
-            data: NodeData::Stream { kind },
-            attrs: Vec::new(),
-        }))
-    }
-
-    pub fn add_generator(&mut self, stream: NodeId, name: &str) -> Result<NodeId> {
-        self.check_parent(NodeKind::Generator, Some(stream))?;
-        let name = self.strings.intern(name);
-        Ok(self.push_node(Node {
-            parent: Some(stream),
-            name,
-            data: NodeData::Generator,
+            data: NodeData::Generator { kind },
             attrs: Vec::new(),
         }))
     }
@@ -2485,13 +2486,14 @@ impl Writer {
     }
 
     pub fn add_log_site(&mut self, spec: &LogSiteSpec) -> Result<LogSiteId> {
-        self.check_parent(NodeKind::Generator, Some(spec.stream))?;
+        self.check_parent(NodeKind::Generator, spec.scope)?;
         let strings = &mut self.strings;
         let (name, attrs) = logblock::site_attrs(spec, |s| strings.intern(s))?;
+        let kind = self.strings.intern(logblock::GENERATOR_KIND);
         let node = self.push_node(Node {
-            parent: Some(spec.stream),
+            parent: spec.scope,
             name,
-            data: NodeData::Generator,
+            data: NodeData::Generator { kind },
             attrs,
         });
         self.log_sites.push(LogSiteEnc {
@@ -2615,10 +2617,8 @@ impl Writer {
     }
 
     pub fn add_clock(&mut self, scope: Option<NodeId>, name: &str) -> Result<ClockId> {
-        let stream = self.add_stream(scope, name, clock::STREAM_KIND)?;
-        let r#gen = self.add_generator(stream, clock::GENERATOR)?;
+        let r#gen = self.add_generator(scope, name, clock::GENERATOR_KIND)?;
         self.clocks.push(ClockState {
-            stream,
             r#gen: r#gen.0,
             running: None,
             last_edge: None,
@@ -2627,8 +2627,8 @@ impl Writer {
     }
 
     #[must_use]
-    pub fn clock_stream(&self, clock: ClockId) -> Option<NodeId> {
-        self.clocks.get(clock.0 as usize).map(|c| c.stream)
+    pub fn clock_generator(&self, clock: ClockId) -> Option<NodeId> {
+        self.clocks.get(clock.0 as usize).map(|c| NodeId(c.r#gen))
     }
 
     fn clock_state(&mut self, clock: ClockId) -> Result<&mut ClockState> {
@@ -2749,11 +2749,11 @@ impl Writer {
             return r.and(joined);
         }
         if let Some((site, args)) = end.record() {
-            let stream = self.push_stream(None, ending::STREAM, logblock::STREAM_KIND)?;
+            let scope = self.push_scope(None, ending::SCOPE, ScopeType::Generic, "")?;
             let (fmt, names, types) = ending::SITES[site];
             let spec = LogSiteSpec {
                 names,
-                ..LogSiteSpec::new(stream, logblock::Severity::Fatal, fmt, types)
+                ..LogSiteSpec::new(Some(scope), logblock::Severity::Fatal, fmt, types)
             };
             let site = self.add_log_site(&spec)?;
             self.log(site, self.time, &args)?;

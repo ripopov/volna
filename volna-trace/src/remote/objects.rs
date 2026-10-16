@@ -4,7 +4,7 @@ use crate::data::loaded_tracks::{
     LoadedGenerator, LoadedRelation, LoadedTrack, TransactionLocation,
 };
 use crate::data::transactions::{Track, TrackKind, TrackRef, Transaction, TransactionRef};
-use crate::data::{Hierarchy, ScopeRole, TraceInfo};
+use crate::data::{Hierarchy, TraceInfo};
 use crate::session::{Capabilities, Session};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -83,31 +83,10 @@ impl Metadata {
                 "duplicate track identity"
             );
         }
-        for track in &self.tracks {
-            checkpoint().await;
-            if let TrackKind::Generator { stream } = track.kind {
-                anyhow::ensure!(
-                    matches!(tracks.get(&stream), Some(TrackKind::Stream { .. })),
-                    "invalid generator stream"
-                );
-            }
-        }
         let mut generators = HashSet::new();
         let mut hierarchy_tracks = HashSet::new();
         for (id, scope) in h.scopes().enumerate() {
             checkpoint().await;
-            match scope.role {
-                ScopeRole::Scope => {
-                    anyhow::ensure!(scope.generators.is_empty(), "generators outside stream");
-                }
-                ScopeRole::Stream { track } => {
-                    anyhow::ensure!(hierarchy_tracks.insert(track), "duplicate hierarchy track");
-                    anyhow::ensure!(
-                        matches!(tracks.get(&track), Some(TrackKind::Stream { kind }) if kind == scope.kind),
-                        "invalid hierarchy stream"
-                    );
-                }
-            }
             for g in scope.generators {
                 checkpoint().await;
                 anyhow::ensure!(generators.insert(g), "duplicate generator declaration");
@@ -115,13 +94,13 @@ impl Metadata {
                     .generators
                     .get(g)
                     .ok_or_else(|| anyhow::anyhow!("invalid generator reference"))?;
-                anyhow::ensure!(g.stream == id, "inconsistent generator parent");
+                anyhow::ensure!(g.scope == id, "inconsistent generator parent");
                 anyhow::ensure!(
                     hierarchy_tracks.insert(g.track),
                     "duplicate hierarchy track"
                 );
                 anyhow::ensure!(
-                    matches!(tracks.get(&g.track), Some(TrackKind::Generator { stream }) if scope.role == ScopeRole::Stream { track: *stream }),
+                    matches!(tracks.get(&g.track), Some(TrackKind::Generator { kind }) if **kind == g.kind),
                     "invalid hierarchy generator"
                 );
             }
@@ -201,17 +180,10 @@ impl TrackPayload {
             if track.id == self.track {
                 declaration = Some(track);
             }
-            if let TrackKind::Generator { stream } = track.kind {
-                catalog_generators.insert(track.id);
-                if stream == self.track {
-                    expected.insert(track.id);
-                }
-            }
+            catalog_generators.insert(track.id);
         }
-        let declaration = declaration.ok_or_else(|| anyhow::anyhow!("unknown loaded track"))?;
-        if matches!(declaration.kind, TrackKind::Generator { .. }) {
-            expected = HashSet::from([self.track]);
-        }
+        declaration.ok_or_else(|| anyhow::anyhow!("unknown loaded track"))?;
+        expected.insert(self.track);
         let mut seen = HashSet::new();
         let mut result = vec![];
         for payload in self.generators {
@@ -245,7 +217,7 @@ impl TrackPayload {
             }
             result.push(Arc::new(generator));
         }
-        anyhow::ensure!(seen == expected, "incomplete stream payload");
+        anyhow::ensure!(seen == expected, "incomplete generator payload");
         let mut transactions = HashMap::new();
         let mut relations = HashMap::new();
         for generator in &result {

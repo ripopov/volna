@@ -8,7 +8,7 @@ use crate::geometry::Modifiers;
 use crate::icons::IconName;
 use crate::selection;
 use crate::trace::{TraceId, TraceSet, Traced};
-use volna_trace::data::{Direction, Hierarchy, Member, ScopeId, ScopeRole, SignalShape, VarId};
+use volna_trace::data::{Direction, Hierarchy, Member, ScopeId, SignalShape, VarId};
 
 const MAX_SEARCH_ROWS: usize = 5000;
 
@@ -68,7 +68,7 @@ pub fn member_detail(h: &Hierarchy, member: Member) -> String {
                 v.shape.dims()
             )
         }
-        Member::Generator(_) => {
+        Member::Generator(id) => {
             if let Some(site) = log_site(h, member) {
                 match (site.file, site.line) {
                     (Some(file), Some(line)) => format!("{file}:{line}"),
@@ -76,10 +76,9 @@ pub fn member_detail(h: &Hierarchy, member: Member) -> String {
                     _ => String::new(),
                 }
             } else {
-                "generator".into()
+                h.generators()[id].kind.clone()
             }
         }
-        Member::Stream(id) => format!("stream · {}", h.scope(id).kind),
     }
 }
 
@@ -117,7 +116,6 @@ pub fn describe(h: &Hierarchy, member: Member) -> String {
                 "generator".into()
             }
         }
-        Member::Stream(_) => member_detail(h, member),
     };
     format!("{} — {}", h.member_path(member), detail)
 }
@@ -202,13 +200,7 @@ impl MemberListModel {
                     let h = session.hierarchy();
                     let members = (0..h.var_count())
                         .map(Member::Var)
-                        .chain((0..h.generators().len()).map(Member::Generator))
-                        .chain(
-                            h.scopes()
-                                .enumerate()
-                                .filter(|(_, s)| matches!(s.role, ScopeRole::Stream { .. }))
-                                .map(|(id, _)| Member::Stream(id)),
-                        );
+                        .chain((0..h.generators().len()).map(Member::Generator));
                     let room = MAX_SEARCH_ROWS + 1 - self.rows.len();
                     self.rows.extend(
                         members
@@ -287,21 +279,11 @@ impl MemberListModel {
     }
 
     #[must_use]
-    pub fn title(&self, traces: &TraceSet) -> &'static str {
+    pub fn title(&self, _traces: &TraceSet) -> &'static str {
         if self.search_everywhere || self.show_scope() {
             return "Results";
         }
-        match self.scope_of(traces).map(|(h, s)| h.scope(s)) {
-            Some(s) if matches!(s.role, ScopeRole::Stream { .. }) => {
-                if s.kind == "LOG" {
-                    "Log sites"
-                } else {
-                    "Generators"
-                }
-            }
-            Some(_) => "Variables",
-            None => "Members",
-        }
+        "Members"
     }
 
     #[must_use]
@@ -345,18 +327,16 @@ impl MemberListModel {
         if traces.first_loaded().is_none() {
             Some("Open a trace to browse variables")
         } else if (self.scope.is_none() || self.search_everywhere) && !self.is_searching() {
-            Some("Select a scope or stream, or type to search all members")
+            Some("Select a scope, or type to search all members")
         } else if self.rows.is_empty() {
             if self.is_searching() {
                 Some("No members match")
             } else if let Some((h, id)) = self.scope_of(traces) {
                 let scope = h.scope(id);
-                Some(if matches!(scope.role, ScopeRole::Stream { .. }) {
-                    "This stream declares no generators"
-                } else if scope.children.is_empty() {
-                    "No variables in this scope"
+                Some(if scope.children.is_empty() {
+                    "No members in this scope"
                 } else {
-                    "No variables here; expand the scope for its children"
+                    "No members here; expand the scope for its children"
                 })
             } else {
                 None

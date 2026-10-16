@@ -52,10 +52,12 @@ fn fixture() -> Arc<dyn Session> {
         .unwrap();
     let core = w.add_clock(Some(top), "core_clk").unwrap();
     let bus = w.add_clock(Some(top), "bus_clk").unwrap();
-    let pipe = w.add_stream(Some(top), "pipe", "PIPELINE").unwrap();
+    let pipe = w
+        .add_scope(Some(top), "pipe", vtr::ScopeType::Generic, "")
+        .unwrap();
     let link = w.intern("top.core_clk");
-    w.node_attr(pipe, "vtr.clock", Value::Str(link)).unwrap();
-    let insn = w.add_generator(pipe, "insn").unwrap();
+    let insn = w.add_generator(Some(pipe), "insn", "PIPELINE").unwrap();
+    w.node_attr(insn, "vtr.clock", Value::Str(link)).unwrap();
     for &(b, e, p) in &CORE {
         w.clock_run(core, b, p).unwrap();
         w.clock_stop(core, e + p / 2).unwrap();
@@ -351,8 +353,11 @@ fn the_status_bar_reads_cycles_and_the_reference_to_cursor_measure() {
 fn a_clock_row_draws_from_stretches_and_survives_a_workspace() {
     let (mut app, session, panel) = waves();
     let theme = Theme::one_dark();
-    let bus = scope(session.as_ref(), &["top", "bus_clk"]);
-    app.handle(Command::AddToWaves(a_all(vec![Member::Stream(bus)])));
+    let bus = match session.hierarchy().find_generator(&["top", "bus_clk"]) {
+        Lookup::Found(id) => id,
+        other => panic!("{other:?}"),
+    };
+    app.handle(Command::AddToWaves(a_all(vec![Member::Generator(bus)])));
     let w = app.panels.waves(panel).unwrap();
     assert_eq!(w.items().len(), 2);
     assert_eq!(w.items()[1].clock().unwrap().key.item, "top.bus_clk");
@@ -422,7 +427,15 @@ fn a_pipeline_counts_in_its_stream_clock_and_its_clock_becomes_the_default_ruler
     let (mut app, session, waves) = waves();
     let theme = Theme::one_dark();
     let pipe = scope(session.as_ref(), &["top", "pipe"]);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(pipe)])));
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+        session
+            .hierarchy()
+            .scope(pipe)
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
+    )])));
     pump(&mut app);
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, waves);
@@ -506,8 +519,11 @@ fn a_kanata_import_counts_its_pipeline_in_the_cycle_clock() {
         (clock.stretches()[0].begin, clock.stretches()[0].period),
         (100, 1)
     );
-    let thread = scope(session.as_ref(), &["cpu", "thread0"]);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
+    let thread = match session.hierarchy().find_generator(&["cpu", "thread0"]) {
+        Lookup::Found(id) => id,
+        other => panic!("{other:?}"),
+    };
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
         thread,
     )])));
     pump(&mut app);
@@ -663,12 +679,10 @@ fn a_clock_generator_adds_as_a_ruler_or_as_a_waveform() {
     let (mut app, session, panel) = waves();
     let theme = Theme::one_dark();
     let h = session.hierarchy();
-    let bus_stream = scope(session.as_ref(), &["top", "bus_clk"]);
-    let edges = h
-        .generators()
-        .iter()
-        .position(|g| g.stream == bus_stream)
-        .unwrap();
+    let edges = match h.find_generator(&["top", "bus_clk"]) {
+        Lookup::Found(id) => id,
+        other => panic!("{other:?}"),
+    };
     let member = Member::Generator(edges);
     assert_eq!(
         app.member_clock(a(member)),
@@ -946,12 +960,10 @@ fn sub_pixel_bursts_of_a_gated_clock_draw_a_band() {
     w.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
     let h = session.hierarchy();
-    let stream = scope(session.as_ref(), &["top", "gclk"]);
-    let generator = h
-        .generators()
-        .iter()
-        .position(|g| g.stream == stream)
-        .unwrap();
+    let generator = match h.find_generator(&["top", "gclk"]) {
+        Lookup::Found(id) => id,
+        other => panic!("{other:?}"),
+    };
     let mut app = App::new();
     app.set_session(session.clone());
     pump(&mut app);

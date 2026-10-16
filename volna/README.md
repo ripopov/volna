@@ -59,7 +59,7 @@ See [geometry and implementation](ISLANDS.md).
 [`examples/gpu_transaction_trace.rs`](examples/gpu_transaction_trace.rs) generates
 and reads back the checked-in
 [`examples/gpu_transaction_trace.vtr`](examples/gpu_transaction_trace.vtr).
-Its static hardware streams model two SMs with four warp slots each; two grids
+Its static hardware generators model two SMs with four warp slots each; two grids
 reuse those slots for 16 logical warps, each with exactly 5,000 instructions
 (80,000 total). Select a `MemoryPacket` under
 `gpu.memory_subsystem.illustrative_l3.requests` and follow its transaction parents

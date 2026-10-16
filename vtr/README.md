@@ -12,7 +12,7 @@ A VTR recording contains:
 | Data | Purpose |
 | --- | --- |
 | Metadata | Time scale, time origin, producer identity, and typed attributes |
-| Hierarchy | Scopes, variables, signal aliases, streams, generators, and enum tables |
+| Hierarchy | Scopes, variables, signal aliases, generators, and enum tables |
 | Waveforms | Value changes of 2-, 4-, and 9-state bit vectors, reals, and byte strings; event occurrences |
 | Transactions | Timed intervals with typed attributes, point events, stages, parent links, and directed relations |
 | Logs | Timestamped log messages with typed arguments and shared call-site metadata |
@@ -33,7 +33,7 @@ annotate netlist and source code views with recorded values, and build other
 features that connect simulation behavior to the design.
 
 The two files are linked through shared names. Full hierarchical paths identify
-scopes and variables; stream and generator names, attribute keys, event and stage
+scopes and variables; generator names, attribute keys, event and stage
 names, lane names, and relation kinds identify other recorded objects and their
 meaning. A consumer uses these names to associate VTR data with the corresponding
 VDB information.

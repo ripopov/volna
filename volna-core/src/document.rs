@@ -14,7 +14,7 @@ use crate::trace::{Rescale, Retime, SlotState, TraceId, TraceSet, TraceSlot, Tra
 use crate::wave::analog::AnalogSummary;
 use crate::wave::timeline::TimeBase;
 use crate::wave::viewport::Viewport;
-use volna_trace::data::transactions::{TrackKind, TrackRef, TransactionRef};
+use volna_trace::data::transactions::{TrackRef, TransactionRef};
 use volna_trace::data::{Hierarchy, SignalRef};
 use volna_trace::session::{OpenSpec, Session};
 
@@ -436,15 +436,15 @@ impl Document {
     }
 
     fn retain_clocks(&mut self, trace: TraceId) {
-        let streams: Vec<_> = self
+        let generators: Vec<_> = self
             .clocks
             .iter()
             .filter(|c| c.trace == trace)
-            .map(super::clock::Clock::stream)
+            .map(super::clock::Clock::generator)
             .collect();
-        for stream in streams {
-            if let Err(error) = self.retain_track(stream) {
-                self.clocks.deliver(stream, Err(&format!("{error:#}")));
+        for generator in generators {
+            if let Err(error) = self.retain_track(generator) {
+                self.clocks.deliver(generator, Err(&format!("{error:#}")));
             }
         }
     }
@@ -781,20 +781,12 @@ impl Document {
             "transactions unsupported"
         );
         let catalog = session.tracks();
-        let declaration = catalog
-            .iter()
-            .find(|t| t.id == track.item)
-            .ok_or_else(|| anyhow::anyhow!("unknown transaction track {}", track.item.0))?;
-        let ids: Vec<_> = match declaration.kind {
-            TrackKind::Generator { .. } => vec![track.item],
-            TrackKind::Stream { .. } => catalog
-                .iter()
-                .filter_map(|t| match t.kind {
-                    TrackKind::Generator { stream } if stream == track.item => Some(t.id),
-                    _ => None,
-                })
-                .collect(),
-        };
+        anyhow::ensure!(
+            catalog.iter().any(|t| t.id == track.item),
+            "unknown transaction track {}",
+            track.item.0
+        );
+        let ids = [track.item];
         let resident: Option<Vec<_>> = ids
             .iter()
             .map(|id| self.resident_generator(track.with(*id)))

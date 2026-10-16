@@ -1503,7 +1503,7 @@ fn pipeline_box_zoom_captures_outside_release_and_ignores_double_click_open(
     vcx.run_until_parked();
     let id = window
         .update(&mut vcx, |ws, window, cx| {
-            let track = ws.app.pipeline_streams()[0].1;
+            let track = ws.app.pipeline_generators()[0].1;
             ws.dispatch(Command::OpenPipeline { track }, Some(window), cx);
             let id = ws.app.panels.focused_id();
             ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
@@ -1624,7 +1624,7 @@ fn pipeline_label_double_click_pans_and_cell_double_click_opens_details(cx: &mut
     vcx.run_until_parked();
     let panel = window
         .update(&mut vcx, |ws, window, cx| {
-            let track = ws.app.pipeline_streams()[0].1;
+            let track = ws.app.pipeline_generators()[0].1;
             ws.dispatch(Command::OpenPipeline { track }, Some(window), cx);
             let panel = ws.app.panels.focused_id();
             ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
@@ -3506,7 +3506,7 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
             assert_eq!(ws.app.scopes.selected, Some(TreeNode::trace(b_id)));
             let track = ws
                 .app
-                .pipeline_streams()
+                .pipeline_generators()
                 .into_iter()
                 .find(|(_, t)| t.trace == b_id)
                 .expect("B records a pipeline")

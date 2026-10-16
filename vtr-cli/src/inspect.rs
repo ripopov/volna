@@ -95,19 +95,17 @@ pub fn info(path: &Path) -> Result<()> {
     let h = r.hierarchy();
     let mut scopes = 0;
     let mut vars = 0;
-    let mut streams = 0;
     let mut gens = 0;
     for n in h.ids() {
         match h.kind(n) {
             vtr::NodeKind::Scope => scopes += 1,
             vtr::NodeKind::Var => vars += 1,
-            vtr::NodeKind::Stream => streams += 1,
             vtr::NodeKind::Generator => gens += 1,
             vtr::NodeKind::EnumTable => {}
         }
     }
     println!(
-        "hierarchy:   {scopes} scopes, {vars} vars ({} signals), {streams} streams, {gens} generators",
+        "hierarchy:   {scopes} scopes, {vars} vars ({} signals), {gens} generators",
         r.signal_count()
     );
     println!("strings:     {}", r.strings().len());
@@ -197,8 +195,8 @@ fn print_node(r: &Reader, n: NodeId, depth: usize, max_depth: usize, vars: bool)
                 if declares.is_none() { " (alias)" } else { "" }
             );
         }
-        NodeData::Stream { kind } => println!("{indent}{name} [stream {}]", r.str(*kind)),
-        NodeData::Generator => println!("{indent}{name} [generator #{}]", n.0),
+        NodeData::Generator { kind } => println!("{indent}{name} [generator {}]", r.str(*kind)),
+
         NodeData::EnumTable { entries } => {
             println!("{indent}{name} [enum {} literals]", entries.len());
         }
@@ -283,7 +281,7 @@ fn print_sizes(r: &Reader, max_depth: usize) {
 
 pub fn transactions(
     path: &Path,
-    stream: Option<&str>,
+    scope: Option<&str>,
     window: (u64, u64),
     max: usize,
     ids: &[u64],
@@ -291,17 +289,18 @@ pub fn transactions(
     let r = Reader::open(path)?;
     let q = TxQuery {
         window: Some(window),
-        stream: find_stream(&r, stream)?,
+        scope: find_scope(&r, scope)?,
         ..Default::default()
     };
     let show = |tx: &vtr::Transaction| {
         let r#gen = r.name(tx.generator);
-        let stream = r
-            .generator_stream(tx.generator)
+        let scope = r
+            .hierarchy()
+            .parent(tx.generator)
             .map(|s| r.full_path(s, "."))
             .unwrap_or_default();
         println!(
-            "tx {} {stream}/{gen} [{} .. {}] status={} kind={:?}{}",
+            "tx {} {scope}/{gen} [{} .. {}] status={} kind={:?}{}",
             tx.id,
             tx.begin,
             tx.end,
@@ -376,7 +375,7 @@ pub fn transactions(
 
 pub fn logs(
     path: &Path,
-    stream: Option<&str>,
+    scope: Option<&str>,
     window: (u64, u64),
     max: usize,
     severity: vtr::Severity,
@@ -398,7 +397,7 @@ pub fn logs(
                 .collect();
             println!(
                 "site {i} {} {} {:?}{loc} [{}]",
-                r.full_path(s.stream, "."),
+                r.full_path(s.node, "."),
                 s.severity.name(),
                 r.str(s.fmt),
                 args.join(", ")
@@ -408,7 +407,7 @@ pub fn logs(
     }
     let q = vtr::LogQuery {
         window: Some(window),
-        stream: find_stream(&r, stream)?,
+        scope: find_scope(&r, scope)?,
         min_severity: severity,
         ..Default::default()
     };
@@ -429,7 +428,7 @@ pub fn logs(
             "{} {:<5} {}: {}",
             rec.time,
             rec.severity().name(),
-            r.full_path(rec.site.stream, "."),
+            r.full_path(rec.site.node, "."),
             line
         ) {
             output_error = Some(error);
@@ -487,11 +486,12 @@ pub fn clocks(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn find_stream(r: &Reader, name: Option<&str>) -> Result<Option<NodeId>> {
+fn find_scope(r: &Reader, name: Option<&str>) -> Result<Option<NodeId>> {
     name.map(|name| {
-        r.streams()
+        r.hierarchy()
+            .nodes_of_kind(vtr::NodeKind::Scope)
             .find(|&s| r.full_path(s, ".") == name)
-            .with_context(|| format!("stream {name:?} not found; use its full hierarchy path"))
+            .with_context(|| format!("scope {name:?} not found; use its full hierarchy path"))
     })
     .transpose()
 }

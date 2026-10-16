@@ -210,8 +210,10 @@ fn stretches_live_in_their_own_blocks_and_survive_recovery() {
     let mut w = Writer::create_with(&path, opts).unwrap();
     let top = w.add_scope(None, "top", ScopeType::Module, "top").unwrap();
     let clk = w.add_clock(Some(top), "clk").unwrap();
-    let pipe = w.add_stream(Some(top), "pipeline", "PIPELINE").unwrap();
-    let r#gen = w.add_generator(pipe, "insn").unwrap();
+    let pipe = w
+        .add_scope(Some(top), "pipeline", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let r#gen = w.add_generator(Some(pipe), "insn", "PIPELINE").unwrap();
     let (_, sig) = w
         .add_var(
             Some(top),
@@ -297,16 +299,16 @@ fn streams_name_their_clock() {
     let cpu = w.add_scope(None, "cpu", ScopeType::Core, "").unwrap();
     let clk = w.add_clock(Some(cpu), "cycle").unwrap();
     let path_id = w.intern("cpu.cycle");
-    let pipe = w.add_stream(Some(cpu), "thread0", "PIPELINE").unwrap();
+    let pipe = w.add_generator(Some(cpu), "thread0", "PIPELINE").unwrap();
     w.node_attr(pipe, "vtr.clock", Value::Str(path_id)).unwrap();
-    let other = w.add_stream(Some(cpu), "thread1", "PIPELINE").unwrap();
-    let w_stream = w.clock_stream(clk).unwrap();
+    let other = w.add_generator(Some(cpu), "thread1", "PIPELINE").unwrap();
+    let w_stream = w.clock_generator(clk).unwrap();
     w.clock_run(clk, 0, 1).unwrap();
     w.set_time(10).unwrap();
     w.close().unwrap();
     let rd = Reader::open(&path).unwrap();
-    assert_eq!(rd.stream_clock(pipe), Some(ClockId(0)));
-    assert_eq!(rd.stream_clock(other), None);
+    assert_eq!(rd.generator_clock(pipe), Some(ClockId(0)));
+    assert_eq!(rd.generator_clock(other), None);
     assert_eq!(rd.clock(ClockId(0)).unwrap().edge_count(), 11);
-    assert_eq!(w_stream, rd.clocks()[0].stream);
+    assert_eq!(w_stream, rd.clocks()[0].generator);
 }

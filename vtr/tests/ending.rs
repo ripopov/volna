@@ -28,10 +28,12 @@ fn write(name: &str, end: Option<Ending>, background: bool) -> std::path::PathBu
             },
         )
         .unwrap();
-    let log = w.add_stream(None, "sim", LOG_STREAM_KIND).unwrap();
+    let log = w
+        .add_scope(None, "sim", vtr::ScopeType::Generic, "")
+        .unwrap();
     let site = w
         .add_log_site(&LogSiteSpec::new(
-            log,
+            Some(log),
             Severity::Fatal,
             "step {}",
             &[LogArgType::U64],
@@ -93,7 +95,7 @@ fn every_ending_round_trips() {
                 },
                 |rec| {
                     last = Some((
-                        r.full_path(rec.site.stream, "."),
+                        r.full_path(rec.site.scope.unwrap(), "."),
                         rec.format(r.strings()),
                         rec.time,
                     ));
@@ -102,7 +104,7 @@ fn every_ending_round_trips() {
             )
             .unwrap();
             let (stream, text, time) = last.unwrap();
-            assert_eq!((stream.as_str(), time), (ending::STREAM, 2990));
+            assert_eq!((stream.as_str(), time), (ending::SCOPE, 2990));
             assert!(text.starts_with("run "), "{text}");
             assert_eq!(r.log_count(), 301);
         }
@@ -136,7 +138,7 @@ fn a_normal_close_writes_no_record() {
         let path = write("closed.vtr", end, true);
         let r = Reader::open(&path).unwrap();
         assert_eq!(r.ending().unwrap(), (Ending::Closed, None));
-        assert!(r.find_node(&[ending::STREAM]).is_none());
+        assert!(r.find_node(&[ending::SCOPE]).is_none());
         assert_eq!(r.log_count(), 300);
     }
 }
@@ -153,11 +155,11 @@ fn a_recovered_file_without_a_record() {
 fn the_stream_is_reserved() {
     let mut w = Writer::create(tmp("reserved.vtr")).unwrap();
     assert!(matches!(
-        w.add_stream(None, ending::STREAM, LOG_STREAM_KIND),
+        w.add_scope(None, ending::SCOPE, vtr::ScopeType::Generic, ""),
         Err(Error::Invalid(_))
     ));
     let top = w.add_scope(None, "top", ScopeType::Module, "").unwrap();
-    w.add_stream(Some(top), ending::STREAM, LOG_STREAM_KIND)
+    w.add_scope(Some(top), ending::SCOPE, vtr::ScopeType::Generic, "")
         .unwrap();
     w.close_with(Ending::Exited { status: 1 }).unwrap();
     w.close_with(Ending::Exited { status: 2 }).unwrap();

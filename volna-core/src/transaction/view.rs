@@ -16,7 +16,7 @@ use crate::trace::Traced;
 use crate::wave::timeline::format_time;
 use volna_trace::data::loaded_tracks::TransactionLocation;
 use volna_trace::data::transactions::{
-    AttributeValue, Attributes, TrackKind, TrackRef, Transaction, TransactionRef, TxKind, TxStatus,
+    AttributeValue, Attributes, TrackRef, Transaction, TransactionRef, TxKind, TxStatus,
 };
 
 pub const VIEW_BYTES: usize = 128 * 1024;
@@ -172,7 +172,7 @@ impl<T> Section<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Identity {
     pub track: Traced<TrackRef>,
-    pub stream: Vec<String>,
+    pub scope: Vec<String>,
     pub generator: String,
     pub ordinal: usize,
     pub id: TransactionRef,
@@ -321,14 +321,7 @@ pub fn view(
     let catalog = session.tracks();
     let declaration = catalog.iter().find(|t| t.id == track.item)?;
     let mut budget = Budget::new(VIEW_BYTES - 4096);
-    let stream = match declaration.kind {
-        TrackKind::Generator { stream } => catalog
-            .iter()
-            .find(|t| t.id == stream)
-            .map(|t| budget.path(&t.path))
-            .unwrap_or_default(),
-        TrackKind::Stream { .. } => Vec::new(),
-    };
+    let scope = budget.path(&declaration.path[..declaration.path.len().saturating_sub(1)]);
     let base = doc.time_base();
     let clock = doc
         .clocks
@@ -349,7 +342,7 @@ pub fn view(
         .map(|a| budget.text(&format_attribute(&a.value, PREVIEW_BYTES)));
     let identity = Identity {
         track,
-        stream,
+        scope,
         generator: declaration
             .path
             .last()

@@ -1,6 +1,6 @@
 # VTR file format specification
 
-Version 1.1 of the VTR (Versatile Trace Record) container and encodings.
+Version 2.0 of the VTR (Versatile Trace Record) container and encodings.
 This document is normative: an independent implementation written from it
 must read every file produced by the reference implementation and produce
 files the reference reader accepts.
@@ -25,7 +25,7 @@ A VTR file holds five things:
 1. **Metadata**: time unit, time-zero offset, producer, date, comment, file
    type and free-form typed attributes.
 2. **Hierarchy**: an ordered forest of nodes. A node is a *scope*, a *var*
-   (variable), a *stream*, a *generator* or an *enum table*, has a name,
+   (variable), a *generator* or an *enum table*, has a name,
    an optional parent and an ordered list of typed attributes. Vars refer to
    *signals*; several vars may alias one signal.
 3. **Signal value changes**: for every signal, its value at every time step
@@ -39,8 +39,8 @@ A VTR file holds five things:
    values only (section 8). A log record is a zero-duration transaction.
 
 Nothing in the file describes presentation. Stable identity for external
-databases (VDB) comes from names: full hierarchical paths of nodes, stream
-and generator names, attribute keys, event names, stage names, lane names
+databases (VDB) comes from names: full hierarchical paths of nodes, generator
+names, attribute keys, event names, stage names, lane names
 and relation kinds are all strings chosen by the producer.
 
 Reader result ownership is an API concern, not an on-disk encoding. The
@@ -68,8 +68,8 @@ identity or the per-block dynamic alias rules in section 6.6.
 | offset | size | field |
 |---:|---:|---|
 | 0 | 8 | magic `89 56 54 52 0D 0A 1A 0A` (`\x89VTR\r\n\x1a\n`) |
-| 8 | 2 | `u16` major version = 1 |
-| 10 | 2 | `u16` minor version = 1 |
+| 8 | 2 | `u16` major version = 2 |
+| 10 | 2 | `u16` minor version = 0 |
 | 12 | 4 | `u32` flags, must be 0 |
 | 16 | 16 | reserved, must be 0 |
 
@@ -243,15 +243,15 @@ Node ids are dense `u32` in file order (`first_node` of a chunk equals the
 number of nodes in all earlier chunks). A node:
 
 ```
-u8      kind        1 scope, 2 var, 3 stream, 4 generator, 5 enum table
+u8      kind        1 scope, 2 var, 3 generator, 4 enum table
 varint  parent      0 = top level; otherwise `this id - parent id` (the parent precedes the node)
 varint  name        string id
 ...kind specific fields...
 attrs               section 5.3
 ```
 
-**Parents.** A scope, var, stream or enum table is a root (`parent = 0`) or
-the child of a scope; a generator is the child of a stream. Writers reject
+**Parents.** Every node is a root (`parent = 0`) or the child of a scope.
+Generators may sit directly in a module or any other scope. Writers reject
 other parents and readers treat them as corrupt. Chunks may declare children of
 nodes from earlier chunks, so the hierarchy can grow anywhere at any time.
 
@@ -265,9 +265,15 @@ Kind specific fields:
 |---|---|
 | scope | `varint scope_type` (5.1), `varint component` string id (module/entity type; 0 = unknown) |
 | var | `varint var_type` (5.2), `u8 direction` (0 implicit, 1 input, 2 output, 3 inout, 4 buffer, 5 linkage), `varint signal_back` = `next_signal - signal` where `next_signal` is the number of signals declared before this node (0 for a var that declares the next signal, `>= 1` for an alias of an earlier one), `u8 declares` then, if `declares = 1`, a signal kind: `u8 code` (0 bits/2-state, 1 bits/4-state, 2 bits/9-state, 3 real, 4 variable-length) followed by `varint width` for codes 0..2 |
-| stream | `varint kind` string id (free form, e.g. FTR's "TRANSACTOR") |
-| generator | none; the parent must be a stream |
+| generator | `varint kind` string id (free form, e.g. "PIPELINE", "TRANSACTION", "LOG", "CLOCK") |
 | enum table | `varint n`, `n x { varint literal string id, varint value string id }` |
+
+**Generators.** The kind classifies the records produced by that generator.
+`LOG` and `CLOCK` have the semantics below; other kinds are producer-defined.
+Generator attributes describe the source and are stored once in its declaration.
+Ordinary scopes provide optional grouping; grouping does not imply a record kind
+or inherit generator attributes. The transaction's status/kind byte in section 7
+is a separate per-record classification.
 
 **Signals.** Signal ids are dense `u32`. The var with `declares = 1` for
 signal *s* is the *s*-th declaring var in file order (so `signal_back`
@@ -351,7 +357,7 @@ value }`. A value is a tag byte followed by a tag-specific payload:
 | 14 | ufixed | `varint raw`, `svarint scale` |
 | 15 | list | `varint n`, `n x value` |
 | 16 | map | `varint n`, `n x { varint key string id, value }` |
-| 17 | text | `blob`, UTF-8; inline text that is not interned (one-off strings such as log arguments; requires 1.1) |
+| 17 | text | `blob`, UTF-8; inline text that is not interned (one-off strings such as log arguments) |
 
 Attribute keys are free form. Keys beginning with `vtr.` and `log.` are
 reserved for this specification (`log.*` is defined in section 8.1,
@@ -640,9 +646,9 @@ attribute, exactly the columns implied by its tag are read.
   the transaction. The same key labels a single event, stage or relation.
   The Kanata converter writes it from `L 0` (transaction) and `L 2`
   (stage).
-* Text logs are streams of kind `LOG`; their records are zero-duration
+* Log sites are generators of kind `LOG`; their records are zero-duration
   transactions stored in LOG_BLOCKs (section 8), not in TX_BLOCKs.
-* Clocks are streams of kind `CLOCK` whose transactions are steady stretches
+* Clocks are generators of kind `CLOCK` whose transactions are steady stretches
   of edges (section 7.4).
 
 ### 7.3 Reading
@@ -665,12 +671,12 @@ A clock records when a clock ticked as a list of steady *stretches*, not as
 edges. It uses the transaction encoding and adds no section, value tag or
 node kind.
 
-* A clock is a stream of kind `CLOCK` with exactly one generator, named
-  `edges`. The stream is normally named after the clock net and placed in the
-  net's scope, so a reader pairs it with the net's waveform by path when that
-  was dumped; a producer may place it elsewhere, for example beside the
-  streams counted in it, and the pairing by path is then lost. A clock's path is its stream's path joined with `.`.
-* A *stretch* is one transaction of `edges`: `begin` is its first rising
+* A clock is a generator of kind `CLOCK`. It is normally named after the
+  clock net and placed in the net's scope, so a reader pairs it with the
+  net's waveform by path when that was dumped. A producer may place it
+  elsewhere; pairing by path is then lost. A clock's path is its generator's
+  hierarchical path joined with `.`.
+* A *stretch* is one transaction of the clock generator: `begin` is its first rising
   edge, `end` its last, and the attribute `vtr.period` (tag 10, *time*) the
   spacing between them, in file units. `end - begin` is a whole multiple of
   the period. A stretch of a single edge (`begin = end`) has no `vtr.period`.
@@ -686,8 +692,8 @@ node kind.
   the last edge at or before `t`; the interval from the last edge of one
   stretch to the first edge of the next is one cycle. Edge counts and cycle
   numbers are computed, never stored.
-* The attribute `vtr.clock` (tag 5, *str*) on any stream names, by path, the
-  clock that the stream's stages and transactions are counted in. A stream
+* The attribute `vtr.clock` (tag 5, *str*) on any generator names, by path, the
+  clock that the generator's stages and transactions are counted in. A generator
   without it has no declared clock.
 
 Writers should store stretches in TX_BLOCKs that hold no other generator, so
@@ -701,15 +707,15 @@ its last edge at or before the writer's current time.
 A log record is a message of a *log site*: one call site of a logging
 macro in the producer (`LOG_INFO("addr={:#x} len={}", a, n)`). The site's
 static facts (format string, severity, source location, argument types)
-are declared once as a generator of a `LOG` stream; a record stores the
+are declared once on a generator of kind `LOG`; a record stores the
 time and the argument values only. This borrows the static/dynamic split of
 NanoLog and binlog and the dictionary of repeated string variables of CLP
 (see [the rationale](RATIONALE.md)).
 
 ### 8.1 Log sites
 
-A log site is a generator node whose parent stream has kind `LOG` and
-whose attributes include `log.args`. Its name is the format string. The
+A log site is a generator node of kind `LOG` whose attributes include
+`log.args`. Its name is the format string. The
 attributes are:
 
 | key | value | meaning |
@@ -781,19 +787,19 @@ the site's declared order.
 ### 8.4 Reading
 
 *Records of a time window*: blocks with `t_min <= window end` and
-`t_max >= window start`. *Records by severity, stream or site*: the
+`t_max >= window start`. *Records by severity, scope or site*: the
 generator list in the header names every site present, so a block whose
-sites are all below the wanted severity or outside the wanted stream is
+sites are all below the wanted severity or outside the wanted scope subtree is
 skipped without decompression. *Record by id*: blocks whose
 `[min_id, max_id]` contains the id, after the TX_BLOCKs.
 
 ### 8.5 Run ending
 
 A file records how its run ended when the run did not simply close. The
-root stream named `vtr.run` of kind `LOG` is reserved for this: producers
+root scope named `vtr.run` is reserved for this: producers
 must not declare it for anything else. A producer that ends a run in any
-other way than a normal close writes one record of one of these FATAL sites
-to it, at its current time, as the last log record of the file:
+other way than a normal close writes one record of one of these FATAL `LOG` generators
+under it, at its current time, as the last log record of the file:
 
 | format | arguments (`log.names`: types) | ending |
 |---|---|---|
@@ -812,8 +818,7 @@ format change: every log reader shows the record.
 ## 9. Extensibility and versioning
 
 The format is under definition and may change freely. The major and minor
-fields remain `1.1` for now and are identifiers, not a compatibility promise or
-a restriction on which parts of the encoding may change. Producers and readers
+fields are `2.0`. Readers in this checkout reject other versions. Producers and readers
 in one checkout implement the specification in that checkout; compatibility
 with files produced by an earlier definition is not required.
 

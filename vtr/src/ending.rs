@@ -3,7 +3,7 @@
 use crate::logblock::{LogArg, LogArgType};
 use std::fmt;
 
-pub const STREAM: &str = "vtr.run";
+pub const SCOPE: &str = "vtr.run";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ending {
@@ -112,8 +112,8 @@ impl Ending {
 
 pub(crate) fn strings() -> impl Iterator<Item = &'static str> {
     [
-        STREAM,
-        crate::logblock::STREAM_KIND,
+        SCOPE,
+        crate::logblock::GENERATOR_KIND,
         crate::logblock::KEY_SEVERITY,
         crate::logblock::KEY_ARGS,
         crate::logblock::KEY_NAMES,

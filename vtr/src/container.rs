@@ -10,8 +10,8 @@ pub const SECTION_HEADER_LEN: usize = 24;
 pub const TRAILER_LEN: usize = 24;
 pub const DIR_ENTRY_LEN: usize = 40;
 
-pub const VERSION_MAJOR: u16 = 1;
-pub const VERSION_MINOR: u16 = 1;
+pub const VERSION_MAJOR: u16 = 2;
+pub const VERSION_MINOR: u16 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u32)]
@@ -139,7 +139,7 @@ impl Container {
         }
         let major = u16::from_le_bytes([data[8], data[9]]);
         let minor = u16::from_le_bytes([data[10], data[11]]);
-        if major > VERSION_MAJOR {
+        if major != VERSION_MAJOR || minor != VERSION_MINOR {
             return Err(Error::UnsupportedVersion {
                 major,
                 minor,

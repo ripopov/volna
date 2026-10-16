@@ -1,4 +1,4 @@
-//! Declared clocks: the catalog of a trace's `CLOCK` streams, their timelines built from
+//! Declared clocks: the catalog of a trace's `CLOCK` generators, their timelines built from
 //! loaded stretches, each panel's clock choices, and the ruler and readout arithmetic every
 //! timed panel shares.
 
@@ -14,7 +14,7 @@ use crate::wave::timeline::TimeBase;
 use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{AttributeValue, Track, TrackKind, TrackRef, TxStatus};
 
-pub const STREAM_KIND: &str = vtr::CLOCK_STREAM_KIND;
+pub const GENERATOR_KIND: &str = vtr::CLOCK_GENERATOR_KIND;
 pub const LINK_ATTRIBUTE: &str = vtr::clock::KEY_CLOCK;
 pub const PERIOD_ATTRIBUTE: &str = vtr::clock::KEY_PERIOD;
 
@@ -56,7 +56,7 @@ impl Clock {
     }
 
     #[must_use]
-    pub fn stream(&self) -> Traced<TrackRef> {
+    pub fn generator(&self) -> Traced<TrackRef> {
         Traced::new(self.trace, self.track)
     }
 }
@@ -74,7 +74,9 @@ impl Clocks {
         self.clocks.extend(
             tracks
                 .iter()
-                .filter(|t| matches!(&t.kind, TrackKind::Stream { kind } if kind == STREAM_KIND))
+                .filter(
+                    |t| matches!(&t.kind, TrackKind::Generator { kind } if kind == GENERATOR_KIND),
+                )
                 .map(|t| Clock {
                     trace,
                     track: t.id,
@@ -84,24 +86,13 @@ impl Clocks {
                 }),
         );
         let added = &self.clocks[first..];
-        let mut stream_clock = HashMap::new();
         for t in tracks {
-            if let TrackKind::Stream { .. } = t.kind
-                && let Some(path) = t.attributes.iter().find_map(|(k, v)| match v {
-                    AttributeValue::Text(p) if k == LINK_ATTRIBUTE => Some(p),
-                    _ => None,
-                })
-                && let Some(clock) = added.iter().find(|c| &c.path == path)
+            if let Some(path) = t.attributes.iter().find_map(|(k, v)| match v {
+                AttributeValue::Text(p) if k == LINK_ATTRIBUTE => Some(p),
+                _ => None,
+            }) && let Some(clock) = added.iter().find(|c| &c.path == path)
             {
                 self.links.insert(Traced::new(trace, t.id), clock.track);
-                stream_clock.insert(t.id, clock.track);
-            }
-        }
-        for t in tracks {
-            if let TrackKind::Generator { stream } = t.kind
-                && let Some(&clock) = stream_clock.get(&stream)
-            {
-                self.links.insert(Traced::new(trace, t.id), clock);
             }
         }
     }
@@ -131,27 +122,24 @@ impl Clocks {
         self.clocks.iter().find(|c| c.is(key))
     }
 
-    fn of_stream(&self, stream: Traced<TrackRef>) -> Option<&Clock> {
-        self.clocks.iter().find(|c| c.stream() == stream)
+    fn of_generator(&self, generator: Traced<TrackRef>) -> Option<&Clock> {
+        self.clocks.iter().find(|c| c.generator() == generator)
     }
 
     #[must_use]
     pub fn of_track(&self, track: Traced<TrackRef>, tracks: &[Track]) -> Option<&Clock> {
-        let stream = match tracks.iter().find(|t| t.id == track.item)?.kind {
-            TrackKind::Generator { stream } => stream,
-            TrackKind::Stream { .. } => track.item,
-        };
-        self.of_stream(track.with(stream))
+        tracks.iter().find(|t| t.id == track.item)?;
+        self.of_generator(track)
     }
 
     #[must_use]
     pub fn linked(&self, track: Traced<TrackRef>) -> Option<&Clock> {
-        self.of_stream(track.with(*self.links.get(&track)?))
+        self.of_generator(track.with(*self.links.get(&track)?))
     }
 
     #[must_use]
     pub fn is_clock_track(&self, track: Traced<TrackRef>) -> bool {
-        self.of_stream(track).is_some()
+        self.of_generator(track).is_some()
     }
 
     pub(crate) fn deliver(
@@ -159,7 +147,7 @@ impl Clocks {
         track: Traced<TrackRef>,
         result: Result<&[Arc<LoadedGenerator>], &str>,
     ) {
-        let Some(clock) = self.clocks.iter_mut().find(|c| c.stream() == track) else {
+        let Some(clock) = self.clocks.iter_mut().find(|c| c.generator() == track) else {
             return;
         };
         clock.state = match result

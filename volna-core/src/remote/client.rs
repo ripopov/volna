@@ -544,11 +544,15 @@ mod tests {
         use crate::session::LoadRequest;
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut writer = vtr::Writer::create(file.path()).unwrap();
-        let stream = writer.add_stream(None, "stream", "raw").unwrap();
-        writer.add_generator(stream, "generator").unwrap();
+        let stream = writer
+            .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+            .unwrap();
+        let generator = writer
+            .add_generator(Some(stream), "generator", "raw")
+            .unwrap();
         writer.close().unwrap();
         let local = OpenSpec::Path(file.path().into()).open().unwrap();
-        let track = Traced::new(TraceId::A, TrackRef(stream.0));
+        let track = Traced::new(TraceId::A, TrackRef(generator.0));
         let mut client = RemoteClient::new(
             TraceId::A,
             1,
@@ -595,8 +599,12 @@ mod tests {
     fn track_preparation_holds_ack_yields_and_releases_on_disconnect() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut writer = vtr::Writer::create(file.path()).unwrap();
-        let stream = writer.add_stream(None, "stream", "raw").unwrap();
-        let generator = writer.add_generator(stream, "generator").unwrap();
+        let stream = writer
+            .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+            .unwrap();
+        let generator = writer
+            .add_generator(Some(stream), "generator", "raw")
+            .unwrap();
         for time in 0..5000 {
             let tx = writer.begin_tx(generator, time * 10).unwrap();
             writer.end_tx(tx, time * 10 + 5, vtr::TxStatus::Ok).unwrap();
@@ -609,7 +617,7 @@ mod tests {
         )
         .unwrap();
         let baseline = budget.used();
-        let track = TrackRef(stream.0);
+        let track = TrackRef(generator.0);
         let ack = acknowledgement(&Packet {
             session: 31,
             request: 17,

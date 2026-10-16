@@ -28,15 +28,15 @@ struct bytes { const uint8_t *data; size_t len; };
 struct pointer { uint64_t value; };
 struct timestamp { uint64_t value; };
 
-class LogStream {
+class Logger {
 public:
-    LogStream() = default;
-    LogStream(vtr_writer *w, uint32_t stream) : w_(w), stream_(stream) {}
-    LogStream(vtr_writer *w, uint32_t parent, const char *name)
-        : w_(w), stream_(vtr_writer_add_stream(w, parent, name, VTR_LOG_STREAM_KIND)) {}
+    Logger() = default;
+    Logger(vtr_writer *w, uint32_t scope) : w_(w), scope_(scope) {}
+    Logger(vtr_writer *w, uint32_t parent, const char *name)
+        : w_(w), scope_(vtr_writer_add_scope(w, parent, name, VTR_SCOPE_GENERIC, "")) {}
 
     vtr_writer *writer() const { return w_; }
-    uint32_t node() const { return stream_; }
+    uint32_t node() const { return scope_; }
     void set_parent(uint64_t tx) { parent_ = tx; }
     uint64_t parent() const { return parent_; }
     void set_min_severity(Severity s) { min_ = static_cast<uint8_t>(s); }
@@ -47,7 +47,7 @@ public:
 
 private:
     vtr_writer *w_ = nullptr;
-    uint32_t stream_ = VTR_NONE;
+    uint32_t scope_ = VTR_NONE;
     uint64_t parent_ = 0;
     uint8_t min_ = 0;
     uint64_t last_id_ = 0;
@@ -191,14 +191,14 @@ template <class Fmt, class... Args>
 constexpr std::integral_constant<size_t, sizeof...(Args)> count_args(Fmt &&, Args &&...) { return {}; }
 
 template <class... Args>
-inline uint32_t register_site(LogStream &ls, Severity sev, const char *fmt, const char *file, uint32_t line, const char *func) {
+inline uint32_t register_site(Logger &ls, Severity sev, const char *fmt, const char *file, uint32_t line, const char *func) {
     constexpr size_t n = sizeof...(Args);
     const uint8_t types[n == 0 ? 1 : n] = {traits_of<Args>::tag...};
     return vtr_writer_add_log_site(ls.writer(), ls.node(), static_cast<uint8_t>(sev), fmt, file, line, func, n, types, nullptr);
 }
 
 template <class... Args>
-inline int emit(LogStream &ls, uint32_t site, uint64_t time, const Args &...args) {
+inline int emit(Logger &ls, uint32_t site, uint64_t time, const Args &...args) {
     constexpr size_t n = sizeof...(Args);
     vtr_value vals[n == 0 ? 1 : n] = {};
     size_t i = 0;
@@ -218,7 +218,7 @@ inline int emit(LogStream &ls, uint32_t site, uint64_t time, const Args &...args
 }
 
 template <class Fmt, class... Args>
-inline void log_call(uint32_t &site, LogStream &ls, Severity sev, uint64_t time, const char *file, uint32_t line, const char *func, const Fmt &fmt, const Args &...args) {
+inline void log_call(uint32_t &site, Logger &ls, Severity sev, uint64_t time, const char *file, uint32_t line, const char *func, const Fmt &fmt, const Args &...args) {
     if (!ls.enabled(sev)) return;
     if (site == VTR_NONE) site = register_site<Args...>(ls, sev, fmt, file, line, func);
     emit(ls, site, time, args...);
@@ -236,10 +236,10 @@ inline std::string format_log(const vtr_reader *r, const vtr_log_rec &rec) {
 }
 
 template <class F>
-inline int for_each_log(const vtr_reader *r, uint32_t stream, uint8_t min_severity, uint64_t t0, uint64_t t1, F &&f) {
+inline int for_each_log(const vtr_reader *r, uint32_t scope, uint8_t min_severity, uint64_t t0, uint64_t t1, F &&f) {
     struct Ctx { F *f; } ctx{&f};
     return vtr_reader_visit_log(
-        r, stream, VTR_NONE, min_severity, t0, t1,
+        r, scope, VTR_NONE, min_severity, t0, t1,
         [](void *user, const vtr_log_rec *rec) -> int { return (*static_cast<Ctx *>(user)->f)(*rec) ? 0 : 1; }, &ctx);
 }
 
@@ -248,20 +248,20 @@ inline int for_each_log(const vtr_reader *r, uint32_t stream, uint8_t min_severi
 #define VTR_LOG_FIRST_(a, ...) a
 #define VTR_LOG_FIRST(...) VTR_LOG_FIRST_(__VA_ARGS__, 0)
 
-#define VTR_LOG(stream, severity, time, ...)                                                                        \
+#define VTR_LOG(scope, severity, time, ...)                                                                        \
     do {                                                                                                            \
         static_assert(::vtr::detail::count_placeholders(VTR_LOG_FIRST(__VA_ARGS__)) ==                             \
                           decltype(::vtr::detail::count_args(__VA_ARGS__))::value,                                  \
                       "VTR_LOG: number of {} placeholders must equal the number of arguments");                     \
         static uint32_t vtr_log_site_ = VTR_NONE;                                                                   \
-        ::vtr::detail::log_call(vtr_log_site_, (stream), (severity), (time), __FILE__, __LINE__, __func__, __VA_ARGS__); \
+        ::vtr::detail::log_call(vtr_log_site_, (scope), (severity), (time), __FILE__, __LINE__, __func__, __VA_ARGS__); \
     } while (0)
 
-#define VTR_LOG_TRACE(stream, time, ...) VTR_LOG(stream, ::vtr::Severity::Trace, time, __VA_ARGS__)
-#define VTR_LOG_DEBUG(stream, time, ...) VTR_LOG(stream, ::vtr::Severity::Debug, time, __VA_ARGS__)
-#define VTR_LOG_INFO(stream, time, ...) VTR_LOG(stream, ::vtr::Severity::Info, time, __VA_ARGS__)
-#define VTR_LOG_WARN(stream, time, ...) VTR_LOG(stream, ::vtr::Severity::Warn, time, __VA_ARGS__)
-#define VTR_LOG_ERROR(stream, time, ...) VTR_LOG(stream, ::vtr::Severity::Error, time, __VA_ARGS__)
-#define VTR_LOG_FATAL(stream, time, ...) VTR_LOG(stream, ::vtr::Severity::Fatal, time, __VA_ARGS__)
+#define VTR_LOG_TRACE(scope, time, ...) VTR_LOG(scope, ::vtr::Severity::Trace, time, __VA_ARGS__)
+#define VTR_LOG_DEBUG(scope, time, ...) VTR_LOG(scope, ::vtr::Severity::Debug, time, __VA_ARGS__)
+#define VTR_LOG_INFO(scope, time, ...) VTR_LOG(scope, ::vtr::Severity::Info, time, __VA_ARGS__)
+#define VTR_LOG_WARN(scope, time, ...) VTR_LOG(scope, ::vtr::Severity::Warn, time, __VA_ARGS__)
+#define VTR_LOG_ERROR(scope, time, ...) VTR_LOG(scope, ::vtr::Severity::Error, time, __VA_ARGS__)
+#define VTR_LOG_FATAL(scope, time, ...) VTR_LOG(scope, ::vtr::Severity::Fatal, time, __VA_ARGS__)
 
 #endif

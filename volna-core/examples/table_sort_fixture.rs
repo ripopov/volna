@@ -8,8 +8,8 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "1000000".into())
         .parse()?;
     let mut writer = Writer::create(path)?;
-    let stream = writer.add_stream(None, "sort", "TRANSACTION")?;
-    let generator = writer.add_generator(stream, "rows")?;
+    let stream = writer.add_scope(None, "sort", vtr::ScopeType::Generic, "")?;
+    let generator = writer.add_generator(Some(stream), "rows", "TRANSACTION")?;
     let label = writer.intern("vtr.label");
     for i in 0..count {
         let tx = writer.begin_tx(generator, i)?;

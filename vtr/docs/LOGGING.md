@@ -2,7 +2,7 @@
 
 A **log site** declares a format string, severity, optional source provenance,
 and argument types once. Each **record** stores a timestamp and typed values.
-Sites are generators under a `LOG` stream. Records are zero-duration transactions
+Sites are generators of kind `LOG`, optionally grouped in ordinary scopes. Records are zero-duration transactions
 with unique transaction IDs, optional parents, and relation support.
 
 Text arguments are deduplicated per block; the writer does not format messages
@@ -17,9 +17,9 @@ use vtr::{LogArgType, LogSiteSpec, Severity, Timescale, Writer};
 let mut writer = Writer::builder()
     .timescale(Timescale::Nanoseconds)
     .create("messages.vtr")?;
-let stream = writer.add_stream(None, "simulation_log", vtr::LOG_STREAM_KIND)?;
+let scope = writer.add_scope(None, "simulation_log", vtr::ScopeType::Generic, "")?;
 let site = writer.add_log_site(
-    &LogSiteSpec::new(stream, Severity::Warn, "{} stalled {} cycles",
+    &LogSiteSpec::new(Some(scope), Severity::Warn, "{} stalled {} cycles",
                      &[LogArgType::Text, LogArgType::U64])
         .names(&["unit", "cycles"])
         .location(file!(), line!()),
@@ -53,7 +53,7 @@ reader.visit_log(
 )?;
 ```
 
-`LogQuery` filters by stream, generator, inclusive time window, and minimum
+`LogQuery` filters by scope subtree, generator, inclusive time window, and minimum
 severity. Block headers prune irrelevant blocks before decompression.
 `LogRecord::arg` exposes values; `format` and `format_into` render text.
 `transaction`, `transactions`, and `visit_transactions` also expose log records

@@ -165,7 +165,7 @@ impl Render for StartPanelView {
         }
         if summary.tracks > 0 {
             hints = hints.child(hint(
-                "Double-click a stream or generator in the sidebar to open a pipeline panel",
+                "Double-click a generator in the sidebar to open a pipeline panel",
             ));
         }
         if summary.variables == 0 && summary.tracks == 0 {
@@ -190,7 +190,7 @@ impl Render for StartPanelView {
             }
             if summary.pipelines.len() > MAX_LISTED {
                 list = list.child(hint(
-                    "More streams are listed in the sidebar and View ▸ Pipeline",
+                    "More generators are listed in the sidebar and View ▸ Pipeline",
                 ));
             }
             body = body.child(list);

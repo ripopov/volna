@@ -201,7 +201,7 @@ fn trace_hierarchy_counts_aliases_once() {
                 .add_scope(parent, &format!("s{i}"), ScopeType::Module, "")
                 .unwrap();
             if i % 5 == 0 {
-                w.add_stream(Some(me), "tx", "TRANSACTOR").unwrap();
+                w.add_generator(Some(me), "tx", "TRANSACTION").unwrap();
             }
             for (k, &g) in t.vars[i].iter().enumerate() {
                 let name = format!("v{k}");

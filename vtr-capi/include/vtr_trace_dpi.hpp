@@ -170,16 +170,14 @@ public:
         cp->started = false;
     }
 
-    uint32_t tracker(const std::string& caller, const char* scope, const char* stream, const char* kind,
-                     const char* generator, const char* clock) {
+    uint32_t tracker(const std::string& caller, const char* scope, const char* generator, const char* kind, const char* clock) {
         const std::lock_guard<SpinLock> lock{m_mutex};
         Tracker t;
-        t.stream = stream ? stream : "";
         t.kind = kind ? kind : "";
         t.generator = generator ? generator : "";
         const std::string root = m_host.rootPath();
         if (!resolveScope(caller, root, scope ? scope : "", t.scope)) {
-            misuse("vtr_tracker(\"" + std::string{scope ? scope : ""} + "\", \"" + t.stream
+            misuse("vtr_tracker(\"" + std::string{scope ? scope : ""} + "\", \"" + t.generator
                    + "\") in " + caller + ": scope above the root, using the root");
             t.scope = root;
         }
@@ -253,11 +251,11 @@ public:
 private:
     struct Tracker {
         std::string scope;
-        std::string stream, kind, generator;
+        std::string kind, generator;
         std::string clock;
         std::vector<std::string> spaces;
         std::unique_ptr<vtr::Tracker> live;
-        std::string path() const { return scope.empty() ? stream : scope + "." + stream; }
+        std::string path() const { return scope.empty() ? generator : scope + "." + generator; }
     };
     struct SpaceRef {
         uint32_t tracker;
@@ -284,8 +282,8 @@ private:
 
     void declare(Tracker& t) {
         vtr_writer* const w = m_sink->writer();
-        const uint32_t stream = vtr_writer_add_stream(w, m_sink->scopeNode(t.scope), t.stream.c_str(), t.kind.c_str());
-        if (stream == VTR_NONE) {
+        const uint32_t gen = vtr_writer_add_generator(w, m_sink->scopeNode(t.scope), t.generator.c_str(), t.kind.c_str());
+        if (gen == VTR_NONE) {
             misuse(t.path() + ": " + vtr_last_error());
             return;
         }
@@ -293,12 +291,7 @@ private:
             vtr_value v{};
             v.tag = VTR_VAL_STR;
             v.str_id = vtr_writer_intern(w, t.clock.c_str());
-            check(vtr_writer_node_attr(w, stream, "vtr.clock", &v), t.path());
-        }
-        const uint32_t gen = vtr_writer_add_generator(w, stream, t.generator.c_str());
-        if (gen == VTR_NONE) {
-            misuse(t.path() + ": " + vtr_last_error());
-            return;
+            check(vtr_writer_node_attr(w, gen, "vtr.clock", &v), t.path());
         }
         t.live.reset(new vtr::Tracker{w, gen, t.path()});
         for (const std::string& s : t.spaces) t.live->keyspace(s.c_str());
@@ -412,13 +405,12 @@ void vtr_clock_run(unsigned int c, unsigned long long period, int unit) {
 void vtr_clock_stop(unsigned int c) { vtr_trace::runtime().clockStop(c); }
 
 
-unsigned int vtr_tracker(const char* scope, const char* stream, const char* kind, const char* generator,
-                         const char* clock) {
-    return vtr_trace::runtime().tracker(vtr_trace::callerScope(), scope, stream, kind, generator, clock);
+unsigned int vtr_tracker(const char* scope, const char* generator, const char* kind, const char* clock) {
+    return vtr_trace::runtime().tracker(vtr_trace::callerScope(), scope, generator, kind, clock);
 }
 
-unsigned int vtr_pipeline(const char* scope, const char* stream, const char* clock) {
-    return vtr_trace::runtime().tracker(vtr_trace::callerScope(), scope, stream, "PIPELINE", "instruction", clock);
+unsigned int vtr_pipeline(const char* scope, const char* generator, const char* clock) {
+    return vtr_trace::runtime().tracker(vtr_trace::callerScope(), scope, generator, "PIPELINE", clock);
 }
 
 unsigned int vtr_keyspace(unsigned int trk, const char* name) { return vtr_trace::runtime().keyspace(trk, name); }

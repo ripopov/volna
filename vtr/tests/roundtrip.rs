@@ -423,10 +423,16 @@ fn transactions_roundtrip() {
     };
     let mut w = Writer::create_with(&path, opts).unwrap();
     let sc = w.add_scope(None, "cpu", ScopeType::Core, "").unwrap();
-    let st = w.add_stream(Some(sc), "pipe", "TRANSACTOR").unwrap();
-    let gen_i = w.add_generator(st, "instruction").unwrap();
-    let st2 = w.add_stream(None, "bus", "TRANSACTOR").unwrap();
-    let gen_b = w.add_generator(st2, "read").unwrap();
+    let st = w
+        .add_scope(Some(sc), "pipe", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let gen_i = w
+        .add_generator(Some(st), "instruction", "TRANSACTOR")
+        .unwrap();
+    let st2 = w
+        .add_scope(None, "bus", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let gen_b = w.add_generator(Some(st2), "read", "TRANSACTOR").unwrap();
     let k_pc = w.intern("pc");
     let k_lbl = w.intern("label");
     let k_dep = w.intern("wakeup");
@@ -473,8 +479,8 @@ fn transactions_roundtrip() {
     let rd = Reader::open(&path).unwrap();
     assert!(rd.tx_block_count() > 3, "blocks: {}", rd.tx_block_count());
     assert_eq!(rd.tx_counts(), (511, 499));
-    let streams: Vec<_> = rd.streams().collect();
-    assert_eq!(streams.len(), 2);
+    let streams: Vec<_> = rd.hierarchy().nodes_of_kind(NodeKind::Scope).collect();
+    assert_eq!(streams.len(), 3);
     let all = rd.transactions(&TxQuery::default()).unwrap();
     assert_eq!(all.len(), 511);
     let t7 = rd.transaction(ids[7]).unwrap().unwrap();
@@ -507,7 +513,7 @@ fn transactions_roundtrip() {
     assert_eq!(rd.str(rt[0].kind), "wakeup");
     let bus = rd
         .transactions(&TxQuery {
-            stream: Some(st2),
+            scope: Some(st2),
             ..Default::default()
         })
         .unwrap();
@@ -531,8 +537,10 @@ fn writer_rejects_duplicate_attribute_keys_per_item() {
     let node = w.add_scope(None, "top", ScopeType::Module, "top").unwrap();
     w.node_attr(node, "key", Value::U64(1)).unwrap();
     assert!(w.node_attr(node, "key", Value::U64(2)).is_err());
-    let stream = w.add_stream(Some(node), "stream", "test").unwrap();
-    let generator = w.add_generator(stream, "generator").unwrap();
+    let stream = w
+        .add_scope(Some(node), "stream", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let generator = w.add_generator(Some(stream), "generator", "test").unwrap();
     let key = w.intern("key");
     let event = w.intern("event");
     let stage = w.intern("stage");
@@ -570,11 +578,13 @@ fn writer_rejects_duplicate_attribute_keys_per_item() {
     );
     w.end_tx(tx, 1, TxStatus::Ok).unwrap();
 
-    let log = w.add_stream(None, "log", vtr::LOG_STREAM_KIND).unwrap();
+    let log = w
+        .add_scope(None, "log", vtr::ScopeType::Generic, "")
+        .unwrap();
     assert!(
         w.add_log_site(
             &LogSiteSpec::new(
-                log,
+                Some(log),
                 Severity::Info,
                 "{} {}",
                 &[LogArgType::U64, LogArgType::U64]
@@ -586,7 +596,7 @@ fn writer_rejects_duplicate_attribute_keys_per_item() {
     assert!(
         w.add_log_site(
             &LogSiteSpec::new(
-                log,
+                Some(log),
                 Severity::Info,
                 "{} {}",
                 &[LogArgType::U64, LogArgType::U64]
@@ -942,17 +952,19 @@ fn logs_roundtrip() {
     let soc = w.add_scope(None, "soc", ScopeType::Generic, "").unwrap();
     let cpu = w.add_scope(Some(soc), "cpu0", ScopeType::Core, "").unwrap();
     let log = w
-        .add_stream(Some(cpu), "log", vtr::LOG_STREAM_KIND)
+        .add_scope(Some(cpu), "log", vtr::ScopeType::Generic, "")
         .unwrap();
-    let bus = w.add_stream(Some(soc), "bus", "TRANSACTOR").unwrap();
-    let gen_rd = w.add_generator(bus, "read").unwrap();
+    let bus = w
+        .add_scope(Some(soc), "bus", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let gen_rd = w.add_generator(Some(bus), "read", "TRANSACTOR").unwrap();
     let buslog = w
-        .add_stream(Some(soc), "buslog", vtr::LOG_STREAM_KIND)
+        .add_scope(Some(soc), "buslog", vtr::ScopeType::Generic, "")
         .unwrap();
     let s_fetch = w
         .add_log_site(
             &LogSiteSpec::new(
-                log,
+                Some(log),
                 Severity::Debug,
                 "fetch pc={:#x} inst={:#010x}",
                 &[LogArgType::U64, LogArgType::U64],
@@ -964,18 +976,23 @@ fn logs_roundtrip() {
         .unwrap();
     let s_warn = w
         .add_log_site(&LogSiteSpec::new(
-            log,
+            Some(log),
             Severity::Warn,
             "{}: stall {} cycles ({:.1}%)",
             &[LogArgType::Text, LogArgType::I64, LogArgType::F64],
         ))
         .unwrap();
     let s_plain = w
-        .add_log_site(&LogSiteSpec::new(buslog, Severity::Info, "bus idle", &[]))
+        .add_log_site(&LogSiteSpec::new(
+            Some(buslog),
+            Severity::Info,
+            "bus idle",
+            &[],
+        ))
         .unwrap();
     let s_err = w
         .add_log_site(&LogSiteSpec::new(
-            buslog,
+            Some(buslog),
             Severity::Error,
             "{} bad {} at {} {}",
             &[
@@ -989,7 +1006,7 @@ fn logs_roundtrip() {
     let interned = w.intern("slave0");
     let s_str = w
         .add_log_site(&LogSiteSpec::new(
-            buslog,
+            Some(buslog),
             Severity::Info,
             "target {}",
             &[LogArgType::Str],
@@ -1082,7 +1099,7 @@ fn logs_roundtrip() {
     w.close().unwrap();
 
     let r = Reader::open(&path).unwrap();
-    assert_eq!(r.version(), (1, 1));
+    assert_eq!(r.version(), (2, 0));
     assert!(
         r.log_block_count() > 1,
         "expected several log blocks, got {}",
@@ -1107,7 +1124,7 @@ fn logs_roundtrip() {
         ),
         ("cpu.cpp", Some(42), "fetch")
     );
-    assert_eq!(r.full_path(site.stream, "."), "soc.cpu0.log");
+    assert_eq!(r.full_path(site.scope.unwrap(), "."), "soc.cpu0.log");
     let warn_site = r
         .log_sites()
         .iter()
@@ -1158,7 +1175,7 @@ fn logs_roundtrip() {
     let mut n = 0;
     r.visit_log(
         &LogQuery {
-            stream: Some(buslog),
+            scope: Some(buslog),
             window: Some((0, 1005)),
             ..Default::default()
         },
@@ -1213,7 +1230,7 @@ fn logs_roundtrip() {
     let mut only_bus = 0;
     r.visit_transactions(
         &TxQuery {
-            stream: Some(buslog),
+            scope: Some(buslog),
             ..Default::default()
         },
         |_| {
@@ -1243,10 +1260,12 @@ fn log_raw_matches_log() {
     ];
     for (path, raw) in [(&a, false), (&b, true)] {
         let mut w = Writer::create_with(path, opts.clone()).unwrap();
-        let st = w.add_stream(None, "log", vtr::LOG_STREAM_KIND).unwrap();
+        let st = w
+            .add_scope(None, "log", vtr::ScopeType::Generic, "")
+            .unwrap();
         let site = w
             .add_log_site(&LogSiteSpec::new(
-                st,
+                Some(st),
                 Severity::Info,
                 "{} {} {} {} {} {}",
                 &types,

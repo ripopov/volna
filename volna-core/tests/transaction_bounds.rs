@@ -119,7 +119,7 @@ fn project_relations(
         Track {
             id: TrackRef(0),
             path: vec![path.clone()],
-            kind: TrackKind::Stream {
+            kind: TrackKind::Generator {
                 kind: "test".into(),
             },
             attributes: vec![],
@@ -128,7 +128,7 @@ fn project_relations(
             id: TrackRef(1),
             path: vec![path],
             kind: TrackKind::Generator {
-                stream: TrackRef(0),
+                kind: "test".into(),
             },
             attributes: vec![],
         },

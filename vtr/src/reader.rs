@@ -189,13 +189,8 @@ pub struct Reader {
 }
 
 fn find_clocks(hier: &Hierarchy, strings: &StringTable) -> (Vec<ClockInfo>, [Option<StrId>; 2]) {
-    const NAMES: [&str; 4] = [
-        clock::KEY_PERIOD,
-        clock::KEY_CLOCK,
-        clock::STREAM_KIND,
-        clock::GENERATOR,
-    ];
-    let mut ids: [Option<StrId>; 4] = [None; 4];
+    const NAMES: [&str; 3] = [clock::KEY_PERIOD, clock::KEY_CLOCK, clock::GENERATOR_KIND];
+    let mut ids: [Option<StrId>; 3] = [None; 3];
     for i in 0..strings.len() {
         let s = strings.get(StrId(i as u32));
         if let Some(k) = NAMES.iter().position(|n| *n == s) {
@@ -203,19 +198,17 @@ fn find_clocks(hier: &Hierarchy, strings: &StringTable) -> (Vec<ClockInfo>, [Opt
         }
     }
     let keys = [ids[0], ids[1]];
-    let (Some(kind), Some(gen_name)) = (ids[2], ids[3]) else {
+    let Some(kind) = ids[2] else {
         return (Vec::new(), keys);
     };
     let mut clocks = Vec::new();
-    for stream in hier.nodes_of_kind(NodeKind::Stream) {
-        if !matches!(hier.node(stream).data, crate::NodeData::Stream { kind: k } if k == kind) {
+    for generator in hier.nodes_of_kind(NodeKind::Generator) {
+        if !matches!(hier.node(generator).data, crate::NodeData::Generator { kind: k } if k == kind)
+        {
             continue;
         }
-        let Some(generator) = hier.children(stream).find(|&g| hier.name(g) == gen_name) else {
-            continue;
-        };
         let mut parts = Vec::new();
-        let mut cur = Some(stream);
+        let mut cur = Some(generator);
         while let Some(c) = cur {
             parts.push(strings.get(hier.name(c)));
             cur = hier.parent(c);
@@ -223,7 +216,6 @@ fn find_clocks(hier: &Hierarchy, strings: &StringTable) -> (Vec<ClockInfo>, [Opt
         parts.reverse();
         clocks.push(ClockInfo {
             id: ClockId(clocks.len() as u32),
-            stream,
             generator,
             path: parts.join("."),
         });
@@ -379,13 +371,13 @@ impl SignalDataBuilder {
 #[derive(Clone, Debug, Default)]
 pub struct TxQuery {
     pub generator: Option<NodeId>,
-    pub stream: Option<NodeId>,
+    pub scope: Option<NodeId>,
     pub window: Option<(u64, u64)>,
 }
 
 #[derive(Clone, Debug)]
 pub struct LogQuery {
-    pub stream: Option<NodeId>,
+    pub scope: Option<NodeId>,
     pub generator: Option<NodeId>,
     pub min_severity: Severity,
     pub window: Option<(u64, u64)>,
@@ -394,7 +386,7 @@ pub struct LogQuery {
 impl Default for LogQuery {
     fn default() -> Self {
         LogQuery {
-            stream: None,
+            scope: None,
             generator: None,
             min_severity: Severity::Trace,
             window: None,
@@ -532,6 +524,10 @@ impl Reader {
         let mut site_index = vec![u32::MAX; hier.len()];
         if !keys[1].is_empty() {
             for n in hier.nodes_of_kind(NodeKind::Generator) {
+                if !matches!(hier.node_data(n), crate::NodeData::Generator { kind } if strings.get(kind) == logblock::GENERATOR_KIND)
+                {
+                    continue;
+                }
                 let attrs = hier.attrs(n);
                 let Some((_, Value::List(types))) = attrs.iter().find(|(k, _)| keys[1].contains(k))
                 else {
@@ -574,12 +570,12 @@ impl Reader {
                     Some(Value::Str(s)) => Some(*s),
                     _ => None,
                 };
-                let stream = hier.parent(n).unwrap_or(n);
+                let scope = hier.parent(n);
                 site_index[n.0 as usize] = log_sites.len() as u32;
                 log_sites.push(LogSite {
                     index: log_sites.len() as u32,
                     node: n,
-                    stream,
+                    scope,
                     severity,
                     fmt: hier.name(n),
                     file,
@@ -641,20 +637,20 @@ impl Reader {
     }
 
     pub fn ending(&self) -> Result<(Ending, Option<u64>)> {
-        let mut streams: Vec<NodeId> = self
+        let mut scopes: Vec<NodeId> = self
             .log_sites
             .iter()
-            .map(|s| s.stream)
-            .filter(|&n| self.hierarchy().parent(n).is_none() && self.name(n) == ending::STREAM)
+            .filter_map(|s| s.scope)
+            .filter(|&n| self.hierarchy().parent(n).is_none() && self.name(n) == ending::SCOPE)
             .collect();
-        streams.dedup();
-        if !streams.is_empty() {
+        scopes.dedup();
+        if !scopes.is_empty() {
             for i in (0..self.log_blocks.len()).rev() {
                 if self.log_blocks[i].header.n_rec == 0 {
                     continue;
                 }
                 let mut may = false;
-                for &st in &streams {
+                for &st in &scopes {
                     may |= self.log_block_may_match(i, None, Some(st), Severity::Trace)?;
                 }
                 if !may {
@@ -664,7 +660,7 @@ impl Reader {
                 for rec in d.recs.iter().rev() {
                     let Some(site) = self
                         .log_site(NodeId(rec.r#gen))
-                        .filter(|s| streams.contains(&s.stream))
+                        .filter(|s| s.scope.is_some_and(|scope| scopes.contains(&scope)))
                     else {
                         continue;
                     };
@@ -764,10 +760,6 @@ impl Reader {
         let parts: Vec<&str> = path.split(sep).collect();
         let n = self.find_node(&parts)?;
         self.hier.signal_of(n)
-    }
-
-    pub fn streams(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.hier.nodes_of_kind(NodeKind::Stream)
     }
 
     pub fn generators(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -1548,8 +1540,15 @@ impl Reader {
         Ok(b.data.get().unwrap().clone())
     }
 
-    pub fn generator_stream(&self, r#gen: NodeId) -> Option<NodeId> {
-        self.hier.parent(r#gen)
+    fn in_scope(&self, node: NodeId, scope: NodeId) -> bool {
+        let mut parent = self.hier.parent(node);
+        while let Some(id) = parent {
+            if id == scope {
+                return true;
+            }
+            parent = self.hier.parent(id);
+        }
+        false
     }
 
     pub fn visit_transactions(
@@ -1587,8 +1586,8 @@ impl Reader {
                 {
                     continue;
                 }
-                if let Some(s) = q.stream
-                    && self.generator_stream(tx.generator) != Some(s)
+                if let Some(s) = q.scope
+                    && !self.in_scope(tx.generator, s)
                 {
                     continue;
                 }
@@ -1720,13 +1719,21 @@ impl Reader {
         self.clocks.iter().find(|c| c.path == path).map(|c| c.id)
     }
 
-    pub fn stream_clock(&self, stream: NodeId) -> Option<ClockId> {
+    pub fn generator_clock(&self, generator: NodeId) -> Option<ClockId> {
+        if generator.0 as usize >= self.hier.len()
+            || self.hier.kind(generator) != NodeKind::Generator
+        {
+            return None;
+        }
         let key = self.clock_keys[1]?;
-        self.hier.attrs(stream).iter().find_map(|(k, v)| match v {
-            Value::Str(s) if *k == key => self.find_clock(self.str(*s)),
-            Value::Text(s) if *k == key => self.find_clock(s),
-            _ => None,
-        })
+        self.hier
+            .attrs(generator)
+            .iter()
+            .find_map(|(k, v)| match v {
+                Value::Str(s) if *k == key => self.find_clock(self.str(*s)),
+                Value::Text(s) if *k == key => self.find_clock(s),
+                _ => None,
+            })
     }
 
     pub fn clock(&self, id: ClockId) -> Result<Arc<ClockTimeline>> {
@@ -1809,7 +1816,7 @@ impl Reader {
         &self,
         i: usize,
         generator: Option<NodeId>,
-        stream: Option<NodeId>,
+        scope: Option<NodeId>,
         min: Severity,
     ) -> Result<bool> {
         let b = &self.log_blocks[i];
@@ -1819,7 +1826,7 @@ impl Reader {
                 continue;
             }
             if let Some(s) = self.log_site(NodeId(g)) {
-                if s.severity < min || stream.is_some_and(|st| s.stream != st) {
+                if s.severity < min || scope.is_some_and(|st| !self.in_scope(s.node, st)) {
                     continue;
                 }
                 return Ok(true);
@@ -1840,7 +1847,7 @@ impl Reader {
             {
                 continue;
             }
-            if !self.log_block_may_match(i, q.generator, q.stream, q.min_severity)? {
+            if !self.log_block_may_match(i, q.generator, q.scope, q.min_severity)? {
                 continue;
             }
             let d = self.log_block(i)?;
@@ -1851,7 +1858,9 @@ impl Reader {
                 let Some(site) = self.log_site(NodeId(rec.r#gen)) else {
                     continue;
                 };
-                if site.severity < q.min_severity || q.stream.is_some_and(|st| site.stream != st) {
+                if site.severity < q.min_severity
+                    || q.scope.is_some_and(|st| !self.in_scope(site.node, st))
+                {
                     continue;
                 }
                 if let Some((t0, t1)) = q.window
@@ -1887,7 +1896,7 @@ impl Reader {
         {
             return Ok(true);
         }
-        if !self.log_block_may_match(i, q.generator, q.stream, Severity::Trace)? {
+        if !self.log_block_may_match(i, q.generator, q.scope, Severity::Trace)? {
             return Ok(true);
         }
         let d = self.log_block(i)?;
@@ -1898,7 +1907,7 @@ impl Reader {
             let Some(site) = self.log_site(NodeId(rec.r#gen)) else {
                 continue;
             };
-            if q.stream.is_some_and(|st| site.stream != st) {
+            if q.scope.is_some_and(|st| !self.in_scope(site.node, st)) {
                 continue;
             }
             if let Some((t0, t1)) = q.window
@@ -2009,11 +2018,15 @@ mod cache_tests {
                 },
             )
             .unwrap();
-        let stream = writer.add_stream(None, "requests", "test").unwrap();
-        let generator = writer.add_generator(stream, "request").unwrap();
+        let stream = writer
+            .add_scope(None, "requests", crate::ScopeType::Generic, "")
+            .unwrap();
+        let generator = writer
+            .add_generator(Some(stream), "request", "test")
+            .unwrap();
         let site = writer
             .add_log_site(&LogSiteSpec::new(
-                stream,
+                Some(stream),
                 Severity::Info,
                 "value={}",
                 &[LogArgType::U64],

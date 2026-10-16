@@ -50,10 +50,16 @@ fn fixture_with_stages(n: u64, stages: &[&str]) -> Arc<dyn Session> {
             },
         )
         .unwrap();
-    let stream = w.add_stream(Some(cpu), "thread0", "PIPELINE").unwrap();
-    let insn = w.add_generator(stream, "instruction").unwrap();
-    let bus = w.add_stream(Some(cpu), "bus", "TX").unwrap();
-    let req = w.add_generator(bus, "request").unwrap();
+    let stream = w
+        .add_scope(Some(cpu), "thread0", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let insn = w
+        .add_generator(Some(stream), "instruction", "PIPELINE")
+        .unwrap();
+    let bus = w
+        .add_scope(Some(cpu), "bus", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let req = w.add_generator(Some(bus), "request", "TX").unwrap();
     let last = n + 4;
     for t in 0..=last {
         w.set_time(t).unwrap();
@@ -107,10 +113,18 @@ fn scope(session: &dyn Session, path: &[&str]) -> usize {
     }
 }
 
-fn stream_track(session: &dyn Session, path: &[&str]) -> TrackRef {
+fn generator_track(session: &dyn Session, path: &[&str]) -> TrackRef {
     let h = session.hierarchy();
-    h.member_track(Member::Stream(scope(session, path)))
-        .unwrap()
+    h.member_track(Member::Generator(
+        session
+            .hierarchy()
+            .scope(scope(session, path))
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
+    ))
+    .unwrap()
 }
 
 fn pump(app: &mut App) {
@@ -144,7 +158,11 @@ fn opened(n: u64) -> (App, Arc<dyn Session>, PanelId, PanelId) {
         &["cpu", "thread0"],
     )))));
     app.take_events();
-    app.handle(Command::ScopesKey(Key::Enter));
+    app.handle(Command::SelectVar {
+        ix: 0,
+        modifiers: Modifiers::default(),
+    });
+    app.handle(Command::VariablesKey(Key::Enter, Modifiers::default()));
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, waves);
     app.handle(Command::PipelineActivity(
@@ -328,25 +346,31 @@ fn activity_state_survives_workspace_and_split() {
 }
 
 #[test]
-fn activity_keeps_long_overlaps_points_and_generator_row_offsets() {
+fn activity_keeps_long_overlaps_and_points_in_one_generator() {
     use volna_core::wave::viewport::Viewport;
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let stream = writer.add_stream(None, "pipeline", "PIPELINE").unwrap();
-    let first = writer.add_generator(stream, "first").unwrap();
-    let second = writer.add_generator(stream, "second").unwrap();
+    let stream = writer
+        .add_scope(None, "pipeline", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let first = writer
+        .add_generator(Some(stream), "first", "PIPELINE")
+        .unwrap();
+    let _second = writer
+        .add_generator(Some(stream), "second", "PIPELINE")
+        .unwrap();
     let long = writer.begin_tx(first, 0).unwrap();
     writer.end_tx(long, 1000, vtr::TxStatus::Ok).unwrap();
     for i in 1..100 {
         let tx = writer.begin_tx(first, i).unwrap();
         writer.end_tx(tx, i, vtr::TxStatus::Ok).unwrap();
     }
-    let point_tx = writer.begin_tx(second, 500).unwrap();
+    let point_tx = writer.begin_tx(first, 500).unwrap();
     writer.end_tx(point_tx, 500, vtr::TxStatus::Ok).unwrap();
     writer.set_time(1000).unwrap();
     writer.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
-    let track = stream_track(session.as_ref(), &["pipeline"]);
+    let track = generator_track(session.as_ref(), &["pipeline"]);
     let mut app = App::new();
     app.set_session(session);
     app.handle(Command::OpenPipeline { track: a(track) });
@@ -371,7 +395,7 @@ fn activity_keeps_long_overlaps_points_and_generator_row_offsets() {
     assert_eq!(
         activity.nearest_below,
         Some(100),
-        "second generator follows first's rows"
+        "point follows the earlier rows"
     );
     app.doc.shared.viewport.set(Viewport {
         start: 500.1,
@@ -410,8 +434,14 @@ fn narrow_pipeline_stages_show_the_prefix_that_fits() {
     let mut app = App::new();
     app.set_session(session.clone());
     pump(&mut app);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
-        scope(session.as_ref(), &["cpu", "thread0"]),
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+        session
+            .hierarchy()
+            .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
     )])));
     pump(&mut app);
     let panel = app.panels.focused_id();
@@ -463,7 +493,7 @@ fn narrow_pipeline_stages_show_the_prefix_that_fits() {
 }
 
 #[test]
-fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
+fn enter_on_a_generator_opens_a_panel_loads_the_track_once_and_paints_cells() {
     let (mut app, session, waves, pipeline) = opened(40);
     assert!(app.status().sidebar_notice.is_none());
     assert!(
@@ -472,7 +502,7 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
             .any(|e| matches!(e, Event::Notice(_)))
     );
     let requests = app.take_requests();
-    let track = stream_track(session.as_ref(), &["cpu", "thread0"]);
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
     let tracks: Vec<_> = requests
         .iter()
         .filter_map(|r| match r {
@@ -565,7 +595,7 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
 
     let generator = Member::Generator(0);
     app.handle(Command::ActivateMembers(a_all(vec![generator])));
-    assert_eq!(app.panels.len(), 4);
+    assert_eq!(app.panels.len(), 3);
     assert!(app.take_requests().is_empty());
     let second = app.panels.focused_id();
     frame(&mut app, second, &theme);
@@ -573,16 +603,30 @@ fn enter_on_a_stream_opens_a_panel_loads_the_track_once_and_paints_cells() {
         app.panels.pipeline(second).unwrap().rows(&app.doc),
         Rows::Ready(set) if set.len() == 40
     ));
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
-        scope(session.as_ref(), &["cpu", "thread0"]),
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+        session
+            .hierarchy()
+            .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
     )])));
-    assert_eq!(app.panels.len(), 4);
+    assert_eq!(app.panels.len(), 3);
     assert_eq!(app.panels.focused_id(), pipeline);
     let bus = scope(session.as_ref(), &["cpu", "bus"]);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(bus)])));
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+        session
+            .hierarchy()
+            .scope(bus)
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
+    )])));
     pump(&mut app);
     let bus_panel = app.panels.focused_id();
-    assert_eq!(app.panels.len(), 5);
+    assert_eq!(app.panels.len(), 4);
     frame(&mut app, bus_panel, &theme);
     let grey = theme.stage_fallback().fill;
     assert_eq!(app.scene().quads().filter(|(_, c)| *c == grey).count(), 1);
@@ -1487,8 +1531,14 @@ fn square_cells_use_the_stream_clock_period_instead_of_time_units() {
         let mut app = App::new();
         app.set_session(session.clone());
         let stream = scope(session.as_ref(), &["TOP", "tb", "core", "pipeline"]);
-        app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
-            stream,
+        app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+            session
+                .hierarchy()
+                .scope(stream)
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
         )])));
         pump(&mut app);
         let pipeline = app.panels.focused_id();
@@ -2260,7 +2310,10 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
         .find(|p| p["kind"] == "pipeline")
         .unwrap()
         .clone();
-    assert_eq!(panel_json["track"], serde_json::json!(["cpu", "thread0"]));
+    assert_eq!(
+        panel_json["track"],
+        serde_json::json!(["cpu", "thread0", "instruction"])
+    );
     assert_eq!(panel_json["rows"]["row_px"], 12.0);
     assert_eq!(panel_json["cursor"], 7);
     assert_eq!(panel_json["label_width"], 240.0);
@@ -2279,7 +2332,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     plan.commit(&mut restored).unwrap();
     assert_eq!(restored.panels.len(), 3);
     let p = restored.panels.pipeline(pipeline).unwrap();
-    assert_eq!(p.track.path(), ["cpu", "thread0"]);
+    assert_eq!(p.track.path(), ["cpu", "thread0", "instruction"]);
     assert!(p.is_attached());
     assert!(!p.nav.link.cursor && p.nav.link.viewport);
     assert_eq!(p.nav.local_cursor, Some(7));
@@ -2379,7 +2432,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
 #[test]
 fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
     let (mut app, session, waves, pipeline) = opened(20);
-    let track = stream_track(session.as_ref(), &["cpu", "thread0"]);
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
     let request = app
         .take_requests()
         .into_iter()
@@ -2472,7 +2525,7 @@ fn a_stream_opened_first_replaces_the_start_panel_and_rows_find_a_waveform_tab()
     app.set_session(session.clone());
     let start = app.panels.focused_id();
     assert!(app.panels.focused().kind.is_start());
-    let track = stream_track(session.as_ref(), &["cpu", "thread0"]);
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
     app.handle(Command::OpenPipeline { track: a(track) });
     assert_eq!(app.panels.len(), 2);
     let pipeline = app.panels.focused_id();
@@ -2505,7 +2558,7 @@ fn a_stream_opened_first_replaces_the_start_panel_and_rows_find_a_waveform_tab()
 }
 
 #[test]
-fn the_checked_in_showcase_has_two_pipeline_streams_on_a_cycle_time_base() {
+fn the_checked_in_showcase_has_two_pipeline_generators_on_a_cycle_time_base() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../volna/examples/pipeline_showcase.vtr");
     let session = OpenSpec::Path(path).open().unwrap();
@@ -2516,8 +2569,14 @@ fn the_checked_in_showcase_has_two_pipeline_streams_on_a_cycle_time_base() {
     let mut counts = Vec::new();
     for core in ["cpu0", "cpu1"] {
         let stream = scope(session.as_ref(), &["soc", core, "pipeline"]);
-        app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
-            stream,
+        app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+            session
+                .hierarchy()
+                .scope(stream)
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
         )])));
         pump(&mut app);
         let id = app.panels.focused_id();
@@ -2567,8 +2626,14 @@ fn the_feature_showcase_cpu_paints_stage_cells_and_stall_bands() {
     app.set_session(session.clone());
     pump(&mut app);
     let stream = scope(session.as_ref(), &["soc", "cpu", "thread0"]);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
-        stream,
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+        session
+            .hierarchy()
+            .scope(stream)
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
     )])));
     pump(&mut app);
     let id = app.panels.focused_id();
@@ -2584,7 +2649,7 @@ fn the_feature_showcase_cpu_paints_stage_cells_and_stall_bands() {
     let aborted = (0..set.len())
         .filter(|r| set.get(*r).unwrap().1.status == vtr::TxStatus::Aborted)
         .count();
-    assert_eq!((set.len(), aborted), (160, 14));
+    assert_eq!((set.len(), aborted), (146, 0));
     let fills: Vec<_> = stages
         .iter()
         .map(|s| p.palette().style(s, &theme).fill)
@@ -2622,8 +2687,14 @@ fn the_theme_showcase_runs_the_c910_stage_ladder_with_flushed_and_open_rows() {
         ),
     ] {
         let stream = scope(session.as_ref(), &["soc", core, "pipeline"]);
-        app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
-            stream,
+        app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+            session
+                .hierarchy()
+                .scope(stream)
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
         )])));
         pump(&mut app);
         let id = app.panels.focused_id();
@@ -2658,8 +2729,14 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     app.set_session(session.clone());
     pump(&mut app);
     let stream = scope(session.as_ref(), &["TOP", "tb", "core", "pipeline"]);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
-        stream,
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+        session
+            .hierarchy()
+            .scope(stream)
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
     )])));
     pump(&mut app);
     let id = app.panels.focused_id();
@@ -2728,7 +2805,7 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     };
     assert_eq!(v.identity.id, selection.id);
     assert_eq!(v.identity.label.as_deref(), Some("0100 add a0,a0,a1"));
-    assert_eq!(v.identity.stream, ["TOP", "tb", "core", "pipeline"]);
+    assert_eq!(v.identity.scope, ["TOP", "tb", "core", "pipeline"]);
     let names: Vec<_> = v.lifeline[0]
         .cells
         .iter()
@@ -2774,8 +2851,12 @@ fn half_million_rows_load_lay_out_and_paint() {
         let core = w
             .add_scope(None, "core", vtr::ScopeType::Module, "")
             .unwrap();
-        let stream = w.add_stream(Some(core), "pipeline", "PIPELINE").unwrap();
-        let insn = w.add_generator(stream, "instruction").unwrap();
+        let stream = w
+            .add_scope(Some(core), "pipeline", vtr::ScopeType::Generic, "")
+            .unwrap();
+        let insn = w
+            .add_generator(Some(stream), "instruction", "PIPELINE")
+            .unwrap();
         let names: Vec<_> = [
             "ID", "IR", "IS", "IQ", "RF", "EX", "CM", "RT", "BJ", "FX", "AG", "DC", "DA", "WB",
         ]
@@ -2861,8 +2942,14 @@ fn half_million_rows_load_lay_out_and_paint() {
     let stream = scope(session.as_ref(), &parts);
     let opened = t0.elapsed().as_secs_f64();
     let t1 = Clock::now();
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Stream(
-        stream,
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
+        session
+            .hierarchy()
+            .scope(stream)
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
     )])));
     pump(&mut app);
     let loaded = t1.elapsed().as_secs_f64();

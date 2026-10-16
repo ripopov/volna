@@ -136,7 +136,7 @@ fn click(app: &mut App, waves: PanelId, p: Point) {
 
 #[test]
 fn add_to_waves_loads_shares_and_releases_generator_records() {
-    let (mut app, session, waves, tracks) = with_lanes(&[CPU0, CPU1]);
+    let (mut app, _session, waves, tracks) = with_lanes(&[CPU0, CPU1]);
     let w = app.panels.waves(waves).unwrap();
     assert_eq!(w.items().len(), 2);
     assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [0, 1]);
@@ -181,21 +181,29 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
     )));
     assert!(app.doc.track(a(tracks[0])).is_none());
 
-    let h = session.hierarchy();
-    let stream = h
-        .scopes()
-        .position(|s| matches!(s.role, volna_trace::data::ScopeRole::Stream { .. }))
-        .unwrap();
     app.handle(Command::Panels(volna_core::panels::PanelsCommand::Focus(
         waves,
     )));
     app.handle(Command::AddToWaves(a_all(vec![
-        Member::Stream(stream),
+        Member::Generator(0),
         Member::Var(0),
     ])));
     let w = app.panels.waves(waves).unwrap();
-    assert_eq!(w.items().len(), 1);
-    assert!(w.items()[0].signal().is_some());
+    assert_eq!(w.items().len(), 2);
+    assert_eq!(
+        w.items()
+            .iter()
+            .filter(|item| item.lane().is_some())
+            .count(),
+        1
+    );
+    assert_eq!(
+        w.items()
+            .iter()
+            .filter(|item| item.signal().is_some())
+            .count(),
+        1
+    );
 }
 
 #[test]

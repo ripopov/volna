@@ -37,8 +37,8 @@ fn equal(a: &Hierarchy, b: &Hierarchy) {
     for id in 0..a.scope_count() {
         let (a, b) = (a.scope(id), b.scope(id));
         assert_eq!(
-            (a.name, a.kind, a.component, a.parent, a.role),
-            (b.name, b.kind, b.component, b.parent, b.role)
+            (a.name, a.kind, a.component, a.parent),
+            (b.name, b.kind, b.component, b.parent)
         );
         assert_eq!(
             a.children.iter().collect::<Vec<_>>(),

@@ -31,10 +31,16 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
     let scope = w
         .add_scope(None, "top", vtr::ScopeType::Module, "top_type")
         .unwrap();
-    let stream = w.add_stream(Some(scope), "cpu", "pipeline").unwrap();
-    let gen_a = w.add_generator(stream, "instructions").unwrap();
-    let stream_b = w.add_stream(None, "bus", "tlm").unwrap();
-    let gen_b = w.add_generator(stream_b, "reads").unwrap();
+    let stream = w
+        .add_scope(Some(scope), "cpu", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let gen_a = w
+        .add_generator(Some(stream), "instructions", "pipeline")
+        .unwrap();
+    let stream_b = w
+        .add_scope(None, "bus", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let gen_b = w.add_generator(Some(stream_b), "reads", "tlm").unwrap();
     let key = w.intern("payload");
     let text = w.intern("decoded");
     let event = w.intern("issue");
@@ -76,7 +82,7 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
     w.close().unwrap();
 
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
-    assert_eq!(session.tracks().len(), 4);
+    assert_eq!(session.tracks().len(), 2);
     let generator = session
         .tracks()
         .iter()
@@ -85,11 +91,11 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
     assert_eq!(
         generator.kind,
         TrackKind::Generator {
-            stream: TrackRef(stream.0)
+            kind: "pipeline".into()
         }
     );
     let loaded_a = session.load_track(generator.id).unwrap();
-    let loaded_b = session.load_track(TrackRef(stream_b.0)).unwrap();
+    let loaded_b = session.load_track(TrackRef(gen_b.0)).unwrap();
     let a = &loaded_a.generators[0];
     let b = &loaded_b.generators[0];
     let p = a.transaction(TransactionRef(parent)).unwrap();
@@ -168,12 +174,20 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
 fn complete_tracks_include_empty_generators_parents_and_parallel_relations() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let stream = writer.add_stream(None, "stream", "transactions").unwrap();
-    let generator = writer.add_generator(stream, "generator").unwrap();
-    let empty = writer.add_generator(stream, "empty").unwrap();
-    let other_stream = writer.add_stream(None, "other", "transactions").unwrap();
+    let stream = writer
+        .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let generator = writer
+        .add_generator(Some(stream), "generator", "transactions")
+        .unwrap();
+    let empty = writer
+        .add_generator(Some(stream), "empty", "transactions")
+        .unwrap();
+    let other_stream = writer
+        .add_scope(None, "other", vtr::ScopeType::Generic, "")
+        .unwrap();
     let other = writer
-        .add_generator(other_stream, "other-generator")
+        .add_generator(Some(other_stream), "other-generator", "transactions")
         .unwrap();
     let parent = writer.begin_tx(other, 0).unwrap();
     writer.end_tx(parent, 100, TxStatus::Ok).unwrap();
@@ -194,8 +208,8 @@ fn complete_tracks_include_empty_generators_parents_and_parallel_relations() {
     );
     assert_eq!(reader.transaction_generator(u64::MAX).unwrap(), None);
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
-    let loaded = session.load_track(TrackRef(stream.0)).unwrap();
-    assert_eq!(loaded.generators.len(), 2);
+    let loaded = session.load_track(TrackRef(generator.0)).unwrap();
+    assert_eq!(loaded.generators.len(), 1);
     let records = loaded
         .generators
         .iter()
@@ -213,7 +227,9 @@ fn complete_tracks_include_empty_generators_parents_and_parallel_relations() {
         records.relations()[1].relation
     );
     assert!(
-        loaded
+        session
+            .load_track(TrackRef(empty.0))
+            .unwrap()
             .generators
             .iter()
             .find(|g| g.generator() == TrackRef(empty.0))

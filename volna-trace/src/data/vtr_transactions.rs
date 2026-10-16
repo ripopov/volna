@@ -11,33 +11,17 @@ use std::sync::Arc;
 use vtr::{NodeData, Reader, Value};
 
 pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Result<LoadedTrack> {
-    let selected = session
-        .tracks
-        .iter()
-        .find(|t| t.id == track)
-        .ok_or_else(|| anyhow::anyhow!("unknown transaction track {}", track.0))?;
-    let generators: Vec<_> = match selected.kind {
-        TrackKind::Generator { .. } => vec![track],
-        TrackKind::Stream { .. } => session
-            .tracks
-            .iter()
-            .filter_map(|t| match t.kind {
-                TrackKind::Generator { stream } if stream == track => Some(t.id),
-                _ => None,
-            })
-            .collect(),
-    };
+    anyhow::ensure!(
+        session.tracks.iter().any(|t| t.id == track),
+        "unknown transaction track {}",
+        track.0
+    );
+    let generators = vec![track];
     let mut records: HashMap<_, Vec<Transaction>> =
         generators.iter().map(|&id| (id, vec![])).collect();
-    let query = match selected.kind {
-        TrackKind::Generator { .. } => vtr::TxQuery {
-            generator: Some(vtr::NodeId(track.0)),
-            ..Default::default()
-        },
-        TrackKind::Stream { .. } => vtr::TxQuery {
-            stream: Some(vtr::NodeId(track.0)),
-            ..Default::default()
-        },
+    let query = vtr::TxQuery {
+        generator: Some(vtr::NodeId(track.0)),
+        ..Default::default()
     };
     let mut owners = HashMap::new();
     session.reader.visit_transactions(&query, |tx| {
@@ -188,11 +172,8 @@ pub(super) fn tracks(reader: &Reader) -> Vec<Track> {
         .filter_map(|id| {
             let node = h.node(id);
             let kind = match node.data {
-                NodeData::Stream { kind } => TrackKind::Stream {
+                NodeData::Generator { kind } => TrackKind::Generator {
                     kind: reader.str(kind).into(),
-                },
-                NodeData::Generator => TrackKind::Generator {
-                    stream: TrackRef(node.parent?.0),
                 },
                 _ => return None,
             };

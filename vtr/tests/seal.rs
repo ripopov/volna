@@ -94,12 +94,16 @@ impl Run {
                     .1
             })
             .collect();
-        let stream = w.add_stream(Some(top), "bus", "TRANSACTOR").unwrap();
-        let r#gen = w.add_generator(stream, "rd").unwrap();
-        let log = w.add_stream(None, "log", LOG_STREAM_KIND).unwrap();
+        let stream = w
+            .add_scope(Some(top), "bus", vtr::ScopeType::Generic, "")
+            .unwrap();
+        let r#gen = w.add_generator(Some(stream), "rd", "TRANSACTOR").unwrap();
+        let log = w
+            .add_scope(None, "log", vtr::ScopeType::Generic, "")
+            .unwrap();
         let site = w
             .add_log_site(&LogSiteSpec::new(
-                log,
+                Some(log),
                 Severity::Info,
                 "at {} {}",
                 &[LogArgType::U64, LogArgType::Text],
@@ -242,8 +246,8 @@ fn assert_sealed_prefix(sealed: &Reader, full: &Reader, what: &str) {
     let full_tx = full.transactions(&TxQuery::default()).unwrap();
     for t in sealed.transactions(&TxQuery::default()).unwrap() {
         if sealed.log_site(t.generator).is_some()
-            || sealed.full_path(sealed.generator_stream(t.generator).unwrap(), ".")
-                == ending::STREAM
+            || sealed.full_path(sealed.hierarchy().parent(t.generator).unwrap(), ".")
+                == ending::SCOPE
         {
             continue;
         }
@@ -281,7 +285,7 @@ fn assert_sealed_prefix(sealed: &Reader, full: &Reader, what: &str) {
     let mut n = 0;
     sealed
         .visit_log(&LogQuery::default(), |r| {
-            if sealed.full_path(r.site.stream, ".") != ending::STREAM {
+            if sealed.full_path(r.site.scope.unwrap(), ".") != ending::SCOPE {
                 assert_eq!(
                     (r.id, r.time, r.format(sealed.strings())),
                     full_logs[n],
@@ -300,9 +304,9 @@ fn assert_sealed_prefix(sealed: &Reader, full: &Reader, what: &str) {
     assert_eq!(
         sealed
             .strings()
-            .find(vtr::LOG_STREAM_KIND)
+            .find(vtr::LOG_GENERATOR_KIND)
             .map(|_| (0..sealed.strings().len())
-                .filter(|&i| sealed.str(StrId(i as u32)) == vtr::LOG_STREAM_KIND)
+                .filter(|&i| sealed.str(StrId(i as u32)) == vtr::LOG_GENERATOR_KIND)
                 .count()),
         Some(1),
         "{what}: strings interned once"

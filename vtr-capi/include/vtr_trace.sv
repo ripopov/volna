@@ -23,10 +23,9 @@ package vtr_trace;
   typedef longint unsigned vtr_key_t;
   localparam byte VTR_TX_OK = 1, VTR_TX_ERROR = 2, VTR_TX_ABORTED = 3;
 
-  import "DPI-C" context function vtr_tracker_t vtr_tracker(string scope, string stream, string kind,
-                                                            string generator, string clock);
+  import "DPI-C" context function vtr_tracker_t vtr_tracker(string scope, string generator, string kind, string clock);
 
-  import "DPI-C" context function vtr_tracker_t vtr_pipeline(string scope, string stream, string clock);
+  import "DPI-C" context function vtr_tracker_t vtr_pipeline(string scope, string generator, string clock);
 
   import "DPI-C" function vtr_keyspace_t vtr_keyspace(vtr_tracker_t trk, string name);
 

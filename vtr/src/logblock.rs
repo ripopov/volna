@@ -252,7 +252,7 @@ pub struct LogSiteId(pub u32);
 
 #[derive(Clone, Debug)]
 pub struct LogSiteSpec<'a> {
-    pub stream: NodeId,
+    pub scope: Option<NodeId>,
     pub severity: Severity,
     pub fmt: &'a str,
     pub args: &'a [LogArgType],
@@ -264,9 +264,14 @@ pub struct LogSiteSpec<'a> {
 
 impl<'a> LogSiteSpec<'a> {
     #[must_use]
-    pub fn new(stream: NodeId, severity: Severity, fmt: &'a str, args: &'a [LogArgType]) -> Self {
+    pub fn new(
+        scope: Option<NodeId>,
+        severity: Severity,
+        fmt: &'a str,
+        args: &'a [LogArgType],
+    ) -> Self {
         LogSiteSpec {
-            stream,
+            scope,
             severity,
             fmt,
             args,
@@ -298,7 +303,7 @@ impl<'a> LogSiteSpec<'a> {
 pub struct LogSite {
     pub index: u32,
     pub node: NodeId,
-    pub stream: NodeId,
+    pub scope: Option<NodeId>,
     pub severity: Severity,
     pub fmt: StrId,
     pub file: Option<StrId>,
@@ -314,7 +319,7 @@ pub const KEY_NAMES: &str = "log.names";
 pub const KEY_FILE: &str = "log.file";
 pub const KEY_LINE: &str = "log.line";
 pub const KEY_FUNC: &str = "log.func";
-pub const STREAM_KIND: &str = "LOG";
+pub const GENERATOR_KIND: &str = "LOG";
 
 pub(crate) fn site_attrs(
     spec: &LogSiteSpec,

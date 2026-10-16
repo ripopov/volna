@@ -53,8 +53,8 @@ int partA(const std::string& path) {
     if (!w) return fail("create");
     vtr_writer_set_timescale(w, -9);
     const uint32_t cpu = vtr_writer_add_scope(w, VTR_NONE, "cpu", VTR_SCOPE_MODULE, nullptr);
-    const uint32_t pg = vtr_writer_add_generator(w, vtr_writer_add_stream(w, cpu, "pipeline", "PIPELINE"), "instruction");
-    const uint32_t lg = vtr_writer_add_generator(w, vtr_writer_add_stream(w, cpu, "lsu", "LSU"), "request");
+    const uint32_t pg = vtr_writer_add_generator(w, cpu, "pipeline", "PIPELINE");
+    const uint32_t lg = vtr_writer_add_generator(w, cpu, "lsu", "LSU");
     vtr::Tracker p{w, pg, "cpu.pipeline"}, l{w, lg, "cpu.lsu"};
     const uint32_t fe = p.keyspace("fe"), iid = p.keyspace("iid"), preg = p.keyspace("preg"), sq = l.keyspace("sq");
 
@@ -109,7 +109,7 @@ int partA(const std::string& path) {
 int partC(const std::string& path) {
     vtr_writer* w = vtr_writer_create(path.c_str(), nullptr);
     if (!w) return fail("create");
-    const uint32_t gen = vtr_writer_add_generator(w, vtr_writer_add_stream(w, VTR_NONE, "many", "PIPELINE"), "item");
+    const uint32_t gen = vtr_writer_add_generator(w, VTR_NONE, "many", "PIPELINE");
     vtr::Tracker q{w, gen, "many"};
     const uint32_t s = q.keyspace("s"), g = q.keyspace("g");
     for (uint64_t k = 0; k < 1000; ++k) q.open(s, k, "A", 1);
@@ -145,8 +145,8 @@ int partB(const std::string& b1, const std::string& b2) {
     const unsigned trk = vtr_pipeline("^", "pipeline", "clk");
     const unsigned c = vtr_clock("^", "clk");
     const unsigned sn = vtr_keyspace(trk, "sn");
-    const unsigned other = vtr_tracker("", "bus", "BUS", "request", "nope");
-    const unsigned grouped = vtr_keyspace(vtr_tracker("/TX.core0", "events", "EVENTS", "event", ""), "ev");
+    const unsigned other = vtr_tracker("", "bus", "BUS", "nope");
+    const unsigned grouped = vtr_keyspace(vtr_tracker("/TX.core0", "events", "EVENTS", ""), "ev");
     vtr_clock_run(c, 10, -12);
     vtr_item_open(sn, 1, "F");
     if (openFile(sink, b1)) return 1;

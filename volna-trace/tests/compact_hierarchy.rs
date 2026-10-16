@@ -1,4 +1,4 @@
-//! Compact hierarchy parity and protocol-v5 admission/lifecycle tests.
+//! Compact hierarchy parity and protocol-v7 admission/lifecycle tests.
 
 use std::sync::Arc;
 use volna_trace::data::{Hierarchy, ScopeSizes};
@@ -128,8 +128,8 @@ fn equal(a: &Hierarchy, b: &Hierarchy) {
     for id in 0..a.scope_count() {
         let (a, b) = (a.scope(id), b.scope(id));
         assert_eq!(
-            (a.name, a.kind, a.component, a.parent, a.role),
-            (b.name, b.kind, b.component, b.parent, b.role)
+            (a.name, a.kind, a.component, a.parent),
+            (b.name, b.kind, b.component, b.parent)
         );
         assert_eq!(
             a.children.iter().collect::<Vec<_>>(),
@@ -452,7 +452,7 @@ fn vtr_views_equal_reader_declarations_node_by_node() {
         let h = reader.hierarchy();
         let scopes: Vec<_> = h
             .ids()
-            .filter(|&id| matches!(h.kind(id), NodeKind::Scope | NodeKind::Stream))
+            .filter(|&id| matches!(h.kind(id), NodeKind::Scope))
             .collect();
         let vars: Vec<_> = h.ids().filter(|&id| h.kind(id) == NodeKind::Var).collect();
         assert_eq!(scopes.len(), local.hierarchy().scope_count());
@@ -483,7 +483,7 @@ fn vtr_views_equal_reader_declarations_node_by_node() {
                     assert_eq!(scope.kind, scope_type.name());
                     assert_eq!(scope.component, reader.str(component));
                 }
-                NodeData::Stream { kind } => assert_eq!(scope.kind, reader.str(kind)),
+
                 _ => unreachable!(),
             }
         }
@@ -519,15 +519,17 @@ fn invalid_catalog_owners_and_capabilities_release_the_private_open() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("raw.vtr");
     let mut writer = vtr::Writer::create(&path).unwrap();
-    let stream = writer.add_stream(None, "raw", "TX").unwrap();
-    writer.add_generator(stream, "site").unwrap();
+    let stream = writer
+        .add_scope(None, "raw", vtr::ScopeType::Generic, "")
+        .unwrap();
+    writer.add_generator(Some(stream), "site", "TX").unwrap();
     writer.close().unwrap();
     let local = OpenSpec::Path(path).open().unwrap();
     for case in 0..3 {
         let mut all = objects(local.as_ref());
         let mut header: Header = bincode::deserialize(&all[0].1).unwrap();
         match case {
-            0 => header.generators[0].stream = usize::MAX,
+            0 => header.generators[0].scope = usize::MAX,
             1 => header.generators[0].track.0 = u32::MAX,
             2 => header.capabilities.transactions = false,
             _ => unreachable!(),
@@ -608,8 +610,10 @@ fn root_variables_keep_synthetic_scope_declaration_order_and_later_top_is_distin
         writer
             .add_scope(Some(after), "child", ScopeType::Module, "")
             .unwrap();
-        let stream = writer.add_stream(Some(after), "TX", "raw").unwrap();
-        writer.add_generator(stream, "site").unwrap();
+        let stream = writer
+            .add_scope(Some(after), "TX", vtr::ScopeType::Generic, "")
+            .unwrap();
+        writer.add_generator(Some(stream), "site", "raw").unwrap();
         writer.close().unwrap();
         let local = OpenSpec::Path(path).open().unwrap();
         let h = local.hierarchy();
@@ -638,7 +642,7 @@ fn root_variables_keep_synthetic_scope_declaration_order_and_later_top_is_distin
             h.scope(later_id).children.iter().collect::<Vec<_>>(),
             [later_id + 1, later_id + 2]
         );
-        assert_eq!(h.generators()[0].stream, later_id + 2);
+        assert_eq!(h.generators()[0].scope, later_id + 2);
         assert_eq!(h.scope(later_id + 1).parent, Some(later_id));
         if mode == 0 {
             assert_eq!(
@@ -683,4 +687,82 @@ fn enum_presence_preserves_the_complete_raw_identity_range() {
     assert_eq!(remote.hierarchy().var(3).enum_table, Some(u32::MAX));
     drop(remote);
     assert_eq!(budget.used(), 0);
+}
+
+#[test]
+fn root_and_module_generators_keep_paths_and_kinds_over_remote_transfer() {
+    use volna_trace::data::source::{Lookup, Member};
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    writer
+        .add_generator(None, "requests", "MEMORY_BUS")
+        .unwrap();
+    let module = writer
+        .add_scope(None, "cpu", vtr::ScopeType::Module, "")
+        .unwrap();
+    writer
+        .add_generator(Some(module), "instructions", "PIPELINE")
+        .unwrap();
+    writer.close().unwrap();
+    let local = OpenSpec::Path(file.path().into()).open().unwrap();
+    let budget = MemoryBudget::new(1024 * 1024);
+    let remote = roundtrip(local.clone(), 7, &budget);
+    for session in [&local, &remote] {
+        let hierarchy = session.hierarchy();
+        for (path, kind, root) in [
+            (&["requests"][..], "MEMORY_BUS", true),
+            (&["cpu", "instructions"][..], "PIPELINE", false),
+        ] {
+            let Lookup::Found(id) = hierarchy.find_generator(path) else {
+                panic!("missing generator")
+            };
+            let generator = &hierarchy.generators()[id];
+            assert_eq!(generator.kind, kind);
+            assert_eq!(generator.root, root);
+            assert_eq!(hierarchy.member_path(Member::Generator(id)), path.join("."));
+            let track = session
+                .tracks()
+                .iter()
+                .find(|t| t.id == generator.track)
+                .unwrap();
+            assert_eq!(track.path, path);
+        }
+    }
+}
+
+#[test]
+fn root_generators_do_not_alias_members_of_a_real_top_scope() {
+    use volna_trace::data::source::{Lookup, Member};
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let top = writer
+        .add_scope(None, "(top)", vtr::ScopeType::Module, "")
+        .unwrap();
+    writer
+        .add_generator(None, "requests", "MEMORY_BUS")
+        .unwrap();
+    writer.add_generator(None, "root_only", "TX").unwrap();
+    writer
+        .add_generator(Some(top), "requests", "PIPELINE")
+        .unwrap();
+    writer.close().unwrap();
+    let local = OpenSpec::Path(file.path().into()).open().unwrap();
+    let budget = MemoryBudget::new(1024 * 1024);
+    let remote = roundtrip(local.clone(), 7, &budget);
+    for session in [&local, &remote] {
+        let h = session.hierarchy();
+        let Lookup::Found(root) = h.find_generator(&["requests"]) else {
+            panic!("root generator")
+        };
+        let Lookup::Found(nested) = h.find_generator(&["(top)", "requests"]) else {
+            panic!("scoped generator")
+        };
+        assert_ne!(root, nested);
+        assert_eq!(h.generators()[root].kind, "MEMORY_BUS");
+        assert_eq!(h.generators()[nested].kind, "PIPELINE");
+        assert_eq!(h.member_path(Member::Generator(root)), "requests");
+        assert_eq!(h.member_path(Member::Generator(nested)), "(top).requests");
+        assert_eq!(h.find_generator(&["(top)", "root_only"]), Lookup::Missing);
+        assert_eq!(h.scope(0).generators.iter().collect::<Vec<_>>(), [0, 1, 2]);
+    }
 }

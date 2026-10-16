@@ -299,8 +299,8 @@ fn vtr_and_fst_process_histories_match_local_values_and_aliases() {
         for id in 0..a.scope_count() {
             let (a, b) = (a.scope(id), b.scope(id));
             assert_eq!(
-                (a.name, a.kind, a.component, a.parent, a.role),
-                (b.name, b.kind, b.component, b.parent, b.role)
+                (a.name, a.kind, a.component, a.parent),
+                (b.name, b.kind, b.component, b.parent)
             );
             assert_eq!(
                 a.children.iter().collect::<Vec<_>>(),
@@ -382,10 +382,13 @@ fn vtr_and_fst_process_histories_match_local_values_and_aliases() {
 fn process_preserves_full_tracks_and_parallel_relations() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
-    let stream = w.add_stream(None, "stream", "transaction").unwrap();
-    let a = w.add_generator(stream, "a").unwrap();
-    let b = w.add_generator(stream, "b").unwrap();
-    w.add_generator(stream, "empty").unwrap();
+    let stream = w
+        .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let a = w.add_generator(Some(stream), "a", "transaction").unwrap();
+    let b = w.add_generator(Some(stream), "b", "transaction").unwrap();
+    w.add_generator(Some(stream), "empty", "transaction")
+        .unwrap();
     let x = w.begin_tx(a, 1).unwrap();
     w.end_tx(x, 100, vtr::TxStatus::Ok).unwrap();
     let y = w.begin_tx(b, 2).unwrap();
@@ -418,7 +421,7 @@ fn process_preserves_full_tracks_and_parallel_relations() {
                 session: session.clone(),
                 generation: 11,
                 request_id: 71,
-                track: TrackRef(stream.0)
+                track: TrackRef(a.0)
             })
             .is_ok()
     );
@@ -432,14 +435,14 @@ fn process_preserves_full_tracks_and_parallel_relations() {
     else {
         panic!("track result");
     };
-    assert_eq!(track, TrackRef(stream.0));
+    assert_eq!(track, TrackRef(a.0));
     let loaded = result.unwrap();
     let local = OpenSpec::Path(file.path().into())
         .open()
         .unwrap()
-        .load_track(volna_trace::data::transactions::TrackRef(stream.0))
+        .load_track(volna_trace::data::transactions::TrackRef(a.0))
         .unwrap();
-    assert_eq!(loaded.generators.len(), 3);
+    assert_eq!(loaded.generators.len(), 1);
     for (a, b) in loaded.generators.iter().zip(&local.generators) {
         assert_eq!(a.transactions(), b.transactions());
         assert_eq!(

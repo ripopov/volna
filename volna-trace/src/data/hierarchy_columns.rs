@@ -1,14 +1,14 @@
 //! Flat resident hierarchy storage and its streaming builder.
 
 use super::source::{
-    Direction, Generator, Hierarchy, HierarchyBuilder, HierarchySource, Ids, ScopeRole, ScopeView,
-    SignalRef, VariableView,
+    Direction, Generator, Hierarchy, HierarchyBuilder, HierarchySource, Ids, ScopeView, SignalRef,
+    VariableView,
 };
 use super::value::SignalShape;
 use std::collections::HashMap;
 
 pub(crate) const NONE: u32 = u32::MAX;
-pub(crate) const SCOPE_WORDS: usize = 6;
+pub(crate) const SCOPE_WORDS: usize = 4;
 pub(crate) const VAR_WORDS: usize = 8;
 
 #[derive(Debug, Default)]
@@ -71,7 +71,7 @@ impl Links {
             parents.iter().map(|&p| (p != NONE).then_some(p as usize)),
         );
         let (var_offsets, vars) = csr(n, vars.map(Some));
-        let (generator_offsets, generators) = csr(n, generators.iter().map(|g| Some(g.stream)));
+        let (generator_offsets, generators) = csr(n, generators.iter().map(|g| Some(g.scope)));
         Self {
             roots: parents
                 .iter()
@@ -167,13 +167,6 @@ impl HierarchySource for Columns {
             kind: self.names.get(c[1][id]),
             component: self.names.get(c[2][id]),
             parent: (c[3][id] != NONE).then_some(c[3][id] as usize),
-            role: if c[4][id] == 0 {
-                ScopeRole::Scope
-            } else {
-                ScopeRole::Stream {
-                    track: super::transactions::TrackRef(c[5][id]),
-                }
-            },
             children: self.links.children(id),
             vars: self.links.vars(id),
             generators: self.links.generators(id),
@@ -256,20 +249,13 @@ impl ColumnBuilder {
         kind: &str,
         component: &str,
         parent: Option<usize>,
-        role: ScopeRole,
     ) -> usize {
         let id = self.columns.scope_count();
-        let (role, track) = match role {
-            ScopeRole::Scope => (0, 0),
-            ScopeRole::Stream { track } => (1, track.0),
-        };
         let row = [
             self.intern(name),
             self.intern(kind),
             self.intern(component),
             parent.map_or(NONE, |p| p as u32),
-            role,
-            track,
         ];
         for (column, value) in self.columns.scopes.iter_mut().zip(row) {
             column.push(value);
@@ -316,13 +302,7 @@ impl HierarchyBuilder {
     pub fn finish(self) -> Hierarchy {
         let mut out = ColumnBuilder::default();
         for scope in self.scopes {
-            out.push_scope(
-                &scope.name,
-                &scope.kind,
-                &scope.component,
-                scope.parent,
-                scope.role,
-            );
+            out.push_scope(&scope.name, &scope.kind, &scope.component, scope.parent);
         }
         for v in self.vars {
             out.push_var(VariableView {

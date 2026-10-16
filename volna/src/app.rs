@@ -216,8 +216,8 @@ pub struct OpenPipelineTrack {
     pub track: Traced<TrackRef>,
 }
 
-pub(crate) fn pipeline_streams(app: &CoreApp) -> Vec<(String, Traced<TrackRef>)> {
-    app.pipeline_streams()
+pub(crate) fn pipeline_generators(app: &CoreApp) -> Vec<(String, Traced<TrackRef>)> {
+    app.pipeline_generators()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -582,7 +582,7 @@ pub(crate) fn menus(
     ]);
     let pipeline_items = if pipelines.is_empty() {
         vec![MenuItem::action(
-            "No pipeline streams in the trace",
+            "No pipeline generators in the trace",
             NoPipelines,
         )]
     } else {
@@ -983,7 +983,7 @@ impl Workspace {
         }
         self.menu_generation = Some(key);
         cx.set_menus(menus(
-            &pipeline_streams(&self.app),
+            &pipeline_generators(&self.app),
             self.app.undo_label(),
             self.app.redo_label(),
             recent_labels(&self.app).as_deref(),

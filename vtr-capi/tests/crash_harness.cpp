@@ -120,10 +120,10 @@ int main(int argc, char **argv) {
         snprintf(name, sizeof name, "s%llu", static_cast<unsigned long long>(s));
         vtr_writer_add_var(w, top, name, VTR_VAR_WIRE, VTR_DIR_IMPLICIT, VTR_SIGNAL_BITS, 32, 2, nullptr, &sig[s]);
     }
-    const uint32_t stream = vtr_writer_add_stream(w, VTR_NONE, "simulation_log", VTR_LOG_STREAM_KIND);
+    const uint32_t scope = vtr_writer_add_scope(w, VTR_NONE, "simulation_log", VTR_SCOPE_GENERIC, "");
     const uint8_t u64 = VTR_VAL_U64;
     const char *step = "step";
-    const uint32_t tick = vtr_writer_add_log_site(w, stream, VTR_SEVERITY_INFO, "step {}", nullptr, 0, nullptr, 1, &u64, &step);
+    const uint32_t tick = vtr_writer_add_log_site(w, scope, VTR_SEVERITY_INFO, "step {}", nullptr, 0, nullptr, 1, &u64, &step);
     pthread_t crash_thread;
     if (mode == "thread") pthread_create(&crash_thread, nullptr, crasher, nullptr);
 

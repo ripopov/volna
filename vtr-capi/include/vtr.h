@@ -38,11 +38,12 @@ const char *vtr_version(void);
 #define VTR_FILE_SOFTWARE      5
 #define VTR_FILE_OTHER         255
 
+#define VTR_API_VERSION 2
+
 #define VTR_NODE_SCOPE      1
 #define VTR_NODE_VAR        2
-#define VTR_NODE_STREAM     3
-#define VTR_NODE_GENERATOR  4
-#define VTR_NODE_ENUM_TABLE 5
+#define VTR_NODE_GENERATOR  3
+#define VTR_NODE_ENUM_TABLE 4
 
 #define VTR_SIGNAL_BITS   0
 #define VTR_SIGNAL_REAL   1
@@ -260,8 +261,7 @@ int      vtr_writer_add_var(vtr_writer *w, uint32_t parent, const char *name, ui
                             uint8_t kind, uint32_t width, uint8_t states, uint32_t *node_out, uint32_t *signal_out);
 uint32_t vtr_writer_add_alias(vtr_writer *w, uint32_t parent, const char *name, uint16_t var_type, uint8_t direction, uint32_t signal);
 uint32_t vtr_writer_add_enum_table(vtr_writer *w, uint32_t parent, const char *name, size_t n, const char *const *literals, const char *const *values);
-uint32_t vtr_writer_add_stream(vtr_writer *w, uint32_t parent, const char *name, const char *kind);
-uint32_t vtr_writer_add_generator(vtr_writer *w, uint32_t stream, const char *name);
+uint32_t vtr_writer_add_generator(vtr_writer *w, uint32_t parent, const char *name, const char *kind);
 int      vtr_writer_node_attr(vtr_writer *w, uint32_t node, const char *key, const vtr_value *v);
 
 int vtr_writer_set_time(vtr_writer *w, uint64_t t);
@@ -288,16 +288,16 @@ int vtr_writer_tx_stage_attr(vtr_writer *w, uint64_t tx, uint32_t key, const vtr
 int vtr_writer_end_tx(vtr_writer *w, uint64_t tx, uint64_t time, uint8_t status);
 int vtr_writer_relate(vtr_writer *w, uint32_t kind, uint64_t from, uint64_t to, size_t n, const uint32_t *keys, const vtr_value *values);
 
-#define VTR_LOG_STREAM_KIND "LOG"
-uint32_t vtr_writer_add_log_site(vtr_writer *w, uint32_t stream, uint8_t severity, const char *fmt, const char *file, uint32_t line,
+#define VTR_LOG_GENERATOR_KIND "LOG"
+uint32_t vtr_writer_add_log_site(vtr_writer *w, uint32_t scope, uint8_t severity, const char *fmt, const char *file, uint32_t line,
                                  const char *func, size_t n_args, const uint8_t *arg_types, const char *const *names);
 uint32_t vtr_writer_log_site_node(const vtr_writer *w, uint32_t site);
 int      vtr_writer_log(vtr_writer *w, uint32_t site, uint64_t time, uint64_t parent , size_t n, const vtr_value *args, uint64_t *id_out );
 int      vtr_writer_log_raw(vtr_writer *w, uint32_t site, uint64_t time, uint64_t parent, const uint8_t *args, size_t len, uint64_t *id_out);
 
-#define VTR_CLOCK_STREAM_KIND "CLOCK"
+#define VTR_CLOCK_GENERATOR_KIND "CLOCK"
 uint32_t vtr_writer_add_clock(vtr_writer *w, uint32_t scope, const char *name);
-uint32_t vtr_writer_clock_stream(const vtr_writer *w, uint32_t clock);
+uint32_t vtr_writer_clock_generator(const vtr_writer *w, uint32_t clock);
 int      vtr_writer_clock_run(vtr_writer *w, uint32_t clock, uint64_t first, uint64_t period);
 int      vtr_writer_clock_stop(vtr_writer *w, uint32_t clock, uint64_t t);
 
@@ -448,7 +448,7 @@ int             vtr_reader_blackout(const vtr_reader *r, uint32_t i, uint64_t *t
 typedef struct vtr_tx vtr_tx;
 typedef struct vtr_tx_info {
     uint64_t id;
-    uint32_t generator, stream;
+    uint32_t generator, scope;
     uint64_t begin, end;
     uint8_t  status, kind;
     int      has_parent;
@@ -464,7 +464,7 @@ int vtr_tx_stage(const vtr_tx *tx, uint32_t i, uint32_t *name_out, uint32_t *lan
 int vtr_tx_stage_attr(const vtr_tx *tx, uint32_t i, uint32_t j, uint32_t *key_out, vtr_value *v_out);
 
 typedef int (*vtr_tx_cb)(void *user, const vtr_tx *tx);
-int vtr_reader_visit_transactions(const vtr_reader *r, uint32_t generator , uint32_t stream ,
+int vtr_reader_visit_transactions(const vtr_reader *r, uint32_t generator , uint32_t scope ,
                                   uint64_t t0, uint64_t t1 , vtr_tx_cb cb, void *user);
 int vtr_reader_transaction(const vtr_reader *r, uint64_t id, vtr_tx_cb cb, void *user);
 int vtr_reader_transaction_generator(const vtr_reader *r, uint64_t id, uint32_t *out_generator);
@@ -474,7 +474,7 @@ typedef int (*vtr_relation_cb)(void *user, uint32_t kind, uint64_t from, uint64_
 int vtr_reader_relations(const vtr_reader *r, uint64_t id, int direction , vtr_relation_cb cb, void *user);
 
 typedef struct vtr_log_site_info {
-    uint32_t node, stream;
+    uint32_t node, scope;
     uint8_t  severity;
     uint32_t fmt;
     uint32_t file, func;
@@ -491,20 +491,20 @@ uint32_t vtr_reader_log_site_of(const vtr_reader *r, uint32_t generator);
 typedef struct vtr_log_rec {
     uint64_t id, time;
     uint64_t parent;
-    uint32_t site, generator, stream;
+    uint32_t site, generator, scope;
     uint8_t  severity;
     uint32_t arg_count;
     const void *inner_;
 } vtr_log_rec;
 
 typedef int (*vtr_log_cb)(void *user, const vtr_log_rec *rec);
-int    vtr_reader_visit_log(const vtr_reader *r, uint32_t stream , uint32_t generator ,
+int    vtr_reader_visit_log(const vtr_reader *r, uint32_t scope , uint32_t generator ,
                             uint8_t min_severity, uint64_t t0, uint64_t t1 , vtr_log_cb cb, void *user);
 int    vtr_log_rec_arg(const vtr_log_rec *rec, uint32_t i, vtr_value *v_out);
 size_t vtr_log_rec_format(const vtr_reader *r, const vtr_log_rec *rec, char *buf, size_t cap);
 
 typedef struct vtr_clock_info {
-    uint32_t stream, generator;
+    uint32_t generator;
 } vtr_clock_info;
 
 typedef struct vtr_stretch {
@@ -524,7 +524,7 @@ typedef struct vtr_cycle_at {
 typedef struct vtr_clock_timeline vtr_clock_timeline;
 uint32_t vtr_reader_clock_count(const vtr_reader *r);
 int      vtr_reader_clock(const vtr_reader *r, uint32_t clock, vtr_clock_info *out);
-uint32_t vtr_reader_stream_clock(const vtr_reader *r, uint32_t stream);
+uint32_t vtr_reader_generator_clock(const vtr_reader *r, uint32_t generator);
 vtr_clock_timeline *vtr_reader_load_clock(const vtr_reader *r, uint32_t clock);
 void     vtr_clock_timeline_free(vtr_clock_timeline *t);
 size_t   vtr_clock_timeline_stretch_count(const vtr_clock_timeline *t);

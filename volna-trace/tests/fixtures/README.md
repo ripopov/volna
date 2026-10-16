@@ -45,3 +45,8 @@ cc volna-trace/tests/fixtures/fst_values.c "$FST_WRITER_DIR/fstapi.c" \
 After replacing fixtures, run `cargo test -p volna-trace -p volna-server --locked`.
 Format changes must update fixtures and assertions together. New VTR test cases
 should normally create recordings in temporary directories with `vtr::Writer`.
+
+The VTR fixtures use format 2.0. Their hierarchy declarations were re-encoded
+with generator kinds and ordinary grouping scopes; clock generators replace
+the former clock container and its edge source. Signal histories, transaction
+IDs, timing, and log arguments are preserved.

@@ -3,8 +3,7 @@
 use crate::error::{Error, Result};
 use crate::hierarchy::NodeId;
 
-pub const STREAM_KIND: &str = "CLOCK";
-pub const GENERATOR: &str = "edges";
+pub const GENERATOR_KIND: &str = "CLOCK";
 pub const KEY_PERIOD: &str = "vtr.period";
 pub const KEY_CLOCK: &str = "vtr.clock";
 
@@ -14,7 +13,6 @@ pub struct ClockId(pub u32);
 #[derive(Clone, Debug)]
 pub struct ClockInfo {
     pub id: ClockId,
-    pub stream: NodeId,
     pub generator: NodeId,
     pub path: String,
 }

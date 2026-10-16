@@ -20,7 +20,7 @@ pub use source::{
     Direction, Hierarchy, HierarchyBuilder, Scope, ScopeId, ScopeView, SignalRef, TraceInfo, VarId,
     Variable, VariableView,
 };
-pub use source::{Generator, GeneratorId, Member, ScopeRole};
+pub use source::{Generator, GeneratorId, Member};
 pub use value::{Bit, SignalShape, ValueKind, WaveValue};
 
 pub(crate) mod hierarchy_columns;

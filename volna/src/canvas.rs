@@ -1458,8 +1458,12 @@ mod presence_atlas_tests {
     fn fragmented_pipeline_uploads_and_releases_obsolete_atlas_images(cx: &mut TestAppContext) {
         let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
         let mut writer = vtr::Writer::create(file.path()).unwrap();
-        let stream = writer.add_stream(None, "pipeline", "PIPELINE").unwrap();
-        let generator = writer.add_generator(stream, "instruction").unwrap();
+        let stream = writer
+            .add_scope(None, "pipeline", vtr::ScopeType::Generic, "")
+            .unwrap();
+        let generator = writer
+            .add_generator(Some(stream), "instruction", "PIPELINE")
+            .unwrap();
         let name = writer.intern("stage");
         let lane = writer.intern("0");
         for row in 0..600 {
@@ -1482,7 +1486,7 @@ mod presence_atlas_tests {
             .update(cx, |ws, window, cx| {
                 ws.dispatch(
                     Command::OpenPipeline {
-                        track: ws.app.pipeline_streams()[0].1,
+                        track: ws.app.pipeline_generators()[0].1,
                     },
                     Some(window),
                     cx,

@@ -15,10 +15,10 @@ fn fixture(mode: &str) -> Reader {
 fn verilator_uses_one_stream_and_one_generator_per_severity() {
     let reader = fixture("normal");
     assert_eq!(reader.log_sites().len(), 6);
-    let stream = reader.log_sites()[0].stream;
+    let stream = reader.log_sites()[0].scope.unwrap();
     for (level, site) in reader.log_sites().iter().enumerate() {
         assert_eq!(site.severity.code(), level as u8);
-        assert_eq!(site.stream, stream);
+        assert_eq!(site.scope.unwrap(), stream);
         assert_eq!(reader.str(site.fmt), "{}");
         assert_eq!(site.args, [vtr::LogArgType::Text]);
     }

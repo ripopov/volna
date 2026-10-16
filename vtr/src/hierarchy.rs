@@ -1,4 +1,4 @@
-//! Design hierarchy: scopes, variables, streams, generators, enum tables.
+//! Design hierarchy: scopes, variables, generators, enum tables.
 
 use crate::error::{Error, Result};
 use crate::strings::StrId;
@@ -16,9 +16,8 @@ pub struct SignalId(pub u32);
 pub enum NodeKind {
     Scope = 1,
     Var = 2,
-    Stream = 3,
-    Generator = 4,
-    EnumTable = 5,
+    Generator = 3,
+    EnumTable = 4,
 }
 
 impl NodeKind {
@@ -26,20 +25,16 @@ impl NodeKind {
         Ok(match v {
             1 => NodeKind::Scope,
             2 => NodeKind::Var,
-            3 => NodeKind::Stream,
-            4 => NodeKind::Generator,
-            5 => NodeKind::EnumTable,
+            3 => NodeKind::Generator,
+            4 => NodeKind::EnumTable,
             _ => return Err(Error::Corrupt("unknown node kind")),
         })
     }
 }
 
 #[must_use]
-pub fn parent_allowed(child: NodeKind, parent: Option<NodeKind>) -> bool {
-    match child {
-        NodeKind::Generator => parent == Some(NodeKind::Stream),
-        _ => matches!(parent, None | Some(NodeKind::Scope)),
-    }
+pub fn parent_allowed(_child: NodeKind, parent: Option<NodeKind>) -> bool {
+    matches!(parent, None | Some(NodeKind::Scope))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -490,10 +485,9 @@ pub enum NodeData {
         signal: SignalId,
         declares: Option<SignalKind>,
     },
-    Stream {
+    Generator {
         kind: StrId,
     },
-    Generator,
     EnumTable {
         entries: Vec<(StrId, StrId)>,
     },
@@ -505,8 +499,7 @@ impl NodeData {
         match self {
             NodeData::Scope { .. } => NodeKind::Scope,
             NodeData::Var { .. } => NodeKind::Var,
-            NodeData::Stream { .. } => NodeKind::Stream,
-            NodeData::Generator => NodeKind::Generator,
+            NodeData::Generator { .. } => NodeKind::Generator,
             NodeData::EnumTable { .. } => NodeKind::EnumTable,
         }
     }
@@ -566,8 +559,7 @@ impl Node {
                     None => out.push(0),
                 }
             }
-            NodeData::Stream { kind } => varint::put_u64(out, u64::from(kind.0)),
-            NodeData::Generator => {}
+            NodeData::Generator { kind } => varint::put_u64(out, u64::from(kind.0)),
             NodeData::EnumTable { entries } => {
                 varint::put_u64(out, entries.len() as u64);
                 for (l, v) in entries {
@@ -618,10 +610,9 @@ impl Node {
                     declares,
                 }
             }
-            NodeKind::Stream => NodeData::Stream {
+            NodeKind::Generator => NodeData::Generator {
                 kind: StrId(r.u32()?),
             },
-            NodeKind::Generator => NodeData::Generator,
             NodeKind::EnumTable => {
                 let n = r.usize()?;
                 if n > r.remaining() {
@@ -740,8 +731,7 @@ impl Hierarchy {
                     signal.0,
                 )
             }
-            NodeData::Stream { kind } => (kind.0, 0),
-            NodeData::Generator => (0, 0),
+            NodeData::Generator { kind } => (kind.0, 0),
             NodeData::EnumTable { entries } => {
                 self.enum_tables.push(entries);
                 (self.enum_tables.len() as u32 - 1, 0)
@@ -811,8 +801,7 @@ impl Hierarchy {
                     None
                 },
             },
-            NodeKind::Stream => NodeData::Stream { kind: StrId(w0) },
-            NodeKind::Generator => NodeData::Generator,
+            NodeKind::Generator => NodeData::Generator { kind: StrId(w0) },
             NodeKind::EnumTable => NodeData::EnumTable {
                 entries: self.enum_tables[w0 as usize].clone(),
             },

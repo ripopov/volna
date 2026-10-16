@@ -418,20 +418,22 @@ fn nodes_added_mid_run() {
             .unwrap();
         w.node_attr(state_node, "enum_table", Value::U64(u64::from(table.0)))
             .unwrap();
-        let items = w.add_stream(Some(uvm), "items", "UVM").unwrap();
+        let items = w
+            .add_scope(Some(uvm), "items", vtr::ScopeType::Generic, "")
+            .unwrap();
         let seqr = w.intern("seqr");
         w.node_attr(items, "uvm.sequencer", Value::Str(seqr))
             .unwrap();
-        let item = w.add_generator(items, "bus_item").unwrap();
+        let item = w.add_generator(Some(items), "bus_item", "UVM").unwrap();
         let bus_item = w.intern("bus_item");
         w.node_attr(item, "uvm.class", Value::Str(bus_item))
             .unwrap();
         let log = w
-            .add_stream(Some(env), "log", vtr::LOG_STREAM_KIND)
+            .add_scope(Some(env), "log", vtr::ScopeType::Generic, "")
             .unwrap();
         let site = w
             .add_log_site(&LogSiteSpec::new(
-                log,
+                Some(log),
                 Severity::Info,
                 "item {} done",
                 &[LogArgType::U64],
@@ -499,7 +501,7 @@ fn nodes_added_mid_run() {
         assert_eq!(rd.value_at(count, 39).unwrap().borrow().as_u64(), Some(20));
         assert_eq!(rd.value_at(phase, 5).unwrap().to_ascii(), "");
         assert_eq!(rd.value_at(phase, 39).unwrap().to_ascii(), "run");
-        assert_eq!(rd.generator_stream(item), Some(items));
+        assert_eq!(rd.hierarchy().parent(item), Some(items));
         let txs = rd
             .transactions(&TxQuery {
                 generator: Some(item),
@@ -512,7 +514,7 @@ fn nodes_added_mid_run() {
         let mut logs = Vec::new();
         rd.visit_log(
             &LogQuery {
-                stream: Some(log),
+                scope: Some(log),
                 ..Default::default()
             },
             |r| {
@@ -549,8 +551,10 @@ fn parents_are_validated() {
             },
         )
         .unwrap();
-    let stream = w.add_stream(Some(top), "s", "T").unwrap();
-    let r#gen = w.add_generator(stream, "g").unwrap();
+    let stream = w
+        .add_scope(Some(top), "s", vtr::ScopeType::Generic, "")
+        .unwrap();
+    let r#gen = w.add_generator(Some(stream), "g", "T").unwrap();
     let table = w.add_enum_table(Some(top), "e", &[("A", "0")]).unwrap();
     let unknown = NodeId(1000);
     let bits = SignalKind::Bits {
@@ -558,7 +562,7 @@ fn parents_are_validated() {
         states: 2,
     };
     let (nodes, signals) = (w.stats().nodes, w.signal_count());
-    for bad in [var, stream, r#gen, table, unknown] {
+    for bad in [var, r#gen, table, unknown] {
         assert!(
             w.add_scope(Some(bad), "x", ScopeType::Module, "").is_err(),
             "scope under {bad:?}"
@@ -578,16 +582,17 @@ fn parents_are_validated() {
             "enum table under {bad:?}"
         );
         assert!(
-            w.add_stream(Some(bad), "x", "T").is_err(),
+            w.add_scope(Some(bad), "x", vtr::ScopeType::Generic, "")
+                .is_err(),
             "stream under {bad:?}"
         );
     }
-    for bad in [top, var, r#gen, table, unknown] {
+    for bad in [var, r#gen, table, unknown] {
         assert!(
-            w.add_generator(bad, "x").is_err(),
+            w.add_generator(Some(bad), "x", "TRANSACTION").is_err(),
             "generator under {bad:?}"
         );
-        let spec = LogSiteSpec::new(bad, Severity::Info, "x", &[]);
+        let spec = LogSiteSpec::new(Some(bad), Severity::Info, "x", &[]);
         assert!(w.add_log_site(&spec).is_err(), "log site under {bad:?}");
     }
     assert!(
