@@ -11,6 +11,7 @@ Volna is a hardware debug environment under development.
 | [`vtr-guard`](vtr-guard/README.md) | Linux crash and stop guard for VTR writers, used by the C API |
 | [`volna-trace`](volna-trace/README.md) | Immutable VTR sessions, complete objects, memory admission, and remote client |
 | [`vtr-convert`](vtr-convert/README.md) | Shared FST, Kanata, and VCD importers |
+| [`vtr-progress`](vtr-progress/README.md) | Conversion progress counters and the CLI/native reporting protocol |
 | [`vtr-cli`](vtr-cli/README.md) | Terminal trace inspection, queries, activity indexing, and Kanata/VCD/FST conversion |
 | [`volna-server`](volna-server/README.md) | Headless process serving one recording over framed stdin/stdout |
 | [`volna-core`](volna-core/README.md) | Toolkit-independent viewer state, commands, layouts, and display lists |
@@ -23,8 +24,9 @@ VTR stores runtime signal values, transactions, logs, clocks, hierarchy, and ide
 
 ## Development
 
-Use Rust 1.97.1 or newer and a C compiler (for vendored Zstandard and
-C smoke tests). The C++ smoke tests also need a C++17 compiler.
+Use the pinned nightly toolchain in `rust-toolchain.toml` and a C compiler
+(for vendored Zstandard and C smoke tests). The C++ smoke tests also need a
+C++17 compiler.
 Core libraries need no simulator, submodules, GUI SDK, or old repository checkout.
 The GPUI viewer requires its platform SDK and display libraries; see the
 [viewer guide](volna/README.md).
@@ -38,7 +40,10 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 ```
 
 CI runs these automated, headless checks. To select the library, use
-`cargo test -p vtr`; VTR alone requires Rust 1.97.1 or newer. See the
+`cargo test -p vtr`. The workspace enables Cargo artifact dependencies so building
+Volna also builds its matching `vtr` executable. The standalone VTR crate still
+requires Rust 1.97.1 or newer; CI tests its packaged source with that compiler.
+See the
 [crate guide](vtr/README.md),
 [format specification](vtr/docs/SPEC.md), and [design rationale](vtr/docs/RATIONALE.md).
 

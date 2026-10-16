@@ -957,7 +957,7 @@ fn box_zoom_fits_uniformly_in_every_direction_and_preserves_selection() {
                 let rows_target = p.rows.value.zoomed(zoom);
                 assert!((time.width() / target.width() - 2.5).abs() < 1e-5);
                 assert!((f64::from(rows_target.row_px / rows.row_px) - 2.5).abs() < 1e-5);
-                assert!(((target.start + target.end) * 0.5 - 270.0).abs() < 1e-5);
+                assert!((target.start.midpoint(target.end) - 270.0).abs() < 1e-5);
                 assert!(
                     (rows_target.row_at(cells.height() * 0.5) - rows.row_at(cells.height() * 0.5))
                         .abs()

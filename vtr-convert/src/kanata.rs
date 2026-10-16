@@ -28,20 +28,29 @@ fn append(dst: &mut String, text: &str) {
     dst.push_str(text);
 }
 
-pub fn convert_kanata(input: impl AsRef<Path>, w: &mut Writer) -> Result<()> {
+pub fn convert_kanata(
+    input: impl AsRef<Path>,
+    w: &mut Writer,
+    progress: &vtr_progress::Reporter,
+) -> Result<()> {
     let input = input.as_ref();
     let file = std::fs::File::open(input).with_context(|| input.display().to_string())?;
-    let mut reader = BufReader::new(file);
+    let counter = progress.begin(vtr_progress::Phase::Reading, Some(file.metadata()?.len()));
+    let mut reader = BufReader::new(vtr_progress::CountingReader::new(file, counter));
     let compressed = reader.fill_buf()?.starts_with(&[0x1f, 0x8b]);
     let reader: Box<dyn Read> = if compressed {
         Box::new(flate2::read::MultiGzDecoder::new(reader))
     } else {
         Box::new(reader)
     };
-    convert_reader(BufReader::new(reader), w)
+    convert_reader(BufReader::new(reader), w, progress)
 }
 
-fn convert_reader(reader: impl BufRead, w: &mut Writer) -> Result<()> {
+fn convert_reader(
+    reader: impl BufRead,
+    w: &mut Writer,
+    progress: &vtr_progress::Reporter,
+) -> Result<()> {
     let mut lines = reader.lines();
     ensure!(
         lines.next().transpose()?.as_deref() == Some("Kanata\t0004"),
@@ -218,6 +227,7 @@ fn convert_reader(reader: impl BufRead, w: &mut Writer) -> Result<()> {
         parse(w, &mut ops).with_context(|| format!("Kanata line {}", line_index + 2))?;
     }
     w.set_time(cycle)?;
+    let counter = progress.begin(vtr_progress::Phase::Writing, Some(ops.len() as u64));
     for op in ops.values() {
         for (key, text) in [("vtr.label", &op.label), ("detail", &op.detail)] {
             if !text.is_empty() {
@@ -256,6 +266,7 @@ fn convert_reader(reader: impl BufRead, w: &mut Writer) -> Result<()> {
                 },
             )?;
         }
+        counter.advance(1);
     }
     Ok(())
 }

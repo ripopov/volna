@@ -38,12 +38,31 @@ association, and reopening. Each import gets a private temporary VTR and activit
 indexes, removed when its last reader closes. Imports are converted again on
 reopen; closing or replacing an unfinished import cancels its converter.
 
-The converter is resolved from `VOLNA_VTR`, then beside the Volna executable,
-then `PATH`. Set `VOLNA_VTR` to an executable path, without arguments. Native
-distributions include the matching converter. Development builds need both binaries:
+During conversion, the loading view shows phase progress, the original input
+file size, and the current VTR size on disk. Preparation and finalization have
+indeterminate bars. A Cancel conversion button stops the child process and
+removes its temporary files. Additional recordings show the same information
+above the open recording. FST reading measures recording time; Kanata reading
+measures source bytes, so percentages describe the current phase rather than a
+prediction of total conversion time.
+
+The same status layout is used in the loading view and secondary import banners:
+
+```text
+Writing VTR                         42%
+[========            ]
+Input file                    256.0 MiB
+Output VTR                     38.7 MiB
+           Cancel conversion
+```
+
+The converter is resolved from `VOLNA_VTR`, then the executable built as Volna's
+Cargo artifact dependency, then beside the Volna executable, then `PATH`.
+Set `VOLNA_VTR` to an executable path, without arguments. Native distributions
+include the matching converter. Building Volna builds both executables:
 
 ```sh
-cargo build --locked -p volna -p vtr-cli --bins
+cargo build --locked -p volna
 cargo run --locked -p volna -- recording.fst
 ```
 
@@ -53,11 +72,11 @@ for those hosts. VCD conversion remains a manual CLI operation.
 
 ## Build and run
 
-Use Rust 1.97.1 or newer and the platform libraries required by GPUI. From the
-repository root:
+Use the pinned nightly toolchain in `rust-toolchain.toml` and the platform
+libraries required by GPUI. From the repository root:
 
 ```sh
-cargo build --locked -p volna -p vtr-cli --bins
+cargo build --locked -p volna
 cargo run --locked -p volna -- volna/examples/picorv32.vtr
 cargo run --locked -p volna -- --help
 ```
@@ -76,10 +95,10 @@ python volna/package_native.py --output atemp/volna-native
 
 Keep both executables in the same directory. The package uses the platform's
 GPUI system libraries; it is not a macOS app bundle or a system installer.
-The process-level import smoke test uses a built converter:
+The process-level import smoke test uses the converter built by Cargo:
 
 ```sh
-VOLNA_VTR="$PWD/target/debug/vtr" cargo test -p volna --lib native_import::tests::real_converter -- --ignored
+cargo test -p volna --lib native_import::tests::real_converter
 ```
 
 ## Islands appearance

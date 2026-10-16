@@ -91,7 +91,7 @@ impl RowSet<'_> {
 
     pub(super) fn activity(&self, view: Viewport, visible: Range<f64>, anchor: f64) -> Activity {
         let mut result = Activity::default();
-        let center = (visible.start + visible.end) * 0.5;
+        let center = visible.start.midpoint(visible.end);
         let mut best = (f64::INFINITY, f64::INFINITY);
         for (&offset, generator) in self.starts.iter().zip(self.generators) {
             let records = generator.transactions();

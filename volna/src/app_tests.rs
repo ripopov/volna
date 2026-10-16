@@ -44,6 +44,17 @@ fn native_import_status_and_errors_remain_usable_across_themes_and_zoom(cx: &mut
                         .open_path("recording with a long original source name.fst".into());
                     let request = ws.app.take_requests().remove(0);
                     let work = ws.native_imports.prepare(request);
+                    ws.native_imports.set_progress(
+                        TraceId::A,
+                        vtr_progress::Snapshot {
+                            phase: vtr_progress::Phase::Writing,
+                            completed: 42,
+                            total: Some(100),
+                            input_bytes: 256 << 20,
+                            output_bytes: 20 << 20,
+                            ..Default::default()
+                        },
+                    );
                     assert_eq!(
                         ws.loading_message("recording.fst"),
                         "Converting recording.fst to VTR…"
@@ -60,6 +71,28 @@ fn native_import_status_and_errors_remain_usable_across_themes_and_zoom(cx: &mut
                     "dark={dark} width={width} zoom={zoom}: loading={loading:?}, message={message:?}"
                 );
                 assert!(message.left() >= px(0.0) && message.right() <= px(width));
+                let bar = vcx.debug_bounds("conversion-bar-A").unwrap();
+                let fill = vcx.debug_bounds("conversion-fill-A").unwrap();
+                assert!((fill.size.width / bar.size.width - 0.42).abs() < 0.01);
+                assert!(loading.contains(&bar.center()));
+                ws.update(&mut vcx, |ws, cx| {
+                    ws.native_imports.set_progress(
+                        TraceId::A,
+                        vtr_progress::Snapshot {
+                            phase: vtr_progress::Phase::Writing,
+                            completed: 75,
+                            total: Some(100),
+                            input_bytes: 256 << 20,
+                            output_bytes: 48 << 20,
+                            ..Default::default()
+                        },
+                    );
+                    cx.notify();
+                });
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                let fill = vcx.debug_bounds("conversion-fill-A").unwrap();
+                assert!((fill.size.width / bar.size.width - 0.75).abs() < 0.01);
                 ws.update(&mut vcx, |ws, cx| {
                     let generation = ws.app.doc.traces().get(TraceId::A).unwrap().generation();
                     let error = anyhow::anyhow!("{diagnostic}");
@@ -143,6 +176,77 @@ fn failed_secondary_import_is_visible_without_replacing_the_open_recording(
             );
         })
         .unwrap();
+}
+
+#[gpui_kit::test]
+fn conversion_cancel_preserves_other_recordings(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{VisualTestContext, size};
+    init(cx);
+    for secondary in [false, true] {
+        for dark in [true, false] {
+            let mut workspace = None;
+            let root = cx.add_window(|window, cx| {
+                let ws = cx.new(|cx| Workspace::new(window, cx));
+                workspace = Some(ws.clone());
+                gpui_kit::component::Root::new(ws, window, cx)
+            });
+            let ws = workspace.unwrap();
+            let mut vcx = VisualTestContext::from_window(root.into(), cx);
+            vcx.simulate_resize(size(px(800.0), px(700.0)));
+            let (work, trace) = ws.update(&mut vcx, |ws, cx| {
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../vtr-convert/tests/fixtures/values.fst");
+                if secondary {
+                    ws.app.set_session(Arc::new(ProceduralTrace::new(100)));
+                    ws.app
+                        .add_resource(OpenSpec::Path(path), "file:///values.fst".into());
+                } else {
+                    ws.app.open_path(path);
+                }
+                let request = ws
+                    .app
+                    .take_requests()
+                    .into_iter()
+                    .find(|r| matches!(r, LoadRequest::Open { .. }))
+                    .unwrap();
+                let trace = match &request {
+                    LoadRequest::Open { trace, .. } => *trace,
+                    _ => unreachable!(),
+                };
+                let work = ws.native_imports.prepare(request);
+                ws.native_imports.set_progress(
+                    trace,
+                    vtr_progress::Snapshot {
+                        phase: vtr_progress::Phase::Finalizing,
+                        input_bytes: 1000,
+                        output_bytes: 2000,
+                        ..Default::default()
+                    },
+                );
+                ws.after(None, cx);
+                (work, trace)
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+                let bounds = window.find(format!("cancel-conversion-{trace}")).bounds();
+                assert!(bounds.top() >= px(0.0) && bounds.bottom() <= px(700.0));
+                window.click(format!("cancel-conversion-{trace}"), cx);
+            });
+            vcx.run_until_parked();
+            ws.update(&mut vcx, |ws, _| {
+                assert!(!ws.native_imports.converting(trace));
+                assert_eq!(ws.app.doc.is_loaded(), secondary);
+                assert_eq!(ws.app.doc.traces().len(), usize::from(secondary));
+            });
+            let LoadResult::Opened { result, .. } = work() else {
+                panic!("open result")
+            };
+            assert!(result.err().unwrap().to_string().contains("cancelled"));
+        }
+    }
 }
 
 #[gpui_kit::test]

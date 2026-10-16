@@ -1,11 +1,11 @@
 //! Native imports run through the installed converter before entering the VTR loader.
 
 use std::collections::BTreeMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Duration;
@@ -33,6 +33,28 @@ impl Imports {
         self.pending.keys().any(|&(id, _)| id == trace)
     }
 
+    pub fn snapshot(&self, trace: TraceId) -> Option<vtr_progress::Snapshot> {
+        self.pending
+            .iter()
+            .find(|((id, _), _)| *id == trace)
+            .map(|(_, job)| job.progress.lock().expect("import progress lock").clone())
+    }
+
+    pub fn active(&self) -> Vec<TraceId> {
+        self.pending.keys().map(|&(trace, _)| trace).collect()
+    }
+
+    #[cfg(test)]
+    pub fn set_progress(&self, trace: TraceId, snapshot: vtr_progress::Snapshot) {
+        let job = self
+            .pending
+            .iter()
+            .find(|((id, _), _)| *id == trace)
+            .unwrap()
+            .1;
+        *job.progress.lock().unwrap() = snapshot;
+    }
+
     pub fn finish(&mut self, result: &LoadResult) {
         if let LoadResult::Opened {
             trace, generation, ..
@@ -53,9 +75,15 @@ impl Imports {
                 spec: OpenSpec::Path(path),
             } if is_import(path) => {
                 let cancellation = Cancellation::default();
-                let flag = cancellation.0.clone();
+                cancellation
+                    .progress
+                    .lock()
+                    .expect("import progress lock")
+                    .input_bytes = std::fs::metadata(path).map_or(0, |m| m.len());
+                let flag = cancellation.cancel.clone();
+                let progress = cancellation.progress.clone();
                 self.pending.insert((*trace, *generation), cancellation);
-                Some(flag)
+                Some((flag, progress))
             }
             _ => None,
         };
@@ -66,11 +94,11 @@ impl Imports {
                     generation,
                     spec: OpenSpec::Path(path),
                 },
-                Some(cancel),
+                Some((cancel, progress)),
             ) => LoadResult::Opened {
                 trace,
                 generation,
-                result: open(&path, &cancel, converter_path),
+                result: open(&path, &cancel, progress, converter_path),
             },
             (request, _) => request.perform(),
         }
@@ -78,11 +106,14 @@ impl Imports {
 }
 
 #[derive(Default)]
-struct Cancellation(Arc<AtomicBool>);
+struct Cancellation {
+    cancel: Arc<AtomicBool>,
+    progress: Arc<Mutex<vtr_progress::Snapshot>>,
+}
 
 impl Drop for Cancellation {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.cancel.store(true, Ordering::Relaxed);
     }
 }
 
@@ -104,10 +135,21 @@ fn converter_path() -> Result<PathBuf> {
         return Ok(path.into());
     }
     let executable = std::env::current_exe().context("locate Volna executable")?;
-    resolve_converter(&executable, std::env::var_os("PATH").as_deref())
+    resolve_converter(
+        &executable,
+        Path::new(env!("CARGO_BIN_FILE_VTR_CLI_vtr")),
+        std::env::var_os("PATH").as_deref(),
+    )
 }
 
-fn resolve_converter(executable: &Path, search_path: Option<&std::ffi::OsStr>) -> Result<PathBuf> {
+fn resolve_converter(
+    executable: &Path,
+    built_converter: &Path,
+    search_path: Option<&std::ffi::OsStr>,
+) -> Result<PathBuf> {
+    if built_converter.is_file() {
+        return Ok(built_converter.to_owned());
+    }
     let directory = executable
         .parent()
         .context("locate Volna installation directory")?;
@@ -125,13 +167,14 @@ fn resolve_converter(executable: &Path, search_path: Option<&std::ffi::OsStr>) -
         }
     }
     bail!(
-        "Cannot find the vtr converter. Install vtr beside Volna or on PATH, or set VOLNA_VTR to its executable. For development, run `cargo build -p vtr-cli --bin vtr`."
+        "Cannot find the vtr converter. Install vtr beside Volna or on PATH, or set VOLNA_VTR to its executable. For development, run `cargo build -p volna`."
     )
 }
 
 fn open(
     path: &Path,
     cancel: &AtomicBool,
+    progress: Arc<Mutex<vtr_progress::Snapshot>>,
     converter: impl FnOnce() -> Result<PathBuf>,
 ) -> Result<Arc<dyn Session>> {
     let mut header = Vec::with_capacity(8);
@@ -153,11 +196,12 @@ fn open(
     let mut command = Command::new(&converter);
     command
         .arg("convert")
+        .arg("--progress=json")
         .arg("--")
         .arg(path)
         .arg(&output)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(diagnostics.try_clone()?);
     #[cfg(target_os = "windows")]
     {
@@ -166,14 +210,40 @@ fn open(
     }
     let mut child = ConverterChild(command.spawn().with_context(|| format!(
         "Cannot run converter {}. Install the matching vtr executable beside Volna, or set VOLNA_VTR.", converter.display()
-    ))?);
+    ))?, None);
+    let stdout = child
+        .0
+        .stdout
+        .take()
+        .context("capture converter progress")?;
+    let received = progress.clone();
+    child.1 = Some(std::thread::spawn(move || {
+        read_progress(BufReader::new(stdout), &received)
+    }));
     let status = loop {
         ensure!(!cancel.load(Ordering::Relaxed), "conversion cancelled");
+        if child
+            .1
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished)
+        {
+            child
+                .1
+                .take()
+                .unwrap()
+                .join()
+                .map_err(|_| anyhow::anyhow!("converter progress reader panicked"))??;
+        }
         if let Some(status) = child.0.try_wait().context("wait for vtr converter")? {
             break status;
         }
         std::thread::sleep(Duration::from_millis(20));
     };
+    if let Some(reader) = child.1.take() {
+        reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("converter progress reader panicked"))??;
+    }
     if !status.success() {
         let length = diagnostics.metadata()?.len();
         diagnostics.seek(SeekFrom::Start(length.saturating_sub(16 * 1024)))?;
@@ -188,6 +258,10 @@ fn open(
         );
     }
     ensure!(!cancel.load(Ordering::Relaxed), "conversion cancelled");
+    ensure!(
+        progress.lock().expect("import progress lock").phase == vtr_progress::Phase::Complete,
+        "converter exited without completed progress"
+    );
     let name = path
         .file_name()
         .unwrap_or_default()
@@ -198,13 +272,40 @@ fn open(
     Ok(Arc::new(session))
 }
 
-struct ConverterChild(Child);
+fn read_progress(mut input: impl BufRead, progress: &Mutex<vtr_progress::Snapshot>) -> Result<()> {
+    loop {
+        let mut line = Vec::new();
+        let size = (&mut input).take(4097).read_until(b'\n', &mut line)?;
+        if size == 0 {
+            return Ok(());
+        }
+        ensure!(
+            size <= 4096 && line.last() == Some(&b'\n'),
+            "invalid converter progress record length"
+        );
+        let snapshot: vtr_progress::Snapshot =
+            serde_json::from_slice(&line).context("invalid converter progress record")?;
+        ensure!(
+            snapshot.version == vtr_progress::VERSION,
+            "unsupported converter progress version {} (expected {})",
+            snapshot.version,
+            vtr_progress::VERSION
+        );
+        ensure!(snapshot.valid(), "invalid converter progress counters");
+        *progress.lock().expect("import progress lock") = snapshot;
+    }
+}
+
+struct ConverterChild(Child, Option<std::thread::JoinHandle<Result<()>>>);
 
 impl Drop for ConverterChild {
     fn drop(&mut self) {
         // Child does not kill or reap on drop, including early cancellation and I/O errors.
         drop(self.0.kill());
         drop(self.0.wait());
+        if let Some(reader) = self.1.take() {
+            drop(reader.join());
+        }
     }
 }
 
@@ -219,6 +320,31 @@ mod tests {
     }
 
     #[test]
+    fn progress_stream_rejects_unknown_versions_truncation_and_invalid_counters() {
+        let state = Mutex::default();
+        let snapshot = vtr_progress::Snapshot {
+            phase: vtr_progress::Phase::Writing,
+            completed: 42,
+            total: Some(100),
+            input_bytes: 1000,
+            output_bytes: 250,
+            ..Default::default()
+        };
+        let line = format!("{}\n", serde_json::to_string(&snapshot).unwrap());
+        read_progress(std::io::Cursor::new(&line), &state).unwrap();
+        assert_eq!(*state.lock().unwrap(), snapshot);
+        for invalid in [
+            line.replace("\"version\":1", "\"version\":999"),
+            line.trim_end().to_owned(),
+            "x".repeat(4097),
+            line.replace("\"completed\":42", "\"completed\":101"),
+        ] {
+            assert!(read_progress(std::io::Cursor::new(invalid), &state).is_err());
+            assert_eq!(*state.lock().unwrap(), snapshot);
+        }
+    }
+
+    #[test]
     fn vtr_with_foreign_extension_bypasses_converter_discovery() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("already converted.fst");
@@ -227,7 +353,7 @@ mod tests {
             &path,
         )
         .unwrap();
-        let session = open(&path, &AtomicBool::new(false), || {
+        let session = open(&path, &AtomicBool::new(false), Arc::default(), || {
             panic!("VTR must open directly")
         })
         .unwrap();
@@ -245,25 +371,35 @@ mod tests {
         let executable = installed.join("volna");
         let tool = format!("vtr{}", std::env::consts::EXE_SUFFIX);
         let search_path = std::env::join_paths([&on_path]).unwrap();
+        let built_converter = directory.path().join("cargo artifact").join(&tool);
         assert!(
-            resolve_converter(&executable, Some(&search_path))
+            resolve_converter(&executable, &built_converter, Some(&search_path))
                 .unwrap_err()
                 .to_string()
                 .contains("VOLNA_VTR")
         );
         std::fs::write(on_path.join(&tool), "").unwrap();
         assert_eq!(
-            resolve_converter(&executable, Some(&search_path)).unwrap(),
+            resolve_converter(&executable, &built_converter, Some(&search_path)).unwrap(),
             on_path.join(&tool)
         );
         std::fs::write(installed.join(&tool), "").unwrap();
         assert_eq!(
-            resolve_converter(&executable, Some(&search_path)).unwrap(),
+            resolve_converter(&executable, &built_converter, Some(&search_path)).unwrap(),
             installed.join(&tool)
         );
-        let error = open(&fixture("values.fst"), &AtomicBool::new(false), || {
-            Ok(directory.path().join("missing tool"))
-        })
+        std::fs::create_dir(built_converter.parent().unwrap()).unwrap();
+        std::fs::write(&built_converter, "").unwrap();
+        assert_eq!(
+            resolve_converter(&executable, &built_converter, Some(&search_path)).unwrap(),
+            built_converter
+        );
+        let error = open(
+            &fixture("values.fst"),
+            &AtomicBool::new(false),
+            Arc::default(),
+            || Ok(directory.path().join("missing tool")),
+        )
         .err()
         .unwrap();
         assert!(format!("{error:#}").contains("Cannot run converter"));
@@ -295,7 +431,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a built vtr CLI; set VOLNA_VTR and run with --ignored"]
     fn real_converter_imports_fst_and_compressed_kanata_and_restores_original_paths() {
         use std::io::Write;
         use volna_core::workspace::{
@@ -400,9 +535,14 @@ mod tests {
         );
         let corrupt = directory.path().join("bad.fst");
         std::fs::write(&corrupt, b"not a recording").unwrap();
-        let error = open(&corrupt, &AtomicBool::new(false), converter_path)
-            .err()
-            .unwrap();
+        let error = open(
+            &corrupt,
+            &AtomicBool::new(false),
+            Arc::default(),
+            converter_path,
+        )
+        .err()
+        .unwrap();
         assert!(format!("{error:#}").contains("Cannot convert"));
     }
 
@@ -437,7 +577,7 @@ mod tests {
 
         fn script(directory: &Path, body: &str) -> PathBuf {
             let path = directory.join("mock vtr");
-            std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+            std::fs::write(&path, format!("#!/bin/sh\nset -eu\n[ \"$2\" = --progress=json ]\nset -- \"$1\" \"$3\" \"$4\" \"$5\"\n{body}\nprintf '%s\\n' '{{\"version\":1,\"phase\":\"complete\",\"completed\":0,\"total\":null,\"input_bytes\":0,\"output_bytes\":0}}'\n")).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
             path
         }
@@ -459,9 +599,12 @@ mod tests {
                     quote(&expected)
                 ),
             );
-            let a = open(&input, &AtomicBool::new(false), || Ok(tool.clone())).unwrap();
+            let a = open(&input, &AtomicBool::new(false), Arc::default(), || {
+                Ok(tool.clone())
+            })
+            .unwrap();
             let a_path = PathBuf::from(std::fs::read_to_string(&output_log).unwrap());
-            let b = open(&input, &AtomicBool::new(false), || Ok(tool)).unwrap();
+            let b = open(&input, &AtomicBool::new(false), Arc::default(), || Ok(tool)).unwrap();
             let b_path = PathBuf::from(std::fs::read_to_string(&output_log).unwrap());
             assert_ne!(a_path, b_path);
             let hierarchy = a.hierarchy().clone();
@@ -499,9 +642,14 @@ mod tests {
                     quote(&output_log)
                 ),
             );
-            let error = open(&fixture("values.fst"), &AtomicBool::new(false), || Ok(tool))
-                .err()
-                .unwrap();
+            let error = open(
+                &fixture("values.fst"),
+                &AtomicBool::new(false),
+                Arc::default(),
+                || Ok(tool),
+            )
+            .err()
+            .unwrap();
             assert!(error.to_string().contains("broken input: invalid section"));
             let output = PathBuf::from(std::fs::read_to_string(output_log).unwrap());
             assert!(!output.parent().unwrap().exists());
@@ -518,9 +666,14 @@ mod tests {
                     quote(&output_log)
                 ),
             );
-            let error = open(&fixture("values.fst"), &AtomicBool::new(false), || Ok(tool))
-                .err()
-                .unwrap();
+            let error = open(
+                &fixture("values.fst"),
+                &AtomicBool::new(false),
+                Arc::default(),
+                || Ok(tool),
+            )
+            .err()
+            .unwrap();
             assert!(format!("{error:#}").contains("did not produce a readable VTR"));
             let output = PathBuf::from(std::fs::read_to_string(output_log).unwrap());
             assert!(!output.parent().unwrap().exists());
@@ -539,8 +692,9 @@ mod tests {
             );
             let cancel = Arc::new(AtomicBool::new(false));
             let flag = cancel.clone();
-            let worker =
-                std::thread::spawn(move || open(&fixture("values.fst"), &flag, || Ok(tool)));
+            let worker = std::thread::spawn(move || {
+                open(&fixture("values.fst"), &flag, Arc::default(), || Ok(tool))
+            });
             let start = std::time::Instant::now();
             while !output_log.exists() {
                 assert!(start.elapsed() < Duration::from_secs(10));

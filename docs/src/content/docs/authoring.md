@@ -9,8 +9,8 @@ than text. Interaction should answer a specific engineering question.
 
 ## Run the site
 
-From the repository root, with Node.js 22.19 or newer, Rust 1.97.1, the
-`wasm32-unknown-unknown` target, and `wasm-bindgen-cli` 0.2.128:
+From the repository root, with Node.js 22.19 or newer, the pinned nightly Rust
+toolchain, the `wasm32-unknown-unknown` target, and `wasm-bindgen-cli` 0.2.128:
 
 ```sh
 rustup target add wasm32-unknown-unknown

@@ -39,7 +39,7 @@ fn export_rejects_unrepresentable_data_and_propagates_write_errors() {
     }
     let path = dir.path().join("trace.vtr");
     let mut w = writer(&path);
-    vtr_convert::vcd::convert_vcd(fixture("waves.vcd"), &mut w).unwrap();
+    vtr_convert::vcd::convert_vcd(fixture("waves.vcd"), &mut w, &Default::default()).unwrap();
     w.close().unwrap();
     let r = Reader::open(path).unwrap();
     let mut tiny = [0u8; 8];
@@ -51,7 +51,7 @@ fn vcd_timebase_aliases_values_events_and_export_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace.vtr");
     let mut w = writer(&path);
-    vtr_convert::vcd::convert_vcd(fixture("waves.vcd"), &mut w).unwrap();
+    vtr_convert::vcd::convert_vcd(fixture("waves.vcd"), &mut w, &Default::default()).unwrap();
     w.close().unwrap();
     let r = Reader::open(&path).unwrap();
     assert_eq!(r.meta().timescale, -8);
@@ -76,7 +76,7 @@ fn vcd_timebase_aliases_values_events_and_export_roundtrip() {
     vtr_cli::vcdout::write_vcd(&r, std::fs::File::create(&out).unwrap()).unwrap();
     let again = dir.path().join("again.vtr");
     let mut w = writer(&again);
-    vtr_convert::vcd::convert_vcd(out, &mut w).unwrap();
+    vtr_convert::vcd::convert_vcd(out, &mut w, &Default::default()).unwrap();
     w.close().unwrap();
     let rr = Reader::open(again).unwrap();
     for name in ["top.clk", "top.bus [3:0]", "top.temperature", "top.pulse"] {

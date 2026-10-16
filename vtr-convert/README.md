@@ -6,7 +6,7 @@ parsing, native files, and atomic destination publication. Browser WASM hosting
 is not implemented yet.
 
 Call `fst::convert_fst`, `kanata::convert_kanata`, or `vcd::convert_vcd` with an
-input path and a fresh `vtr::Writer`, then close the writer. Discard output after
+input path, a fresh `vtr::Writer`, and a `vtr_progress::Reporter`, then close the writer. Discard output after
 any conversion error. For FST, disable writer deduplication to retain recorded
 samples, including repeated events. Foreign-format decoding dependencies belong
 in this crate; the viewer and `volna-server` read VTR only.
@@ -15,6 +15,13 @@ See the [CLI guide](../vtr-cli/README.md#conversion-semantics-and-limits) for
 conversion semantics and limits. FST retains complete signal histories, and
 Kanata retains instructions until EOF; these conversions require those values
 to fit in memory.
+
+Progress has separate reading and writing phases. Kanata and VCD count source
+bytes read, including compressed bytes for gzip Kanata. FST reading counts
+simulation ticks through the recording; writing counts emitted samples. Kanata
+writing counts retained instructions. Preparation and writer finalization have
+unknown totals. Hosts measure the output file on disk independently of these
+work counters.
 
 ```sh
 cargo test --locked -p vtr-convert

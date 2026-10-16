@@ -124,6 +124,8 @@ paths are omitted.
 
 Requires Rust 1.97.1+ and a C compiler for Zstandard. All Rust dependencies come
 from crates.io; there are no path dependencies on other project components.
+When working in the full repository, use its pinned nightly Cargo to load the
+workspace's executable dependencies. The packaged VTR crate builds on stable Rust.
 
 ```sh
 cargo test -p vtr --locked

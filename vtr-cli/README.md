@@ -1,7 +1,8 @@
 # VTR command-line tools
 
 `vtr-cli` supplies the `vtr` executable and uses [`vtr-convert`](../vtr-convert/README.md) to import Kanata, VCD,
-and FST. It requires Rust 1.97.1 or newer. Build or install from the workspace:
+and FST. Use the pinned nightly toolchain in `rust-toolchain.toml` to build or
+install from the workspace:
 
 ```sh
 cargo build -p vtr-cli --locked
@@ -11,6 +12,15 @@ vtr convert --help
 ```
 
 ## Commands
+
+`vtr convert` prints a progress bar with the current phase, input file size, and
+current output VTR size on stderr. Interactive terminals update one line;
+redirected stderr receives periodic lines. `--progress=none` suppresses this
+display. `--progress=json` reserves stdout for versioned newline-delimited
+[progress records](../vtr-progress/README.md), with diagnostics on stderr.
+The output size includes the private file while conversion runs; the destination
+is published only after conversion succeeds. Finalization stays indeterminate
+while the writer flushes its buffers.
 
 | Command | Input | Purpose |
 | --- | --- | --- |

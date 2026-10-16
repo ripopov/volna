@@ -687,7 +687,7 @@ impl PipelineModel {
         let z = f64::from(self.layout.zoom);
         let w = self.cells_w();
         let t_lo = (w / self.fit_viewport(doc).width()).ln();
-        let center = (viewport.start + viewport.end) * 0.5;
+        let center = viewport.start.midpoint(viewport.end);
         let t_hi = (CYCLE_PX_MAX * z / self.cycle_units(doc, center))
             .ln()
             .max(t_lo);
@@ -918,7 +918,7 @@ impl PipelineModel {
     fn fit_square(&mut self, doc: &mut Document, now: Option<Instant>) {
         self.suspend_follow();
         let fit = self.fit_viewport(doc);
-        let cycle_units = self.cycle_units(doc, (fit.start + fit.end) * 0.5);
+        let cycle_units = self.cycle_units(doc, fit.start.midpoint(fit.end));
         let side = self.square_size_limits(doc, cycle_units).0.exp();
         let h = self.cells_h();
         let mut rows = self.rows_target();

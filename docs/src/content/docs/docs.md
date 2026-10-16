@@ -46,8 +46,9 @@ belong to the separate VDB and application layers.
 
 ## Work with the libraries
 
-Building the workspace requires Rust 1.97.1 or newer and a C compiler to build
-the Zstandard dependency.
+Building the workspace requires the pinned nightly toolchain in `rust-toolchain.toml`
+and a C compiler to build the Zstandard dependency. The standalone VTR crate
+supports Rust 1.97.1 or newer.
 
 The [VTR guide](../vtr/) includes a complete waveform
 round trip and instructions for browsing the Rust API documentation.

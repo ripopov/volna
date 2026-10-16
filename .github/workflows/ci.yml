@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.97.1"
+          toolchain: nightly-2026-09-29
       - name: Install and link an external C consumer
         shell: bash
         run: |
@@ -40,28 +40,21 @@ jobs:
           test -z "$(git status --porcelain)"
 
   test:
-    name: Test (${{ matrix.os }}, Rust ${{ matrix.rust }})
+    name: Test (${{ matrix.os }}, nightly)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    env:
-      RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            rust: stable
           - os: macos-latest
-            rust: stable
-          - os: ubuntu-latest
-            rust: "1.97.1"
           - os: windows-latest
-            rust: stable
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: nightly-2026-09-29
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux desktop libraries
         if: runner.os == 'Linux'
@@ -75,7 +68,7 @@ jobs:
           VOLNA_VTR: ${{ runner.temp }}/volna-native/vtr${{ runner.os == 'Windows' && '.exe' || '' }}
         run: |
           python volna/package_native.py --debug --output "${{ runner.temp }}/volna-native"
-          cargo test -p volna --lib --locked native_import::tests::real_converter -- --ignored
+          cargo test -p volna --lib --locked native_import::tests::real_converter
       - name: Exercise examples
         shell: bash
         run: |
@@ -94,7 +87,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.97.1"
+          toolchain: nightly-2026-09-29
           components: rustfmt, clippy
       - name: Install Linux desktop libraries
         run: |
@@ -122,9 +115,21 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.97.1"
+          toolchain: nightly-2026-09-29
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +1.97.1 test --locked -p vtr
+      - run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Test the standalone VTR package on its minimum Rust version
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo package -p vtr --locked --no-verify
+          package=$(cargo pkgid -p vtr)
+          version=${package##*#}
+          version=${version##*@}
+          mkdir -p "$RUNNER_TEMP/vtr-msrv"
+          tar -xzf "target/package/vtr-$version.crate" -C "$RUNNER_TEMP/vtr-msrv"
+          cd "$RUNNER_TEMP/vtr-msrv/vtr-$version"
+          cargo +1.97.1 test --locked
 
   dependencies:
     name: Dependency hygiene and advisories
@@ -134,7 +139,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.97.1"
+          toolchain: nightly-2026-09-29
       - uses: Swatinem/rust-cache@v2
       - run: cargo install --locked cargo-machete --version 0.9.2
       - run: cargo install --locked cargo-deny --version 0.20.2

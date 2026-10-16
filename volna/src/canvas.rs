@@ -76,7 +76,7 @@ fn presence_image(
     for (y, x) in runs {
         let start = (y * width + x.start) * 4;
         let end = (y * width + x.end) * 4;
-        for pixel in bytes[start..end].chunks_exact_mut(4) {
+        for pixel in bytes[start..end].as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&[b, g, r, a]);
         }
     }

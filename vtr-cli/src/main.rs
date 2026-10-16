@@ -3,6 +3,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
 use vtr::{Reader, Writer};
 mod inspect;
+mod progress;
 
 #[derive(Parser)]
 #[command(
@@ -93,6 +94,8 @@ enum Command {
         output: PathBuf,
         #[arg(long, value_enum)]
         format: Option<Format>,
+        #[arg(long, value_enum, default_value_t = progress::Style::Auto)]
+        progress: progress::Style,
     },
     ToVcd {
         input: PathBuf,
@@ -248,9 +251,13 @@ fn run(cli: Cli) -> Result<u8> {
             input,
             output,
             format,
+            progress,
         } => {
             let format = format.map_or_else(|| format_of(&input), Ok)?;
+            let mut display =
+                progress::Display::start(std::fs::metadata(&input)?.len(), &output, progress);
             output_file(&output, |path| {
+                display.output(path);
                 let mut writer = Writer::create_with(
                     path,
                     vtr::WriterOptions {
@@ -259,15 +266,27 @@ fn run(cli: Cli) -> Result<u8> {
                     },
                 )?;
                 match format {
-                    Format::Kanata => vtr_convert::kanata::convert_kanata(&input, &mut writer),
-                    Format::Vcd => vtr_convert::vcd::convert_vcd(&input, &mut writer),
-                    Format::Fst => vtr_convert::fst::convert_fst(&input, &mut writer),
+                    Format::Kanata => {
+                        vtr_convert::kanata::convert_kanata(&input, &mut writer, &display.reporter)
+                    }
+                    Format::Vcd => {
+                        vtr_convert::vcd::convert_vcd(&input, &mut writer, &display.reporter)
+                    }
+                    Format::Fst => {
+                        vtr_convert::fst::convert_fst(&input, &mut writer, &display.reporter)
+                    }
                 }
                 .with_context(|| format!("converting {}", input.display()))?;
+                display
+                    .reporter
+                    .begin(vtr_progress::Phase::Finalizing, None);
                 writer.close()?;
                 Ok(())
             })?;
-            println!("wrote {}", output.display());
+            display.complete(&output);
+            if !matches!(progress, progress::Style::Json) {
+                println!("wrote {}", output.display());
+            }
         }
         Command::ToVcd { input, output } => {
             let reader = Reader::open(input)?;

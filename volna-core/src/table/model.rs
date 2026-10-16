@@ -339,7 +339,6 @@ impl TableModel {
         self.panel_reservation = None;
     }
 
-    #[must_use]
     pub fn signal_demand(&self) -> Box<dyn Iterator<Item = Traced<SignalRef>> + '_> {
         if !self.attached {
             return Box::new(std::iter::empty());

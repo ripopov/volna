@@ -723,7 +723,7 @@ mod tests {
             };
             let visible = f64::from(case * 7) + 0.13..f64::from(case * 7 + 70) + 0.87;
             let anchor = view.start + view.width() * 0.5;
-            let center = (visible.start + visible.end) * 0.5;
+            let center = visible.start.midpoint(visible.end);
             let actual = index.activity(&records, 11, view, visible.clone(), anchor, center);
             let mut expected = Activity::default();
             let mut best = (f64::INFINITY, f64::INFINITY, usize::MAX);

@@ -913,7 +913,7 @@ impl Workspace {
                         log::warn!("{text}");
                         #[cfg(not(target_family = "wasm"))]
                         if !self.app.workspace.notices.contains(&text) {
-                            self.app.workspace.notices.push(text.clone());
+                            self.app.workspace.notices.push(text);
                             cx.notify();
                         }
                         #[cfg(target_family = "wasm")]
@@ -1737,44 +1737,87 @@ impl Workspace {
             return div().size_full().child(view).into_any_element();
         }
         match self.app.trace_state() {
-            TraceState::Loaded(_) => self.render_dock(window, cx).into_any_element(),
-            TraceState::Loading { name } => div()
-                .id("trace-loading")
-                .debug_selector(|| "trace-loading".into())
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_3()
-                .bg(t.editor.bg)
-                .child(
-                    icon_svg(IconName::LoaderCircle, t.px(28.0), colors.icon_accent)
-                        .with_animation(
-                            "spinner",
-                            Animation::new(Duration::from_millis(900)).repeat(),
-                            |svg, delta| {
-                                svg.with_transformation(Transformation::rotate(percentage(delta)))
-                            },
-                        ),
-                )
-                .child(
-                    div()
-                        .font_family(t.ui_font)
-                        .text_size(px(t.ui_size))
-                        .text_color(colors.text_muted)
-                        .id("trace-loading-message")
-                        .debug_selector(|| "trace-loading-message".into())
-                        .max_w_full()
-                        .min_w_0()
-                        .px_4()
-                        .whitespace_normal()
-                        .text_center()
-                        .child(SharedString::from(self.loading_message(&name))),
-                )
-                .into_any_element(),
+            TraceState::Loaded(_) => self.render_loaded(window, cx),
+            TraceState::Loading { name } => {
+                #[cfg(not(target_family = "wasm"))]
+                let progress = self.render_import_progress(TraceId::A, false, cx);
+                #[cfg(target_family = "wasm")]
+                let progress: Option<gpui_kit::AnyElement> = None;
+                div()
+                    .id("trace-loading")
+                    .debug_selector(|| "trace-loading".into())
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .bg(t.editor.bg)
+                    .child(
+                        icon_svg(IconName::LoaderCircle, t.px(28.0), colors.icon_accent)
+                            .with_animation(
+                                "spinner",
+                                Animation::new(Duration::from_millis(900)).repeat(),
+                                |svg, delta| {
+                                    svg.with_transformation(Transformation::rotate(percentage(
+                                        delta,
+                                    )))
+                                },
+                            ),
+                    )
+                    .child(
+                        div()
+                            .font_family(t.ui_font)
+                            .text_size(px(t.ui_size))
+                            .text_color(colors.text_muted)
+                            .id("trace-loading-message")
+                            .debug_selector(|| "trace-loading-message".into())
+                            .max_w_full()
+                            .min_w_0()
+                            .px_4()
+                            .whitespace_normal()
+                            .text_center()
+                            .child(SharedString::from(self.loading_message(&name))),
+                    )
+                    .children(progress)
+                    .into_any_element()
+            }
             TraceState::Empty | TraceState::Error(_) => self.render_empty(cx).into_any_element(),
         }
+    }
+
+    fn render_loaded(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let dock = self.render_dock(window, cx).into_any_element();
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let active = self.native_imports.active();
+            if !active.is_empty() {
+                return div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .id("conversion-banners")
+                            .flex_none()
+                            .w_full()
+                            .max_h(gpui_kit::relative(0.4))
+                            .overflow_y_scroll()
+                            .children(
+                                active.into_iter().filter_map(|trace| {
+                                    self.render_import_progress(trace, true, cx)
+                                }),
+                            ),
+                    )
+                    .child(div().flex_1().min_h_0().child(dock))
+                    .into_any_element();
+            }
+        }
+        dock
     }
 
     fn loading_message(&self, name: &str) -> String {
@@ -2381,6 +2424,10 @@ impl Render for Workspace {
             window.request_animation_frame();
         }
         self.after(Some(window), cx);
+        #[cfg(not(target_family = "wasm"))]
+        if !self.native_imports.active().is_empty() {
+            window.request_animation_frame();
+        }
         if was_animating && let Some(dock) = &self.dock {
             dock.invalidate_panels(cx);
         }

@@ -377,7 +377,6 @@ impl Index {
         }
     }
 
-    #[must_use]
     pub fn stretches(&self, signal: SignalId) -> impl ExactSizeIterator<Item = Stretch> + '_ {
         let s = signal.0 as usize;
         (self.off[s] as usize..self.off[s + 1] as usize).map(move |i| Stretch {

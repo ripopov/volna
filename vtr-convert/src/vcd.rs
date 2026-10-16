@@ -101,8 +101,16 @@ fn declarations(
     Ok(())
 }
 
-pub fn convert_vcd(input: impl AsRef<Path>, w: &mut Writer) -> Result<()> {
-    let mut parser = vcd::Parser::new(BufReader::new(std::fs::File::open(input)?));
+pub fn convert_vcd(
+    input: impl AsRef<Path>,
+    w: &mut Writer,
+    progress: &vtr_progress::Reporter,
+) -> Result<()> {
+    let file = std::fs::File::open(input)?;
+    let counter = progress.begin(vtr_progress::Phase::Reading, Some(file.metadata()?.len()));
+    let mut parser = vcd::Parser::new(BufReader::new(vtr_progress::CountingReader::new(
+        file, counter,
+    )));
     let header = parser.parse_header()?;
     let (factor, unit) = header.timescale.unwrap_or((1, vcd::TimescaleUnit::NS));
     let base = match unit {

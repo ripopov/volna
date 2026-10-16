@@ -7,7 +7,7 @@ builds display lists for wave, pipeline, table, and transaction panels. The
 
 ## Build and test
 
-From the repository root, with Rust 1.97.1 or newer:
+From the repository root, with the pinned Rust toolchain:
 
 ```sh
 cargo build --locked -p volna-core

@@ -831,12 +831,11 @@ fn apply_dict(
 
 #[inline]
 fn hash_bytes(mut h: u64, bytes: &[u8]) -> u64 {
-    let mut chunks = bytes.chunks_exact(8);
-    for c in &mut chunks {
-        let w = u64::from_le_bytes(c.try_into().unwrap());
+    let (chunks, rest) = bytes.as_chunks::<8>();
+    for c in chunks {
+        let w = u64::from_le_bytes(*c);
         h = (h ^ w).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_left(29);
     }
-    let rest = chunks.remainder();
     if !rest.is_empty() {
         let mut b = [0u8; 8];
         b[..rest.len()].copy_from_slice(rest);

@@ -24,7 +24,7 @@ fn converted(bytes: Vec<u8>) -> anyhow::Result<Arc<dyn volna_trace::Session>> {
             ..Default::default()
         },
     )?;
-    vtr_convert::fst::convert_fst(&input, &mut writer)?;
+    vtr_convert::fst::convert_fst(&input, &mut writer, &Default::default())?;
     writer.close()?;
     OpenSpec::Bytes {
         name: "output.vtr".into(),

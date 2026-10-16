@@ -15,6 +15,8 @@ doc = false
 
 [dependencies]
 vtr.workspace = true
+vtr-progress = { version = "0.1.0", path = "../vtr-progress" }
+serde_json = "1"
 vtr-convert = { version = "0.1.0", path = "../vtr-convert" }
 volna-trace = { version = "0.1.0", path = "../volna-trace" }
 anyhow = "1"

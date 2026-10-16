@@ -1,7 +1,7 @@
 [workspace]
-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "volna-core", "volna"]
+members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "vtr-progress", "volna-core", "volna"]
 resolver = "3"
-default-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "volna-core"]
+default-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "vtr-progress", "volna-core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -64,3 +64,6 @@ struct_field_names = "allow"
 
 # Exact comparisons detect unchanged geometry, sentinel values, and lossless round trips.
 float_cmp = "allow"
+
+# is_empty assertions keep tests independent of container types.
+assert_is_empty = "allow"

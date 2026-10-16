@@ -16,8 +16,8 @@ vtr convert input.kanata output.vtr
 
 Use Node 24, Python 3, the repository Rust toolchain, and a C compiler that
 supports WebAssembly. Install the matching `wasm-bindgen` CLI from `Cargo.lock`.
-The shared build helper enables `RUSTC_BOOTSTRAP` for the unstable atomic wait
-API used by `wasm_thread`. From this directory:
+The pinned nightly toolchain supports the atomic wait API used by `wasm_thread`
+and rebuilding the standard library for shared-memory WebAssembly. From this directory:
 
 ```sh
 rustup target add wasm32-unknown-unknown

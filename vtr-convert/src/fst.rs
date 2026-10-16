@@ -11,12 +11,21 @@ use vtr::{Direction, LogicStates, ScopeType, SignalId, SignalKind, VarType, Writ
 trait Input: BufRead + Seek {}
 impl<T: BufRead + Seek> Input for T {}
 
-pub fn convert_fst(input: impl AsRef<Path>, writer: &mut Writer) -> Result<()> {
+pub fn convert_fst(
+    input: impl AsRef<Path>,
+    writer: &mut Writer,
+    progress: &vtr_progress::Reporter,
+) -> Result<()> {
+    progress.begin(vtr_progress::Phase::Preparing, None);
     let input = std::io::BufReader::new(std::fs::File::open(input)?);
-    convert_reader(Box::new(input), writer)
+    convert_reader(Box::new(input), writer, progress)
 }
 
-fn convert_reader(mut input: Box<dyn Input>, writer: &mut Writer) -> Result<()> {
+fn convert_reader(
+    mut input: Box<dyn Input>,
+    writer: &mut Writer,
+    progress: &vtr_progress::Reporter,
+) -> Result<()> {
     validate_sections(&mut *input)?;
     let mut tag = [0];
     input.read_exact(&mut tag)?;
@@ -148,8 +157,13 @@ fn convert_reader(mut input: Box<dyn Input>, writer: &mut Writer) -> Result<()> 
         .context("read FST hierarchy")?;
     result?;
     ensure!(scopes.is_empty(), "FST hierarchy has unclosed scopes");
+    let reading = progress.begin(
+        vtr_progress::Phase::Reading,
+        header.end_time.checked_sub(header.start_time),
+    );
     reader
         .read_signals(&FstFilter::all(), |time, handle, value| -> Result<()> {
+            reading.set(time.saturating_sub(header.start_time));
             signals
                 .get_mut(&handle.get_index())
                 .ok_or_else(|| anyhow!("FST returned an undeclared signal"))?
@@ -157,6 +171,10 @@ fn convert_reader(mut input: Box<dyn Input>, writer: &mut Writer) -> Result<()> 
         })
         .map_err(|error| anyhow!("read FST signals: {error:?}"))?;
     let histories: Vec<_> = signals.into_values().collect();
+    let writing = progress.begin(
+        vtr_progress::Phase::Writing,
+        Some(histories.iter().map(|h| h.times.len() as u64).sum()),
+    );
     let mut heap = BinaryHeap::new();
     for (i, history) in histories.iter().enumerate() {
         if let Some(&time) = history.times.first() {
@@ -167,6 +185,7 @@ fn convert_reader(mut input: Box<dyn Input>, writer: &mut Writer) -> Result<()> 
         let history = &histories[i];
         writer.set_time(time)?;
         history.emit(offset, writer)?;
+        writing.advance(1);
         if let Some(&time) = history.times.get(offset + 1) {
             heap.push(std::cmp::Reverse((time, i, offset + 1)));
         }

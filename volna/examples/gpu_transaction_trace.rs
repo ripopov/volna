@@ -1135,14 +1135,9 @@ fn generate(path: &Path) -> vtr::Result<()> {
             e.event(wg, e.n.allocated, resident)?;
             workgroups.push(wg);
             let mut group = Vec::new();
-            for slot in 0..WARPS {
+            for (slot, warp) in h.sms[sm].slots.iter().enumerate() {
                 let logical = (grid_index * SMS + sm) * WARPS + slot;
-                let tx = e.begin(
-                    h.sms[sm].slots[slot].warp,
-                    Some(wg),
-                    dispatch,
-                    &format!("warp {logical}"),
-                )?;
+                let tx = e.begin(warp.warp, Some(wg), dispatch, &format!("warp {logical}"))?;
                 e.attr(tx, e.n.warp, Value::U64(logical as u64))?;
                 e.attr(tx, e.n.epoch, Value::U64(grid_index as u64))?;
                 e.event(tx, e.n.dispatched, dispatch)?;

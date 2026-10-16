@@ -9,7 +9,7 @@ Convert foreign recordings with `vtr convert INPUT OUTPUT` before serving the VT
 
 ## Build and start
 
-From the repository root, with Rust 1.97.1 or newer and a C compiler:
+From the repository root, with the pinned Rust toolchain and a C compiler:
 
 ```sh
 cargo build --locked --release -p volna-server

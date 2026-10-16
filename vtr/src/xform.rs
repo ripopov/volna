@@ -75,13 +75,12 @@ impl Default for DictTable {
 #[inline]
 fn hash_entry(e: &[u8]) -> u64 {
     let mut h = 0x9E37_79B9_7F4A_7C15u64;
-    let mut chunks = e.chunks_exact(8);
-    for c in &mut chunks {
-        h = (h ^ u64::from_le_bytes(c.try_into().unwrap()))
+    let (chunks, rest) = e.as_chunks::<8>();
+    for c in chunks {
+        h = (h ^ u64::from_le_bytes(*c))
             .wrapping_mul(0xD6E8_FEB8_6659_FD93)
             .rotate_left(31);
     }
-    let rest = chunks.remainder();
     if !rest.is_empty() {
         let mut b = [0u8; 8];
         b[..rest.len()].copy_from_slice(rest);
@@ -267,7 +266,7 @@ fn unshuffle_w<const W: usize>(v: &mut [u8], tmp: &mut Vec<u8>) {
     let n = v.len() / W;
     tmp.clear();
     tmp.extend_from_slice(v);
-    for (i, e) in v.chunks_exact_mut(W).enumerate() {
+    for (i, e) in v.as_chunks_mut::<W>().0.iter_mut().enumerate() {
         for b in 0..W {
             e[b] = tmp[b * n + i];
         }

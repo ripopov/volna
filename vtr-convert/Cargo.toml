@@ -10,6 +10,7 @@ description = "Import foreign trace formats into VTR"
 
 [dependencies]
 vtr.workspace = true
+vtr-progress = { version = "0.1.0", path = "../vtr-progress" }
 anyhow = "1"
 flate2 = "1"
 fst-reader = "0.17"

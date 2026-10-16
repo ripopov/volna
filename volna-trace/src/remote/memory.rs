@@ -74,7 +74,7 @@ impl MemoryBudget {
         let admitted = self
             .0
             .used
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 used.checked_add(bytes).filter(|&next| next <= limit)
             });
         anyhow::ensure!(
@@ -90,7 +90,7 @@ impl MemoryBudget {
     fn release(&self, bytes: u64) {
         self.0
             .used
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
                 used.checked_sub(bytes)
             })
             .expect("balanced memory reservation");

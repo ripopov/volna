@@ -64,8 +64,14 @@ impl Workspace {
         let name: SharedString = chip.name.clone().into();
         let detail: SharedString = chip.detail().into();
         #[cfg(not(target_family = "wasm"))]
-        let detail: SharedString = if self.native_imports.converting(trace) {
-            "converting…".into()
+        let detail: SharedString = if let Some(progress) = self.native_imports.snapshot(trace) {
+            progress
+                .fraction()
+                .map_or_else(
+                    || "converting…".to_owned(),
+                    |f| format!("converting {:.0}%", f * 100.0),
+                )
+                .into()
         } else {
             detail
         };

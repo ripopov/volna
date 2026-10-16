@@ -7657,6 +7657,8 @@ dependencies = [
  "volna-core",
  "volna-trace",
  "vtr",
+ "vtr-cli",
+ "vtr-progress",
  "wasm-bindgen",
 ]
 
@@ -7767,10 +7769,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde_json",
  "tempfile",
  "volna-trace",
  "vtr",
  "vtr-convert",
+ "vtr-progress",
 ]
 
 [[package]]
@@ -7784,6 +7788,7 @@ dependencies = [
  "vcd",
  "volna-trace",
  "vtr",
+ "vtr-progress",
 ]
 
 [[package]]
@@ -7792,6 +7797,13 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "vtr",
+]
+
+[[package]]
+name = "vtr-progress"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

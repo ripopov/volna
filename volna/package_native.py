@@ -1,6 +1,7 @@
 """Build a native Volna distribution with its matching VTR converter and notices."""
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -24,19 +25,28 @@ def main():
     target = args.target_dir.resolve()
     command = [
         "cargo", "build", "--locked", "--target-dir", str(target),
-        "-p", "volna", "-p", "vtr-cli", "--bins",
+        "-p", "volna", "--bin", "volna", "--message-format=json-render-diagnostics",
     ]
     if not args.debug:
         command.append("--release")
-    subprocess.run(command, cwd=ROOT, check=True)
-    profile = "debug" if args.debug else "release"
+    result = subprocess.run(command, cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True)
+    artifacts = {}
+    for line in result.stdout.splitlines():
+        message = json.loads(line)
+        if message.get("reason") == "compiler-artifact" and message.get("executable"):
+            name = message["target"]["name"]
+            if name in ("volna", "vtr"):
+                artifacts[name] = Path(message["executable"])
+    missing = {"volna", "vtr"} - artifacts.keys()
+    if missing:
+        raise RuntimeError(f"Cargo did not report required executables: {', '.join(sorted(missing))}")
     suffix = ".exe" if os.name == "nt" else ""
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="volna-package-", dir=output.parent) as temporary:
         staged = Path(temporary) / "volna"
         staged.mkdir()
         for name in ("volna", "vtr"):
-            shutil.copy2(target / profile / f"{name}{suffix}", staged)
+            shutil.copy2(artifacts[name], staged / f"{name}{suffix}")
         distribution_notices.collect(staged / "notices", {"volna", "vtr-cli"})
         distribution_notices.verify(lambda name: (staged / "notices" / name).read_bytes())
         (staged / "README.txt").write_text(

@@ -28,7 +28,8 @@ fn kanata_cycles_threads_stages_labels_relations_and_open_instructions() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace.vtr");
     let mut w = writer(&path);
-    vtr_convert::kanata::convert_kanata(fixture("pipeline.kanata"), &mut w).unwrap();
+    vtr_convert::kanata::convert_kanata(fixture("pipeline.kanata"), &mut w, &Default::default())
+        .unwrap();
     w.close().unwrap();
     let r = Reader::open(path).unwrap();
     assert_eq!(r.meta().timescale, 0);
@@ -91,7 +92,7 @@ fn kanata_gzip_and_malformed_input() {
         .unwrap();
     encoder.finish().unwrap();
     let mut w = writer(&dir.path().join("gzip.vtr"));
-    vtr_convert::kanata::convert_kanata(gzip, &mut w).unwrap();
+    vtr_convert::kanata::convert_kanata(gzip, &mut w, &Default::default()).unwrap();
     w.close().unwrap();
     for input in [
         "",
@@ -108,7 +109,7 @@ fn kanata_gzip_and_malformed_input() {
         std::fs::write(&source, input).unwrap();
         let mut w = writer(&dir.path().join("bad.vtr"));
         assert!(
-            vtr_convert::kanata::convert_kanata(source, &mut w).is_err(),
+            vtr_convert::kanata::convert_kanata(source, &mut w, &Default::default()).is_err(),
             "{input}"
         );
     }
@@ -120,7 +121,7 @@ fn vcd_short_vectors_strings_and_dump_intervals() {
     std::fs::write(&input, "$var wire 4 ! bus $end\n$var string 1 \" text $end\n$enddefinitions $end\n#0\nb1 !\nshello \"\n#2\n$dumpoff\nbx !\n$end\n#4\n$dumpon\nbz !\n$end\n").unwrap();
     let path = dir.path().join("values.vtr");
     let mut w = writer(&path);
-    vtr_convert::vcd::convert_vcd(input, &mut w).unwrap();
+    vtr_convert::vcd::convert_vcd(input, &mut w, &Default::default()).unwrap();
     w.close().unwrap();
     let r = Reader::open(path).unwrap();
     assert_eq!(r.meta().timescale, -9);
@@ -160,7 +161,7 @@ fn vcd_malformed_commands_and_aliases_are_errors() {
         std::fs::write(&path, &input).unwrap();
         let mut w = writer(&dir.path().join("out.vtr"));
         assert!(
-            vtr_convert::vcd::convert_vcd(path, &mut w).is_err(),
+            vtr_convert::vcd::convert_vcd(path, &mut w, &Default::default()).is_err(),
             "{input}"
         );
     }

@@ -273,7 +273,7 @@ fn stretches_live_in_their_own_blocks_and_survive_recovery() {
         .map(|e| e.payload_offset() + e.len)
         .find(|&end| {
             let bytes = &full[..end as usize];
-            Reader::from_bytes(bytes.to_vec()).ok().is_some_and(|r| {
+            Reader::from_bytes(bytes.to_vec()).is_ok_and(|r| {
                 r.clocks().len() == 1
                     && r.clock(ClockId(0)).is_ok_and(|t| !t.stretches().is_empty())
             })

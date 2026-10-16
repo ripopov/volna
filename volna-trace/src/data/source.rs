@@ -322,11 +322,9 @@ impl Hierarchy {
     pub fn get_var(&self, id: VarId) -> Option<VariableView<'_>> {
         (id < self.var_count()).then(|| self.var(id))
     }
-    #[must_use]
     pub fn scopes(&self) -> impl ExactSizeIterator<Item = ScopeView<'_>> {
         (0..self.scope_count()).map(|id| self.scope(id))
     }
-    #[must_use]
     pub fn vars(&self) -> impl ExactSizeIterator<Item = VariableView<'_>> {
         (0..self.var_count()).map(|id| self.var(id))
     }

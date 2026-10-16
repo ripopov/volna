@@ -61,8 +61,14 @@ impl Matches {
             .partition_point(|&n| n <= rank)
             .checked_sub(1)?;
         let mut local = rank - self.prefixes[block];
-        for i in block * 8..(block * 8 + 8).min(self.words.len()) {
-            let mut word = self.words[i];
+        for (i, mut word) in self
+            .words
+            .iter()
+            .copied()
+            .enumerate()
+            .skip(block * 8)
+            .take(8)
+        {
             let count = u64::from(word.count_ones());
             if local < count {
                 for _ in 0..local {

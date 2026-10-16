@@ -478,12 +478,10 @@ impl History {
         self.redo.last().map(|s| s.label.as_str())
     }
 
-    #[must_use]
     pub fn undo_steps(&self) -> impl DoubleEndedIterator<Item = &Step> {
         self.undo.iter()
     }
 
-    #[must_use]
     pub fn redo_steps(&self) -> impl DoubleEndedIterator<Item = &Step> {
         self.redo.iter().rev()
     }
