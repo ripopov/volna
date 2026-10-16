@@ -646,3 +646,84 @@ repeated stage visits, overlaps, coincident points, open records, logs, clocks,
 relations, forward references, and incomplete-file recovery. Block sizes and
 generator mixing must be evaluated on representative traces before adding
 finer persistent indexes or per-generator output buffers.
+
+## 12. Encoding efficiency estimate
+
+The encoding in section 8 has been compared with alternatives on a synthetic
+pipeline workload. The results are estimates to guide revision of this
+proposal; they must be confirmed on representative traces, such as Kanata
+conversions, before the format is changed.
+
+### 12.1 Workload
+
+The model is a 4-wide out-of-order core retiring 200,000 instructions. Each
+instruction is an ordinary transaction with two arguments, a `pointer` PC and a
+`str` opcode, and owns seven located stages: fetch, decode, rename, issue
+queue, execute, writeback, and retire. The stages use 58 STAGE generators: four
+slots for each in-order stage, 32 issue-queue entries, four ALUs, and two
+load/store units. Execute latency and issue wait vary; stage records carry no
+arguments.
+
+IDs are allocated in creation order: an instruction at fetch and each stage at
+its begin. Stages are encoded on completion, and instructions on retirement.
+Blocks hold 65,536 records and are compressed with Zstandard level 1, the
+reference writer default. Sizes include block headers and are reported in
+bytes per located stage; owner costs are divided across their seven stages.
+
+### 12.2 Results
+
+| Encoding | Raw | Compressed | Supports |
+|---|---:|---:|---|
+| SPEC.md section 7, stages embedded in owners | 9.86 | 1.55 | Transaction view only |
+| Section 8 of this document | 13.50 | 5.43 | Both views |
+| Section 8 stage records only | 5.94 | 2.38 | |
+| Section 8 owner records, mostly reference pairs | 7.56 | 3.05 | |
+| Owner references as local generator index and ID gap | 4.65 | 1.31 | Owner part only |
+| Owner block locator, described in 12.3 | 2.57 | 0.45 | Owner part only |
+| Stages grouped by generator, described in 12.3 | 4.56 | 1.82 | Stage part only |
+| Grouped stages and owner block locators | 7.14 | 2.26 | Both views |
+| The same without per-stage IDs | 5.90 | 1.58 | Both views; stages are not relation endpoints |
+
+Using file time units of 1000 per cycle instead of one per cycle increases
+the section 8 total from 5.43 to 5.56 bytes per stage. Dividing timestamps by
+a per-block common factor therefore saves little after compression.
+
+Decoding one located track from a section 8 block decompresses the whole
+block, about 370 KiB here. Compressing each generator's records separately
+reduces this to about 5 KiB per generator, but raises grouped stage storage
+from 1.82 to 2.26 bytes per stage at this block size.
+
+### 12.3 Candidate revisions
+
+Ordered by estimated effect:
+
+1. Replace the located child reference lists with block locators. An owner
+   stores the delta-coded sequence numbers of the located blocks containing its
+   children, and those blocks carry sequence numbers in their headers. Child
+   parent fields identify the children within a block. Reference order adds no
+   information, since IDs follow creation order. All children have been
+   assigned to blocks when the owner ends, and writer memory per active owner
+   grows with its block count rather than its child count.
+2. Group records by generator within located blocks, using a stable sort at
+   block encoding. The header lists each generator's record count, time bounds,
+   and offset, so track queries can skip blocks and records without
+   decompression. Begin is coded as the gap from the previous end of the same
+   generator, and parent as a delta from the previous parent. ID order
+   preserves production order across generators.
+3. Decide whether located stages need global IDs. Their ID column is the
+   largest remaining stage cost. Identifying a stage by owner, generator, and
+   visit removes it, but stages could no longer be relation endpoints.
+4. Compress timing columns separately from argument columns, or each
+   generator's records separately, when track loading speed matters more than
+   the storage cost reported in 12.2.
+5. Simplify the encoding. EVENT_BLOCK, STAGE_BLOCK, and LOG_BLOCK can share one
+   block kind whose duration column is read according to generator kind, which
+   also merges the two child lists. A mandatory parent can be coded as
+   `id - parent - 1`, because a located child is created after its owner.
+   TX_BLOCK can use block-local generator indexes.
+
+Pipeline views usually label visits with their owners, so owner lookup is a
+common operation, not only an occasional navigation step. TX_BLOCK ID ranges
+overlap whenever a long-lived owner shares a block with short-lived ones. An
+optional ID index written at close, or headers storing a dense ID range with a
+short outlier list, would bound that lookup.
