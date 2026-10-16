@@ -1,8 +1,6 @@
 //! Recording data: signal values, complete histories and the hierarchy model.
 
 pub mod activity;
-pub mod compact;
-pub(crate) mod fst_source;
 pub mod history;
 pub mod loaded_tracks;
 pub mod sizes;
@@ -24,8 +22,3 @@ pub use source::{Generator, GeneratorId, Member};
 pub use value::{Bit, SignalShape, ValueKind, WaveValue};
 
 pub(crate) mod hierarchy_columns;
-
-#[cfg(not(target_family = "wasm"))]
-mod fst_activity;
-#[cfg(not(target_family = "wasm"))]
-pub use fst_activity::FstTrace;

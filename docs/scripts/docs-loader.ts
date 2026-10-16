@@ -13,10 +13,10 @@ const sources = [
   ['vtr/docs/LOGGING.md', 'vtr/logging', 'Structured logging', 'Declare typed log sites, write records, and query messages.'],
   ['vtr-capi/README.md', 'vtr-capi', 'VTR C API', 'Build and link libvtr, use opaque handles, and write a trace from C.'],
   ['vtr-guard/README.md', 'vtr-guard', 'VTR crash guard', 'Finish watched VTR writers after Linux faults, stop requests, and exit.'],
-  ['volna-trace/README.md', 'volna-trace', 'Volna trace loading', 'Read immutable VTR/FST recordings locally or through a cooperative remote client.'],
+  ['volna-trace/README.md', 'volna-trace', 'Volna trace loading', 'Read immutable VTR recordings locally or through a cooperative remote client.'],
   ['volna-server/README.md', 'volna-server', 'Volna server', 'Host one immutable recording over framed pipes, with complete objects and activity sidecars.'],
   ['volna-core/README.md', 'volna-core', 'Volna viewer core', 'Toolkit-independent viewer state, commands, panel models, and display lists.'],
-  ['volna/README.md', 'volna', 'Volna desktop viewer', 'Build and run the GPUI viewer for VTR and FST recordings.'],
+  ['volna/README.md', 'volna', 'Volna desktop viewer', 'Build and run the GPUI viewer for VTR recordings.'],
 ] as const;
 export function volnaDocsLoader(): Loader {
   const authored = docsLoader();

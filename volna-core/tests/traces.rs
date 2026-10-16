@@ -24,8 +24,8 @@ fn landing() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/landing.vtr")
 }
 
-fn values_fst() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures/values.fst")
+fn values_vtr() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures/values.vtr")
 }
 
 fn pump(app: &mut App) {
@@ -78,7 +78,7 @@ fn two_runs() -> App {
 }
 
 #[test]
-fn a_vtr_in_ns_and_an_fst_in_ps_share_one_exact_timeline() {
+fn vtr_recordings_in_ns_and_ps_share_one_exact_timeline() {
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(landing())));
     pump(&mut app);
@@ -93,7 +93,7 @@ fn a_vtr_in_ns_and_an_fst_in_ps_share_one_exact_timeline() {
     app.handle(Command::Action(volna_core::Action::NextMarker));
     assert_eq!(app.doc.time_base().timescale, -9);
 
-    app.handle(Command::AddTrace(OpenSpec::Path(values_fst())));
+    app.handle(Command::AddTrace(OpenSpec::Path(values_vtr())));
     assert_eq!(app.trace_chips()[1].detail(), "opening…");
     pump(&mut app);
     assert_eq!(app.doc.time_base().timescale, -12);
@@ -112,7 +112,7 @@ fn a_vtr_in_ns_and_an_fst_in_ps_share_one_exact_timeline() {
             .collect::<Vec<_>>(),
         [
             (TraceId::A, "landing.vtr", "VTR · ns".to_owned()),
-            (b(), "values.fst", "FST · ps".to_owned()),
+            (b(), "values.vtr", "VTR · ps".to_owned()),
         ]
     );
 
@@ -335,8 +335,8 @@ fn reopen(trace: &Path, sidecar: Content) -> App {
 fn a_workspace_reopens_every_trace_it_names() {
     let dir = tempfile::tempdir().unwrap();
     let cpu = copy_to(dir.path(), "cpu.vtr");
-    let dram = dir.path().join("dram.fst");
-    std::fs::copy(values_fst(), &dram).unwrap();
+    let dram = dir.path().join("dram.vtr");
+    std::fs::copy(values_vtr(), &dram).unwrap();
     let mut app = reopen(&cpu, Content::Missing);
     app.add_resource(OpenSpec::Path(dram.clone()), uri(&dram));
     pump(&mut app);
@@ -358,7 +358,7 @@ fn a_workspace_reopens_every_trace_it_names() {
     let saved: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(saved["traces"][1]["letter"], "B");
     assert_eq!(
-        saved["traces"][1]["path"], "dram.fst",
+        saved["traces"][1]["path"], "dram.vtr",
         "beside the workspace"
     );
     assert_eq!(saved["traces"][1]["rename"], "dram");
@@ -443,7 +443,7 @@ fn a_trace_in_cycles_does_not_join_one_in_seconds() {
 }
 
 fn landing_dram() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/landing_dram.fst")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/landing_dram.vtr")
 }
 
 fn text_at(history: &dyn volna_trace::data::SignalHistory, time: u64) -> String {
@@ -512,7 +512,7 @@ fn a_trace_opening_while_a_workspace_restores_still_joins() {
     let mut app = App::new();
     app.configure_persistence(Persistence::Auto);
     app.open_resource(OpenSpec::Path(cpu.clone()), uri(&cpu));
-    app.add_resource(OpenSpec::Path(values_fst()), uri(&values_fst()));
+    app.add_resource(OpenSpec::Path(values_vtr()), uri(&values_vtr()));
     let mut requests = app.take_requests();
     assert_eq!(requests.len(), 2);
     let second = requests.pop().unwrap();
@@ -555,7 +555,7 @@ fn closing_a_trace_still_opening_cancels_it() {
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(landing())));
     pump(&mut app);
-    app.handle(Command::AddTrace(OpenSpec::Path(values_fst())));
+    app.handle(Command::AddTrace(OpenSpec::Path(values_vtr())));
     assert!(app.trace_chips()[1].loading);
     app.handle(Command::RemoveTrace(b()));
     assert_eq!(app.doc.traces().len(), 1);
@@ -571,8 +571,8 @@ fn closing_a_trace_still_opening_cancels_it() {
 fn saved_times_follow_the_unit_of_the_traces_open_now() {
     let dir = tempfile::tempdir().unwrap();
     let cpu = copy_to(dir.path(), "cpu.vtr");
-    let dram = dir.path().join("dram.fst");
-    std::fs::copy(values_fst(), &dram).unwrap();
+    let dram = dir.path().join("dram.vtr");
+    std::fs::copy(values_vtr(), &dram).unwrap();
     let mut saved = {
         let mut app = reopen(&cpu, Content::Missing);
         app.doc.shared.cursor = Some(783);
@@ -581,7 +581,7 @@ fn saved_times_follow_the_unit_of_the_traces_open_now() {
         serde_json::to_value(workspace.unwrap()).unwrap()
     };
     assert_eq!(saved["timescale"], -9);
-    let b_entry = serde_json::json!({"letter": "B", "path": "dram.fst", "name": "dram.fst",
+    let b_entry = serde_json::json!({"letter": "B", "path": "dram.vtr", "name": "dram.vtr",
         "timescale": -12, "time_range": [0, 20], "design_id": null});
     saved["traces"].as_array_mut().unwrap().push(b_entry);
     let app = reopen(&cpu, Content::Bytes(serde_json::to_vec(&saved).unwrap()));
@@ -616,9 +616,9 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
     let dir = tempfile::tempdir().unwrap();
     let directory = dir.path().canonicalize().unwrap();
     let cpu = copy_to(&directory, "cpu.vtr");
-    let (x, y) = (directory.join("x.fst"), directory.join("y.fst"));
-    std::fs::copy(values_fst(), &x).unwrap();
-    std::fs::copy(values_fst(), &y).unwrap();
+    let (x, y) = (directory.join("x.vtr"), directory.join("y.vtr"));
+    std::fs::copy(values_vtr(), &x).unwrap();
+    std::fs::copy(values_vtr(), &y).unwrap();
     let mut app = reopen(&cpu, Content::Missing);
     app.add_resource(OpenSpec::Path(x.clone()), uri(&x));
     pump(&mut app);
@@ -635,7 +635,7 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
     };
     app.save_workspace(None);
     let (old, mut w2) = writes(&mut app).pop().unwrap();
-    w2["traces"][1]["path"] = "y.fst".into();
+    w2["traces"][1]["path"] = "y.vtr".into();
     app.handle(Command::AddVars(vec![var(&app, TraceId::A, "soc.cpu0.pc")]));
     let w2_target = Target::File {
         uri: url::Url::from_file_path(directory.join("w2.volna.json"))
@@ -649,7 +649,7 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
     let flushed = writes(&mut app);
     assert_eq!(flushed.len(), 1, "the old workspace is flushed first");
     assert_eq!(flushed[0].0, old);
-    assert_eq!(flushed[0].1["traces"][1]["path"], "x.fst");
+    assert_eq!(flushed[0].1["traces"][1]["path"], "x.vtr");
     assert_eq!(app.doc.traces().get(b()).unwrap().uri, Some(uri(&x)));
     let ticket = app.workspace.scheduler.outstanding().cloned().unwrap();
     app.workspace_saved(ticket, None, volna_core::Instant::now());

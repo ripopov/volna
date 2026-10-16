@@ -660,10 +660,10 @@ mod tests {
         assert_eq!(options.config_dir, Some(PathBuf::from("/tmp/volna-config")));
         assert_eq!(options.files, [PathBuf::from("trace.vtr")]);
         let options =
-            Options::parse(["cpu.vtr", "--", "dram.fst"].map(str::to_owned), None, None).unwrap();
+            Options::parse(["cpu.vtr", "--", "dram.vtr"].map(str::to_owned), None, None).unwrap();
         assert_eq!(
             options.files,
-            [PathBuf::from("cpu.vtr"), PathBuf::from("dram.fst")]
+            [PathBuf::from("cpu.vtr"), PathBuf::from("dram.vtr")]
         );
         let options = Options::parse(
             ["--workspace", "chosen.json"].map(str::to_owned),

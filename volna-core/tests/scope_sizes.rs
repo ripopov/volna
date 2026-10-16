@@ -1,5 +1,5 @@
 //! Scope sizes: the count over the session hierarchy equals a brute-force set count on
-//! every fixture, VTR and FST, and the scope tree reports it per row once the count after
+//! every VTR fixture, and the scope tree reports it per row once the count after
 //! open is delivered.
 
 use std::collections::HashSet;

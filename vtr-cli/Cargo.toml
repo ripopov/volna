@@ -15,11 +15,10 @@ doc = false
 
 [dependencies]
 vtr.workspace = true
+vtr-convert = { version = "0.1.0", path = "../vtr-convert" }
 volna-trace = { version = "0.1.0", path = "../volna-trace" }
 anyhow = "1"
 clap = { version = "4.6", features = ["derive"] }
-flate2 = "1"
-vcd = "0.7"
 tempfile.workspace = true
 
 [lints]

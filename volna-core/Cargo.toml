@@ -34,7 +34,7 @@ gethostname = "=1.1.0"
 bincode = "=1.3.3"
 volna-core = { version = "0.1.0", path = ".", features = ["testing"] }
 tempfile = "3"
-vtr-cli = { version = "0.1.0", path = "../vtr-cli" }
+vtr-convert = { version = "0.1.0", path = "../vtr-convert" }
 
 [lints]
 workspace = true

@@ -7680,7 +7680,7 @@ dependencies = [
  "volna-core",
  "volna-trace",
  "vtr",
- "vtr-cli",
+ "vtr-convert",
  "web-time",
 ]
 
@@ -7705,11 +7705,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bincode",
- "crc32fast",
- "flate2",
- "fst-reader",
  "lz4_flex 0.11.6",
- "memmap2",
  "serde",
  "serde_json",
  "tempfile",
@@ -7770,7 +7766,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "tempfile",
+ "volna-trace",
+ "vtr",
+ "vtr-convert",
+]
+
+[[package]]
+name = "vtr-convert"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "flate2",
+ "fst-reader",
  "tempfile",
  "vcd",
  "volna-trace",

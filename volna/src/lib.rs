@@ -1,4 +1,4 @@
-//! GPUI frontend for viewing VTR and FST recordings.
+//! GPUI frontend for viewing VTR recordings.
 
 pub mod app;
 pub mod assets;

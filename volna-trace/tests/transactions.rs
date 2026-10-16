@@ -1,19 +1,7 @@
 use volna_trace::OpenSpec;
 use volna_trace::data::transactions::*;
 #[test]
-fn capabilities_distinguish_empty_from_unsupported() {
-    let fst = OpenSpec::Bytes {
-        name: "features.fst".into(),
-        bytes: include_bytes!("fixtures/features.fst").to_vec(),
-    }
-    .open()
-    .unwrap();
-    assert!(fst.capabilities().waveforms);
-    assert!(!fst.capabilities().transactions);
-    assert!(!fst.capabilities().relations);
-    assert!(fst.tracks().is_empty());
-    assert!(fst.load_track(TrackRef(0)).is_err());
-
+fn empty_transaction_catalog_still_supports_transactions() {
     let file = tempfile::NamedTempFile::new().unwrap();
     vtr::Writer::create(file.path()).unwrap().close().unwrap();
     let vtr = OpenSpec::Path(file.path().into()).open().unwrap();

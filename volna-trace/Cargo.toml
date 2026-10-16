@@ -9,21 +9,17 @@ readme = "README.md"
 description = "Standalone immutable trace access and complete-object remote loading"
 
 [dependencies]
-crc32fast.workspace = true
-memmap2.workspace = true
-tempfile.workspace = true
 vtr.workspace = true
 anyhow = "1"
 bincode = "=1.3.3"
 lz4_flex = { workspace = true, features = ["frame"] }
-fst-reader = "0.17"
-flate2 = "1"
 serde = { version = "1", features = ["derive"] }
 
 [features]
 testing = []
 
 [dev-dependencies]
+tempfile.workspace = true
 serde_json = "1"
 volna-trace = { version = "0.1.0", path = ".", features = ["testing"] }
 

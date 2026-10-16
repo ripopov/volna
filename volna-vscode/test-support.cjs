@@ -6,8 +6,8 @@ const traces = [
     viewport: [0, 10000000],
   },
   {
-    name: "values.fst",
-    source: "volna-trace/tests/fixtures/values.fst",
+    name: "values.vtr",
+    source: "volna-trace/tests/fixtures/values.vtr",
     theme: "Default Light Modern",
     viewport: [5, 20],
   },

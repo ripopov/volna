@@ -2,7 +2,7 @@
 Version=1.0
 Type=Application
 Name=Volna
-Comment=VTR and FST waveform viewer
+Comment=VTR waveform viewer
 Exec=volna %f
 TryExec=volna
 Icon=io.github.ripopov.volna

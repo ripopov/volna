@@ -26,7 +26,7 @@ queued `LoadRequest` values on its worker executor and returns `LoadResult`
 values to `App`. Each request carries a trace identity and generation so a late
 result cannot update a replaced trace.
 
-The core consumes immutable VTR/FST sessions from
+The core consumes immutable VTR sessions from
 [`volna-trace`](../volna-trace/README.md). It keeps shared trace placement,
 cursor, markers, panel state, and row selections in the document. Panel models
 prepare layouts and toolkit-neutral `Scene` drawing commands; the frontend

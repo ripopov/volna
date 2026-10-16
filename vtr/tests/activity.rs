@@ -597,12 +597,14 @@ fn sidecar_is_bound_to_its_trace() {
     let mut flipped = image.clone();
     flipped[200] ^= 0x40;
     assert!(Index::decode(&flipped, &id).is_err());
-    let mut v2 = image;
-    v2[8] = 2;
-    assert!(matches!(
-        Index::decode(&v2, &id),
-        Err(Error::UnsupportedVersion { major: 2, .. })
-    ));
+    for version in [activity::VERSION - 1, activity::VERSION + 1] {
+        let mut unsupported = image.clone();
+        unsupported[8..10].copy_from_slice(&version.to_le_bytes());
+        assert!(matches!(
+            Index::decode(&unsupported, &id),
+            Err(Error::UnsupportedVersion { major, .. }) if major == version
+        ));
+    }
 }
 
 #[test]

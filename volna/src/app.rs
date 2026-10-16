@@ -1947,7 +1947,7 @@ impl Workspace {
             .child(
                 div()
                     .text_color(colors.text_muted)
-                    .child("Open a VTR or FST trace to browse its signals and transactions"),
+                    .child("Open a VTR trace to browse its signals and transactions"),
             )
             .when_some(error, |el, e| {
                 el.child(

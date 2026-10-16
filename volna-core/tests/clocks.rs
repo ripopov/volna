@@ -501,7 +501,7 @@ fn a_kanata_import_counts_its_pipeline_in_the_cycle_clock() {
     .unwrap();
     let out = dir.path().join("t.vtr");
     let mut w = vtr::Writer::create(&out).unwrap();
-    vtr_cli::kanata::convert_kanata(log.to_str().unwrap(), &mut w).unwrap();
+    vtr_convert::kanata::convert_kanata(log.to_str().unwrap(), &mut w).unwrap();
     w.close().unwrap();
     let session = OpenSpec::Path(out).open().unwrap();
     let mut app = App::new();

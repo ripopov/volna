@@ -28,7 +28,7 @@ fn kanata_cycles_threads_stages_labels_relations_and_open_instructions() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace.vtr");
     let mut w = writer(&path);
-    vtr_cli::kanata::convert_kanata(fixture("pipeline.kanata"), &mut w).unwrap();
+    vtr_convert::kanata::convert_kanata(fixture("pipeline.kanata"), &mut w).unwrap();
     w.close().unwrap();
     let r = Reader::open(path).unwrap();
     assert_eq!(r.meta().timescale, 0);
@@ -91,7 +91,7 @@ fn kanata_gzip_and_malformed_input() {
         .unwrap();
     encoder.finish().unwrap();
     let mut w = writer(&dir.path().join("gzip.vtr"));
-    vtr_cli::kanata::convert_kanata(gzip, &mut w).unwrap();
+    vtr_convert::kanata::convert_kanata(gzip, &mut w).unwrap();
     w.close().unwrap();
     for input in [
         "",
@@ -108,130 +108,11 @@ fn kanata_gzip_and_malformed_input() {
         std::fs::write(&source, input).unwrap();
         let mut w = writer(&dir.path().join("bad.vtr"));
         assert!(
-            vtr_cli::kanata::convert_kanata(source, &mut w).is_err(),
+            vtr_convert::kanata::convert_kanata(source, &mut w).is_err(),
             "{input}"
         );
     }
 }
-#[test]
-fn vcd_timebase_aliases_values_events_and_export_roundtrip() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("trace.vtr");
-    let mut w = writer(&path);
-    vtr_cli::vcd::convert_vcd(fixture("waves.vcd"), &mut w).unwrap();
-    w.close().unwrap();
-    let r = Reader::open(&path).unwrap();
-    assert_eq!(r.meta().timescale, -8);
-    assert_eq!(r.time_range().unwrap().1, 10);
-    let clk = r.find_signal("top.clk", '.').unwrap();
-    assert_eq!(r.find_signal("top.alias", '.'), Some(clk));
-    let bus = r.find_signal("top.bus [3:0]", '.').unwrap();
-    assert_eq!(r.value_at(bus, 0).unwrap().to_ascii(), "10xz");
-    assert_eq!(r.value_at(bus, 5).unwrap().to_ascii(), "z001");
-    let real = r.find_signal("top.temperature", '.').unwrap();
-    assert_eq!(r.value_at(real, 5).unwrap().to_ascii(), "-2.5");
-    let event = r.find_signal("top.pulse", '.').unwrap();
-    assert_eq!(
-        r.changes(event, 0, 10)
-            .unwrap()
-            .iter()
-            .map(|(t, _)| *t)
-            .collect::<Vec<_>>(),
-        [5, 5, 7]
-    );
-    let out = dir.path().join("export.vcd");
-    vtr_cli::vcdout::write_vcd(&r, std::fs::File::create(&out).unwrap()).unwrap();
-    let again = dir.path().join("again.vtr");
-    let mut w = writer(&again);
-    vtr_cli::vcd::convert_vcd(out, &mut w).unwrap();
-    w.close().unwrap();
-    let rr = Reader::open(again).unwrap();
-    for name in ["top.clk", "top.bus [3:0]", "top.temperature", "top.pulse"] {
-        let changes = |reader: &Reader| {
-            reader
-                .changes(reader.find_signal(name, '.').unwrap(), 0, 10)
-                .unwrap()
-                .iter()
-                .map(|(t, v)| (*t, v.to_ascii()))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(changes(&r), changes(&rr), "{name}");
-    }
-    assert_eq!(rr.time_range(), r.time_range());
-}
-#[test]
-fn fst_conversion_matches_shared_histories_including_aliases_and_raw_values() {
-    for name in ["values.fst", "values-wrapped.fst", "fst_types.fst"] {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../volna-trace/tests/fixtures")
-            .join(name);
-        let session = volna_trace::OpenSpec::Path(source.clone()).open().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let out = dir.path().join("trace.vtr");
-        let mut w = writer(&out);
-        vtr_cli::fst::convert_fst(&source, &mut w).unwrap();
-        w.close().unwrap();
-        let converted = volna_trace::OpenSpec::Path(out).open().unwrap();
-        assert_eq!(session.info().timescale, converted.info().timescale);
-        assert_eq!(session.info().time_range.1, converted.info().time_range.1);
-        let (a, b) = (session.hierarchy(), converted.hierarchy());
-        assert_eq!(a.var_count(), b.var_count());
-        for id in 0..a.var_count() {
-            assert_eq!(a.full_name(id), b.full_name(id));
-            assert_eq!(a.var(id).shape, b.var(id).shape);
-            assert_eq!(a.var(id).direction, b.var(id).direction);
-            let x = session.load_signal(a.signal(id)).unwrap();
-            let y = converted.load_signal(b.signal(id)).unwrap();
-            assert_eq!(x.len(), y.len(), "{name}: {}", a.full_name(id));
-            for i in 0..x.len() {
-                assert_eq!(x.time(i), y.time(i));
-                match (x.value(Some(i)), y.value(Some(i))) {
-                    (
-                        volna_trace::data::WaveValue::Real(a),
-                        volna_trace::data::WaveValue::Real(b),
-                    ) => assert_eq!(a.to_bits(), b.to_bits()),
-                    (a, b) => assert_eq!(a, b),
-                }
-            }
-            for other in 0..id {
-                assert_eq!(
-                    a.signal(id) == a.signal(other),
-                    b.signal(id) == b.signal(other)
-                );
-            }
-        }
-    }
-}
-#[test]
-fn export_rejects_unrepresentable_data_and_propagates_write_errors() {
-    let dir = tempfile::tempdir().unwrap();
-    for kind in [
-        vtr::SignalKind::VarLen,
-        vtr::SignalKind::bits(1, vtr::LogicStates::Nine),
-    ] {
-        let path = dir.path().join("trace.vtr");
-        let mut w = writer(&path);
-        w.add_var(
-            None,
-            "a",
-            vtr::VarType::Wire,
-            vtr::Direction::Implicit,
-            kind,
-        )
-        .unwrap();
-        w.close().unwrap();
-        let r = Reader::open(path).unwrap();
-        assert!(vtr_cli::vcdout::write_vcd(&r, Vec::new()).is_err());
-    }
-    let path = dir.path().join("trace.vtr");
-    let mut w = writer(&path);
-    vtr_cli::vcd::convert_vcd(fixture("waves.vcd"), &mut w).unwrap();
-    w.close().unwrap();
-    let r = Reader::open(path).unwrap();
-    let mut tiny = [0u8; 8];
-    assert!(vtr_cli::vcdout::write_vcd(&r, &mut tiny[..]).is_err());
-}
-
 #[test]
 fn vcd_short_vectors_strings_and_dump_intervals() {
     let dir = tempfile::tempdir().unwrap();
@@ -239,7 +120,7 @@ fn vcd_short_vectors_strings_and_dump_intervals() {
     std::fs::write(&input, "$var wire 4 ! bus $end\n$var string 1 \" text $end\n$enddefinitions $end\n#0\nb1 !\nshello \"\n#2\n$dumpoff\nbx !\n$end\n#4\n$dumpon\nbz !\n$end\n").unwrap();
     let path = dir.path().join("values.vtr");
     let mut w = writer(&path);
-    vtr_cli::vcd::convert_vcd(input, &mut w).unwrap();
+    vtr_convert::vcd::convert_vcd(input, &mut w).unwrap();
     w.close().unwrap();
     let r = Reader::open(path).unwrap();
     assert_eq!(r.meta().timescale, -9);
@@ -278,6 +159,9 @@ fn vcd_malformed_commands_and_aliases_are_errors() {
         let path = dir.path().join("bad.vcd");
         std::fs::write(&path, &input).unwrap();
         let mut w = writer(&dir.path().join("out.vtr"));
-        assert!(vtr_cli::vcd::convert_vcd(path, &mut w).is_err(), "{input}");
+        assert!(
+            vtr_convert::vcd::convert_vcd(path, &mut w).is_err(),
+            "{input}"
+        );
     }
 }

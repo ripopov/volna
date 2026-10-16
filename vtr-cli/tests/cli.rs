@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
+        .join("../vtr-convert/tests/fixtures")
         .join(name)
 }
 fn run(dir: &Path, args: &[&str]) -> Output {
@@ -202,16 +202,20 @@ fn transactions_clocks_logs_and_window_bounds() {
     );
 }
 #[test]
-fn fst_activity_uses_the_shared_session_api() {
+fn fst_must_be_converted_before_activity_indexing() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     let fixture =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures/values.fst");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../vtr-convert/tests/fixtures/values.fst");
     std::fs::copy(fixture, d.join("values.fst")).unwrap();
-    ok(d, &["index", "values.fst"]);
-    ok(d, &["index", "values.fst", "--check"]);
-    let output = ok(d, &["active", "values.fst", "--from", "11", "--to", "1000"]);
-    let session = volna_trace::OpenSpec::Path(d.join("values.fst"))
+    for command in ["index", "active"] {
+        assert!(!run(d, &[command, "values.fst"]).status.success());
+    }
+    ok(d, &["convert", "values.fst", "values.vtr"]);
+    ok(d, &["index", "values.vtr"]);
+    ok(d, &["index", "values.vtr", "--check"]);
+    let output = ok(d, &["active", "values.vtr", "--from", "11", "--to", "1000"]);
+    let session = volna_trace::OpenSpec::Path(d.join("values.vtr"))
         .open()
         .unwrap();
     let refs: Vec<_> = session.hierarchy().vars().map(|v| v.signal).collect();

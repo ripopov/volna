@@ -324,50 +324,26 @@ impl OpenSpec {
             }
             #[cfg(not(target_family = "wasm"))]
             OpenSpec::Path(p) => {
-                use std::io::{Read, Seek};
-                let mut input = std::io::BufReader::new(std::fs::File::open(&p)?);
-                let mut prefix = [0; 9];
-                input.read_exact(&mut prefix)?;
-                input.rewind()?;
-                if is_fst(&prefix)? {
-                    let name = p
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned();
-                    let mut session =
-                        crate::data::fst_source::FstSession::open(name, Box::new(input))?;
-                    session.find_activity(&p);
-                    Ok(Arc::new(session))
-                } else {
-                    Ok(Arc::new(LocalSession::open(&p)?))
-                }
+                use std::io::Read;
+                let mut prefix = Vec::with_capacity(8);
+                std::fs::File::open(&p)?.take(8).read_to_end(&mut prefix)?;
+                ensure_vtr(&prefix)?;
+                Ok(Arc::new(LocalSession::open(&p)?))
             }
             OpenSpec::Bytes { name, bytes } => {
-                if is_fst(&bytes)? {
-                    Ok(Arc::new(crate::data::fst_source::FstSession::open(
-                        name,
-                        Box::new(std::io::Cursor::new(bytes)),
-                    )?))
-                } else {
-                    Ok(Arc::new(LocalSession::from_bytes(name, bytes)?))
-                }
+                ensure_vtr(&bytes)?;
+                Ok(Arc::new(LocalSession::from_bytes(name, bytes)?))
             }
         }
     }
 }
 
-fn is_fst(bytes: &[u8]) -> anyhow::Result<bool> {
-    if bytes.starts_with(&vtr::container::FILE_MAGIC) {
-        return Ok(false);
-    }
-    if bytes.len() >= 9
-        && (bytes[0] == 254
-            || (bytes[0] == 0 && u64::from_be_bytes(bytes[1..9].try_into().unwrap()) == 329))
-    {
-        return Ok(true);
-    }
-    anyhow::bail!("unrecognized trace format: expected VTR or FST header")
+fn ensure_vtr(bytes: &[u8]) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        bytes.starts_with(&vtr::container::FILE_MAGIC),
+        "unsupported trace format: expected VTR; convert foreign recordings with `vtr convert INPUT OUTPUT` before opening"
+    );
+    Ok(())
 }
 
 pub enum LoadRequest<Tag = u64> {

@@ -229,9 +229,5 @@ impl ScopeActivity {
 
 #[must_use]
 pub fn estimated_seconds(info: volna_trace::data::ActivityBuildInfo) -> u64 {
-    let rate = match info.format {
-        vtr::activity::SourceFormat::Vtr => 1 << 30,
-        vtr::activity::SourceFormat::Fst => 400 << 20,
-    };
-    info.bytes.div_ceil(rate).max(1)
+    info.bytes.div_ceil(1 << 30).max(1)
 }

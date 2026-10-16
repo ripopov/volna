@@ -1,5 +1,4 @@
-//! FST loading and agreement with paired VTR recordings; fixture provenance is documented
-//! in tests/fixtures/README.md.
+//! Conversion fidelity and malformed FST inputs.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,9 +11,121 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn converted(bytes: Vec<u8>) -> anyhow::Result<Arc<dyn volna_trace::Session>> {
+    let dir = tempfile::tempdir()?;
+    let input = dir.path().join("input.fst");
+    let output = dir.path().join("output.vtr");
+    std::fs::write(&input, bytes)?;
+    let mut writer = vtr::Writer::create_with(
+        &output,
+        vtr::WriterOptions {
+            dedup: false,
+            background: false,
+            ..Default::default()
+        },
+    )?;
+    vtr_convert::fst::convert_fst(&input, &mut writer)?;
+    writer.close()?;
+    OpenSpec::Bytes {
+        name: "output.vtr".into(),
+        bytes: std::fs::read(output)?,
+    }
+    .open()
+}
+
+#[test]
+fn declarations_aliases_and_every_sample_match_the_fst_decoder() {
+    use fst_reader::{FstFilter, FstHierarchyEntry, FstReader, FstSignalValue};
+    use std::collections::BTreeMap;
+
+    for name in [
+        "values.fst",
+        "fst_types.fst",
+        "zlib.fst",
+        "landing_dram.fst",
+    ] {
+        let bytes = std::fs::read(fixture(name)).unwrap();
+        let session = converted(bytes.clone()).unwrap();
+        let mut reader = FstReader::open(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(
+            session.info().timescale,
+            reader.get_header().timescale_exponent
+        );
+        assert_eq!(session.info().time_range.1, reader.get_header().end_time);
+        let mut declarations = Vec::new();
+        reader
+            .read_hierarchy(|entry| {
+                if let FstHierarchyEntry::Var {
+                    name,
+                    tpe,
+                    direction,
+                    handle,
+                    ..
+                } = entry
+                {
+                    declarations.push((name, tpe, direction, handle.get_index()));
+                }
+            })
+            .unwrap();
+        assert_eq!(session.hierarchy().var_count(), declarations.len());
+        let mut histories = BTreeMap::new();
+        for (id, (name, tpe, direction, handle)) in declarations.iter().enumerate() {
+            let var = session.hierarchy().var(id);
+            assert_eq!(var.name, name);
+            assert_eq!(var.var_type, vtr::VarType::from_code(*tpe as u16).name());
+            let expected = match vtr::Direction::from_u8(*direction as u8) {
+                vtr::Direction::Input => volna_trace::data::Direction::Input,
+                vtr::Direction::Output => volna_trace::data::Direction::Output,
+                vtr::Direction::InOut => volna_trace::data::Direction::InOut,
+                _ => volna_trace::data::Direction::None,
+            };
+            assert_eq!(var.direction, expected);
+            let history = session.load_signal(var.signal).unwrap();
+            if let Some((signal, _, _)) = histories.get(handle) {
+                assert_eq!(var.signal, *signal, "alias {name}");
+            } else {
+                histories.insert(*handle, (var.signal, history, 0usize));
+            }
+        }
+        reader
+            .read_signals(
+                &FstFilter::all(),
+                |time, handle, value| -> anyhow::Result<()> {
+                    let (_, history, offset) = histories.get_mut(&handle.get_index()).unwrap();
+                    assert_eq!(history.time(*offset), time, "{name}: {handle:?}");
+                    let actual = history.value(Some(*offset));
+                    match value {
+                        FstSignalValue::Real(expected) => {
+                            let WaveValue::Real(actual) = actual else {
+                                panic!("expected real")
+                            };
+                            assert_eq!(actual.to_bits(), expected.to_bits());
+                        }
+                        FstSignalValue::String(bytes) => {
+                            let expected = if history.shape()
+                                == volna_trace::data::SignalShape::Text
+                            {
+                                WaveValue::Bytes(bytes.to_vec())
+                            } else {
+                                WaveValue::Bits(std::str::from_utf8(bytes)?.to_ascii_lowercase())
+                            };
+                            assert_eq!(actual, expected, "{name}: {handle:?} at {time}");
+                        }
+                    }
+                    *offset += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        for (_, history, count) in histories.into_values() {
+            assert_eq!(history.len(), count, "{name}: sample count");
+        }
+    }
+}
+
 #[test]
 fn surfer_fst_types_loads() {
-    let session = OpenSpec::Path(fixture("fst_types.fst")).open().unwrap();
+    let session = converted(std::fs::read(fixture("fst_types.fst")).unwrap()).unwrap();
     let signals: Vec<_> = session.hierarchy().vars().map(|v| v.signal).collect();
     assert_eq!(signals.len(), 76);
     for (signal, result) in session.load_signals(&signals) {
@@ -34,12 +145,13 @@ fn surfer_fst_types_loads() {
 #[test]
 fn equivalent_verilator_traces_agree_at_every_change() {
     for design in ["features", "operators", "pipeline"] {
-        let fst = OpenSpec::Path(fixture(&format!("{design}.fst")))
-            .open()
-            .unwrap();
-        let vtr = OpenSpec::Path(fixture(&format!("{design}.vtr")))
-            .open()
-            .unwrap();
+        let fst = converted(std::fs::read(fixture(&format!("{design}.fst"))).unwrap()).unwrap();
+        let vtr = OpenSpec::Path(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../volna-trace/tests/fixtures/{design}.vtr")),
+        )
+        .open()
+        .unwrap();
         assert_eq!(fst.info().timescale, vtr.info().timescale);
         let signals: Vec<_> = fst.hierarchy().vars().map(|v| v.signal).collect();
         let histories = fst.load_signals(&signals);
@@ -73,14 +185,7 @@ fn equivalent_verilator_traces_agree_at_every_change() {
 #[test]
 fn malformed_images_report_errors() {
     for bytes in [vec![], b"not a trace".to_vec(), vec![0; 9]] {
-        assert!(
-            OpenSpec::Bytes {
-                name: "trace.fst".into(),
-                bytes
-            }
-            .open()
-            .is_err()
-        );
+        assert!(converted(bytes).is_err());
     }
 }
 
@@ -88,28 +193,13 @@ fn malformed_images_report_errors() {
 fn truncated_sections_and_overflowing_lengths_return_errors() {
     let original = include_bytes!("fixtures/values.fst");
     for end in [9, 100, 329, original.len() - 1] {
-        assert!(
-            OpenSpec::Bytes {
-                name: "truncated.fst".into(),
-                bytes: original[..end].to_vec()
-            }
-            .open()
-            .is_err(),
-            "prefix {end}"
-        );
+        assert!(converted(original[..end].to_vec()).is_err(), "prefix {end}");
     }
     for size in [0u64, 7, u64::MAX] {
         let mut bytes = original.to_vec();
         let offset = 330;
         bytes[offset + 1..offset + 9].copy_from_slice(&size.to_be_bytes());
-        assert!(
-            OpenSpec::Bytes {
-                name: "bad-length.fst".into(),
-                bytes
-            }
-            .open()
-            .is_err()
-        );
+        assert!(converted(bytes).is_err());
     }
 }
 
@@ -117,13 +207,7 @@ fn truncated_sections_and_overflowing_lengths_return_errors() {
 fn gzip_wrapper_preserves_values_and_rejects_truncation() {
     let wrapped = include_bytes!("fixtures/values-wrapped.fst");
     assert_eq!(wrapped[0], 254);
-    let open = |bytes: Vec<u8>| {
-        OpenSpec::Bytes {
-            name: "wrapped.fst".into(),
-            bytes,
-        }
-        .open()
-    };
+    let open = |bytes: Vec<u8>| converted(bytes);
     let a = open(wrapped.to_vec()).unwrap();
     let b = open(include_bytes!("fixtures/values.fst").to_vec()).unwrap();
     assert_eq!(a.info().time_range, b.info().time_range);
@@ -158,13 +242,7 @@ fn unsupported_time_and_dump_metadata_is_explicit_even_when_wrapped() {
         wrapped.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
         wrapped.extend_from_slice(&compressed);
         for image in [bytes, wrapped] {
-            let error = OpenSpec::Bytes {
-                name: "metadata.fst".into(),
-                bytes: image,
-            }
-            .open()
-            .err()
-            .expect("unsupported metadata");
+            let error = converted(image).err().expect("unsupported metadata");
             assert!(error.to_string().contains(expected), "{error:#}");
         }
     }
@@ -172,12 +250,7 @@ fn unsupported_time_and_dump_metadata_is_explicit_even_when_wrapped() {
 
 #[test]
 fn raw_bytes_reals_nine_states_and_time_boundaries() {
-    let fst = OpenSpec::Bytes {
-        name: "wrong-extension.vtr".into(),
-        bytes: include_bytes!("fixtures/values.fst").to_vec(),
-    }
-    .open()
-    .unwrap();
+    let fst = converted(include_bytes!("fixtures/values.fst").to_vec()).unwrap();
     assert_eq!(fst.info().timescale, -12);
     assert_eq!(fst.info().time_range, (5, 20));
     let vars: Vec<_> = fst.hierarchy().vars().collect();
@@ -187,7 +260,7 @@ fn raw_bytes_reals_nine_states_and_time_boundaries() {
     assert_eq!(bytes.index_at(4), None);
     for result in &loaded[..4] {
         let history = result.1.as_ref().unwrap();
-        assert_eq!(history.value(history.index_at(4)), WaveValue::Unavailable);
+        assert_eq!(history.index_at(4), None);
     }
     assert_eq!(
         bytes.value(bytes.index_at(5)),
@@ -211,7 +284,7 @@ fn raw_bytes_reals_nine_states_and_time_boundaries() {
         logic.value(logic.index_at(10)),
         WaveValue::Bits("111111111".into())
     );
-    assert!(Arc::ptr_eq(logic, loaded[3].1.as_ref().unwrap()));
+    assert_eq!(vars[2].signal, vars[3].signal);
     assert!(fst.load_signal(SignalRef(u32::MAX)).is_err());
     assert!(fst.load_signals(&[]).is_empty());
     let event = loaded[4].1.as_ref().unwrap();

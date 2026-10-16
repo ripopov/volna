@@ -12,11 +12,11 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let mut args = std::env::args_os().skip(1);
     let Some(path) = args.next() else {
-        anyhow::bail!("usage: volna-server <trace.vtr|trace.fst>");
+        anyhow::bail!("usage: volna-server <trace.vtr>");
     };
     if path == "--help" {
         println!(
-            "Usage: volna-server <trace.vtr|trace.fst>\n\nServes one immutable recording over framed stdin/stdout. Diagnostics use stderr."
+            "Usage: volna-server <trace.vtr>\n\nServes one immutable recording over framed stdin/stdout. Diagnostics use stderr."
         );
         return Ok(());
     }

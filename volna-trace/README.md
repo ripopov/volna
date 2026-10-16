@@ -1,6 +1,6 @@
 # Volna trace loading
 
-`volna-trace` opens immutable VTR and FST recordings and exposes a common API
+`volna-trace` opens immutable VTR recordings and exposes a common API
 for local and remote access. It provides hierarchy metadata, complete signal
 histories, transaction tracks, activity sidecars, memory admission, and a
 cooperative remote client. It has no GUI toolkit or server-process dependency.
@@ -8,6 +8,13 @@ cooperative remote client. It has no GUI toolkit or server-process dependency.
 Use [`vtr`](../vtr/README.md) to write a recording or query its format-specific
 features. Use `volna-trace` when a consumer needs the same objects from a local
 file, an in-memory image, or [`volna-server`](../volna-server/README.md).
+
+FST and Kanata must be converted before opening:
+
+```sh
+vtr convert input.fst output.vtr
+vtr convert input.kanata output.vtr
+```
 
 ## Read a local recording
 
@@ -21,8 +28,7 @@ cargo doc --locked -p volna-trace --no-deps --open
 The crate requires Rust 1.97.1 or newer. The workspace also needs a C compiler
 for VTR's Zstandard dependency.
 
-`OpenSpec::Path` detects the format from the file header, rather than its
-extension. Opening and local queries block; a host should run them on its
+`OpenSpec::Path` validates the VTR header, regardless of the file extension. Opening and local queries block; a host should run them on its
 worker executor. Opening a local recording does not start a server.
 
 ```rust
@@ -48,7 +54,7 @@ and all supported logic states.
 
 For an image already in memory, use `OpenSpec::Bytes { name, bytes }`. The name
 labels the recording; its bytes determine the format. Native path access uses
-a memory-mapped VTR reader or a buffered FST reader. Keep files unchanged while
+a memory-mapped VTR reader. Keep files unchanged while
 sessions or objects borrowing their storage exist.
 
 ## Metadata and complete objects
@@ -65,8 +71,7 @@ sessions or objects borrowing their storage exist.
 
 Aliases refer to the same signal identity. A batched load can share their
 history storage. An empty transaction catalog differs from an unsupported
-operation: VTR supports transactions even in a waveform-only recording; FST
-does not support transaction or relation loading.
+operation: VTR supports transactions even in a waveform-only recording.
 
 An activity sidecar helps identify signals that are quiet or changing in a
 time window. Its classification can leave signals undecided; use
@@ -74,7 +79,7 @@ time window. Its classification can leave signals undecided; use
 index with `build_activity()`, a memory budget, and VTR's `BuildOptions`.
 `BuildControl` provides progress and cancellation. Byte images and recovered
 recordings have no stable activity build source. See the
-[activity sidecar specification](../vtr/docs/SPEC.md#activity-index-sidecar-version-1).
+[activity sidecar specification](../vtr/docs/SPEC.md#activity-index-sidecar-version-2).
 
 ## Remote loading
 
@@ -104,7 +109,7 @@ and generations identify completions without entering the wire protocol.
 `RemoteClient`, rather than their blocking local query methods.
 
 The [server guide](../volna-server/README.md) describes process hosting and
-protocol version 7. Local and remote objects have the same data contract;
+protocol version 8. Local and remote objects have the same data contract;
 transport carries runtime facts. Viewport state, search, value translation,
 transaction layout, VDB design semantics, and annotations belong to consumers.
 
@@ -119,8 +124,7 @@ refuses new reservations without evicting existing objects.
 These limits do not bound total process memory, reader caches, or every
 allocation made before admission. Complete metadata and selected histories or
 tracks must fit in memory. Remote queries load complete objects; there are no
-window-query or live-recording endpoints. FST recordings with nonzero time
-offsets or dump-off regions are rejected explicitly. In a single-threaded WASM
+window-query or live-recording endpoints. In a single-threaded WASM
 host, local byte-image decoding can block; remote decoding yields cooperatively.
 
 ## Verification
@@ -131,7 +135,7 @@ cargo test --locked -p volna-trace --doc
 cargo clippy --locked -p volna-trace --all-targets --all-features -- -D warnings
 ```
 
-Tests cover local VTR/FST agreement, aliases, transaction semantics, compact
+Tests cover local and remote VTR agreement, aliases, transaction semantics, compact
 hierarchy transfer, corrupted and incomplete responses, cooperative decoding,
 and memory ownership. All binary fixtures are committed under
 [`tests/fixtures`](tests/fixtures/README.md); no simulator or submodule is needed.

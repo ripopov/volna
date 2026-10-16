@@ -857,12 +857,11 @@ The Rust reader supports decoded-cache eviction through `Reader::clear_cache`.
 This changes in-memory ownership only, with no file-format or version change.
 See its rustdoc for exclusive-access requirements and result lifetimes.
 
-## Activity index sidecar, version 1
+## Activity index sidecar, version 2
 
 An activity index answers which signals change in a time window, for every
 signal at once. It is derived data in a
-file of its own: `<trace>.index` beside the trace (`run.vtr.index`,
-`run.fst.index`), or, when
+file of its own: `<trace>.index` beside the trace (`run.vtr.index`), or, when
 that directory is read-only, `<format>-<length>-<crc>.index` in a user cache
 directory (`$XDG_CACHE_HOME/vtr/index`, `~/.cache/vtr/index`). The trace
 format and its writer are unchanged. A reader uses a sidecar only when the
@@ -876,10 +875,7 @@ between two consecutive changes; its length is `b − a` and its *interior* is
 `[a + 1, b − 1]`. The trace's blocks, in time order, have first and last time
 steps `start_k` and `end_k`. Block `k`'s *cell* is `(end_{k−1}, end_k]`; the
 first cell extends down and the last cell up without bound, so the cells
-partition time. For an FST the blocks are its value-change blocks with the
-start and end times of their headers, `t_min` is the header's start time,
-and a block's frame, the values at its start, is never a change. Each block
-has a threshold `Δ_k = 2^j_k`. A signal's
+partition time. Each block has a threshold `Δ_k = 2^j_k`. A signal's
 changes form *stretches*, maximal runs of changes separated by *kept*
 silences; a stretch records its first change, its last change and its
 largest *gap*, the longest silence inside it (0 for a single change).
@@ -910,7 +906,7 @@ silence `(a, b)` that ends in block `k` when `b − a` exceeds the smallest `Δ`
 of the blocks from the cell holding `a + 1` through `k`.
 
 **Container.** The file uses the VTR container (section 2) with its own
-magic `89 56 54 49 0D 0A 1A 0A` (`\x89VTI\r\n\x1a\n`), major version 1 and
+magic `89 56 54 49 0D 0A 1A 0A` (`\x89VTI\r\n\x1a\n`), major version 2 and
 minor version 0; a reader rejects any other major version. Every section
 carries its CRC-32. The directory and trailer are required: a sidecar is
 written under a temporary name and renamed into place when complete, and is
@@ -924,8 +920,8 @@ HEADER payload (40 bytes):
 | offset | size | field |
 |---:|---:|---|
 | 0 | 8 | `u64` trace length in bytes |
-| 8 | 4 | `u32` CRC-32 of the trace's table of contents: the DIRECTORY payload of a VTR file; the header, geometry and hierarchy blocks of an FST (type byte, length and payload, in file order); every byte of a gzip-wrapped FST |
-| 12 | 1 | `u8` source format: 1 VTR, 2 FST |
+| 8 | 4 | `u32` CRC-32 of the trace's table of contents: the DIRECTORY payload of the VTR file |
+| 12 | 1 | `u8` source format: 1 VTR |
 | 13 | 3 | reserved, 0 |
 | 16 | 4 | `u32` signal count |
 | 20 | 4 | `u32` disk budget, parts per million of each block's bytes |
@@ -967,4 +963,4 @@ then a compressed blob of three columns with one row per signal that changes,
 ascending: the signal delta as above, the length of the signal's final
 stretch and its gap. A signal's stretches are the ones its BLOCK rows close,
 in block order, followed by its final stretch; a signal that never changes
-has none. Signals are VTR signal ids, or FST handles counted from 0.
+has none. Signals are VTR signal ids.

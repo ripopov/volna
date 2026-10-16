@@ -1,9 +1,11 @@
 # Volna server
 
-`volna-server` serves one immutable VTR or FST recording over framed stdin and
+`volna-server` serves one immutable VTR recording over framed stdin and
 stdout. It supplies metadata, selected complete signal histories, complete
 transaction tracks, and raw activity sidecars. Diagnostics go to stderr.
 It uses [`volna-trace`](../volna-trace/README.md) and has no viewer or GUI dependency.
+
+Convert foreign recordings with `vtr convert INPUT OUTPUT` before serving the VTR.
 
 ## Build and start
 
@@ -55,13 +57,13 @@ Files must remain unchanged throughout a session. Live recordings are unsupporte
 
 ## Framing and object limits
 
-Protocol **6** is independent of the VTR file-format version. Peers reject other
+Protocol **8** is independent of the VTR file-format version. Peers reject other
 protocol versions; there is no negotiation. Each packet has a 12-byte header:
 
 | Field | Encoding |
 | --- | --- |
 | Magic | Four bytes: `VLNA` |
-| Version | Little-endian `u32`, currently 6 |
+| Version | Little-endian `u32`, currently 8 |
 | Encoded body length | Little-endian `u32`, at most 1 MiB |
 
 The body is an independent checksummed LZ4 frame containing a fixed-width,
@@ -76,7 +78,7 @@ wire schema. The service has no viewport, presentation, search, or VDB endpoints
 ## Activity sidecars
 
 The open catalog includes the activity source identity, cache availability,
-and reader hostname. A build request uses the same VTR/FST activity builder as
+and reader hostname. A build request uses the same VTR activity builder as
 local loading. A persistent sibling lock and a cache recheck coordinate server
 processes. The sidecar is published atomically beside the trace, or in an
 identity-keyed user cache when its directory is read-only.
@@ -95,7 +97,7 @@ cargo clippy --locked -p volna-server --all-targets --all-features -- -D warning
 ```
 
 Process tests launch the actual executable with isolated temporary files and
-a watchdog. They compare local and remote VTR/FST results, aliases, full
+a watchdog. They compare local and remote VTR results, aliases, full
 transaction records, parallel relations, empty generators, explicit errors,
 size limits, recording-change detection, and sidecar reuse between processes.
 Hierarchy tests also exercise transfers across multiple metadata pages.

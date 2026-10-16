@@ -5,7 +5,7 @@
 mod server;
 
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use volna_core::app::App;
@@ -541,25 +541,6 @@ fn an_index_of_another_trace_is_ignored() {
 }
 
 #[test]
-fn fst_traces_count_alike() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("zlib.fst");
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zlib.fst");
-    std::fs::copy(fixture, &path).unwrap();
-    let f = volna_trace::data::FstTrace::open(&path).unwrap();
-    vtr::activity::Sidecar::new(&path, &f.identity(), None)
-        .write(|w| f.build(w, &vtr::activity::BuildOptions::default()))
-        .unwrap();
-    let (mut app, session) = open(&path);
-    assert!(session.activity().is_some());
-    for (t0, t1) in [(0, 20_000_000), (1_000_000, 1_001_000), (100_000, 100_004)] {
-        view(&mut app, t0, t1);
-        settle(&mut app);
-        check_exact(&app, &session, t0, t1);
-    }
-}
-
-#[test]
 fn a_row_labels_its_count_and_range() {
     let exact = ScopeActivity {
         changing: 2483,
@@ -777,23 +758,6 @@ fn a_failed_build_can_be_retried_explicitly() {
     settle(&mut app);
     assert!(session.activity().is_some());
     assert!(build_views(&app).is_empty());
-}
-
-#[test]
-fn fst_build_from_the_viewer_installs_the_same_meters() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("run.fst");
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zlib.fst");
-    std::fs::copy(fixture, &path).unwrap();
-    let (mut app, session) = open(&path);
-    app.handle(volna_core::app::Command::BuildActivity(TraceId::A));
-    settle(&mut app);
-    assert!(session.activity().is_some());
-    for (t0, t1) in [(0, 20_000_000), (100_000, 100_004)] {
-        view(&mut app, t0, t1);
-        settle(&mut app);
-        check_exact(&app, &session, t0, t1);
-    }
 }
 
 #[cfg(unix)]
@@ -1263,31 +1227,6 @@ fn remote_exact_reads_span_multiple_complete_history_batches() {
                 .count(),
             3
         );
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn remote_fst_build_and_exact_windows_match_local() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("remote.fst");
-    std::fs::copy(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zlib.fst"),
-        &path,
-    )
-    .unwrap();
-    let local = OpenSpec::Path(path).open().unwrap();
-    let (mut rig, remote) = RemoteRig::open(local.clone());
-    let mut app = App::default();
-    app.set_session(remote.clone());
-    rig.settle(&mut app);
-    app.handle(volna_core::app::Command::BuildActivity(TraceId::A));
-    rig.settle(&mut app);
-    assert!(remote.activity().is_some());
-    for (t0, t1) in [(0, 0), (0, 20_000_000), (100_000, 100_004)] {
-        view(&mut app, t0, t1);
-        rig.settle(&mut app);
-        check_exact(&app, &local, t0, t1);
     }
 }
 

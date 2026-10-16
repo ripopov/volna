@@ -7,7 +7,7 @@ edition.workspace = true
 rust-version.workspace = true
 autoexamples = false
 default-run = "volna"
-description = "GPUI viewer for VTR and FST recordings"
+description = "GPUI viewer for VTR recordings"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

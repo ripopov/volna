@@ -47,8 +47,8 @@ mod tests {
     #[test]
     fn different_files_are_named_by_file() {
         assert_eq!(
-            derive_names(&["/sim/cpu/landing.vtr", "/sim/dram/dram.fst"]),
-            ["landing.vtr", "dram.fst"]
+            derive_names(&["/sim/cpu/landing.vtr", "/sim/dram/dram.vtr"]),
+            ["landing.vtr", "dram.vtr"]
         );
     }
 
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn a_single_or_repeated_source_keeps_its_file_name() {
-        assert_eq!(derive_names(&["file:///a/b/c.fst"]), ["c.fst"]);
+        assert_eq!(derive_names(&["file:///a/b/c.vtr"]), ["c.vtr"]);
         assert_eq!(derive_names(&["/a/c.vtr", "/a/c.vtr"]), ["c.vtr", "c.vtr"]);
         assert_eq!(derive_names(&[]), Vec::<String>::new());
     }

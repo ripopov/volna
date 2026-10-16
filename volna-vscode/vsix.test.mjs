@@ -31,7 +31,7 @@ async function freePort() {
 }
 
 test(
-  "installed VSIX opens and renders VTR and FST with its bundled server",
+  "installed VSIX opens and renders VTR with its bundled server",
   { timeout: 180000 },
   async (t) => {
     assert.equal(

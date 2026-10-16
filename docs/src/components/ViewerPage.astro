@@ -21,7 +21,7 @@ const { sample, controls = false } = Astro.props;
       </nav>}
       <noscript><p>Enable JavaScript to run the viewer. The <a href={`${base}docs/`}>engineering documentation</a> remains available.</p></noscript>
     </main>
-    <input id="recording-file" type="file" accept=".vtr,.fst" aria-label="Open a local recording" hidden />
+    <input id="recording-file" type="file" accept=".vtr" aria-label="Open a local recording" hidden />
     <script type="module" src={`${base}viewer/host.js`}></script>
   </body>
 </html>

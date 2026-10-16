@@ -18,7 +18,7 @@ fn main() {
     };
     if options.help {
         println!(
-            "usage: volna [FILE.vtr|FILE.fst …|FILE.volna.json]\n  Several traces open side by side: the first is A, the next B, …\n  --workspace FILE   load and autosave an explicit workspace\n  --no-workspace     disable workspace reads and writes\n  --config-dir DIR   settings directory (settings.json, state.json, themes/)\nEnvironment: VOLNA_WORKSPACE=off|FILE, VOLNA_CONFIG_DIR=DIR"
+            "usage: volna [FILE.vtr …|FILE.volna.json]\n  Several traces open side by side: the first is A, the next B, …\n  --workspace FILE   load and autosave an explicit workspace\n  --no-workspace     disable workspace reads and writes\n  --config-dir DIR   settings directory (settings.json, state.json, themes/)\nEnvironment: VOLNA_WORKSPACE=off|FILE, VOLNA_CONFIG_DIR=DIR"
         );
         return;
     }

@@ -1,6 +1,6 @@
 # VTR command-line tools
 
-`vtr-cli` supplies the `vtr` executable and Rust converters for Kanata, VCD,
+`vtr-cli` supplies the `vtr` executable and uses [`vtr-convert`](../vtr-convert/README.md) to import Kanata, VCD,
 and FST. It requires Rust 1.97.1 or newer. Build or install from the workspace:
 
 ```sh
@@ -25,8 +25,8 @@ vtr convert --help
 | `convert INPUT OUTPUT [--format kanata\|vcd\|fst]` | Kanata, VCD, FST | Create a VTR recording |
 | `to-vcd INPUT OUTPUT` | VTR | Export waveforms |
 | `recover INPUT OUTPUT` | VTR | Copy verified sections into a complete recording |
-| `index FILE [--check] [--threads N] [--memory MiB]` | VTR, FST | Build or validate an activity sidecar |
-| `active FILE [--from T] [--to T] [--build]` | VTR, FST | List changing signals once each, using their first declaration |
+| `index FILE [--check] [--threads N] [--memory MiB]` | VTR | Build or validate an activity sidecar |
+| `active FILE [--from T] [--to T] [--build]` | VTR | List changing signals once each, using their first declaration |
 
 Times are unsigned integer ticks in the file's time base, with both window
 ends included. An omitted bound means zero or the largest tick. Signal and
@@ -39,7 +39,7 @@ output only after successful completion. Exit codes are 0 for success, 1 for
 `index --check` with no valid sidecar, 2 for invalid arguments or processing
 errors, and 3 for successful recovery that dropped bytes.
 
-Activity commands use `volna-trace` for both formats. Sidecars are validated
+Activity commands use `volna-trace` for VTR. Sidecars are validated
 against the source identity and written beside the trace, with the library's
 user-cache fallback. `active` resolves undecided signals from the recording;
 it requires an index or `--build`. `--memory` limits builder scratch, not total
@@ -63,13 +63,13 @@ process memory or the retained index. Keep recordings unchanged while reading.
   timestamp order. Undeclared identifiers, incompatible aliases, overwide
   values, truncated commands, and backwards times are errors. Vendor-specific
   declarations, GHW, and EVCD are not supported.
-- **FST:** the shared `volna-trace` session supplies hierarchy, aliases, scope
-  and variable types, components, input/output/inout directions, events,
-  nine-state logic, reals, and raw string/port bytes. Other directions become
-  implicit and root variables appear under `(top)`. FST attributes, enum tables,
-  and producer metadata are omitted. Nonzero time offsets and dump-off regions
-  are rejected. All distinct histories must fit in memory. The CLI disables
-  VTR deduplication to retain the session's samples.
+- **FST:** the conversion library reads hierarchy, aliases, scope and variable
+  types, components, input/output/inout directions, events, nine-state logic,
+  reals, and raw string/port bytes. Other directions become implicit and root
+  variables appear under `(top)`. Attributes, enum tables, and producer metadata
+  are omitted. Nonzero time offsets and dump-off regions are rejected. All
+  distinct histories must fit in memory. The CLI disables VTR deduplication to
+  retain recorded samples.
 - **VCD export:** supports two/four-state bits, events, and reals. Nine-state
   declarations, byte strings, unsupported timescales, time-zero offsets, and
   blackout intervals are rejected. Hierarchy names must be representable as VCD
@@ -83,26 +83,27 @@ Run from the workspace root; these use committed, hand-authored fixtures:
 
 ```sh
 work=$(mktemp -d)
-cargo run -p vtr-cli --locked -- convert vtr-cli/tests/fixtures/waves.vcd "$work/waves.vtr"
+cargo run -p vtr-cli --locked -- convert vtr-convert/tests/fixtures/waves.vcd "$work/waves.vtr"
 cargo run -p vtr-cli --locked -- value "$work/waves.vtr" 'top.bus [3:0]' 5
 cargo run -p vtr-cli --locked -- active "$work/waves.vtr" --from 5 --to 7 --build
 cargo run -p vtr-cli --locked -- to-vcd "$work/waves.vtr" "$work/waves.vcd"
-cargo run -p vtr-cli --locked -- convert vtr-cli/tests/fixtures/pipeline.kanata "$work/pipeline.vtr"
+cargo run -p vtr-cli --locked -- convert vtr-convert/tests/fixtures/pipeline.kanata "$work/pipeline.vtr"
 cargo run -p vtr-cli --locked -- transactions "$work/pipeline.vtr" --scope cpu
 cargo run -p vtr-cli --locked -- clocks "$work/pipeline.vtr"
 ```
 
-Rust callers use `kanata::convert_kanata`, `vcd::convert_vcd`, or
-`fst::convert_fst` with a fresh `vtr::Writer`, then explicitly close it.
+Rust callers use `vtr_convert::kanata::convert_kanata`,
+`vtr_convert::vcd::convert_vcd`, or `vtr_convert::fst::convert_fst` with a fresh
+`vtr::Writer`, then explicitly close it.
 Converters leave partial writer state after errors; discard that output.
 `vcdout::write_vcd` writes to any `std::io::Write` sink. See the crate rustdoc
 for a runnable example.
 
-For FST activity in downstream tests, open `volna_trace::OpenSpec::Path`, then
-use `Session::build_activity`, `activity`, and `resolve_activity`. Supply a
-`BuildControl` in the build options and a `MemoryBudget`. There is no CLI-owned
-FST reader or activity wrapper. Shared FST fixtures and their provenance are in
-[`volna-trace/tests/fixtures`](../volna-trace/tests/fixtures/README.md).
+Convert FST to VTR before running `index` or `active`. The viewer and server
+also accept VTR only; conversion is currently an explicit CLI step.
+
+Conversion fixtures and provenance are in
+[`vtr-convert/tests/fixtures`](../vtr-convert/tests/fixtures/README.md).
 
 ## Verification and license
 
@@ -112,8 +113,8 @@ cargo clippy -p vtr-cli --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc -p vtr-cli --no-deps --locked
 ```
 
-Tests cover conversion values and time bases, alias identity, Kanata lifecycle
-semantics, malformed input, CLI queries, recovery, activity, and failed-output
-cleanup. They require no simulator, network, GUI, or external checkout.
+CLI tests cover queries, conversion commands, export, recovery, activity, and
+failed-output cleanup. Conversion fidelity and malformed-input tests live in
+`vtr-convert`. They require no simulator, network, GUI, or external checkout.
 
 Licensed under MIT; see [LICENSE](../LICENSE).

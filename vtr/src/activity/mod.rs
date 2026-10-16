@@ -26,7 +26,7 @@ pub const STRETCH_BYTES: u64 = 20;
 
 pub const MAGIC: [u8; 8] = [0x89, b'V', b'T', b'I', 0x0D, 0x0A, 0x1A, 0x0A];
 
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 
 pub(crate) const BUCKETS: usize = 65;
 
@@ -49,21 +49,18 @@ pub(crate) fn threshold(hist: &[u64; BUCKETS], cap: u64, j_max: u32) -> u32 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SourceFormat {
     Vtr,
-    Fst,
 }
 
 impl SourceFormat {
     fn code(self) -> u8 {
         match self {
             SourceFormat::Vtr => 1,
-            SourceFormat::Fst => 2,
         }
     }
 
     fn from_code(c: u8) -> Result<SourceFormat> {
         match c {
             1 => Ok(SourceFormat::Vtr),
-            2 => Ok(SourceFormat::Fst),
             _ => Err(Error::Corrupt("unknown activity index source format")),
         }
     }
@@ -72,7 +69,6 @@ impl SourceFormat {
     pub fn name(self) -> &'static str {
         match self {
             SourceFormat::Vtr => "vtr",
-            SourceFormat::Fst => "fst",
         }
     }
 }

@@ -17,7 +17,6 @@ impl Descriptor {
         Some(Self {
             format: match id.format {
                 vtr::activity::SourceFormat::Vtr => 1,
-                vtr::activity::SourceFormat::Fst => 2,
             },
             length: id.length,
             toc_crc: id.toc_crc,
@@ -29,7 +28,6 @@ impl Descriptor {
         Ok(vtr::activity::Identity {
             format: match self.format {
                 1 => vtr::activity::SourceFormat::Vtr,
-                2 => vtr::activity::SourceFormat::Fst,
                 _ => anyhow::bail!("invalid activity source format"),
             },
             length: self.length,

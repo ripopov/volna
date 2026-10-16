@@ -1,6 +1,6 @@
 # Volna viewer
 
-`volna` is the GPUI desktop frontend for VTR and FST recordings. `volna-core`
+`volna` is the GPUI desktop frontend for VTR recordings. `volna-core`
 owns viewer state, input interpretation, loading requests, viewport math, and
 toolkit-neutral painting. `volna-trace` owns immutable recording data and the
 complete-object remote protocol used by `volna-server`. Pipeline, table, and
@@ -31,6 +31,13 @@ timestamps and assigns overlapping intervals to subrows; producer call
 order does not determine their horizontal position. The raw VTR reader
 itself retains file order.
 
+FST and Kanata must be converted before opening:
+
+```sh
+vtr convert input.fst output.vtr
+vtr convert input.kanata output.vtr
+```
+
 ## Build and run
 
 Use Rust 1.97.1 or newer and the platform libraries required by GPUI. From the
@@ -42,7 +49,7 @@ cargo run --locked -p volna -- volna/examples/picorv32.vtr
 cargo run --locked -p volna -- --help
 ```
 
-The launcher accepts VTR or FST paths, multiple traces, and saved
+The launcher accepts VTR paths, multiple traces, and saved
 `.volna.json` workspaces. `--no-workspace` disables workspace reads and writes;
 `--config-dir DIR` chooses the settings directory.
 

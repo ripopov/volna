@@ -180,8 +180,7 @@ fn every_fixture_roundtrips_column_for_column_with_shared_sizes() {
         "tests/fixtures/counter.vtr",
         "tests/fixtures/picorv32.vtr",
         "tests/fixtures/landing.vtr",
-        "tests/fixtures/values.fst",
-        "tests/fixtures/values-wrapped.fst",
+        "tests/fixtures/values.vtr",
     ] {
         let local = OpenSpec::Path(root.join(path)).open().unwrap();
         let budget = MemoryBudget::new(64 * 1024 * 1024);

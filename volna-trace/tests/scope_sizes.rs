@@ -31,8 +31,8 @@ fn counts_equal_brute_force_on_the_fixtures() {
         "feature_showcase.vtr",
         "pipeline_showcase.vtr",
         "landing.vtr",
-        "landing_dram.fst",
-        "values.fst",
+        "landing_dram.vtr",
+        "values.vtr",
     ] {
         let session = OpenSpec::Path(root().join(rel)).open().unwrap();
         let h = session.hierarchy();

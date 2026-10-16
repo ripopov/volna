@@ -1,6 +1,3 @@
-//! Hardware trace conversion.
+//! Hardware trace inspection and export.
 
-pub mod fst;
-pub mod kanata;
-pub mod vcd;
 pub mod vcdout;

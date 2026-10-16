@@ -259,9 +259,9 @@ fn run(cli: Cli) -> Result<u8> {
                     },
                 )?;
                 match format {
-                    Format::Kanata => vtr_cli::kanata::convert_kanata(&input, &mut writer),
-                    Format::Vcd => vtr_cli::vcd::convert_vcd(&input, &mut writer),
-                    Format::Fst => vtr_cli::fst::convert_fst(&input, &mut writer),
+                    Format::Kanata => vtr_convert::kanata::convert_kanata(&input, &mut writer),
+                    Format::Vcd => vtr_convert::vcd::convert_vcd(&input, &mut writer),
+                    Format::Fst => vtr_convert::fst::convert_fst(&input, &mut writer),
                 }
                 .with_context(|| format!("converting {}", input.display()))?;
                 writer.close()?;

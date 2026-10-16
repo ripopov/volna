@@ -43,7 +43,7 @@ function webviewHtml(vscode, webview, extensionUri) {
 async function pickTrace(vscode) {
   const picked = await vscode.window.showOpenDialog({
     canSelectMany: false,
-    filters: { "Waveform traces": ["vtr", "fst"] },
+    filters: { "Waveform traces": ["vtr"] },
     openLabel: "Open",
   });
   if (picked?.[0]) {

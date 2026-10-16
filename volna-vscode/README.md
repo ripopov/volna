@@ -1,9 +1,16 @@
 # Volna for VS Code
 
-Open VTR and FST recordings in a read-only custom editor. The GPUI viewer runs
+Open VTR recordings in a read-only custom editor. The GPUI viewer runs
 in the webview; the bundled `volna-server` reads traces on the workspace host,
 including Remote SSH workspaces. Viewer commands, VS Code themes, resource
 settings, and saved `.volna.json` workspaces pass through the extension host.
+
+FST and Kanata must be converted before opening:
+
+```sh
+vtr convert input.fst output.vtr
+vtr convert input.kanata output.vtr
+```
 
 ## Build and install
 
@@ -37,7 +44,7 @@ bounded binary transport. `npm run test:package` checks platform identities,
 server architectures, asset dependencies, and license integrity.
 
 On Linux, `npm run test:vsix` installs the built package into an isolated VS Code
-profile and opens VTR and FST fixtures through their default editor association.
+profile and opens VTR fixtures through their default editor association.
 It requires `code` and `xvfb-run`; Playwright connects to that VS Code process.
 Set `VOLNA_CODE` to use another VS Code binary.
 The test verifies the bundled server, trace metadata, and rendered viewer frames.

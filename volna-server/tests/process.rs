@@ -271,9 +271,26 @@ fn same_value(a: WaveValue, b: WaveValue) {
 }
 
 #[test]
-fn vtr_and_fst_process_histories_match_local_values_and_aliases() {
+fn foreign_recordings_return_an_actionable_open_error() {
+    let dir = tempfile::tempdir().unwrap();
+    for bytes in [
+        include_bytes!("../../vtr-convert/tests/fixtures/values.fst").as_slice(),
+        include_bytes!("../../vtr-convert/tests/fixtures/pipeline.kanata").as_slice(),
+    ] {
+        let path = dir.path().join("recording.vtr");
+        std::fs::write(&path, bytes).unwrap();
+        let mut server = Server::start(&path);
+        let error = server.open(64 << 20).unwrap_err();
+        assert!(error.contains("expected VTR"), "{error}");
+        assert!(error.contains("vtr convert"), "{error}");
+        assert!(server.wait().success());
+    }
+}
+
+#[test]
+fn vtr_process_histories_match_local_values_and_aliases() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures");
-    for file in ["picorv32.vtr", "features.fst"] {
+    for file in ["picorv32.vtr", "features.vtr"] {
         let path = root.join(file);
         let local = OpenSpec::Path(path.clone()).open().unwrap();
         let mut server = Server::start(&path);
@@ -581,7 +598,7 @@ fn changed_recording_invalidates_process() {
 
 #[test]
 fn activity_sidecars_are_raw_cached_objects_shared_between_processes() {
-    for (fixture, extension) in [("picorv32.vtr", "vtr"), ("values-wrapped.fst", "fst")] {
+    for (fixture, extension) in [("picorv32.vtr", "vtr"), ("values.vtr", "vtr")] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(format!("shared.{extension}"));
         std::fs::copy(
