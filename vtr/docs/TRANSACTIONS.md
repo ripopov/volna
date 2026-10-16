@@ -1,17 +1,19 @@
 # VTR transactions
 
-Status: proposed; not implemented.
+Status: proposed; production format not implemented.
 
 This document specifies the transaction model, encoding, and reader and writer
-behavior. [SPEC.md](SPEC.md) defines the current container, compression, string
-table, and hierarchy framing. Adoption requires a new format version, assigned
-section kind codes, and regeneration of older trace assets.
+behavior for format version 3.0. [SPEC.md](SPEC.md) defines the current version-2
+container, compression, string table, and hierarchy framing. This proposal
+inherits that framing except where explicitly replaced below. TX_BLOCK retains
+section kind 5; RECORD_BLOCK uses kind 9 and replaces LOG_BLOCK storage.
+Adoption requires regeneration of older trace assets.
 
 Every transaction record has a file-wide ID. Events and stages associated with
 design locations are stored separately from their owning transactions, grouped
 by generator and packed into independently compressed pages. Each owner lists
 the blocks containing its children. The recommended writer settings are 64 KiB
-pages and Zstandard level 1. Section 12 gives the performance rationale.
+pages for both block kinds and Zstandard level 1. Section 12 gives the performance rationale.
 
 ## Notation and common types
 
@@ -385,7 +387,11 @@ containing at least one of its located EVENT or STAGE children. Block numbers
 identify sections within the file as defined in section 8; they are not
 transaction IDs or byte offsets. The list contains no TX_BLOCK locators and
 no blocks without a matching child. LOG records do not contribute locators,
-even when their parent is this owner.
+even when their parent is this owner. A log's parent supports navigation from
+the log to the operation that produced it; this list indexes located activity
+for transaction expansion. It is not an inverse index of every parent field.
+Finding all logs associated with an owner requires a separate log search or
+reader-built index.
 
 To expand an owner, the reader selects EVENT and STAGE segments in the listed
 blocks, then selects records whose parent equals the owner's ID. LOG segments
@@ -588,21 +594,45 @@ the result is a single-edge stretch at `begin`.
 The container supplies section framing, CRC, compression codecs, directory
 entries, and string and hierarchy declarations. All referenced strings and
 generators must be declared before their block. RECORD_BLOCK stores located
-events, located stages, and logs in a paged layout. TX_BLOCK holds ordinary
-transactions, clocks, and relations in one compressed column set.
+events, located stages, and logs in a paged layout. TX_BLOCK stores ordinary
+transactions, clocks, and relations in independently compressed pages.
 
 Both block kinds carry a nonzero `u64 block_number`, unique across RECORD_BLOCK
 and TX_BLOCK within the file. The writer assigns increasing numbers when
 records enter a block, before background encoding. Numbers never wrap or
-get reused and need not match physical section order. Readers map them to
-section offsets using block headers and the container directory, or a section
-scan during recovery. The container directory-entry layout is unchanged.
+get reused and need not match physical section order.
 
-A *segment* is a sequence of records from one generator, with its own column
-set and delta state. A *page* is an independently compressed blob containing
-one or more complete segments. A generator may span several segments and
-pages within a block. Segment headers select generators and time ranges before
-decompression; segment byte offsets select columns after their page is decoded.
+Version 3 DIRECTORY entries occupy 48 bytes, replacing SPEC.md section 2.3's
+40-byte entries. The entry count and trailer framing are unchanged:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 4 | `u32 kind` |
+| 4 | 4 | `u32 flags` |
+| 8 | 8 | `u64 section_header_offset` |
+| 16 | 8 | `u64 section_payload_length` |
+| 24 | 8 | `u64 aux0` |
+| 32 | 8 | `u64 aux1` |
+| 40 | 8 | `u64 block_number` |
+
+For RECORD_BLOCK and TX_BLOCK, `aux0/aux1` are their `t_min/t_max`, and
+`block_number` identifies the block. Other section kinds store zero in
+`block_number` and retain their SPEC.md auxiliary-field meanings. Entries remain
+in physical file order. Block numbers are unique across both block kinds.
+
+Readers construct the block-number-to-section map directly from DIRECTORY,
+without reading individual block headers. Generator, ID-range, segment, and page
+metadata still comes from block headers and may be loaded on demand. Recovery
+reads block numbers and bounds from surviving block headers when rebuilding
+DIRECTORY; it preserves numbers and never infers them from section order.
+
+A *page* is an independently compressed blob. In RECORD_BLOCK it contains one
+or more complete *segments*: sequences of records from one generator, each with
+its own column set and delta state. A generator may span several segments and
+pages within a block. Segment headers select generators, parent ranges, and
+time ranges before decompression; segment byte offsets select columns after
+their page is decoded. A TX_BLOCK page instead contains one complete column
+set for its transactions and relations, as defined in section 8.3.
 
 ### 8.1 Column sets and scalar encodings
 
@@ -614,27 +644,27 @@ Unknown columns or invalid lengths are errors for this format version.
 
 ![A RECORD_BLOCK segment contains one column set: framing gives column count and byte lengths, followed by time, ID, parent, duration, and five argument streams.](diagrams/transaction-columns.drawio.svg)
 
-Delta state resets to zero at each segment, or at the beginning of a TX_BLOCK.
+Delta state resets to zero at each RECORD_BLOCK segment or TX_BLOCK page.
 Signed ID, parent, and time differences use wrapping 64-bit subtraction,
 interpreted as signed, with inverse wrapping addition on decode. This permits
 the full unsigned domain and negative differences. Duration addition must not
 overflow: `begin + duration` must fit in `u64`.
 
-An optional parent is encoded as varint zero for absent, otherwise
-`zigzag(delta)`, where `delta` is the wrapping difference `id - parent`,
-interpreted as signed. A present parent cannot equal the record's ID because
-self-parentage is a cycle. The nonzero difference distinguishes a parent
-reference from absence. Decoding a nonzero value subtracts its inverse ZigZag
-value from the record ID with wrapping arithmetic; the resolved parent must be
-nonzero and smaller than the record ID. Writers require an active ordinary
-parent as specified in section 1.
-This encoding applies to ordinary transactions
-and logs. Located events and stages use the mandatory parent delta column in
-section 8.2.
+An optional parent is an unsigned varint: zero for absent, otherwise
+`id - parent`. A present parent satisfies `0 < parent < id`, so its distance is
+positive and subtraction does not wrap. A reader rejects a nonzero distance
+that is greater than or equal to the record ID. This encoding applies to
+ordinary transactions and logs. Located events and stages use the mandatory
+signed parent delta column in section 8.2.
 
-Unsigned scalar varints are limited to 64 bits, except the unlocated stage-end
-sentinel in section 8.3, which can require 65 bits. Writers use the shortest
-base-128 representation. Only signed delta and offset reconstruction wraps.
+Unsigned scalar varints are limited to 64 bits, except for the single unlocated
+stage-end value `2^64` in section 8.3. Writers use the shortest base-128
+representation. Only signed delta and offset reconstruction wraps.
+
+The exceptional value has nine bytes `80` followed by `02`, in hexadecimal.
+A codec can recognize that code directly and use ordinary `u64` varints for
+every other value; it does not need a general 65-bit integer decoder. No other
+value above `u64::MAX` is valid. Timestamps retain the full `u64` domain.
 
 Each column set has these five argument streams. Records consume arguments
 in declaration order, selecting streams by the declared type:
@@ -649,7 +679,7 @@ in declaration order, selecting streams by the declared type:
 
 Dictionary entries are distinct text values in first-occurrence order. Empty
 dictionaries encode a zero count. A dictionary belongs to one segment or one
-TX_BLOCK; no page depends on another page's dictionary or delta state.
+TX_BLOCK page; no page depends on another page's dictionary or delta state.
 Argument counts, keys, and type tags come from the generator declaration and
 are omitted from records.
 
@@ -673,15 +703,16 @@ u32 segment_count, page_count
 segment_count * {
     u32 generator_node_id
     u32 page_index
-    u64 record_count
-    u64 raw_offset, raw_length
+    u32 record_count
+    u32 raw_offset, raw_length
     u64 min_id, max_id
+    u64 min_parent, max_parent
     u64 t_min, t_max
 }
 
 page_count * {
-    u64 blob_offset, blob_length
-    u64 raw_length
+    u32 blob_offset, blob_length
+    u32 raw_length
 }
 
 page blobs
@@ -690,6 +721,10 @@ page blobs
 Blocks, segments, and pages are nonempty. Only EVENT, STAGE, and LOG generators
 are permitted. The segment table gives complete generator membership; no
 per-record generator column is stored. Segment ID bounds describe its records.
+Parent bounds are the minimum and maximum present parent IDs. They are `(0, 0)`
+when all parents are absent; absent LOG parents do not lower a nonempty range.
+For EVENT/STAGE, every parent is present. These ranges permit conservative
+owner filtering; different segments' parent ranges can overlap.
 Segment time bounds are minimum and maximum timestamps for LOG and EVENT, or
 minimum begin and maximum end for STAGE. Block bounds are the extrema over all
 segments, including when kinds are mixed. The block record count is the sum of
@@ -706,8 +741,12 @@ is ordered by page index and then raw offset. Segments partition each page
 without gaps or overlaps, and each segment contains exactly one column set.
 Repeated entries for a generator are allowed and need not be adjacent, as in
 the illustration. Their table order defines its record sequence within the
-block. Counts, offsets, and length arithmetic must fit their encoded fields and
-remain within the containing page or section.
+block. Each segment's record count, raw offset, and raw length, and each page's
+blob offset, blob length, and raw length must fit their `u32` fields. Lengths
+include column or blob framing as appropriate. Writers reject a record or
+block that cannot be represented. Readers compute range sums in a wider type
+and check them against the containing page or section before indexing or
+allocating. The 64 KiB page target is distinct from these encoded limits.
 
 Every segment uses nine columns. The generator kind determines their contents:
 
@@ -734,9 +773,16 @@ whose column set alone exceeds the target occupies a page by itself; the
 target is not a format limit. Readers accept other page sizes. The writer must
 account for framing and dictionary bytes when deciding whether a page fits.
 
-Pages may contain segments of different kinds. Writers may close a page or
-block early to separate logs from events and stages when selective reading
-benefits. Readers must accept both mixed and single-kind pages and blocks.
+The recommended writer policy places LOG segments in separate pages from
+EVENT/STAGE segments. After stable grouping, partition the generator buckets
+by this distinction and close the current page at the boundary. This adds at
+most one partial page per block and avoids decompressing LOG payloads during
+owner expansion. Preserve each generator's assignment order.
+
+Readers must accept both mixed and single-kind pages and blocks. Separate LOG
+block buffers are an optional policy: they can reduce log-driven block turnover
+and header storage, but larger EVENT/STAGE blocks can increase the child rows
+scanned for one owner. Section 12.4 measures this tradeoff.
 
 Zstandard level 1 is recommended. Each blob may use any container-supported
 codec and settings. Store uncompressed bytes when compression does not reduce
@@ -744,7 +790,7 @@ the page size. Section 12 compares compression and throughput.
 
 ### 8.3 TX_BLOCK
 
-The section payload begins with:
+The section payload has the following layout:
 
 ```text
 u64 block_number
@@ -752,20 +798,55 @@ u64 transaction_count, relation_count
 u64 min_id, max_id                 ordinary and clock IDs; zero if none
 u64 t_min, t_max                   smallest begin, largest end; zero if none
 u64 rel_min_from, rel_max_from, rel_min_to, rel_max_to
-u32 generator_count
-u32 compressed_blob_length
+u32 generator_count, page_count
 generator_count * u32 generator_node_id
-compressed blob
+
+page_count * {
+    u64 transaction_count, relation_count
+    u64 min_id, max_id             zero when this page has no transactions
+    u64 t_min, t_max               owner/clock bounds; zero if none
+    u64 rel_min_from, rel_max_from, rel_min_to, rel_max_to
+    u32 blob_offset, blob_length, raw_length
+}
+
+page blobs
 ```
 
 The generator list is unique, sorted by node ID, and names the ordinary
 transactions and clocks physically present. Located child blocks do not add
-their generators to this list. Relation endpoint bounds cover all stored
-endpoints, including zero; all four bounds are zero when no relations exist.
-A relation-only block has no generators or transactions. A block with neither
-transactions nor relations is not emitted.
+their generators to this list. The encoder collects the generator IDs and
+assigns their local indexes before encoding transaction columns. The bounded
+transaction buffer already fixes block membership; single-pass emission of
+columns before collecting that membership is not required.
 
-The decompressed blob contains one column set with 31 columns:
+Each page is one independently compressed column set. All pages use the same
+block-local generator table, but reset their delta and argument-dictionary
+state. One transaction, its arguments, attributes, embedded details, and child
+block list remain in one page. Relations do not span pages. Page packing targets
+64 KiB of decompressed bytes, including column framing and dictionaries; an
+oversized item occupies a page alone, subject to the encoded field limits.
+
+Within a block, transactions and clock stretches are sorted by ID before
+splitting them into pages. Transaction ID ranges are therefore ordered and
+disjoint within that block. Relation-only pages follow pages containing
+transactions. A page may contain both transactions and relations. Relations
+retain their sequence independently of transaction sorting. Sorting never moves
+an item to a different numbered block.
+
+Page offsets are relative to the start of the page-blob area. Blobs use SPEC.md
+section 3.1 framing, occur in page-table order, and consume that area without
+gaps or overlaps. Each raw length agrees with the blob framing and decompressed
+length. The `u32` field limits and checked range arithmetic from section 8.2
+also apply here.
+
+Block counts are sums of page counts. Block ID/time bounds are extrema over
+pages containing transactions; relation endpoint bounds are extrema over pages
+containing relations. Endpoint ranges include zero. All four endpoint bounds
+are zero when their relation count is zero. A relation-only block has no
+generators or transaction bounds. Blocks and pages with neither transactions
+nor relations are not emitted.
+
+Each decompressed page contains one column set with 31 columns:
 
 | Index | Column | Encoding |
 |---|---|---|
@@ -805,46 +886,58 @@ the owner.
 
 Keyed attribute lists are consumed for each transaction, then each of its
 unlocated events, then each of its unlocated stages; relation attribute lists
-follow all transactions. Arguments are consumed once per transaction using
-its generator schema. Embedded child lists retain insertion order.
+follow all transactions in that page. Arguments are consumed once per
+transaction using its generator schema. Embedded child lists retain insertion
+order.
 
 Attribute numeric payloads follow the value table. An enum consumes its
 signed numeric value and its literal from the string stream. Fixed and ufixed
 consume raw and scale from the numeric stream. Floating-point attributes share
 the floating stream; each value's tag determines whether it consumes four or
 eight bytes. Argument floating widths are determined by the generator schema.
-Lists and maps in the miscellaneous stream retain nested tags. Attribute text is inline, while
-schema argument text uses the dictionary. The stage-end sentinel arithmetic
-uses sufficient width for `u64::MAX + 1`, without wrapping to the open marker.
+Lists and maps in the miscellaneous stream retain nested tags. Attribute text
+is inline, while
+schema argument text uses the page's dictionary. For an explicit unlocated
+stage end, encode `end - begin + 1` without wrapping to the open marker. When
+`begin = 0` and `end = u64::MAX`, use the exceptional code from section 8.1.
+A codec can test for that duration before incrementing, and reconstruct it
+without a wider integer type. Decoded end addition must still fit in `u64`.
 
-TX_BLOCK uses the same recommended Zstandard level-1 policy as paged blocks.
-Its owner and relation columns remain in one blob; page packing and stable
-generator grouping apply only to RECORD_BLOCK.
+TX_BLOCK uses the same recommended Zstandard level-1 policy as RECORD_BLOCK.
+Stable generator grouping applies only to RECORD_BLOCK; TX_BLOCK page packing
+preserves the block's sorted transaction-ID sequence.
 
 ### 8.4 Order and queries
 
 The writer assigns ordinary transactions and stages to blocks on finalization;
 events and logs are assigned on emission. RECORD_BLOCK has one assignment
-sequence shared by EVENT, STAGE, and LOG; TX_BLOCK has a separate sequence for
-ordinary transactions, clocks, and relations. Blocks contain consecutive
-portions of their sequence, with block numbers increasing along that sequence.
+sequence shared by EVENT, STAGE, and LOG under the recommended buffer policy;
+a writer using separate LOG buffers has separate located-child and log
+sequences. TX_BLOCK has a separate sequence for ordinary transactions, clocks,
+and relations. Blocks contain consecutive portions of their sequence, with block numbers increasing along that sequence.
 Background encoders may complete out of order. Declarations must still
 precede their uses in the physical file, and readers must not infer
 record order from file offsets.
 
-Within each paged block, stable grouping preserves assignment order for each
+Within each RECORD_BLOCK, stable grouping preserves assignment order for each
 generator. Segment splitting also preserves that order. Across generators,
 physical order has no semantic meaning and does not recover stage completion
 order. Global IDs recover creation order, including log and event production
-order. TX_BLOCK preserves transaction finalization order within its sequence.
-Neither creation nor finalization order implies timestamp order.
+order. TX_BLOCK stores transactions in ID order within each block; its physical
+row order does not preserve finalization order. Neither creation nor
+finalization order implies timestamp order.
 
 For a closed query window `[a, b]`, where `a <= b`, candidate blocks and segments
 satisfy `t_min <= b` and `t_max >= a`. A positive-duration stage intersects the
 window when `begin <= b` and `end > a`; a point matches when
 `a <= time <= b`. Ordinary transaction queries use `begin <= b` and `end >= a`.
 Clock queries select stretches by these bounds and derive edges from the
-period. Embedded event and stage times do not expand TX_BLOCK bounds.
+period. TX_BLOCK page headers further prune ordinary and clock queries.
+Embedded event and stage times do not expand these bounds: these queries select
+owner intervals, and embedded records are accessed through selected owners.
+An embedded record outside its owner's interval does not make that owner match
+an owner-interval query. A reader offering a separate time search over embedded
+activity must inspect otherwise excluded owner blocks or build another index.
 
 A located-track query selects matching generator segments by their headers,
 decompresses their pages once each, and decodes only the selected segments.
@@ -854,25 +947,32 @@ resolves descendant generators from the hierarchy. Log severity queries filter
 generators by their declared metadata. Owner payloads are not required to load
 located intervals, points, or their declared arguments.
 
-Expanding an owner uses its block locators to select EVENT and STAGE segments,
-decompresses their pages once each, and selects children by parent ID. LOG
-segments are skipped even if their records have the same parent. Pages holding
+Expanding an owner uses its block locators to select EVENT and STAGE segments
+whose parent ranges contain the owner ID, decompresses their pages once each,
+and selects children by exact parent ID. LOG segments are skipped even if their records have the same parent. Pages holding
 only LOG segments need no decompression for this query; mixed pages may still
 require decompressing log data. Owner time bounds cannot filter children
 because ownership does not require temporal containment. A reader may
 build a transient parent-to-record index while decoding a block and reuse it
 for later expansions. The format does not contain an owner-to-page index;
-uncached owner expansion may read every page containing EVENT or STAGE segments
-in each referenced block.
+parent bounds only provide conservative pruning. Uncached owner expansion
+may still read every page containing EVENT/STAGE segments in a referenced block
+when their parent ranges all contain the owner ID.
 
 ![Owner 42 lists child blocks 12 and 15. The reader visits those RECORD_BLOCKs and selects EVENT and STAGE records whose parent is 42, excluding LOG and other owners' records.](diagrams/transaction-child-blocks.drawio.svg)
 
-Global ID lookup filters block ID ranges and, for paged blocks, segment ID
-ranges. Relation lookup uses TX_BLOCK endpoint ranges. Ranges can overlap,
-including when a long-lived owner finishes alongside recently created owners.
-Header ranges select candidates rather than providing an exact ID-to-row map.
-Readers should batch parent and label lookups by candidate block and cache
-decoded owners.
+Global ID lookup filters block ranges, then RECORD_BLOCK segment ranges or
+TX_BLOCK page ranges. Within one TX_BLOCK, binary search over the ordered
+transaction-page ID ranges selects at most one page for one ID. Multiple IDs
+should be batched, with each selected page decompressed once. Relation lookup
+uses block and page endpoint ranges.
+
+Ranges across blocks can overlap, including when a long-lived owner finishes
+alongside recently created owners. Even a sorted page containing one old owner
+and several recent owners can have a broad range. These headers select
+candidates; they are not an exact global ID-to-row map. One lookup may require
+pages from several blocks. Readers cache decoded owners and stop searching
+once every requested owner has been resolved.
 
 Readers build header-based block-number and generator/segment indexes. They
 cache decoded pages and records on demand. Section CRC verification still
@@ -892,15 +992,17 @@ close. Missing arguments are a writer error; close must not fabricate values
 or emit an incomplete argument list.
 
 The submission path assigns each finalized record to a block before handing
-the block to a background encoder. One ordered stream of bounded buffers
-serves EVENT, STAGE, and LOG records in RECORD_BLOCK; another serves TX_BLOCK.
+the block to a background encoder. The recommended buffer policy uses one
+ordered stream of bounded RECORD_BLOCK buffers for EVENT, STAGE, and LOG and
+another for TX_BLOCK. Separate LOG buffers may use the same block-number
+allocator; the EVENT/STAGE stream must still reserve increasing numbers.
 A block's first record reserves its block number. For a located child,
 assignment also records that number in the active owner. A record must
 never migrate to another numbered block during grouping, page packing, or
 compression: its owner may already have been serialized with that locator.
 
-The writer maintains one block list for each active owner. RECORD_BLOCK
-numbers increase along the shared submission stream, so a located EVENT or
+The writer maintains one block list for each active owner. EVENT/STAGE block
+numbers increase along their submission stream, so a located EVENT or
 STAGE child appends a number only when it differs from that owner's last
 entry. Logs do not update the list. The list is already sorted and distinct
 at owner finalization, without a merge, per-child hash set, or scan of
@@ -916,18 +1018,22 @@ that payload alive until encoding finishes.
 
 The recommended RECORD_BLOCK buffer limits are 65,536 finalized records and
 4 MiB of buffered record payload; reaching either limit flushes the block.
-An oversized record is accepted alone. Byte accounting must include
+An oversized record that fits the encoded limits is accepted alone. Byte
+accounting must include
 variable-length arguments.
 Bounded encoder queues apply backpressure when producers outrun encoding.
 TX_BLOCK uses a separate byte budget, also 4 MiB, so large embedded
 details and relations also count toward its memory budget.
 
-Encoding gathers records into generator buckets in first-occurrence order,
-preserving order within each bucket. This linear pass requires no ID or
-timestamp sorting. The encoder splits buckets into segments, emits each
-bucket's segments consecutively, and fills pages in that order as specified
-in section 8.2. Grouping and encoding state, including argument dictionaries
-and pending pages, is discarded after the block is encoded.
+RECORD_BLOCK encoding gathers records into generator buckets in first-occurrence
+order, preserving order within each bucket. This linear pass requires no ID or
+timestamp sorting. Partition the buckets into EVENT/STAGE and LOG groups for
+the recommended page policy, preserve bucket order within each group, then
+split buckets into segments and pack pages as specified in section 8.2.
+TX_BLOCK encoding sorts buffered transactions by ID, collects the generator
+table, and splits the owner and relation column sets into independent pages.
+Grouping and encoding state, including argument dictionaries and pending pages,
+is discarded after the block is encoded.
 
 At file close, unfinished ordinary transactions receive status `open` and end
 `max(begin, current_waveform_time)`. Their active located stages close at that
@@ -955,7 +1061,11 @@ status/kind codes, and out-of-range indexes. Page and segment byte ranges must
 partition their containers as specified. Loaded column sets must consume every
 column exactly, and decoded record counts and bounds must agree with headers.
 Lazy queries validate the data they load; full validation additionally checks
-unloaded pages and aggregate block bounds.
+unloaded pages and aggregate block bounds. TX_BLOCK transaction pages have
+ordered, disjoint ID ranges and sorted transaction IDs. Parent bounds agree
+with the present parents in each loaded RECORD_BLOCK segment. Directory block
+numbers agree with their section headers; lookup must not rely on physical
+section order.
 
 Globally unique record IDs and block numbers, acyclic ownership, relation
 endpoint existence, and owner-locator consistency are complete-file invariants.
@@ -1015,10 +1125,10 @@ storage costs.
 ## 12. Performance rationale
 
 Prototype measurements support the recommended layout and writer settings.
-The prototypes use different headers from section 8 and omit full container
-framing, integrity checks, and directory costs. Results describe these workloads
-and do not establish production throughput. The stage-only comparisons do not
-measure the effect of batching events, stages, and logs in the same block.
+The stage-only prototypes in sections 12.1–12.3 use different headers from
+section 8 and omit full container framing, integrity checks, and directory
+costs. Section 12.4 adds a file-backed mixed-workload study. These results
+describe their workloads and do not establish production throughput.
 
 ### 12.1 Workloads and method
 
@@ -1107,8 +1217,9 @@ reduced track latency to 36.97 microseconds. These results support Zstandard
 level 1 as the recommended setting, with LZ4 available when throughput takes
 priority over storage size.
 
-The encoding omits owner-ID dictionaries, extra ID sorting, and adaptive
-integer bit-packing. The tested bit-packing variant reduced raw size but did
+The RECORD_BLOCK encoding omits owner-ID dictionaries, ID sorting, and adaptive
+integer bit-packing. TX_BLOCK sorts owners for page lookup as specified in
+section 8.3. The tested bit-packing variant reduced raw size but did
 not improve compressed size on both workloads. Encoding times in units of a
 shared time quantum also saved little after compression. These transforms
 need further evidence to justify their encoding cost and format complexity.
@@ -1118,3 +1229,79 @@ replace them and still support relations if relation endpoints were redesigned
 as compound identities. That would change the common identity model and lose
 global creation order unless stored separately. The available size estimates
 do not justify this added complexity.
+
+### 12.4 File-backed mixed workloads
+
+A standalone Rust study compared 15 layout variants over five simulated
+workloads. Each file contains about 10.1 million ordinary transactions,
+located stages/events, logs, relations, and signal changes. There are
+128–192 interleaved ordinary-transaction generators representing cores, NoC
+endpoints, and accelerators, with different argument schemas. Four waveform
+counters per producer use the production signal codec in the same file.
+The workloads cover normal traffic, long-lived owners, log bursts,
+out-of-order timestamps/completions, and 128 KiB incompressible attributes.
+
+The screen wrote and validated 75 files. A confirmation batch compared the
+original monolithic-TX proposal, the selected layout in section 8, and an
+ablation without parent bounds, using three seeds for each workload:
+45 more files and 120 trials overall. Complete scans checked source digests,
+global IDs, ownership, relation endpoints, exact child-block locator sets,
+page partitions, header bounds, schemas, and signal changes. Sampled track,
+owner, label, relation, and window queries also matched source oracles.
+
+The machine was an Intel Core Ultra 7 265K on Linux with NVMe ext4 storage,
+Rust 1.97.1, Zstandard level 1, CPU affinity 2/3/4, and two bounded encoder
+workers. Write timing includes simulation, allocation, checksums, file I/O,
+and fsync. Queries use filesystem-warm input with an empty decoded cache.
+The following are median three-trial values; query cells are medians of
+trial medians. Each cell is original proposal → selected layout.
+
+| Workload | File, MB | Write, seconds | Owner lookup, ms | Expansion including owner, ms | Pipeline with labels, ms |
+|---|---:|---:|---:|---:|---:|
+| balanced | 51.13 → 54.48 | 3.60 → 3.57 | 4.14 → 0.26 | 9.15 → 2.77 | 116.96 → 10.51 |
+| longtail | 52.49 → 56.00 | 3.35 → 3.83 | 4.19 → 0.27 | 10.17 → 3.03 | 174.38 → 16.52 |
+| logburst | 102.76 → 105.40 | 4.53 → 5.08 | 5.36 → 0.35 | 9.38 → 1.20 | 166.68 → 15.23 |
+| disordered | 63.42 → 66.29 | 4.04 → 4.44 | 15.25 → 1.00 | 23.97 → 8.11 | 156.57 → 26.96 |
+| large | 571.29 → 572.80 | 3.74 → 4.47 | 4.49 → 0.16 | 7.49 → 2.55 | 145.12 → 11.17 |
+
+Across workloads, geometric-mean speedups were 17.5-fold for full owner lookup,
+3.8-fold for expansion including owner loading, and 9.9-fold for pipeline loading.
+Files grew 4.1%, write wall time grew 10.8%, and writer user-plus-system
+CPU time grew 39.9%. The prototype re-encodes column sets while splitting pages;
+that encoder cost is included. A production encoder may improve it.
+
+Paging without ID sorting gave only 1.36-fold owner-lookup and 1.43-fold
+pipeline speedups in the screen. Sorting before slicing into pages is
+important; paging alone leaves broad candidate ranges. Parent bounds cut
+child-row decoding by 61.9% on logburst and 34.1% on disordered traffic.
+In confirmation, adding parent bounds to the otherwise selected layout
+improved logburst expansion by 1.79-fold; benefits were smaller elsewhere.
+Narrower fields offset much of the extra header cost: the screen saved
+1.8% of total file bytes geometrically and 4.4% on logburst. A segment with
+parent bounds occupies 68 bytes rather than 80 with the original widths.
+
+Separate LOG pages reduced irrelevant decompression without increasing
+child-row counts. Separate LOG blocks saved more storage but increased
+large-owner expansion from 61,712 to 81,087 child rows per query, slowing
+that case. This supports a page-separation policy rather than a universal
+block-separation rule. Directory block numbers removed all block-header
+reads needed solely to build the block map; independent audits observed
+6,803 physical block-number descents across the retained files.
+
+The timestamp cap, integer-width normalization, and first-occurrence TX
+generator tables provided no material storage benefit. Normalization also
+lost attribute-width identity. A stage-end bitmap saved 0.8% of file bytes
+geometrically without a stable latency benefit. The single full-duration
+code can instead be handled with `u64` operations as in section 8.1.
+Expanded embedded-time bounds benefited an additional embedded-activity
+search, but are not needed for the owner-interval queries in section 8.4.
+
+With full section CRC checking, pipeline queries were 6.6-fold faster.
+That does not imply page-sized I/O: each selected section still needs its
+complete compressed payload for CRC verification. Per-file cache-eviction
+advice before opening was best effort; query input was filesystem warm.
+Host timing noise was visible, so small one-pass timing differences did
+not justify format changes. The study uses experimental container framing
+and a full-record reader. Label projection, parent filtering without
+materializing unrelated records, cold-device I/O, and production writer
+integration can change absolute timings and policy tradeoffs.
