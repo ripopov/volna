@@ -7638,6 +7638,7 @@ dependencies = [
  "console_error_panic_hook",
  "embed-resource",
  "env_logger",
+ "flate2",
  "futures",
  "gpui-kit",
  "hdrhistogram",

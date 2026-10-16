@@ -70,6 +70,12 @@ jobs:
           sudo apt-get install --no-install-recommends -y libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev
       - run: cargo test --workspace --locked
       - run: cargo check --workspace --all-targets --locked
+      - name: Package native viewer and test automatic imports
+        env:
+          VOLNA_VTR: ${{ runner.temp }}/volna-native/vtr${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: |
+          python volna/package_native.py --debug --output "${{ runner.temp }}/volna-native"
+          cargo test -p volna --lib --locked native_import::tests::real_converter -- --ignored
       - name: Exercise examples
         shell: bash
         run: |

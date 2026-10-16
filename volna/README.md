@@ -31,12 +31,25 @@ timestamps and assigns overlapping intervals to subrows; producer call
 order does not determine their horizontal position. The raw VTR reader
 itself retains file order.
 
-FST and Kanata must be converted before opening:
+The native app opens FST and Kanata (`.kanata`, `.log`, and their `.gz` forms)
+by running `vtr convert INPUT OUTPUT` in the background. VTR opens directly.
+The original recording path is retained for names, recent files, workspace
+association, and reopening. Each import gets a private temporary VTR and activity
+indexes, removed when its last reader closes. Imports are converted again on
+reopen; closing or replacing an unfinished import cancels its converter.
+
+The converter is resolved from `VOLNA_VTR`, then beside the Volna executable,
+then `PATH`. Set `VOLNA_VTR` to an executable path, without arguments. Native
+distributions include the matching converter. Development builds need both binaries:
 
 ```sh
-vtr convert input.fst output.vtr
-vtr convert input.kanata output.vtr
+cargo build --locked -p volna -p vtr-cli --bins
+cargo run --locked -p volna -- recording.fst
 ```
+
+The standalone browser and VS Code extension still accept VTR only. Use
+`vtr convert input.kanata output.vtr` or `vtr convert input.fst output.vtr`
+for those hosts. VCD conversion remains a manual CLI operation.
 
 ## Build and run
 
@@ -44,14 +57,30 @@ Use Rust 1.97.1 or newer and the platform libraries required by GPUI. From the
 repository root:
 
 ```sh
-cargo build --locked -p volna
+cargo build --locked -p volna -p vtr-cli --bins
 cargo run --locked -p volna -- volna/examples/picorv32.vtr
 cargo run --locked -p volna -- --help
 ```
 
-The launcher accepts VTR paths, multiple traces, and saved
+The launcher accepts VTR, FST, and Kanata paths, multiple traces, and saved
 `.volna.json` workspaces. `--no-workspace` disables workspace reads and writes;
 `--config-dir DIR` chooses the settings directory.
+
+Build a native distribution directory for the current platform with both
+executables and dependency license notices:
+
+```sh
+python volna/package_native.py --output atemp/volna-native
+# Use --debug for a development distribution; --target-dir accepts a Cargo build directory.
+```
+
+Keep both executables in the same directory. The package uses the platform's
+GPUI system libraries; it is not a macOS app bundle or a system installer.
+The process-level import smoke test uses a built converter:
+
+```sh
+VOLNA_VTR="$PWD/target/debug/vtr" cargo test -p volna --lib native_import::tests::real_converter -- --ignored
+```
 
 ## Islands appearance
 

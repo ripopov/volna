@@ -12,13 +12,27 @@ use super::transactions::TrackRef;
 use super::value::{Bit, SignalShape, WaveValue};
 use crate::session::Session;
 
+pub(super) struct LocalReader {
+    reader: Reader,
+    // Shared hierarchy handles retain this owner; close the mapping before removing its files.
+    _owner: Option<Box<dyn Send + Sync>>,
+}
+
+impl std::ops::Deref for LocalReader {
+    type Target = Reader;
+    fn deref(&self) -> &Reader {
+        &self.reader
+    }
+}
+
 pub struct LocalSession {
-    pub(super) reader: Arc<Reader>,
+    pub(super) reader: Arc<LocalReader>,
     pub(super) tracks: Vec<super::transactions::Track>,
     info: TraceInfo,
     hierarchy: Hierarchy,
     source_bytes: u64,
     activity: Option<super::activity::ActivitySource>,
+    temporary: bool,
 }
 
 impl LocalSession {
@@ -38,6 +52,26 @@ impl LocalSession {
         Ok(session)
     }
 
+    /// Retains owned temporary files until the last mapped reader closes. Activity
+    /// sidecars stay beside this VTR rather than entering the persistent cache.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn open_temporary(
+        path: &std::path::Path,
+        name: String,
+        owner: impl Send + Sync + 'static,
+    ) -> anyhow::Result<Self> {
+        let source_bytes = std::fs::metadata(path)?.len();
+        let reader = Reader::open(path)?;
+        let activity = vtr::activity::Identity::of(&reader)
+            .ok()
+            .map(|id| super::activity::ActivitySource::new_temporary(path, id));
+        let mut session =
+            Self::from_owned_reader(name, reader, source_bytes, Some(Box::new(owner)));
+        session.activity = activity;
+        session.temporary = true;
+        Ok(session)
+    }
+
     pub fn from_bytes(name: impl Into<String>, bytes: Vec<u8>) -> anyhow::Result<Self> {
         let source_bytes = bytes.capacity() as u64;
         let reader = Reader::from_bytes(bytes).context("parse VTR image")?;
@@ -45,7 +79,19 @@ impl LocalSession {
     }
 
     fn from_reader(name: String, reader: Reader, source_bytes: u64) -> Self {
-        let reader = Arc::new(reader);
+        Self::from_owned_reader(name, reader, source_bytes, None)
+    }
+
+    fn from_owned_reader(
+        name: String,
+        reader: Reader,
+        source_bytes: u64,
+        owner: Option<Box<dyn Send + Sync>>,
+    ) -> Self {
+        let reader = Arc::new(LocalReader {
+            reader,
+            _owner: owner,
+        });
         let hierarchy = build_hierarchy(Arc::clone(&reader));
         let file_text = |name: &str| {
             reader.meta().attrs.iter().find_map(|(key, value)| {
@@ -74,6 +120,7 @@ impl LocalSession {
             hierarchy,
             source_bytes,
             activity: None,
+            temporary: false,
         }
     }
 }
@@ -93,7 +140,7 @@ fn shape_of(kind: SignalKind, var_type: vtr::VarType) -> SignalShape {
 }
 
 struct ReaderHierarchy {
-    reader: Arc<Reader>,
+    reader: Arc<LocalReader>,
     scopes: vtr::hierarchy_index::NodeIndex,
     vars: vtr::hierarchy_index::NodeIndex,
     generators: vtr::hierarchy_index::NodeIndex,
@@ -246,7 +293,7 @@ impl super::source::HierarchySource for ReaderHierarchy {
     }
 }
 
-fn build_hierarchy(reader: Arc<Reader>) -> Hierarchy {
+fn build_hierarchy(reader: Arc<LocalReader>) -> Hierarchy {
     use vtr::{NodeKind, hierarchy_index::NodeIndex};
     let h = reader.hierarchy();
     let scopes = NodeIndex::new(h, &[NodeKind::Scope]);
@@ -381,7 +428,7 @@ impl Session for LocalSession {
             self.activity
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("this trace has no activity source"))?
-                .image(cache_dir)
+                .image(cache_dir.filter(|_| !self.temporary))
         }
         #[cfg(target_family = "wasm")]
         {
@@ -399,9 +446,13 @@ impl Session for LocalSession {
             .activity
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("this trace cannot build an activity index"))?;
-        source.build(options, budget, cache_dir, self.info.signal_count, |w| {
-            vtr::activity::build(&self.reader, w, options)
-        })
+        source.build(
+            options,
+            budget,
+            cache_dir.filter(|_| !self.temporary),
+            self.info.signal_count,
+            |w| vtr::activity::build(&self.reader, w, options),
+        )
     }
     fn resolve_activity(
         &self,

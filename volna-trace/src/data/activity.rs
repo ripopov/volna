@@ -44,6 +44,15 @@ pub(crate) struct ActivitySource {
 
 impl ActivitySource {
     #[cfg(not(target_family = "wasm"))]
+    pub fn new_temporary(path: &std::path::Path, identity: vtr::activity::Identity) -> Self {
+        Self {
+            path: path.to_owned(),
+            identity,
+            loaded: std::sync::OnceLock::new(),
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     pub fn new(path: &std::path::Path, identity: vtr::activity::Identity) -> Self {
         let loaded = std::sync::OnceLock::new();
         if let Some(index) = find_index(path, &identity) {

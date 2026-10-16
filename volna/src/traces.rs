@@ -63,6 +63,12 @@ impl Workspace {
         let tooltip = chip.tooltip();
         let name: SharedString = chip.name.clone().into();
         let detail: SharedString = chip.detail().into();
+        #[cfg(not(target_family = "wasm"))]
+        let detail: SharedString = if self.native_imports.converting(trace) {
+            "converting…".into()
+        } else {
+            detail
+        };
         let body = match renaming {
             Some(rename) => div()
                 .w(t.px(140.0))

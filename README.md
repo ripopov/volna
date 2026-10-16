@@ -14,7 +14,7 @@ Volna is a hardware debug environment under development.
 | [`vtr-cli`](vtr-cli/README.md) | Terminal trace inspection, queries, activity indexing, and Kanata/VCD/FST conversion |
 | [`volna-server`](volna-server/README.md) | Headless process serving one recording over framed stdin/stdout |
 | [`volna-core`](volna-core/README.md) | Toolkit-independent viewer state, commands, layouts, and display lists |
-| [`volna`](volna/README.md) | GPUI desktop viewer for VTR recordings |
+| [`volna`](volna/README.md) | GPUI desktop viewer with automatic FST and Kanata import into VTR |
 | [`volna-vscode`](volna-vscode/README.md) | VS Code custom editor, WebAssembly host, and platform VSIX packaging |
 
 ## VTR/VDB boundary

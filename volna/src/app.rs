@@ -276,6 +276,8 @@ pub struct Workspace {
     pub(crate) remote: Option<crate::web_remote::Bridge>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) native_store: Option<crate::native_workspace::Store>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) native_imports: crate::native_import::Imports,
     pub(crate) dock: Option<crate::dock::DockHost>,
     panel_focus_pending: bool,
     pub(crate) focus_handle: FocusHandle,
@@ -781,6 +783,8 @@ impl Workspace {
             remote: None,
             #[cfg(not(target_family = "wasm"))]
             native_store: None,
+            #[cfg(not(target_family = "wasm"))]
+            native_imports: Default::default(),
             dock: None,
             panel_focus_pending: false,
             system_dark: crate::theme::is_dark(window.appearance()),
@@ -907,6 +911,11 @@ impl Workspace {
                     }
                     Event::Notice(text) => {
                         log::warn!("{text}");
+                        #[cfg(not(target_family = "wasm"))]
+                        if !self.app.workspace.notices.contains(&text) {
+                            self.app.workspace.notices.push(text.clone());
+                            cx.notify();
+                        }
                         #[cfg(target_family = "wasm")]
                         crate::web::notice(&text);
                     }
@@ -991,17 +1000,48 @@ impl Workspace {
     }
 
     fn run_requests(&mut self, cx: &mut Context<Self>) {
+        #[cfg(not(target_family = "wasm"))]
+        self.native_imports.retain_current(&self.app.doc);
         #[cfg(target_family = "wasm")]
         self.sync_remote();
         for request in self.app.take_requests() {
+            #[cfg(not(target_family = "wasm"))]
+            if let volna_core::session::LoadRequest::Open {
+                trace, generation, ..
+            } = &request
+                && self
+                    .app
+                    .doc
+                    .traces()
+                    .get(*trace)
+                    .is_none_or(|slot| slot.generation() != *generation)
+            {
+                continue;
+            }
             #[cfg(target_family = "wasm")]
             let Some(request) = self.route_remote(request, cx) else {
                 continue;
             };
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let work = self.native_imports.prepare(request);
+                cx.spawn(async move |this, cx| {
+                    let result = cx.background_spawn(async move { work() }).await;
+                    this.update(cx, |this, cx| {
+                        this.native_imports.finish(&result);
+                        this.app.deliver(result);
+                        this.after(None, cx);
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+            #[cfg(target_family = "wasm")]
             Self::spawn_request(request, cx);
         }
     }
 
+    #[cfg(any(test, target_family = "wasm"))]
     pub(crate) fn spawn_request(request: volna_core::session::LoadRequest, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let result = cx.background_spawn(async move { request.perform() }).await;
@@ -1699,6 +1739,8 @@ impl Workspace {
         match self.app.trace_state() {
             TraceState::Loaded(_) => self.render_dock(window, cx).into_any_element(),
             TraceState::Loading { name } => div()
+                .id("trace-loading")
+                .debug_selector(|| "trace-loading".into())
                 .size_full()
                 .flex()
                 .flex_col()
@@ -1721,11 +1763,29 @@ impl Workspace {
                         .font_family(t.ui_font)
                         .text_size(px(t.ui_size))
                         .text_color(colors.text_muted)
-                        .child(SharedString::from(format!("Loading {name}…"))),
+                        .id("trace-loading-message")
+                        .debug_selector(|| "trace-loading-message".into())
+                        .max_w_full()
+                        .min_w_0()
+                        .px_4()
+                        .whitespace_normal()
+                        .text_center()
+                        .child(SharedString::from(self.loading_message(&name))),
                 )
                 .into_any_element(),
             TraceState::Empty | TraceState::Error(_) => self.render_empty(cx).into_any_element(),
         }
+    }
+
+    fn loading_message(&self, name: &str) -> String {
+        #[cfg(not(target_family = "wasm"))]
+        if self
+            .native_imports
+            .converting(volna_core::trace::TraceId::A)
+        {
+            return format!("Converting {name} to VTR…");
+        }
+        format!("Loading {name}…")
     }
 
     fn render_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1947,13 +2007,22 @@ impl Workspace {
             .child(
                 div()
                     .text_color(colors.text_muted)
-                    .child("Open a VTR trace to browse its signals and transactions"),
+                    .max_w_full()
+                    .whitespace_normal()
+                    .text_center()
+                    .child(if cfg!(target_family = "wasm") {
+                        "Open a VTR trace to browse its signals and transactions"
+                    } else {
+                        "Open a VTR, FST, or Kanata trace to browse its signals and transactions"
+                    }),
             )
             .when_some(error, |el, e| {
+                let summary = e.lines().next().unwrap_or_default().to_owned();
                 el.child(
                     div()
                         .id("trace-error")
                         .mt_1()
+                        .w_full()
                         .max_w_full()
                         .min_w_0()
                         .flex()
@@ -1971,9 +2040,16 @@ impl Workspace {
                                 .size(t.px(14.0))
                                 .color(t.panel.error),
                         )
-                        .child(div().flex_1().min_w_0().whitespace_normal().child(
-                            gpui_kit::base::SelectableText::new("trace-error-text", e.clone()),
-                        ))
+                        .child(
+                            div().flex_1().min_w_0().whitespace_normal().child(
+                                div()
+                                    .line_clamp(3)
+                                    .child(gpui_kit::base::SelectableText::new(
+                                        "trace-error-text",
+                                        summary,
+                                    )),
+                            ),
+                        )
                         .child(
                             Button::new("trace-error-details")
                                 .label("Details")

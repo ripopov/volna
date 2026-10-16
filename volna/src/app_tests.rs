@@ -15,6 +15,137 @@ fn init(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn native_import_status_and_errors_remain_usable_across_themes_and_zoom(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{VisualTestContext, size};
+    init(cx);
+    let diagnostic = format!(
+        "Cannot convert recording.fst to VTR (exit status: 2).\n{}",
+        "invalid FST section in source recording\n".repeat(50)
+    );
+    for dark in [true, false] {
+        for width in [800.0, 360.0] {
+            for zoom in [1.0, 1.6] {
+                let mut workspace = None;
+                let root = cx.add_window(|window, cx| {
+                    let ws = cx.new(|cx| Workspace::new(window, cx));
+                    workspace = Some(ws.clone());
+                    gpui_kit::component::Root::new(ws, window, cx)
+                });
+                let ws = workspace.unwrap();
+                let mut vcx = VisualTestContext::from_window(root.into(), cx);
+                vcx.simulate_resize(size(px(width), px(700.0)));
+                let work = ws.update(&mut vcx, |ws, cx| {
+                    crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                    crate::theme::set_zoom(zoom, cx);
+                    ws.app.sidebar_visible = width >= 800.0;
+                    ws.app
+                        .open_path("recording with a long original source name.fst".into());
+                    let request = ws.app.take_requests().remove(0);
+                    let work = ws.native_imports.prepare(request);
+                    assert_eq!(
+                        ws.loading_message("recording.fst"),
+                        "Converting recording.fst to VTR…"
+                    );
+                    ws.after(None, cx);
+                    work
+                });
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                let loading = vcx.debug_bounds("trace-loading").unwrap();
+                let message = vcx.debug_bounds("trace-loading-message").unwrap();
+                assert!(
+                    loading.contains(&message.center()),
+                    "dark={dark} width={width} zoom={zoom}: loading={loading:?}, message={message:?}"
+                );
+                assert!(message.left() >= px(0.0) && message.right() <= px(width));
+                ws.update(&mut vcx, |ws, cx| {
+                    let generation = ws.app.doc.traces().get(TraceId::A).unwrap().generation();
+                    let error = anyhow::anyhow!("{diagnostic}");
+                    let result = LoadResult::Opened {
+                        trace: TraceId::A,
+                        generation,
+                        result: Err(error),
+                    };
+                    ws.native_imports.finish(&result);
+                    ws.app.deliver(result);
+                    ws.after(None, cx);
+                });
+                drop(work);
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                assert!(vcx.debug_bounds("trace-loading").is_none());
+                vcx.update(|window, cx| {
+                    let details = window.find("trace-error-details").bounds();
+                    assert!(details.left() >= px(0.0) && details.right() <= px(width));
+                    assert!(details.top() >= px(0.0) && details.bottom() <= px(700.0));
+                    window.click("trace-error-details", cx);
+                });
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    let text = window
+                        .focused_input(cx)
+                        .unwrap()
+                        .as_textarea()
+                        .unwrap()
+                        .clone();
+                    assert_eq!(text.read(cx).value().as_ref(), diagnostic);
+                    window.click("close-message", cx);
+                });
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    let focus = ws.read(cx).focus_handle.clone();
+                    window.focus(&focus, cx);
+                });
+                vcx.simulate_keystrokes("ctrl-o");
+                vcx.run_until_parked();
+                assert!(
+                    vcx.did_prompt_for_paths(),
+                    "open shortcut remains available after import failure"
+                );
+                vcx.simulate_path_prompt_response(|_| None);
+                vcx.run_until_parked();
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn failed_secondary_import_is_visible_without_replacing_the_open_recording(
+    cx: &mut TestAppContext,
+) {
+    init(cx);
+    let window = cx.add_window(Workspace::new);
+    window
+        .update(cx, |ws, _, cx| {
+            ws.app.set_session(Arc::new(ProceduralTrace::new(100)));
+            ws.app
+                .add_resource(OpenSpec::Path("bad.fst".into()), "file:///bad.fst".into());
+            let request = ws
+                .app
+                .take_requests()
+                .into_iter()
+                .find(|request| matches!(request, LoadRequest::Open { .. }))
+                .unwrap();
+            ws.app.deliver(
+                request.fail(anyhow::anyhow!("Cannot convert bad.fst: truncated section")),
+            );
+            ws.after(None, cx);
+            assert!(ws.app.doc.is_loaded());
+            assert_eq!(ws.app.doc.traces().len(), 1);
+            assert!(
+                ws.app
+                    .status()
+                    .workspace_notice
+                    .unwrap()
+                    .contains("Cannot convert bad.fst")
+            );
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
 fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
     use volna_core::{
