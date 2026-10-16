@@ -7792,6 +7792,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vtr-convert-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "console_error_panic_hook",
+ "flate2",
+ "serde_json",
+ "tempfile",
+ "vtr",
+ "vtr-convert",
+ "vtr-progress",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "vtr-guard"
 version = "0.1.0"
 dependencies = [

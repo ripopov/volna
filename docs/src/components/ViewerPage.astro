@@ -13,15 +13,23 @@ const { sample, controls = false } = Astro.props;
   </head>
   <body data-sample={sample ? 'true' : 'false'}>
     <main id="viewer" aria-label="Volna viewer">
-      <div id="viewer-status" role="status">Loading the Volna viewer…</div>
-      <div id="viewer-error" role="alert" hidden></div>
-      {controls && <nav id="viewer-actions" aria-label="Recording controls">
-        <button class="v-btn v-btn--sm" id="open-recording" type="button" disabled>Open recording</button>
-        <button class="v-btn v-btn--sm" id="load-sample" type="button" disabled>Load sample</button>
-      </nav>}
+      <div id="viewer-notices">
+        <div id="viewer-status" role="status">
+          <span id="viewer-message">Loading the Volna viewer…</span>
+          <div id="import-progress" class="v-progress" role="progressbar" aria-label="Conversion progress" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
+        </div>
+        <div id="viewer-error" role="alert" hidden></div>
+        <nav id="viewer-actions" aria-label="Recording controls">
+          <button class="v-btn v-btn--sm" id="cancel-import" type="button" hidden>Cancel import</button>
+          {controls && <>
+            <button class="v-btn v-btn--sm" id="open-recording" type="button" disabled>Open recording</button>
+            <button class="v-btn v-btn--sm" id="load-sample" type="button" disabled>Load sample</button>
+          </>}
+        </nav>
+      </div>
       <noscript><p>Enable JavaScript to run the viewer. The <a href={`${base}docs/`}>engineering documentation</a> remains available.</p></noscript>
     </main>
-    <input id="recording-file" type="file" accept=".vtr" aria-label="Open a local recording" hidden />
+    <input id="recording-file" type="file" accept=".vtr,.fst,.fst.gz,.kanata,.kanata.gz,.log,.log.gz,.vcd,.vcd.gz" aria-label="Open a local recording" hidden />
     <script type="module" src={`${base}viewer/host.js`}></script>
   </body>
 </html>
@@ -30,8 +38,13 @@ const { sample, controls = false } = Astro.props;
   #viewer { position: relative; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
   #viewer > * { pointer-events: auto; }
   body > canvas { position: absolute; inset: 0; }
-  #viewer-status, #viewer-error { position: absolute; z-index: 1; inset: auto 1rem 1rem; width: max-content; max-width: calc(100% - 2rem); padding: .75rem 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-raised); color: var(--text-1); font: var(--text-sm) var(--font-sans); }
+  #viewer-notices { position: absolute; inset: auto 1rem 1rem; display: flex; flex-direction: column; gap: .5rem; pointer-events: none; }
+  #viewer-notices > * { pointer-events: auto; }
+  #viewer-status, #viewer-error { width: max-content; max-width: 100%; padding: .75rem 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-raised); color: var(--text-1); font: var(--text-sm) var(--font-sans); overflow-wrap: anywhere; box-sizing: border-box; }
   #viewer-error { border-color: var(--danger); }
-  #viewer-actions { position: absolute; z-index: 1; right: 1rem; bottom: 1rem; display: flex; flex-wrap: wrap; gap: .5rem; }
+  #import-progress { margin-top: .75rem; }
+  #viewer-actions { align-self: end; display: flex; justify-content: end; flex-wrap: wrap; gap: .5rem; }
+  #viewer-actions:not(:has(button:not([hidden]))) { display: none; }
+  #cancel-import[hidden] { display: none; }
   #viewer-status[hidden], #viewer-error[hidden] { display: none; }
 </style>

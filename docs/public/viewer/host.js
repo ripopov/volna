@@ -1,7 +1,10 @@
 import { ensureIsolation } from '../isolation.js';
+import { Conversion, conversionStatus } from './conversion.js';
 
 const base = new URL('../', import.meta.url);
 const status = document.getElementById('viewer-status');
+const statusText = document.getElementById('viewer-message');
+const importProgress = document.getElementById('import-progress');
 const error = document.getElementById('viewer-error');
 const fileInput = document.getElementById('recording-file');
 const workspaceInput = document.createElement('input');
@@ -16,6 +19,10 @@ let viewer;
 let pendingLocal = null;
 let pendingSample = false;
 let currentTraceUri = null;
+const conversion = new Conversion();
+const cancelImport = document.getElementById('cancel-import');
+let openRequest = 0;
+let openAbort;
 const labelViewerInputs = () => {
   document.querySelectorAll('textarea:not([aria-label])').forEach(input => {
     input.setAttribute('aria-label', 'Viewer text input');
@@ -25,6 +32,7 @@ new MutationObserver(labelViewerInputs).observe(document.body, { childList: true
 const startupTimer = setTimeout(() => showError('The viewer did not start. Check browser graphics support and reload this page.'), 30000);
 
 function showError(message) {
+  importProgress.hidden = true;
   error.textContent = message;
   error.hidden = false;
   status.hidden = true;
@@ -54,52 +62,104 @@ function candidates(traceUri, sidecarBytes, workspaceUri = `${traceUri}.volna.js
   };
 }
 
-async function openSample() {
-  pendingSample = true;
+function beginOpen() {
+  conversion.cancel();
+  openAbort?.abort();
+  openAbort = new AbortController();
+  pendingLocal = null;
+  pendingSample = false;
+  cancelImport.hidden = true;
+  importProgress.hidden = true;
+  delete document.body.dataset.localTraceOpened;
   delete document.body.dataset.workspaceRestored;
   window.volnaCurrentState = '';
-  status.textContent = 'Loading the sample recording and workspace…';
+  error.hidden = true;
+  return ++openRequest;
+}
+
+async function openSample() {
+  const request = beginOpen();
+  pendingSample = true;
+  statusText.textContent = 'Loading the sample recording and workspace…';
   status.hidden = false;
   error.hidden = true;
   try {
     const [traceResponse, workspaceResponse] = await Promise.all([
-      fetch(sampleUrl), fetch(sampleWorkspaceUrl),
+      fetch(sampleUrl, { signal: openAbort.signal }), fetch(sampleWorkspaceUrl, { signal: openAbort.signal }),
     ]);
     if (!traceResponse.ok || !workspaceResponse.ok) throw new Error('Sample files are unavailable.');
     const [trace, workspace] = await Promise.all([
       traceResponse.arrayBuffer(), workspaceResponse.arrayBuffer(),
     ]);
+    if (request !== openRequest) return;
     currentTraceUri = sampleUrl.href;
     viewer.open_resource('landing.vtr', new Uint8Array(trace), JSON.stringify({
       traceUri: sampleUrl.href,
       candidates: candidates(sampleUrl.href, new Uint8Array(workspace), sampleWorkspaceUrl.href),
     }));
-    status.textContent = 'Opening the sample workspace…';
+    statusText.textContent = 'Opening the sample workspace…';
   } catch (cause) {
+    if (request !== openRequest) return;
     pendingSample = false;
     showError(`Could not load the sample: ${cause.message}`);
   }
 }
 
+function showConversion(name, snapshot) {
+  statusText.textContent = `${name}: ${conversionStatus(snapshot)}`;
+  importProgress.hidden = false;
+  const fraction = snapshot.phase === 'complete' ? 1 : snapshot.total ? snapshot.completed / snapshot.total : null;
+  if (fraction === null) {
+    importProgress.removeAttribute('aria-valuenow');
+    importProgress.style.removeProperty('--progress');
+  } else {
+    importProgress.setAttribute('aria-valuenow', String(Math.floor(fraction * 100)));
+    importProgress.style.setProperty('--progress', `${fraction * 100}%`);
+  }
+}
+
 async function openFile(file) {
   if (!file) return;
-  delete document.body.dataset.workspaceRestored;
-  window.volnaCurrentState = '';
-  status.textContent = `Opening ${file.name}…`;
+  const request = beginOpen();
+  statusText.textContent = `Opening ${file.name}…`;
   status.hidden = false;
   error.hidden = true;
   try {
+    const direct = /\.vtr$/i.test(file.name);
+    if (!direct && !/\.(fst|kanata|log|vcd)(\.gz)?$/i.test(file.name)) {
+      throw new Error('Choose a VTR, FST, Kanata, LOG, or VCD recording.');
+    }
+    cancelImport.hidden = direct;
+    if (!direct) showConversion(file.name, {
+      version: 1, phase: 'preparing', completed: 0, total: null, input_bytes: file.size, output_bytes: 0,
+    });
+    const bytes = direct ? new Uint8Array(await file.arrayBuffer()) : await conversion.run(file, snapshot => {
+      if (request === openRequest) showConversion(file.name, snapshot);
+    });
+    if (request !== openRequest) return;
+    cancelImport.hidden = true;
+    importProgress.hidden = true;
+    statusText.textContent = `Opening ${file.name}…`;
     const traceUri = new URL(`local/${encodeURIComponent(file.name)}`, base).href;
     pendingLocal = file.name;
     currentTraceUri = traceUri;
-    viewer.open_resource(file.name, new Uint8Array(await file.arrayBuffer()), JSON.stringify({
+    viewer.open_resource(file.name, bytes, JSON.stringify({
       traceUri, candidates: candidates(traceUri),
     }));
   } catch (cause) {
+    if (request !== openRequest) return;
     pendingLocal = null;
+    cancelImport.hidden = true;
     showError(`Could not open ${file.name}: ${cause.message}`);
   }
 }
+
+cancelImport.addEventListener('click', () => {
+  beginOpen();
+  statusText.textContent = 'Import cancelled.';
+  status.hidden = false;
+});
+window.addEventListener('pagehide', () => { beginOpen(); });
 
 window.volnaOpen = () => fileInput.click();
 fileInput.addEventListener('change', () => {

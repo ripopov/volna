@@ -19,7 +19,7 @@ use crate::txblock::{self, TxBlockInput, TxId, TxKind, TxStatus};
 use crate::value::{Value, packed_len};
 use crate::varint;
 use std::fs::File;
-use std::io::{BufWriter, Seek, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering, compiler_fence};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -149,7 +149,7 @@ impl LogPool {
 
 struct FileSink {
     log_pool: Option<LogPool>,
-    file: BufWriter<File>,
+    file: BufWriter<Box<dyn Write + Send>>,
     offset: u64,
     entries: Vec<DirEntry>,
     comp: Compression,
@@ -179,7 +179,12 @@ struct FileSink {
 }
 
 impl FileSink {
-    fn new(file: File, offset: u64, opts: &WriterOptions, group_size: u32) -> Result<FileSink> {
+    fn new(
+        file: impl Write + Send + 'static,
+        offset: u64,
+        opts: &WriterOptions,
+        group_size: u32,
+    ) -> Result<FileSink> {
         let log_encoders = if opts.background {
             opts.log_encoders
         } else {
@@ -191,7 +196,7 @@ impl FileSink {
             } else {
                 None
             },
-            file: BufWriter::with_capacity(1 << 20, file),
+            file: BufWriter::with_capacity(1 << 20, Box::new(file)),
             offset,
             entries: Vec::new(),
             comp: opts.compression,
@@ -1159,9 +1164,18 @@ impl Writer {
     }
 
     pub fn create_with(path: impl AsRef<Path>, opts: WriterOptions) -> Result<Writer> {
-        let mut file = File::create(path)?;
+        Self::from_writer(File::create(path)?, opts)
+    }
+
+    /// Writes a fresh VTR image to an owned output without seeking.
+    /// Call `close` before using its contents; discard output after an error.
+    /// Hosts without native threads must disable `WriterOptions::background`.
+    pub fn from_writer(
+        mut file: impl Write + Send + 'static,
+        opts: WriterOptions,
+    ) -> Result<Writer> {
         container::write_file_header(&mut file)?;
-        let offset = file.stream_position()?;
+        let offset = container::FILE_HEADER_LEN as u64;
         let (recycle_tx, recycle_rx) = sync_channel(16);
         let group_size = opts.group_size.max(1).next_power_of_two();
         let mut fsink = FileSink::new(file, offset, &opts, group_size)?;

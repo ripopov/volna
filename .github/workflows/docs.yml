@@ -3,9 +3,9 @@ name: Documentation
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'vtr/**', 'vtr-capi/**', 'vtr-guard/**', 'volna-trace/**', 'volna-server/README.md', 'volna-core/**', 'volna/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', '.agents/**', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'vtr/**', 'vtr-capi/**', 'vtr-guard/**', 'vtr-convert/**', 'vtr-convert-wasm/**', 'vtr-progress/**', 'volna-trace/**', 'volna-server/README.md', 'volna-core/**', 'volna/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', '.agents/**', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['docs/**', 'vtr/**', 'vtr-capi/**', 'vtr-guard/**', 'volna-trace/**', 'volna-server/README.md', 'volna-core/**', 'volna/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', '.agents/**', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'vtr/**', 'vtr-capi/**', 'vtr-guard/**', 'vtr-convert/**', 'vtr-convert-wasm/**', 'vtr-progress/**', 'volna-trace/**', 'volna-server/README.md', 'volna-core/**', 'volna/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/**', '.agents/**', '.github/workflows/docs.yml']
   workflow_dispatch:
 
 permissions:

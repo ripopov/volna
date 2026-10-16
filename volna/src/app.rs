@@ -2053,11 +2053,9 @@ impl Workspace {
                     .max_w_full()
                     .whitespace_normal()
                     .text_center()
-                    .child(if cfg!(target_family = "wasm") {
-                        "Open a VTR trace to browse its signals and transactions"
-                    } else {
-                        "Open a VTR, FST, or Kanata trace to browse its signals and transactions"
-                    }),
+                    .child(
+                        "Open a VTR, FST, or Kanata trace to browse its signals and transactions",
+                    ),
             )
             .when_some(error, |el, e| {
                 let summary = e.lines().next().unwrap_or_default().to_owned();

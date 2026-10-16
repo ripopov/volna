@@ -11,7 +11,8 @@
     "check": "astro check",
     "build": "npm run build:viewer && astro build && node scripts/check-links.mjs",
     "preview": "astro preview",
-    "test": "node tests/site.mjs && node tests/web-sorting.mjs",
+    "test": "node --test tests/conversion.test.mjs && node tests/site.mjs && node tests/web-imports.mjs && node tests/web-sorting.mjs",
+    "test:imports": "node --test tests/conversion.test.mjs && node tests/web-imports.mjs",
     "test:sorting": "node tests/web-sorting.mjs"
   },
   "dependencies": {

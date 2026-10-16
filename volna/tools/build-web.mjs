@@ -1,4 +1,5 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,4 +67,62 @@ export async function buildWebViewer(destination) {
       "volna.wasm",
     ),
   ]);
+}
+
+export async function buildWebConverter(destination) {
+  const metadata = JSON.parse(
+    run(
+      "cargo",
+      ["metadata", "--no-deps", "--format-version", "1", "--locked"],
+      {
+        stdio: ["ignore", "pipe", "inherit"],
+        encoding: "utf8",
+      },
+    ),
+  );
+  run(
+    "cargo",
+    [
+      "build",
+      "-p",
+      "vtr-convert-wasm",
+      "--target",
+      "wasm32-unknown-unknown",
+      "--release",
+      "--locked",
+    ],
+    {
+      env: {
+        ...process.env,
+        CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:
+          "-C link-arg=--max-memory=1073741824",
+      },
+    },
+  );
+  await rm(destination, { recursive: true, force: true });
+  await mkdir(destination, { recursive: true });
+  const wasm = join(
+    metadata.target_directory,
+    "wasm32-unknown-unknown",
+    "release",
+    "vtr_convert_wasm.wasm",
+  );
+  const digest = createHash("sha256")
+    .update(await readFile(wasm))
+    .digest("hex")
+    .slice(0, 16);
+  const name = `vtr_convert_${digest}`;
+  run("wasm-bindgen", [
+    "--target",
+    "web",
+    "--out-dir",
+    destination,
+    "--out-name",
+    name,
+    wasm,
+  ]);
+  await writeFile(
+    join(destination, "manifest.json"),
+    JSON.stringify({ module: `${name}.js` }) + "\n",
+  );
 }

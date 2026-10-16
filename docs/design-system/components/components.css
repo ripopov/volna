@@ -117,6 +117,12 @@
 
 .v-status{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;padding:var(--space-3) var(--space-4);border:var(--border-width) solid var(--border);border-radius:var(--radius-sm);font-size:var(--text-sm);color:var(--text-2);background:var(--surface-card)}
 .v-status__label,.v-guide__label{font-family:var(--font-mono);font-size:var(--text-2xs);letter-spacing:var(--tracking-caps);color:var(--accent-text)}
+.v-progress{height:8px;overflow:hidden;border-radius:var(--radius-sm);background:var(--surface-selected)}
+.v-progress[hidden]{display:none}
+.v-progress>span{display:block;height:100%;width:var(--progress,25%);background:var(--accent)}
+.v-progress:not([aria-valuenow])>span{animation:v-progress-pulse 1.5s ease-in-out infinite alternate}
+@keyframes v-progress-pulse{to{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.v-progress:not([aria-valuenow])>span{animation:none}}
 .v-guide-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--space-4);margin-block:var(--space-8)}
 .v-guide{position:relative;display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-6);border:var(--border-width) solid var(--border);border-radius:var(--radius-md);background:var(--surface-card);color:var(--text-2);text-decoration:none;transition:background var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)}
 .v-guide-grid .v-guide{margin:0}

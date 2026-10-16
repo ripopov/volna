@@ -1,5 +1,5 @@
 [workspace]
-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "vtr-progress", "volna-core", "volna"]
+members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "vtr-convert-wasm", "vtr-progress", "volna-core", "volna"]
 resolver = "3"
 default-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "vtr-progress", "volna-core"]
 

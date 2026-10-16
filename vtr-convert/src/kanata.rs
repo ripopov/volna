@@ -35,8 +35,18 @@ pub fn convert_kanata(
 ) -> Result<()> {
     let input = input.as_ref();
     let file = std::fs::File::open(input).with_context(|| input.display().to_string())?;
-    let counter = progress.begin(vtr_progress::Phase::Reading, Some(file.metadata()?.len()));
-    let mut reader = BufReader::new(vtr_progress::CountingReader::new(file, counter));
+    let length = file.metadata()?.len();
+    convert_input(file, length, w, progress)
+}
+
+pub fn convert_input(
+    input: impl Read + 'static,
+    length: u64,
+    w: &mut Writer,
+    progress: &vtr_progress::Reporter,
+) -> Result<()> {
+    let counter = progress.begin(vtr_progress::Phase::Reading, Some(length));
+    let mut reader = BufReader::new(vtr_progress::CountingReader::new(input, counter));
     let compressed = reader.fill_buf()?.starts_with(&[0x1f, 0x8b]);
     let reader: Box<dyn Read> = if compressed {
         Box::new(flate2::read::MultiGzDecoder::new(reader))

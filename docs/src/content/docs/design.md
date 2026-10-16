@@ -52,6 +52,15 @@ shared `v-` classes. Their specimens are the [landing page](../), the
 [VTR introduction](../vtr/), and the [authoring calculator](../authoring/#html-and-javascript-widgets).
 They use semantic tokens; they introduce no independent color palette.
 
+Browser import notices use `v-progress` with a percentage for measured phases.
+Omit `aria-valuenow` while work is indeterminate; reduced motion leaves its fill
+static. The text accompanying the bar names the phase and input/output sizes.
+
+<div class="v-status">
+<span>Reading input 42% · Input 128.0 MiB · Output 38.7 MiB</span>
+<div class="v-progress" role="progressbar" aria-label="Import progress specimen" aria-valuemin="0" aria-valuemax="100" aria-valuenow="42" style="--progress:42%;width:100%"><span></span></div>
+</div>
+
 The landing page also contains the `v-viewer-frame` specimen. It spans 90% of
 the viewport width and grows to use the available viewport height while the
 surrounding documentation remains scrollable. The viewer itself runs in a

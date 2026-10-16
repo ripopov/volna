@@ -16,8 +16,16 @@ pub fn convert_fst(
     writer: &mut Writer,
     progress: &vtr_progress::Reporter,
 ) -> Result<()> {
-    progress.begin(vtr_progress::Phase::Preparing, None);
     let input = std::io::BufReader::new(std::fs::File::open(input)?);
+    convert_input(input, writer, progress)
+}
+
+pub fn convert_input(
+    input: impl BufRead + Seek + 'static,
+    writer: &mut Writer,
+    progress: &vtr_progress::Reporter,
+) -> Result<()> {
+    progress.begin(vtr_progress::Phase::Preparing, None);
     convert_reader(Box::new(input), writer, progress)
 }
 
@@ -170,6 +178,7 @@ fn convert_reader(
                 .push(time, value)
         })
         .map_err(|error| anyhow!("read FST signals: {error:?}"))?;
+    drop(reader);
     let histories: Vec<_> = signals.into_values().collect();
     let writing = progress.begin(
         vtr_progress::Phase::Writing,

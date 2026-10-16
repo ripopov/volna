@@ -11,6 +11,7 @@ Volna is a hardware debug environment under development.
 | [`vtr-guard`](vtr-guard/README.md) | Linux crash and stop guard for VTR writers, used by the C API |
 | [`volna-trace`](volna-trace/README.md) | Immutable VTR sessions, complete objects, memory admission, and remote client |
 | [`vtr-convert`](vtr-convert/README.md) | Shared FST, Kanata, and VCD importers |
+| [`vtr-convert-wasm`](vtr-convert-wasm/README.md) | Browser worker host for in-memory trace conversion |
 | [`vtr-progress`](vtr-progress/README.md) | Conversion progress counters and the CLI/native reporting protocol |
 | [`vtr-cli`](vtr-cli/README.md) | Terminal trace inspection, queries, activity indexing, and Kanata/VCD/FST conversion |
 | [`volna-server`](volna-server/README.md) | Headless process serving one recording over framed stdin/stdout |

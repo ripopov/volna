@@ -77,16 +77,36 @@ impl Snapshot {
     }
 }
 
+type Observer = Arc<dyn Fn(Phase, u64, Option<u64>) + Send + Sync>;
+
+#[derive(Default)]
+struct Count {
+    value: AtomicU64,
+    step: u64,
+    notify: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
 #[derive(Clone, Default)]
-pub struct Counter(Arc<AtomicU64>);
+pub struct Counter(Arc<Count>);
 
 impl Counter {
     pub fn set(&self, value: u64) {
-        self.0.fetch_max(value, Ordering::Relaxed);
+        let previous = self.0.value.fetch_max(value, Ordering::Relaxed);
+        self.notify(previous, previous.max(value));
     }
 
     pub fn advance(&self, amount: u64) {
-        self.0.fetch_add(amount, Ordering::Relaxed);
+        let previous = self.0.value.fetch_add(amount, Ordering::Relaxed);
+        self.notify(previous, previous.saturating_add(amount));
+    }
+
+    fn notify(&self, previous: u64, completed: u64) {
+        if let Some(notify) = &self.0.notify {
+            let step = self.0.step.max(1);
+            if previous == 0 && completed > 0 || previous / step != completed / step {
+                notify();
+            }
+        }
     }
 }
 
@@ -98,27 +118,66 @@ struct Work {
 }
 
 #[derive(Clone, Default)]
-pub struct Reporter(Arc<Mutex<Work>>);
+pub struct Reporter {
+    work: Arc<Mutex<Work>>,
+    observer: Option<Observer>,
+}
 
 impl Reporter {
+    /// Delivers phase changes and coalesced counter updates on the calling thread.
+    /// The callback runs without holding the progress lock.
+    pub fn with_observer(
+        observer: impl Fn(Phase, u64, Option<u64>) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            work: Arc::default(),
+            observer: Some(Arc::new(observer)),
+        }
+    }
+
     #[expect(
         clippy::must_use_candidate,
         reason = "Starting an indeterminate phase does not need a work counter."
     )]
     pub fn begin(&self, phase: Phase, total: Option<u64>) -> Counter {
-        let counter = Counter::default();
-        *self.0.lock().expect("progress lock") = Work {
+        let total = total.filter(|&n| n > 0);
+        let notify = self.observer.as_ref().map(|observer| {
+            let observer = observer.clone();
+            let work = Arc::downgrade(&self.work);
+            Arc::new(move || {
+                if let Some(work) = work.upgrade() {
+                    let (phase, completed, total) = {
+                        let work = work.lock().expect("progress lock");
+                        (
+                            work.phase,
+                            work.counter.0.value.load(Ordering::Relaxed),
+                            work.total,
+                        )
+                    };
+                    observer(phase, total.map_or(completed, |n| completed.min(n)), total);
+                }
+            }) as Arc<dyn Fn() + Send + Sync>
+        });
+        let counter = Counter(Arc::new(Count {
+            value: AtomicU64::new(0),
+            step: total.map_or(4096, |total| total.div_ceil(1000)),
+            notify,
+        }));
+        *self.work.lock().expect("progress lock") = Work {
             phase,
             counter: counter.clone(),
-            total: total.filter(|&n| n > 0),
+            total,
         };
+        if let Some(observer) = &self.observer {
+            observer(phase, 0, total);
+        }
         counter
     }
 
     #[must_use]
     pub fn snapshot(&self, input_bytes: u64, output_bytes: u64) -> Snapshot {
-        let work = self.0.lock().expect("progress lock");
-        let completed = work.counter.0.load(Ordering::Relaxed);
+        let work = self.work.lock().expect("progress lock");
+        let completed = work.counter.0.value.load(Ordering::Relaxed);
         Snapshot {
             version: VERSION,
             phase: work.phase,
@@ -170,6 +229,56 @@ pub fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamp_units_do_not_turn_every_sample_into_a_progress_message() {
+        let events = Arc::new(AtomicU64::new(0));
+        let observed = events.clone();
+        let reporter = Reporter::with_observer(move |_, _, _| {
+            observed.fetch_add(1, Ordering::Relaxed);
+        });
+        let counter = reporter.begin(Phase::Reading, Some(10_000_000_000_000));
+        for tick in 1..=10_000 {
+            counter.set(tick * 1_000_000_000);
+        }
+        assert!(events.load(Ordering::Relaxed) <= 1002);
+        assert_eq!(reporter.snapshot(0, 0).fraction(), Some(1.0));
+    }
+
+    #[test]
+    fn observers_can_read_snapshots_and_coalesce_updates_without_retaining_the_reporter() {
+        let slot: Arc<Mutex<Option<Reporter>>> = Arc::default();
+        let weak = Arc::downgrade(&slot);
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let events = observed.clone();
+        let reporter = Reporter::with_observer(move |phase, completed, total| {
+            let reporter = weak.upgrade().unwrap().lock().unwrap().clone().unwrap();
+            let snapshot = reporter.snapshot(12, 34);
+            assert_eq!(
+                (snapshot.phase, snapshot.completed, snapshot.total),
+                (phase, completed, total)
+            );
+            events.lock().unwrap().push(snapshot);
+        });
+        *slot.lock().unwrap() = Some(reporter.clone());
+        let reading = reporter.begin(Phase::Reading, Some(10000));
+        for _ in 0..10000 {
+            reading.advance(1);
+        }
+        let writing = reporter.begin(Phase::Writing, Some(10));
+        writing.advance(100);
+        reading.advance(4096);
+        let snapshots = observed.lock().unwrap();
+        assert!(snapshots.len() <= 1005);
+        assert_eq!(snapshots.last().unwrap().phase, Phase::Writing);
+        assert_eq!(snapshots.last().unwrap().completed, 10);
+        assert!(snapshots.iter().all(Snapshot::valid));
+        drop(snapshots);
+        slot.lock().unwrap().take();
+        let work = Arc::downgrade(&reporter.work);
+        drop(reporter);
+        assert!(work.upgrade().is_none());
+    }
 
     #[test]
     fn phase_changes_detach_old_counters_and_bound_progress() {

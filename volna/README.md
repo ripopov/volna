@@ -66,9 +66,20 @@ cargo build --locked -p volna
 cargo run --locked -p volna -- recording.fst
 ```
 
-The standalone browser and VS Code extension still accept VTR only. Use
-`vtr convert input.kanata output.vtr` or `vtr convert input.fst output.vtr`
-for those hosts. VCD conversion remains a manual CLI operation.
+The VS Code extension also imports FST and Kanata with its bundled converter.
+The standalone browser imports FST, Kanata (`.kanata` and `.log`), and VCD,
+including their `.gz` forms, through a separate converter WASM worker. The page
+shows phase progress and input/output sizes. **Cancel import**, another recording,
+or **Load sample** terminates the conversion worker and discards its memory.
+The viewer receives a complete VTR image and keeps the original source filename
+for workspace association. VTR opens directly without starting a converter.
+
+Browser imports stay local and use RAM for the input, retained histories, and
+converted VTR. The browser converter limits input, external gzip decompression,
+and encoded output to 256 MiB each, with a separate 1 GiB WASM memory ceiling for
+conversion. The viewer and file buffers need additional memory; available browser
+RAM can impose a lower limit. No converted recording is written to disk. Native
+and VS Code hosts use temporary files instead.
 
 ## Build and run
 
@@ -250,7 +261,9 @@ so its maximum dataset size is lower than native even on machines with more RAM.
 
 The web build requires `rust-src` (`rustup component add rust-src`).
 `tools/build-web.mjs` rebuilds the standard library with atomics and emits a
-shared-memory module. Serve it over HTTPS (localhost also works), with
+shared-memory viewer module. The docs build also emits the independent,
+single-threaded `vtr-convert-wasm` module, loaded only for browser imports.
+Serve it over HTTPS (localhost also works), with
 `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` on the top-level page and its frames.
 The browser must support `SharedArrayBuffer` and `Atomics.waitAsync`; startup
@@ -265,6 +278,11 @@ After building the docs, `npm run test:sorting` in `docs/` checks a 1,000,000-ro
 browser table, cancellation, selection, memory refusal, keyboard sorting, and
 animation frames during sorting. It also tests static-host isolation and missing
 browser capability errors.
+
+`npm run test:imports` verifies the browser converter, compressed fixtures, loaded
+pipeline and waveform data, workspace identity, responsive frames, keyboard
+cancellation, replacement, error recovery, and progress controls in both themes
+at desktop and 360px widths. It requires an existing docs build.
 
 The reproducible scale check sorts and verifies 100M procedural keys in RAM.
 It measures the sorter, independently of trace loading and frame latency:
