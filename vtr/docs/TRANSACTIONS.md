@@ -4,8 +4,8 @@ Status: proposed design; not implemented. [SPEC.md](SPEC.md) describes the
 current format. Adoption requires a format version bump and regeneration of
 older trace assets. This document specifies the transaction subsystem; the
 container, compression, string table, and general hierarchy framing are defined
-in SPEC.md. Numeric section kind allocation and the version number must be assigned when this
-proposal is integrated into the container specification.
+in SPEC.md. Numeric section kind allocation and the version number must be
+assigned when this proposal is integrated into the container specification.
 
 ## Problem statement
 
@@ -37,6 +37,15 @@ their schema, release completed child payloads promptly, and avoid retaining
 stage history or checking resource exclusivity. The design must also preserve
 unlocated stages and events for producers that need only transaction-local
 detail.
+
+![The same stage visits grouped by instruction above and by pipeline location below. Stage 103 belongs to instruction 42 and occupies execute.slot0 from time 4 to 7 in both views.](diagrams/transaction-views.drawio.svg)
+
+The highlighted visit is one stored record. The transaction view reaches it
+through the owner's reference list; the pipeline view queries its generator.
+
+The figures contain embedded draw.io source and can be opened directly in
+diagrams.net or draw.io for editing. Their colors distinguish concepts, not
+prescribed viewer styling.
 
 ## 1. Identity, time, and ownership
 
@@ -195,7 +204,8 @@ located stages: [(generator ID, transaction ID), ...]
 
 Span kinds are `unspecified` (0), `internal` (1), `server` (2), `client` (3),
 `producer` (4), and `consumer` (5). They classify an individual operation and
-are independent of the generator's kind string. All lists may be empty.
+are independent of the generator's kind string. Child and optional attribute
+lists may be empty; the argument list must match the generator's schema.
 Ordinary parentage does not require an inverse child list; the located child
 lists specifically enumerate EVENT and STAGE records.
 
@@ -228,6 +238,12 @@ A located child's owner is an ordinary transaction; LOG, EVENT, STAGE, and
 CLOCK records do not own located children. This keeps specialized records
 limited to their stated fields. The generator ID in a reference lets a reader
 select candidate blocks without first resolving the child by global ID.
+
+![Transaction 42 embeds unlocated details and references located stage 103 and event 104. Each located child stores parent 42 and belongs to a generator with its own hierarchy location and schema.](diagrams/transaction-ownership.drawio.svg)
+
+Generator IDs locate record sources in the hierarchy. Transaction IDs identify
+runtime instances; the parent's global ID connects each located child to its
+owner independently of the generator's hierarchy parent.
 
 ## 4. Located events and stages
 
@@ -376,6 +392,12 @@ not contiguous on-disk rows. The container supplies section framing, CRC,
 compression codec, directory entries, and string and hierarchy declarations.
 All referenced strings and generators must be declared before their block.
 
+![Generator 18 declares argument names and types once. A query for its stage records skips owner and event blocks, decodes candidate stage blocks, and reads argument values using the declaration.](diagrams/transaction-blocks.drawio.svg)
+
+Block membership and time bounds select candidates before decompression.
+Decoding a candidate still reads its column streams; a header match is not a
+direct offset to one record. Owner payloads are unnecessary for a located track.
+
 Fixed-width integers are little-endian. `varint` means unsigned base-128;
 `svarint` means ZigZag followed by varint. Delta columns reset at each block
 and use zero as their initial previous value. ID and time deltas use wrapping
@@ -383,10 +405,17 @@ and use zero as their initial previous value. ID and time deltas use wrapping
 decode, so the full unsigned domain remains representable.
 
 Optional parents use a varint: zero for absent, otherwise
-`(zigzag(id - parent) << 1) | 1`. This packed expression is evaluated as an
-integer without truncation and can require 65 bits for full-range IDs.
-Decoders must accept that width in this column. EVENT and STAGE require a
-nonzero encoded parent and a nonzero resolved parent ID.
+`(zigzag(delta) << 1) | 1`, where `delta` is the wrapping 64-bit difference
+`id - parent`, interpreted as signed. The shift is evaluated without truncation
+and can require 65 bits. Decoding removes the low presence bit, reverses
+ZigZag, and subtracts the resulting delta from the record ID with wrapping
+64-bit arithmetic. Nonzero even encodings are invalid. EVENT and STAGE require
+a nonzero encoded parent and a nonzero resolved parent ID.
+
+Unsigned scalar varints are limited to 64 bits, except the 65-bit packed
+parent and unlocated stage-end fields. Writers use the shortest base-128
+representation. Duration addition must not overflow: `begin + duration` must
+fit in `u64`. Only signed delta and offset reconstruction wraps.
 
 Every decompressed block starts with `varint column_count`, followed by that
 many varint column byte lengths, then the concatenated column streams. Counts
@@ -520,8 +549,16 @@ events and logs preserve production order. Parallel encoders must preserve
 that order within each output sequence. Block ID and time ranges may overlap.
 Chronological consumers must sort; they cannot assume file order is time order.
 
-Time-window selection uses conservative block bounds, followed by per-record
-checks. Generator selection uses complete block membership lists. A scope
+For a closed query window `[a, b]`, where `a <= b`, candidate blocks satisfy
+`t_min <= b` and `t_max >= a`. A positive-duration stage intersects the window
+when `begin <= b` and `end > a`; a point record matches when `a <= time <= b`.
+Ordinary transaction queries use `begin <= b` and `end >= a`. Clock queries
+select candidate stretches by these bounds and derive matching edges from
+the period. Embedded event and stage times do not expand TX_BLOCK bounds:
+they are inspected through their owners, while located records have their
+own independently queryable block bounds.
+
+Generator selection uses complete block membership lists. A scope
 query resolves descendant generators from the hierarchy. Log severity queries
 can skip blocks whose generators are all below the threshold. ID queries use
 block ID ranges; relations use their source and destination ranges.
@@ -580,9 +617,10 @@ unique IDs, acyclic ownership, and relation endpoint existence are complete-file
 invariants. Full validation may check them separately from ordinary lazy
 queries; loading a track must not trigger a whole-file ownership scan.
 
-Forward references are valid. A complete finalized file must resolve every
-nonzero relation endpoint, parent, and located child reference. A growing or
-recovered file may lack referenced records whose blocks were never written.
+Forward references are valid. A complete, normally finalized file must resolve
+every nonzero relation endpoint, parent, and located child reference. A growing,
+sealed, or recovered file may lack referenced records whose blocks were never
+written, even if recovery or sealing appended a final directory.
 Readers expose unresolved references as missing and preserve available records;
 they do not fabricate children or owners. Recovery uses complete container
 sections and their integrity checks.
