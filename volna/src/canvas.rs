@@ -229,7 +229,13 @@ fn shape(
     size: f32,
     color: Hsla,
 ) -> ShapedLine {
-    let text: SharedString = text.to_owned().into();
+    // Canvas labels occupy one row; GPUI's line shaper rejects embedded newlines.
+    let text: SharedString = if text.contains('\r') {
+        text.replace("\r\n", " ").replace(['\r', '\n'], " ")
+    } else {
+        text.replace('\n', " ")
+    }
+    .into();
     let run = TextRun {
         len: text.len(),
         font: font(t, role),
@@ -1442,6 +1448,107 @@ mod presence_tests {
                 0, 0, 0, 0, 0, 0, 0,
             ]
         );
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod text_tests {
+    use super::*;
+    use gpui_kit::{TestAppContext, VisualTestContext};
+
+    #[gpui_kit::test]
+    fn pipeline_draws_multiline_trace_labels(cx: &mut TestAppContext) {
+        use volna_core::pipeline::{FollowActivity, PipelineModel, Rows};
+
+        let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+        let mut writer = vtr::Writer::create(file.path()).unwrap();
+        let generator = writer.add_generator(None, "thread0", "PIPELINE").unwrap();
+        let tx = writer.begin_tx(generator, 0).unwrap();
+        let label = "0x800013f4: \naddi a2, a2, 8";
+        let key = writer.intern("vtr.label");
+        writer
+            .tx_attr(tx, key, &vtr::Value::Text(label.into()))
+            .unwrap();
+        let stage = writer.intern("F\nD");
+        let lane = writer.intern("0");
+        writer.tx_stage(tx, stage, lane, 0, 10, &[]).unwrap();
+        writer.end_tx(tx, 10, vtr::TxStatus::Ok).unwrap();
+        writer.set_time(10).unwrap();
+        writer.close().unwrap();
+
+        cx.update(crate::init_app);
+        let host = cx.add_window(Workspace::new);
+        host.update(cx, |ws, _, cx| ws.open_path(file.path().into(), cx))
+            .unwrap();
+        cx.run_until_parked();
+        let panel = host
+            .update(cx, |ws, window, cx| {
+                ws.dispatch(
+                    Command::OpenPipeline {
+                        track: ws.app.pipeline_generators()[0].1,
+                    },
+                    Some(window),
+                    cx,
+                );
+                let panel = ws.app.panels.focused_id();
+                ws.app.panels.pipeline_mut(panel).unwrap().follow = FollowActivity::Off;
+                panel
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let mut vcx = VisualTestContext::from_window(host.into(), cx);
+        for dark in [true, false] {
+            for (width, zoom) in [(1200.0, 1.0), (360.0, 1.5)] {
+                vcx.simulate_resize(size(px(width), px(800.0)));
+                host.update(&mut vcx, |ws, _, cx| {
+                    crate::theme::set(crate::theme::CoreTheme::volna(dark).zoomed(zoom), cx);
+                    let pipeline = ws.app.panels.pipeline(panel).unwrap();
+                    let Rows::Ready(rows) = pipeline.rows(&ws.app.doc) else {
+                        panic!("loaded pipeline");
+                    };
+                    assert_eq!(PipelineModel::label(rows.get(0).unwrap().1), label);
+                    cx.notify();
+                })
+                .unwrap();
+                vcx.run_until_parked();
+                vcx.update(|window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                });
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn canvas_shapes_and_measures_multiline_labels_as_single_lines(cx: &mut TestAppContext) {
+        cx.update(crate::init_app);
+        let host = cx.add_window(Workspace::new);
+        host.update(cx, |_, window, cx| {
+            for dark in [true, false] {
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                let t = *theme(cx);
+                for (input, expected) in [
+                    (
+                        "0x800013d8: \naddi a0, a1, 1",
+                        "0x800013d8:  addi a0, a1, 1",
+                    ),
+                    ("取指\r\n执行\r完成", "取指 执行 完成"),
+                    ("\nF\n\n", " F  "),
+                    ("  F  D  ", "  F  D  "),
+                    ("", ""),
+                ] {
+                    let line = shape(window, &t, input, FontRole::Mono, 12.0, t.panel.text);
+                    assert_eq!(line.text.as_ref(), expected);
+                    assert_eq!(line.len(), expected.len());
+                    let mut measure = GpuiMeasure { window, theme: &t };
+                    assert_eq!(
+                        measure.text_width(input, FontRole::Mono, 12.0),
+                        measure.text_width(expected, FontRole::Mono, 12.0),
+                    );
+                }
+            }
+        })
+        .unwrap();
     }
 }
 
