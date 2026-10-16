@@ -19,8 +19,11 @@ Rust-style declarations describe the logical data model. They do not prescribe
 a programming interface, memory layout, or serialization order. Section 8
 defines the byte layout.
 
-`u8`, `u32`, and `u64` are unsigned integers of the indicated width; `i64` is a
-signed 64-bit integer. `bool` is Boolean and `f64` is IEEE 754 binary64.
+`i8`, `i16`, `i32`, and `i64` are signed integers; `u8`, `u16`, `u32`, and
+`u64` are unsigned integers. The suffix gives the width in bits. A signed
+N-bit integer ranges from `-2^(N-1)` to `2^(N-1) - 1`; an unsigned N-bit
+integer ranges from zero to `2^N - 1`. `bool` is Boolean; `f32` and `f64` are
+IEEE 754 binary32 and binary64, respectively.
 `Vec<T>` is an ordered, variable-length sequence of `T`; `Option<T>` is either
 absent or one `T`. `(A, B)` is a pair. Collections may be empty unless a
 constraint says otherwise. An `enum` selects one named variant and its payload.
@@ -133,9 +136,9 @@ identify an ordinary scope.
 |---|---|---|
 | Producer-defined, such as `INSTRUCTION` or `TRANSACTION` | Ordinary transactions | TX_BLOCK |
 | `CLOCK` | Clock stretches | TX_BLOCK |
-| `EVENT` | Located events | EVENT_BLOCK |
-| `STAGE` | Located stages | STAGE_BLOCK |
-| `LOG` | Log messages | LOG_BLOCK |
+| `EVENT` | Located events | RECORD_BLOCK |
+| `STAGE` | Located stages | RECORD_BLOCK |
+| `LOG` | Log messages | RECORD_BLOCK |
 
 The four special kind strings are reserved. Other kinds are producer-defined.
 A generator's kind is separate from the per-record span kind of an ordinary
@@ -168,14 +171,21 @@ There are no optional positions or implicit default values.
 | Tag | Type | Value variant | Meaning |
 |---|---|---|---|
 | 1 | bool | `Bool` | Boolean |
-| 2 | i64 | `I64` | Signed 64-bit integer |
-| 3 | u64 | `U64` | Unsigned 64-bit integer |
-| 4 | f64 | `F64` | IEEE binary64 |
-| 5 | str | `Str` | Interned string ID |
-| 6 | bytes | `Bytes` | Opaque byte sequence |
-| 10 | time | `Time` | Unsigned value in file time units |
-| 12 | pointer | `Pointer` | Unsigned address |
-| 17 | text | `Text` | UTF-8 text, deduplicated within one column set (section 8.1) |
+| 2 | i8 | `I8` | Signed 8-bit integer |
+| 3 | i16 | `I16` | Signed 16-bit integer |
+| 4 | i32 | `I32` | Signed 32-bit integer |
+| 5 | i64 | `I64` | Signed 64-bit integer |
+| 6 | u8 | `U8` | Unsigned 8-bit integer |
+| 7 | u16 | `U16` | Unsigned 16-bit integer |
+| 8 | u32 | `U32` | Unsigned 32-bit integer |
+| 9 | u64 | `U64` | Unsigned 64-bit integer |
+| 10 | f32 | `F32` | IEEE binary32 |
+| 11 | f64 | `F64` | IEEE binary64 |
+| 12 | str | `Str` | Interned string ID |
+| 13 | text | `Text` | UTF-8 text, deduplicated within one column set (section 8.1) |
+| 14 | bytes | `Bytes` | Opaque byte sequence |
+| 18 | time | `Time` | Unsigned value in file time units |
+| 20 | pointer | `Pointer` | Unsigned address |
 
 The generator-specific hierarchy payload is `varint kind_string_id`, then
 `varint argument_count`, then that many `{varint name_string_id, u8 type_tag}`
@@ -205,10 +215,18 @@ type Attributes = Vec<(StringId, Value)>;
 enum Value {
     Null,
     Bool(bool),
+    I8(i8),
+    I16(i16),
+    I32(i32),
     I64(i64),
+    U8(u8),
+    U16(u16),
+    U32(u32),
     U64(u64),
+    F32(f32),
     F64(f64),
     Str(StringId),
+    Text(Utf8Text),
     Bytes(Bytes),
     Bits { width: u64, packed: Bytes },
     Logic { width: u64, packed: Bytes },
@@ -220,7 +238,6 @@ enum Value {
     Ufixed { raw: u64, scale: i64 },
     List(Vec<Value>),
     Map(Attributes),
-    Text(Utf8Text),
 }
 ```
 
@@ -233,22 +250,44 @@ lengths and the wire tags for all variants are defined below.
 |---|---|---|
 | 0 | null | None |
 | 1 | bool | Byte 0 or 1 |
-| 2 | i64 | Signed varint |
-| 3 | u64 | Unsigned varint |
-| 4 | f64 | 8 bytes, little-endian IEEE binary64 |
-| 5 | str | Varint string ID |
-| 6 | bytes | Length-prefixed bytes |
-| 7 | bits | Varint width, then `ceil(width/8)` packed bytes |
-| 8 | logic | Varint width, then `ceil(width/4)` packed bytes |
-| 9 | logic9 | Varint width, then `ceil(width/2)` packed bytes |
-| 10 | time | Unsigned varint |
-| 11 | enum | Signed varint value, varint literal string ID |
-| 12 | pointer | Unsigned varint |
-| 13 | fixed | Signed varint raw, signed varint scale; value is `raw * 2^-scale` |
-| 14 | ufixed | Unsigned varint raw, signed varint scale |
-| 15 | list | Varint count, then tagged values |
-| 16 | map | Varint count, then string-ID keys and tagged values |
-| 17 | text | Length-prefixed UTF-8 bytes |
+| 2 | i8 | Signed varint |
+| 3 | i16 | Signed varint |
+| 4 | i32 | Signed varint |
+| 5 | i64 | Signed varint |
+| 6 | u8 | Unsigned varint |
+| 7 | u16 | Unsigned varint |
+| 8 | u32 | Unsigned varint |
+| 9 | u64 | Unsigned varint |
+| 10 | f32 | 4 bytes, little-endian IEEE binary32 |
+| 11 | f64 | 8 bytes, little-endian IEEE binary64 |
+| 12 | str | Varint string ID |
+| 13 | text | Length-prefixed UTF-8 bytes |
+| 14 | bytes | Length-prefixed bytes |
+| 15 | bits | Varint width, then `ceil(width/8)` packed bytes |
+| 16 | logic | Varint width, then `ceil(width/4)` packed bytes |
+| 17 | logic9 | Varint width, then `ceil(width/2)` packed bytes |
+| 18 | time | Unsigned varint |
+| 19 | enum | Signed varint value, varint literal string ID |
+| 20 | pointer | Unsigned varint |
+| 21 | fixed | Signed varint raw, signed varint scale; value is `raw * 2^-scale` |
+| 22 | ufixed | Unsigned varint raw, signed varint scale |
+| 23 | list | Varint count, then tagged values |
+| 24 | map | Varint count, then string-ID keys and tagged values |
+
+Tags group signed integers, unsigned integers, and floating-point values into
+contiguous ranges, with increasing width within each family. Argument schemas
+and tagged attributes use the same assignments.
+
+Integer types preserve both signedness and width. Signed values use the
+64-bit ZigZag encoding after sign extension; unsigned values use unsigned
+varints. Writers and readers reject values outside the tagged or declared
+type's range; narrowing must not truncate or wrap. Integer width determines
+the permitted range, not a fixed payload length. These rules also apply to
+values nested in lists and maps.
+
+Floating-point payloads preserve their IEEE 754 bit patterns, including signed
+zero, infinities, and NaN payloads. An `f32` value occupies four bytes and is
+not widened to `f64`.
 
 Packed signal-state codes follow the container's value definitions. A
 length-prefixed byte sequence is a varint byte length followed by those bytes.
@@ -333,15 +372,17 @@ Readers preserve the distinction between an absent end and an explicit end.
 
 ### 3.2 Located child block locators
 
-An owner stores the sorted, distinct block numbers of every EVENT_BLOCK and
-STAGE_BLOCK containing at least one of its children. Block numbers identify
-sections within the file as defined in section 8; they are not transaction IDs
-or byte offsets. One list covers both kinds. It contains no LOG_BLOCK or
-TX_BLOCK locators and no blocks without a matching child.
+An owner stores the sorted, distinct block numbers of every RECORD_BLOCK
+containing at least one of its located EVENT or STAGE children. Block numbers
+identify sections within the file as defined in section 8; they are not
+transaction IDs or byte offsets. The list contains no TX_BLOCK locators and
+no blocks without a matching child. LOG records do not contribute locators,
+even when their parent is this owner.
 
-To expand an owner, the reader loads the listed blocks and selects records
-whose parent equals the owner's ID. Every located child must be covered by its
-owner's list. Multiple visits to one generator remain distinct records with
+To expand an owner, the reader selects EVENT and STAGE segments in the listed
+blocks, then selects records whose parent equals the owner's ID. LOG segments
+are excluded. Every located child must be covered by its owner's list.
+Multiple visits to one generator remain distinct records with
 distinct global IDs. Sorting the selected children by ID reconstructs their
 creation order, which is also their insertion order within the owner. A reader
 can expose separate event and stage lists by generator kind.
@@ -353,8 +394,9 @@ timestamp order or temporal containment.
 
 For example, owner 42 may list blocks `[12, 15]`. Block 12 contains stage 103
 with generator 18 and parent 42; block 15 contains event 104 with generator 19
-and parent 42. Other owners' records in those blocks are filtered out. Neither
-the generator IDs nor the individual child IDs are repeated in owner 42.
+and parent 42. Either block may also contain logs or other owners' records;
+these are excluded from the result. Neither the generator IDs nor the
+individual child IDs are repeated in owner 42.
 
 Locators identify blocks, not individual pages or rows. Section 8.4 defines
 how readers retrieve an owner's children.
@@ -525,13 +567,13 @@ before the writer's current time.
 
 The container supplies section framing, CRC, compression codecs, directory
 entries, and string and hierarchy declarations. All referenced strings and
-generators must be declared before their block. EVENT_BLOCK, STAGE_BLOCK, and
-LOG_BLOCK share a paged layout; TX_BLOCK holds ordinary transactions, clocks,
-and relations in one compressed column set.
+generators must be declared before their block. RECORD_BLOCK stores located
+events, located stages, and logs in a paged layout. TX_BLOCK holds ordinary
+transactions, clocks, and relations in one compressed column set.
 
-Each of these four block kinds carries a nonzero `u64 block_number`, unique
-across the four kinds within the file. The writer assigns increasing numbers
-when records enter a block, before background encoding. Numbers never wrap or
+Both block kinds carry a nonzero `u64 block_number`, unique across RECORD_BLOCK
+and TX_BLOCK within the file. The writer assigns increasing numbers when
+records enter a block, before background encoding. Numbers never wrap or
 get reused and need not match physical section order. Readers map them to
 section offsets using block headers and the container directory, or a section
 scan during recovery. The container directory-entry layout is unchanged.
@@ -576,8 +618,8 @@ in declaration order, selecting streams by the declared type:
 
 | Stream | Contents |
 |---|---|
-| numeric | bool as byte; i64 as svarint; u64, time, pointer as varint |
-| floating | f64 as 8 little-endian bytes |
+| numeric | bool as byte; i8/i16/i32/i64 as svarint; u8/u16/u32/u64, time, pointer as varint |
+| floating | f32 as 4 little-endian bytes; f64 as 8 little-endian bytes |
 | text | Varint index into this column set's text dictionary |
 | dictionary | Varint entry count, then length-prefixed UTF-8 entries |
 | miscellaneous | str as varint string ID; bytes as length-prefixed bytes |
@@ -588,9 +630,13 @@ TX_BLOCK; no page depends on another page's dictionary or delta state.
 Argument counts, keys, and type tags come from the generator declaration and
 are omitted from records.
 
-### 8.2 LOG_BLOCK, EVENT_BLOCK, and STAGE_BLOCK
+### 8.2 RECORD_BLOCK
 
-These section payloads have the following layout:
+A RECORD_BLOCK may contain any combination of EVENT, STAGE, and LOG generators.
+Each segment contains records from one generator, whose declared kind selects
+the time, parent, and duration encodings. No per-record kind tag is stored.
+
+The section payload has the following layout:
 
 ```text
 u64 block_number
@@ -616,12 +662,13 @@ page_count * {
 page blobs
 ```
 
-Blocks, segments, and pages are nonempty. A block contains only records of its
-own kind. The segment table gives complete generator membership; no per-record
-generator column is stored. Segment ID bounds describe its records. Time bounds
-are minimum and maximum timestamps for LOG and EVENT, or minimum begin and
-maximum end for STAGE. Block bounds are the extrema over all segments, and
-the block record count is the sum of segment record counts.
+Blocks, segments, and pages are nonempty. Only EVENT, STAGE, and LOG generators
+are permitted. The segment table gives complete generator membership; no
+per-record generator column is stored. Segment ID bounds describe its records.
+Segment time bounds are minimum and maximum timestamps for LOG and EVENT, or
+minimum begin and maximum end for STAGE. Block bounds are the extrema over all
+segments, including when kinds are mixed. The block record count is the sum of
+segment record counts.
 
 Page indexes are zero-based. Each page blob uses SPEC.md section 3.1 framing
 and is independently decompressible. Blob offsets are relative to the start
@@ -636,7 +683,7 @@ Repeated entries for a generator are allowed. Their table order defines its
 record sequence within the block. Counts, offsets, and length arithmetic must
 fit their encoded fields and remain within the containing page or section.
 
-All three kinds use nine columns per segment:
+Every segment uses nine columns. The generator kind determines their contents:
 
 | Index | Column | Encoding |
 |---|---|---|
@@ -660,6 +707,10 @@ together up to that target. A record cannot span segments or pages. A record
 whose column set alone exceeds the target occupies a page by itself; the
 target is not a format limit. Readers accept other page sizes. The writer must
 account for framing and dictionary bytes when deciding whether a page fits.
+
+Pages may contain segments of different kinds. Writers may close a page or
+block early to separate logs from events and stages when selective reading
+benefits. Readers must accept both mixed and single-kind pages and blocks.
 
 Zstandard level 1 is recommended. Each blob may use any container-supported
 codec and settings. Store uncompressed bytes when compression does not reduce
@@ -702,9 +753,9 @@ The decompressed blob contains one column set with 31 columns:
 | 7 | attribute key | Varint string ID |
 | 8 | attribute tag | Byte value tag, upper three bits zero |
 | 9 | attribute numeric | bool byte; signed/unsigned varints according to type |
-| 10 | attribute f64 | 8 little-endian bytes |
+| 10 | attribute floating | f32 as 4 little-endian bytes; f64 as 8 little-endian bytes |
 | 11 | attribute string | Varint string ID for str or enum literal |
-| 12 | attribute miscellaneous | Payload for tags 6–9 and 15–17 |
+| 12 | attribute miscellaneous | Payload for tags 13–17 and 23–24 |
 | 13 | unlocated event count | Varint per transaction |
 | 14 | unlocated event time | Svarint offset from owner begin |
 | 15 | unlocated event name | Varint string ID |
@@ -733,22 +784,26 @@ its generator schema. Embedded child lists retain insertion order.
 
 Attribute numeric payloads follow the value table. An enum consumes its
 signed numeric value and its literal from the string stream. Fixed and ufixed
-consume raw and scale from the numeric stream. Lists and maps in the
-miscellaneous stream retain nested tags. Attribute text is inline, while
+consume raw and scale from the numeric stream. Floating-point attributes share
+the floating stream; each value's tag determines whether it consumes four or
+eight bytes. Argument floating widths are determined by the generator schema.
+Lists and maps in the miscellaneous stream retain nested tags. Attribute text is inline, while
 schema argument text uses the dictionary. The stage-end sentinel arithmetic
 uses sufficient width for `u64::MAX + 1`, without wrapping to the open marker.
 
 TX_BLOCK uses the same recommended Zstandard level-1 policy as paged blocks.
 Its owner and relation columns remain in one blob; page packing and stable
-generator grouping apply only to LOG_BLOCK, EVENT_BLOCK, and STAGE_BLOCK.
+generator grouping apply only to RECORD_BLOCK.
 
 ### 8.4 Order and queries
 
 The writer assigns ordinary transactions and stages to blocks on finalization;
-events and logs are assigned on emission. Blocks contain consecutive portions
-of each kind's assignment sequence, with block numbers increasing along that
-sequence. Background encoders may complete out of order. Declarations must
-still precede their uses in the physical file, and readers must not infer
+events and logs are assigned on emission. RECORD_BLOCK has one assignment
+sequence shared by EVENT, STAGE, and LOG; TX_BLOCK has a separate sequence for
+ordinary transactions, clocks, and relations. Blocks contain consecutive
+portions of their sequence, with block numbers increasing along that sequence.
+Background encoders may complete out of order. Declarations must still
+precede their uses in the physical file, and readers must not infer
 record order from file offsets.
 
 Within each paged block, stable grouping preserves assignment order for each
@@ -773,12 +828,16 @@ resolves descendant generators from the hierarchy. Log severity queries filter
 generators by their declared metadata. Owner payloads are not required to load
 located intervals, points, or their declared arguments.
 
-Expanding an owner uses its block locators, decompresses the referenced blocks'
-pages, and selects children by parent ID. Owner time bounds cannot filter those
-children because ownership does not require temporal containment. A reader may
+Expanding an owner uses its block locators to select EVENT and STAGE segments,
+decompresses their pages once each, and selects children by parent ID. LOG
+segments are skipped even if their records have the same parent. Pages holding
+only LOG segments need no decompression for this query; mixed pages may still
+require decompressing log data. Owner time bounds cannot filter children
+because ownership does not require temporal containment. A reader may
 build a transient parent-to-record index while decoding a block and reuse it
 for later expansions. The format does not contain an owner-to-page index;
-uncached owner expansion may read every page in each referenced block.
+uncached owner expansion may read every page containing EVENT or STAGE segments
+in each referenced block.
 
 Global ID lookup filters block ID ranges and, for paged blocks, segment ID
 ranges. Relation lookup uses TX_BLOCK endpoint ranges. Ranges can overlap,
@@ -805,17 +864,19 @@ close. Missing arguments are a writer error; close must not fabricate values
 or emit an incomplete argument list.
 
 The submission path assigns each finalized record to a block before handing
-the block to a background encoder. Each block kind has one ordered stream of
-bounded buffers. Its first record reserves its block number. For a located
-child, assignment also records that number in the active owner. A record must
+the block to a background encoder. One ordered stream of bounded buffers
+serves EVENT, STAGE, and LOG records in RECORD_BLOCK; another serves TX_BLOCK.
+A block's first record reserves its block number. For a located child,
+assignment also records that number in the active owner. A record must
 never migrate to another numbered block during grouping, page packing, or
 compression: its owner may already have been serialized with that locator.
 
-The writer can maintain separate EVENT and STAGE block lists for each active
-owner. Within each kind, block numbers increase, so the writer appends a number
-only when it differs from that owner's last entry. At owner finalization, it
-merges the two lists into one sorted list. This avoids a per-child hash set or
-a scan of completed records.
+The writer maintains one block list for each active owner. RECORD_BLOCK
+numbers increase along the shared submission stream, so a located EVENT or
+STAGE child appends a number only when it differs from that owner's last
+entry. Logs do not update the list. The list is already sorted and distinct
+at owner finalization, without a merge, per-child hash set, or scan of
+completed records.
 
 Ending an owner closes remaining active stages at
 `max(stage.begin, owner.end)` and submits them to numbered blocks before
@@ -825,7 +886,7 @@ encoding or physical I/O; forward block references are valid. The owner retains
 no completed child payload after submission. Buffer and queue ownership keeps
 that payload alive until encoding finishes.
 
-The recommended paged-block buffer limits are 65,536 finalized records and
+The recommended RECORD_BLOCK buffer limits are 65,536 finalized records and
 4 MiB of buffered record payload; reaching either limit flushes the block.
 An oversized record is accepted alone. Byte accounting must include
 variable-length arguments.
@@ -869,9 +930,10 @@ unloaded pages and aggregate block bounds.
 
 Globally unique record IDs and block numbers, acyclic ownership, relation
 endpoint existence, and owner-locator consistency are complete-file invariants.
-For each owner, its locator list must equal the set of EVENT and STAGE blocks
-containing records with that parent. Full validation may check these separately;
-loading one track must not trigger a whole-file ownership scan.
+For each owner, its locator list must equal the set of RECORD_BLOCKs containing
+EVENT or STAGE records with that parent. LOG records are excluded from this
+invariant. Full validation may check these separately; loading one track must
+not trigger a whole-file ownership scan.
 
 Forward references are valid. A complete, normally finalized file must resolve
 every nonzero relation endpoint, parent, and located block locator. A growing,
@@ -909,7 +971,9 @@ from filesystem-cache state and actual disk or remote I/O.
 Exercise ordinary transactions with and without schemas, mixed generators,
 skewed generator traffic, large arguments, out-of-order timestamps, long-lived
 owners, repeated visits, overlaps, coincident points, open records, logs,
-clocks, relations, and forward references. Verify segment splits reset all
+clocks, relations, and forward references. Include blocks and pages mixing
+EVENT, STAGE, and LOG generators, and verify that a log whose parent is an
+owner is excluded from that owner's located children. Verify segment splits reset all
 delta and dictionary state; one page decodes independently; owner finalization
 assigns every child block before serialization; and asynchronous completion
 does not change locators or per-generator order. Test truncation after an
@@ -924,7 +988,8 @@ storage costs.
 Prototype measurements support the recommended layout and writer settings.
 The prototypes use different headers from section 8 and omit full container
 framing, integrity checks, and directory costs. Results describe these workloads
-and do not establish production throughput.
+and do not establish production throughput. The stage-only comparisons do not
+measure the effect of batching events, stages, and logs in the same block.
 
 ### 12.1 Workloads and method
 
