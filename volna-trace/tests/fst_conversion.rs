@@ -147,8 +147,7 @@ fn equivalent_verilator_traces_agree_at_every_change() {
     for design in ["features", "operators", "pipeline"] {
         let fst = converted(std::fs::read(fixture(&format!("{design}.fst"))).unwrap()).unwrap();
         let vtr = OpenSpec::Path(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("../volna-trace/tests/fixtures/{design}.vtr")),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{design}.vtr")),
         )
         .open()
         .unwrap();

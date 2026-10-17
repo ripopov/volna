@@ -42,7 +42,7 @@ jobs:
           cargo test -p volna --lib --locked native_import::tests::real_converter
 
   quality:
-    name: Format, lint, docs, and package
+    name: Format, lint, and docs
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

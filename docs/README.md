@@ -7,7 +7,9 @@ system lives in `design-system/`; the agent entry is
 
 ## Build
 
-Requires Node.js 22.19+ and Chromium for Mermaid. From this directory:
+Initialize the VTR submodule with `git submodule update --init vtr` from the
+Volna root before building. Requires Node.js 22.19+ and Chromium for Mermaid.
+From this directory:
 
 ```sh
 npm ci
