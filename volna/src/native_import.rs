@@ -315,7 +315,7 @@ mod tests {
 
     fn fixture(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../vtr-convert/tests/fixtures")
+            .join("../vtr/vtr-convert/tests/fixtures")
             .join(name)
     }
 

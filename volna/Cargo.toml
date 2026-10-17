@@ -46,8 +46,8 @@ tempfile = "3"
 url = "2"
 notify = "7"
 vtr.workspace = true
-vtr-progress = { version = "0.1.0", path = "../vtr-progress" }
-vtr-cli = { version = "0.1.0", path = "../vtr-cli", artifact = "bin:vtr" }
+vtr-progress = { version = "0.1.0", path = "../vtr/vtr-progress" }
+vtr-cli = { version = "0.1.0", path = "../vtr/vtr-cli", artifact = "bin:vtr" }
 gpui-kit = { version = "=0.7.3", features = ["tree-sitter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

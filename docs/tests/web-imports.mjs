@@ -9,7 +9,7 @@ import { chromium } from 'playwright';
 
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 const results = fileURLToPath(new URL('../test-results/imports/', import.meta.url));
-const fixtures = new URL('../../vtr-convert/tests/fixtures/', import.meta.url);
+const fixtures = new URL('../../vtr/vtr-convert/tests/fixtures/', import.meta.url);
 const sampleWorkspace = JSON.parse(
   await readFile(new URL('../../volna/examples/landing-page.volna.json', import.meta.url))
 );

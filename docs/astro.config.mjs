@@ -9,7 +9,7 @@ import { focusScrollRegions, rehypeFocusScrollRegions } from './scripts/focus-sc
 await mkdir(new URL('./public/assets/', import.meta.url), { recursive: true });
 await copyFile(new URL('./design-system/assets/volna.svg', import.meta.url),
   new URL('./public/assets/volna.svg', import.meta.url));
-await copyFile(new URL('../vtr/docs/container.svg', import.meta.url),
+await copyFile(new URL('../vtr/vtr/docs/container.svg', import.meta.url),
   new URL('./public/assets/container.svg', import.meta.url));
 
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';

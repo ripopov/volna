@@ -19,6 +19,9 @@ serde = { version = "1", features = ["derive"] }
 testing = []
 
 [dev-dependencies]
+vtr-convert = { version = "0.1.0", path = "../vtr/vtr-convert" }
+fst-reader = "0.17"
+flate2 = "1"
 tempfile.workspace = true
 serde_json = "1"
 volna-trace = { version = "0.1.0", path = ".", features = ["testing"] }

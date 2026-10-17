@@ -5,7 +5,7 @@ for local and remote access. It provides hierarchy metadata, complete signal
 histories, transaction tracks, activity sidecars, memory admission, and a
 cooperative remote client. It has no GUI toolkit or server-process dependency.
 
-Use [`vtr`](../vtr/README.md) to write a recording or query its format-specific
+Use [`vtr`](../vtr/vtr/README.md) to write a recording or query its format-specific
 features. Use `volna-trace` when a consumer needs the same objects from a local
 file, an in-memory image, or [`volna-server`](../volna-server/README.md).
 
@@ -79,7 +79,7 @@ time window. Its classification can leave signals undecided; use
 index with `build_activity()`, a memory budget, and VTR's `BuildOptions`.
 `BuildControl` provides progress and cancellation. Byte images and recovered
 recordings have no stable activity build source. See the
-[activity sidecar specification](../vtr/docs/SPEC.md#activity-index-sidecar-version-2).
+[activity sidecar specification](../vtr/vtr/docs/SPEC.md#activity-index-sidecar-version-2).
 
 ## Remote loading
 

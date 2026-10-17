@@ -120,12 +120,12 @@ try {
   await failedViewer.close();
   report.behavior.push('viewer initialization failure keeps landing documentation links usable');
   await page.goto(`${origin}${base}vtr/`);
-  const waveform = await readFile(new URL('../../vtr/examples/waveform.rs', import.meta.url), 'utf8');
+  const waveform = await readFile(new URL('../../vtr/vtr/examples/waveform.rs', import.meta.url), 'utf8');
   const example = page.locator('.expressive-code pre').filter({ hasText: 'Minimal waveform round trip.' });
   const exampleLines = (await example.locator('.ec-line').allTextContents()).map(line => line === '\n' ? '' : line);
   assert.equal(exampleLines.join('\n'), waveform.trimEnd(), 'quick start must embed the current waveform source');
   assert.equal(await page.getByRole('link', { name: 'runnable waveform API example' }).getAttribute('href'),
-    'https://github.com/ripopov/volna/blob/main/vtr/examples/waveform.rs');
+    'https://github.com/ripopov/vtr/blob/main/vtr/examples/waveform.rs');
   await verifyDiagrams(page);
   await page.keyboard.press('Tab');
   const focus = await page.evaluate(() => ({ width: getComputedStyle(document.activeElement).outlineWidth, style: getComputedStyle(document.activeElement).outlineStyle }));

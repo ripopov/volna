@@ -7,12 +7,12 @@ import type { Loader } from 'astro/loaders';
 import { docsLoader } from '@astrojs/starlight/loaders';
 
 const sources = [
-  ['vtr/README.md', 'vtr', 'VTR trace library', 'What a VTR recording contains, and how to write, read, and recover one.'],
-  ['vtr/docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR 1.1 container, encodings, recovery rules, and activity sidecar.'],
-  ['vtr/docs/RATIONALE.md', 'vtr/rationale', 'VTR design rationale', 'Trace storage decisions, library boundaries, and derived indexes.'],
-  ['vtr/docs/LOGGING.md', 'vtr/logging', 'Structured logging', 'Declare typed log sites, write records, and query messages.'],
-  ['vtr-capi/README.md', 'vtr-capi', 'VTR C API', 'Build and link libvtr, use opaque handles, and write a trace from C.'],
-  ['vtr-guard/README.md', 'vtr-guard', 'VTR crash guard', 'Finish watched VTR writers after Linux faults, stop requests, and exit.'],
+  ['vtr/vtr/README.md', 'vtr', 'VTR trace library', 'What a VTR recording contains, and how to write, read, and recover one.'],
+  ['vtr/vtr/docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR 1.1 container, encodings, recovery rules, and activity sidecar.'],
+  ['vtr/vtr/docs/RATIONALE.md', 'vtr/rationale', 'VTR design rationale', 'Trace storage decisions, library boundaries, and derived indexes.'],
+  ['vtr/vtr/docs/LOGGING.md', 'vtr/logging', 'Structured logging', 'Declare typed log sites, write records, and query messages.'],
+  ['vtr/vtr-capi/README.md', 'vtr-capi', 'VTR C API', 'Build and link libvtr, use opaque handles, and write a trace from C.'],
+  ['vtr/vtr-guard/README.md', 'vtr-guard', 'VTR crash guard', 'Finish watched VTR writers after Linux faults, stop requests, and exit.'],
   ['volna-trace/README.md', 'volna-trace', 'Volna trace loading', 'Read immutable VTR recordings locally or through a cooperative remote client.'],
   ['volna-server/README.md', 'volna-server', 'Volna server', 'Host one immutable recording over framed pipes, with complete objects and activity sidecars.'],
   ['volna-core/README.md', 'volna-core', 'Volna viewer core', 'Toolkit-independent viewer state, commands, panel models, and display lists.'],
@@ -46,7 +46,9 @@ export function volnaDocsLoader(): Loader {
             return `](${route}/${fragment})`;
           }
           const repoPath = relative(fileURLToPath(new URL('../../', import.meta.url)), path).split(sep).join('/');
-          return `](https://github.com/ripopov/volna/blob/main/${repoPath}${fragment})`;
+          const repository = repoPath.startsWith('vtr/') ? 'vtr' : 'volna';
+          const sourcePath = repository === 'vtr' ? repoPath.slice(4) : repoPath;
+          return `](https://github.com/ripopov/${repository}/blob/main/${sourcePath}${fragment})`;
         });
         body = body.replace('src="docs/container.svg"', 'src="../assets/container.svg"');
         const includes = [...body.matchAll(/^<!-- include-code: (\S+) (\w+) -->[ \t]*$/gm)];

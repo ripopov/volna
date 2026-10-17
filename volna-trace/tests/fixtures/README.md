@@ -22,7 +22,7 @@ the counter, PicoRV32, landing, and showcase recordings came from
 describes their original generators.
 
 `values.vtr` and `landing_dram.vtr` were generated with `vtr convert` from
-inputs in [`vtr-convert`](../../../vtr-convert/tests/fixtures/README.md).
+inputs in [`vtr-convert`](../../../vtr/vtr-convert/tests/fixtures/README.md).
 That guide records foreign-format fixture provenance and regeneration commands.
 
 The VTR fixtures use format 2.0. Their hierarchy declarations use generator kinds

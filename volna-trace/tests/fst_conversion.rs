@@ -7,7 +7,7 @@ use volna_trace::session::OpenSpec;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
+        .join("../vtr/vtr-convert/tests/fixtures")
         .join(name)
 }
 
@@ -191,7 +191,7 @@ fn malformed_images_report_errors() {
 
 #[test]
 fn truncated_sections_and_overflowing_lengths_return_errors() {
-    let original = include_bytes!("fixtures/values.fst");
+    let original = include_bytes!("../../vtr/vtr-convert/tests/fixtures/values.fst");
     for end in [9, 100, 329, original.len() - 1] {
         assert!(converted(original[..end].to_vec()).is_err(), "prefix {end}");
     }
@@ -205,11 +205,12 @@ fn truncated_sections_and_overflowing_lengths_return_errors() {
 
 #[test]
 fn gzip_wrapper_preserves_values_and_rejects_truncation() {
-    let wrapped = include_bytes!("fixtures/values-wrapped.fst");
+    let wrapped = include_bytes!("../../vtr/vtr-convert/tests/fixtures/values-wrapped.fst");
     assert_eq!(wrapped[0], 254);
     let open = |bytes: Vec<u8>| converted(bytes);
     let a = open(wrapped.to_vec()).unwrap();
-    let b = open(include_bytes!("fixtures/values.fst").to_vec()).unwrap();
+    let b =
+        open(include_bytes!("../../vtr/vtr-convert/tests/fixtures/values.fst").to_vec()).unwrap();
     assert_eq!(a.info().time_range, b.info().time_range);
     for id in 0..4 {
         let a = a.load_signal(a.hierarchy().var(id).signal).unwrap();
@@ -226,7 +227,7 @@ fn gzip_wrapper_preserves_values_and_rejects_truncation() {
 #[test]
 fn unsupported_time_and_dump_metadata_is_explicit_even_when_wrapped() {
     use std::io::Write;
-    let original = include_bytes!("fixtures/values.fst");
+    let original = include_bytes!("../../vtr/vtr-convert/tests/fixtures/values.fst");
     let mut shifted = original.to_vec();
     shifted[322..330].copy_from_slice(&(-10i64).to_be_bytes());
     let mut blackout = original.to_vec();
@@ -250,7 +251,8 @@ fn unsupported_time_and_dump_metadata_is_explicit_even_when_wrapped() {
 
 #[test]
 fn raw_bytes_reals_nine_states_and_time_boundaries() {
-    let fst = converted(include_bytes!("fixtures/values.fst").to_vec()).unwrap();
+    let fst = converted(include_bytes!("../../vtr/vtr-convert/tests/fixtures/values.fst").to_vec())
+        .unwrap();
     assert_eq!(fst.info().timescale, -12);
     assert_eq!(fst.info().time_range, (5, 20));
     let vars: Vec<_> = fst.hierarchy().vars().collect();

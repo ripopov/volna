@@ -36,7 +36,7 @@ For application UI work or when creating or editing HTML, read and apply the
 [Volna design skill](docs/design-system/SKILL.md). Do not apply it to Markdown-only
 documentation edits, Rust data model work, or other non-UI code. The shared tokens
 and assets live in `docs/design-system`; engineering content lives in Markdown
-and builds through Astro/Starlight. The current VTR guides in `vtr/docs` are
+and builds through Astro/Starlight. The current VTR guides in `vtr/vtr/docs` are
 authoritative.
 
 # UI design workflow

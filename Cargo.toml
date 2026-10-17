@@ -1,7 +1,8 @@
 [workspace]
-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "vtr-convert-wasm", "vtr-progress", "volna-core", "volna"]
+members = ["volna-trace", "volna-server", "volna-core", "volna"]
+exclude = ["vtr"]
 resolver = "3"
-default-members = ["vtr", "vtr-capi", "vtr-guard", "volna-trace", "volna-server", "vtr-cli", "vtr-convert", "vtr-progress", "volna-core"]
+default-members = ["volna-trace", "volna-server", "volna-core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,15 +12,9 @@ license = "MIT"
 repository = "https://github.com/ripopov/volna"
 
 [workspace.dependencies]
-vtr = { version = "0.1.0", path = "vtr" }
-crc32fast = "1.4"
+vtr = { version = "0.1.0", path = "vtr/vtr" }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
-memmap2 = "0.9"
-rand = "0.8"
 tempfile = "3"
-thiserror = "2"
-zstd = { version = "0.13", default-features = false }
-zstd-sys = { version = "2.0.16", default-features = false, features = ["experimental"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

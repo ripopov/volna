@@ -4,9 +4,9 @@ use volna_trace::OpenSpec;
 fn foreign_recordings_are_rejected_from_paths_and_bytes_regardless_of_name() {
     let dir = tempfile::tempdir().unwrap();
     for bytes in [
-        include_bytes!("../../vtr-convert/tests/fixtures/values.fst").as_slice(),
-        include_bytes!("../../vtr-convert/tests/fixtures/values-wrapped.fst").as_slice(),
-        include_bytes!("../../vtr-convert/tests/fixtures/pipeline.kanata").as_slice(),
+        include_bytes!("../../vtr/vtr-convert/tests/fixtures/values.fst").as_slice(),
+        include_bytes!("../../vtr/vtr-convert/tests/fixtures/values-wrapped.fst").as_slice(),
+        include_bytes!("../../vtr/vtr-convert/tests/fixtures/pipeline.kanata").as_slice(),
         b"not a recording",
         b"",
     ] {

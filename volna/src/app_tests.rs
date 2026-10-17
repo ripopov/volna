@@ -197,7 +197,7 @@ fn conversion_cancel_preserves_other_recordings(cx: &mut TestAppContext) {
             let (work, trace) = ws.update(&mut vcx, |ws, cx| {
                 crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
                 let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../vtr-convert/tests/fixtures/values.fst");
+                    .join("../vtr/vtr-convert/tests/fixtures/values.fst");
                 if secondary {
                     ws.app.set_session(Arc::new(ProceduralTrace::new(100)));
                     ws.app

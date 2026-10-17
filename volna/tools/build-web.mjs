@@ -84,6 +84,10 @@ export async function buildWebConverter(destination) {
     "cargo",
     [
       "build",
+      "--manifest-path",
+      "vtr/Cargo.toml",
+      "--target-dir",
+      metadata.target_directory,
       "-p",
       "vtr-convert-wasm",
       "--target",

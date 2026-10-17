@@ -274,8 +274,8 @@ fn same_value(a: WaveValue, b: WaveValue) {
 fn foreign_recordings_return_an_actionable_open_error() {
     let dir = tempfile::tempdir().unwrap();
     for bytes in [
-        include_bytes!("../../vtr-convert/tests/fixtures/values.fst").as_slice(),
-        include_bytes!("../../vtr-convert/tests/fixtures/pipeline.kanata").as_slice(),
+        include_bytes!("../../vtr/vtr-convert/tests/fixtures/values.fst").as_slice(),
+        include_bytes!("../../vtr/vtr-convert/tests/fixtures/pipeline.kanata").as_slice(),
     ] {
         let path = dir.path().join("recording.vtr");
         std::fs::write(&path, bytes).unwrap();

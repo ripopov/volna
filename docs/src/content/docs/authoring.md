@@ -48,7 +48,7 @@ Use the same prefix when serving and testing the build:
 
 | Location | Responsibility |
 | --- | --- |
-| `vtr/README.md`, `vtr/docs/*.md`, `vtr-capi/README.md`, `vtr-guard/README.md` | Authoritative VTR guides |
+| `vtr/vtr/README.md`, `vtr/vtr/docs/*.md`, `vtr/vtr-capi/README.md`, `vtr/vtr-guard/README.md` | Authoritative VTR guides |
 | `volna-trace/README.md`, `volna-server/README.md`, `volna-core/README.md`, `volna/README.md` | Trace access, hosting, and viewer guides |
 | `docs/scripts/docs-loader.ts` | Load crate guides directly, supplying metadata and adapting web links |
 | `docs/src/content/docs/` | Landing page, documentation overview, and authored site guides |

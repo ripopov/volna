@@ -47,9 +47,9 @@ permissions only to the deployment job.
 
 ## Sources
 
-The content loader reads `../vtr/README.md` as the VTR introduction and
-`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md` as the remaining VTR pages. It also
-reads `../vtr-capi/README.md`, `../vtr-guard/README.md`,
+The content loader reads `../vtr/vtr/README.md` as the VTR introduction and
+`../vtr/vtr/docs/{SPEC,RATIONALE,LOGGING}.md` as the remaining VTR pages. It also
+reads `../vtr/vtr-capi/README.md`, `../vtr/vtr-guard/README.md`,
 `../volna-trace/README.md`, `../volna-server/README.md`,
 `../volna-core/README.md`, and `../volna/README.md` as crate guides.
 Edit these canonical crate files; the development server
