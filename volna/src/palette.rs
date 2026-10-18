@@ -371,7 +371,7 @@ impl Workspace {
         let query_model = model.clone();
         let confirm_ws = ws;
         let confirm_model = model.clone();
-        let command_target = self.focus_handle.clone();
+        let command_target = self.window_focus(window);
         let binding_target = window.focused(cx).unwrap_or_else(|| command_target.clone());
         let focus_state = state.clone();
         window.open_dialog(cx, move |dialog, _, _| {

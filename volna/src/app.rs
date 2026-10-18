@@ -1,8 +1,11 @@
-//! `Workspace`: the GPUI root view, a thin adapter over [`volna_core::App`].
+//! `Workspace` owns the shared session and the primary GPUI view.
 
 #[cfg(all(test, not(target_family = "wasm")))]
 #[path = "app_tests.rs"]
 mod tests;
+
+#[path = "window_actions.rs"]
+mod window_actions;
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -21,7 +24,7 @@ use volna_core::settings::ZoomStep;
 use volna_core::trace::{TraceId, Traced};
 use volna_core::wave::MenuEntry;
 use volna_core::workspace::recent::{RecentCommand, RecentKey, RecentKind};
-use volna_core::{App as CoreApp, FontRole, Instant, Scene};
+use volna_core::{App as CoreApp, FontRole, Instant};
 use volna_trace::data::transactions::TrackRef;
 use volna_trace::session::Session;
 
@@ -51,6 +54,7 @@ actions!(
         ToggleSidebar,
         CloseTrace,
         Quit,
+        CloseWindow,
         OpenSettings,
         CommandPalette,
         UiZoomIn,
@@ -278,8 +282,8 @@ pub struct Workspace {
     pub(crate) native_store: Option<crate::native_workspace::Store>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) native_imports: crate::native_import::Imports,
-    pub(crate) dock: Option<crate::dock::DockHost>,
-    panel_focus_pending: bool,
+    pub(crate) dock: Option<Entity<crate::dock::DockHost>>,
+    pub(crate) panel_focus_pending: bool,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) waves_focus: FocusHandle,
     pub(crate) scopes_focus: FocusHandle,
@@ -287,15 +291,15 @@ pub struct Workspace {
     pub(crate) filter: Entity<TextInput>,
     pub(crate) scopes_scroll: UniformListScrollHandle,
     pub(crate) variables_scroll: UniformListScrollHandle,
-    pub(crate) status_menu: Option<(gpui_kit::Point<Pixels>, Entity<PopupMenu>)>,
+    pub(crate) status_menu: Option<HostedMenu>,
     pub(crate) trace_rename: Option<crate::traces::TraceRename>,
     pub(crate) on_waves: Option<(OnWavesKey, std::rc::Rc<OnWaves>)>,
     pub(crate) frame_view: crate::frame_stats::FrameView,
     wave_menu: Option<HostedWaveMenu>,
     pub(crate) rename: Option<HostedRename>,
-    pub(crate) scene: Scene,
-    pub(crate) shaped: ShapedCache,
-    pub(crate) presence_images: crate::canvas::PresenceImages,
+    pub(crate) canvas: HashMap<gpui_kit::WindowId, crate::canvas::CanvasState>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) windows: crate::native_windows::Windows,
     pub embedded: bool,
     pub(crate) cli_policy: bool,
     menu_generation: Option<MenuKey>,
@@ -308,12 +312,20 @@ pub struct Workspace {
 }
 
 pub(crate) struct HostedRename {
+    window: gpui_kit::WindowId,
     target: volna_core::app::EditTarget,
     pub(crate) input: Entity<TextInput>,
     _subscription: gpui_kit::Subscription,
 }
 
+pub(crate) struct HostedMenu {
+    window: gpui_kit::WindowId,
+    position: gpui_kit::Point<Pixels>,
+    popup: Entity<PopupMenu>,
+}
+
 struct HostedWaveMenu {
+    window: gpui_kit::WindowId,
     panel: volna_core::panels::PanelId,
     row: usize,
     kind: volna_core::wave::WaveMenuKind,
@@ -660,26 +672,6 @@ pub(crate) fn menus(
     ]
 }
 
-macro_rules! focus_panel_actions {
-    ($el:expr, $cx:expr, [$(($name:ident, $index:expr)),* $(,)?]) => {
-        $el $(.on_action($cx.listener(|this: &mut Workspace, _: &$name, window, cx| {
-            this.dispatch(
-                Command::Panels(volna_core::panels::PanelsCommand::FocusIndex($index)),
-                Some(window),
-                cx,
-            )
-        })))*
-    };
-}
-
-macro_rules! wave_actions {
-    ($el:expr, $cx:expr, [$($name:ident),* $(,)?]) => {
-        $el $(.on_action($cx.listener(|this: &mut Workspace, _: &$name, window, cx| {
-            this.dispatch(Command::Action(Action::$name), Some(window), cx)
-        })))*
-    };
-}
-
 pub(crate) const MEMORY_PILL_W: f32 = 112.0;
 
 fn memory_meter(
@@ -761,6 +753,8 @@ impl Workspace {
             async {}
         })
         .detach();
+        #[cfg(not(target_family = "wasm"))]
+        cx.on_release(|ws, cx| ws.windows.close(cx)).detach();
         let filter = cx.new(|cx| TextInput::new("Filter members", cx));
         cx.subscribe(&filter, |this, filter, event, cx| match event {
             TextInputEvent::Changed => {
@@ -769,6 +763,40 @@ impl Workspace {
             }
             TextInputEvent::Submit => this.dispatch(Command::AddSelectedOrAllVars, None, cx),
             TextInputEvent::Cancel => {}
+        })
+        .detach();
+        #[cfg(not(target_family = "wasm"))]
+        cx.observe_window_activation(window, |ws, window, cx| {
+            if window.is_window_active()
+                && !ws.windows.contains_panel(
+                    window.window_handle(),
+                    ws.app.panels.focused_id(),
+                    &ws.app.panels,
+                )
+                && let Some(panel) = ws
+                    .windows
+                    .main_panel()
+                    .filter(|panel| {
+                        matches!(
+                            ws.app.panels.layout().placement(*panel),
+                            Some(
+                                volna_core::panels::Placement::Center
+                                    | volna_core::panels::Placement::Right
+                            )
+                        )
+                    })
+                    .or_else(|| {
+                        ws.app
+                            .panels
+                            .layout()
+                            .for_window(None)
+                            .visible()
+                            .first()
+                            .copied()
+                    })
+            {
+                ws.activate_panel(panel, window, cx);
+            }
         })
         .detach();
         cx.observe_window_appearance(window, |this, window, cx| {
@@ -801,9 +829,9 @@ impl Workspace {
             rename: None,
             trace_rename: None,
             on_waves: None,
-            scene: Scene::default(),
-            shaped: ShapedCache::default(),
-            presence_images: Default::default(),
+            canvas: HashMap::new(),
+            #[cfg(not(target_family = "wasm"))]
+            windows: crate::native_windows::Windows::new(window.window_handle()),
             embedded: false,
             cli_policy: false,
             menu_generation: None,
@@ -846,7 +874,20 @@ impl Workspace {
         #[cfg(not(target_family = "wasm"))]
         self.check_recent();
         let panel = self.app.panels.focused_id();
-        if let Some(h) = self.rename.as_ref().filter(|h| h.target.panel() != panel) {
+        #[cfg(not(target_family = "wasm"))]
+        let editor_moved = self.rename.as_ref().is_some_and(|hosted| {
+            self.windows
+                .handle_for(hosted.target.panel(), &self.app.panels)
+                .map(|handle| handle.window_id())
+                != Some(hosted.window)
+        });
+        #[cfg(target_family = "wasm")]
+        let editor_moved = false;
+        if let Some(h) = self
+            .rename
+            .as_ref()
+            .filter(|h| h.target.panel() != panel || editor_moved)
+        {
             let text = h.input.read(cx).text().to_owned();
             self.app.handle(Command::CommitText(h.target, Some(text)));
         }
@@ -900,12 +941,16 @@ impl Workspace {
                     }
                     Event::Quit => cx.quit(),
                     Event::Changed => {
+                        #[cfg(not(target_family = "wasm"))]
+                        self.windows.invalidate(cx);
                         if let Some(dock) = &self.dock {
-                            dock.invalidate_panels(cx);
+                            crate::dock::DockHost::invalidate_panels(dock, cx);
                         }
                         cx.notify();
                     }
                     Event::LayoutChanged { .. } => {
+                        #[cfg(not(target_family = "wasm"))]
+                        self.windows.invalidate(cx);
                         self.panel_focus_pending = true;
                         cx.notify();
                     }
@@ -962,8 +1007,7 @@ impl Workspace {
                         if let (Some(window), Some(id)) =
                             (window.as_deref_mut(), self.app.panels.settings_id())
                         {
-                            let view = self.settings_view(id, window, cx);
-                            view.update(cx, |view, cx| view.focus_search(window, cx));
+                            self.focus_settings_search(id, window, cx);
                         }
                     }
                 }
@@ -974,6 +1018,20 @@ impl Workspace {
         self.sync_filter(cx);
         self.sync_menus(cx);
         self.run_requests(cx);
+        #[cfg(not(target_family = "wasm"))]
+        crate::native_windows::schedule(self, cx);
+        #[cfg(target_family = "wasm")]
+        for id in self
+            .app
+            .panels
+            .layout()
+            .windows
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            drop(self.app.panels.return_window(id));
+        }
         #[cfg(target_family = "wasm")]
         if self.app.doc.is_loaded() {
             crate::web::viewer_state(&self.debug_state());
@@ -1054,7 +1112,7 @@ impl Workspace {
         .detach();
     }
 
-    fn sync_wave_menu(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
+    pub(crate) fn sync_wave_menu(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
         let panel = self.app.panels.focused_id();
         let Some(m) = self.app.menu() else {
             self.wave_menu = None;
@@ -1068,6 +1126,13 @@ impl Workspace {
             return;
         }
         let Some(window) = window else { return };
+        #[cfg(not(target_family = "wasm"))]
+        if !self
+            .windows
+            .contains_panel(window.window_handle(), panel, &self.app.panels)
+        {
+            return;
+        }
         let row = m.row;
         let generation = self.app.doc.generation();
         let position = point(px(m.position.x), px(m.position.y));
@@ -1105,7 +1170,9 @@ impl Workspace {
             })
         };
         let entries = m.entries.clone();
-        let focus = self.waves_focus.clone();
+        let focus = self
+            .panel_focus(panel, cx)
+            .unwrap_or_else(|| self.waves_focus.clone());
         let min_w = theme(cx).px(200.0);
         let menu = PopupMenu::build(window, cx, move |mut menu, window, cx| {
             for entry in &entries {
@@ -1131,6 +1198,7 @@ impl Workspace {
         })
         .detach();
         self.wave_menu = Some(HostedWaveMenu {
+            window: window.window_handle().window_id(),
             panel,
             row,
             kind: m.kind,
@@ -1153,12 +1221,23 @@ impl Workspace {
             }
             return;
         };
-        if self.rename.take().is_some() {
+        #[cfg(not(target_family = "wasm"))]
+        if want.is_some()
+            && !self
+                .windows
+                .contains_panel(window.window_handle(), panel, &self.app.panels)
+        {
+            return;
+        }
+        if self
+            .rename
+            .take()
+            .is_some_and(|hosted| hosted.window == window.window_handle().window_id())
+        {
             let focus = self
-                .dock
-                .as_ref()
-                .and_then(|dock| dock.focus(panel, cx))
-                .unwrap_or_else(|| self.waves_focus.clone());
+                .panel_focus(panel, cx)
+                .filter(|focus| self.window_focus(window).contains(focus, window))
+                .unwrap_or_else(|| self.window_focus(window));
             window.focus(&focus, cx);
             cx.notify();
         }
@@ -1204,7 +1283,9 @@ impl Workspace {
             },
         );
         window.focus(&input.read(cx).focus_handle(cx), cx);
+        self.panel_focus_pending = false;
         self.rename = Some(HostedRename {
+            window: window.window_handle().window_id(),
             target,
             input,
             _subscription: subscription,
@@ -1332,13 +1413,21 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<crate::settings_panel::SettingsPanelView> {
-        let mut dock = self
+        let owner = cx.weak_entity();
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(volna_core::panels::Placement::Window(window_id)) =
+            self.app.panels.layout().placement(id)
+            && let Some(dock) = self.windows.dock(window_id)
+        {
+            return dock.update(cx, |dock, cx| dock.settings_view(id, window, cx));
+        }
+        let dock = self
             .dock
-            .take()
-            .unwrap_or_else(|| crate::dock::DockHost::new(window, cx));
-        let view = dock.settings_view(id, cx.weak_entity(), window, cx);
-        self.dock = Some(dock);
-        view
+            .get_or_insert_with(|| {
+                cx.new(|cx| crate::dock::DockHost::new(owner.clone(), None, window, cx))
+            })
+            .clone();
+        dock.update(cx, |dock, cx| dock.settings_view(id, window, cx))
     }
 
     fn settings_changed(&mut self, keys: &[&'static str], cx: &mut Context<Self>) {
@@ -1422,7 +1511,7 @@ impl Workspace {
                     .ok();
             }
         };
-        let focus = self.focus_handle.clone();
+        let focus = self.window_focus(window);
         let min_w = theme(cx).px(200.0);
         let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
             let presets = |choices: Vec<volna_core::app::MemoryChoice>,
@@ -1470,13 +1559,7 @@ impl Workspace {
             .min_w(min_w)
             .action_context(focus.clone())
         });
-        cx.subscribe(&menu, move |this, _, _: &gpui_kit::DismissEvent, cx| {
-            this.status_menu = None;
-            cx.notify();
-        })
-        .detach();
-        self.status_menu = Some((position, menu));
-        cx.notify();
+        self.show_status_menu(position, menu, window, cx);
     }
 
     #[must_use]
@@ -1730,7 +1813,12 @@ impl Workspace {
         let colors = t.editor;
         let settings_only = match self.app.trace_state() {
             TraceState::Loaded(_) | TraceState::Loading { .. } => None,
-            _ => self.app.panels.settings_id(),
+            _ => self.app.panels.settings_id().filter(|id| {
+                !matches!(
+                    self.app.panels.layout().placement(*id),
+                    Some(volna_core::panels::Placement::Window(_))
+                )
+            }),
         };
         if let Some(id) = settings_only {
             let view = self.settings_view(id, window, cx);
@@ -1833,20 +1921,31 @@ impl Workspace {
 
     fn render_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let el = div().id("wave-view").size_full().relative();
-        let mut dock = self
+        let dock = self
             .dock
-            .take()
-            .unwrap_or_else(|| crate::dock::DockHost::new(window, cx));
-        dock.sync(&self.app, cx.weak_entity(), window, cx);
-        if let Some(focus) = dock.focus(self.app.panels.focused_id(), cx) {
+            .get_or_insert_with(|| {
+                let owner = cx.weak_entity();
+                cx.new(|cx| crate::dock::DockHost::new(owner, None, window, cx))
+            })
+            .clone();
+        let render_owner = cx.entity_id();
+        dock.update(cx, |dock, cx| {
+            dock.sync(&self.app, render_owner, window, cx);
+        });
+        let layout = self.app.panels.layout();
+        if let Some(focus) = dock.read(cx).focus(self.app.panels.focused_id(), cx) {
             if self.panel_focus_pending {
                 window.focus(&focus, cx);
                 self.panel_focus_pending = false;
             }
             self.waves_focus = focus;
+        } else if layout.center.is_none()
+            && layout.right.is_none()
+            && (self.waves_focus.is_focused(window) || window.focused(cx).is_none())
+        {
+            window.focus(&self.focus_handle, cx);
         }
-        let area = dock.area.clone();
-        self.dock = Some(dock);
+        let area = dock.read(cx).area.clone();
         el.child(area)
     }
 
@@ -2385,8 +2484,11 @@ impl Workspace {
 }
 
 impl Workspace {
-    fn render_rename(&self) -> Option<impl IntoElement> {
-        let hosted = self.rename.as_ref()?;
+    fn render_rename(&self, window: &Window) -> Option<gpui_kit::AnyElement> {
+        let hosted = self
+            .rename
+            .as_ref()
+            .filter(|host| host.window == window.window_handle().window_id())?;
         let rect = self
             .app
             .text_edit()
@@ -2409,7 +2511,8 @@ impl Workspace {
                             .child(hosted.input.clone()),
                     ),
             )
-            .with_priority(5),
+            .with_priority(5)
+            .into_any_element(),
         )
     }
 }
@@ -2426,8 +2529,12 @@ impl Render for Workspace {
         if !self.native_imports.active().is_empty() {
             window.request_animation_frame();
         }
+        #[cfg(not(target_family = "wasm"))]
+        if was_animating {
+            self.windows.invalidate(cx);
+        }
         if was_animating && let Some(dock) = &self.dock {
-            dock.invalidate_panels(cx);
+            crate::dock::DockHost::invalidate_panels(dock, cx);
         }
         let t = *theme(cx);
         let colors = t.editor;
@@ -2447,222 +2554,8 @@ impl Render for Workspace {
             .bg(t.editor.bg)
             .text_color(colors.text)
             .font_family(t.ui_font)
-            .text_size(px(t.ui_size))
-            .on_action(cx.listener(Self::open_file))
-            .on_action(cx.listener(Self::add_trace))
-            .on_action(cx.listener(|this, _: &OpenWorkspace, window, cx| {
-                this.dispatch(Command::RequestOpenWorkspace, Some(window), cx);
-            }))
-            .on_action(cx.listener(|this, _: &SaveWorkspace, window, cx| {
-                this.dispatch(Command::SaveWorkspace, Some(window), cx);
-            }))
-            .on_action(cx.listener(|this, _: &SaveWorkspaceAs, window, cx| {
-                this.dispatch(Command::RequestSaveWorkspaceAs, Some(window), cx);
-            }))
-            .on_action(cx.listener(|this, _: &Quit, window, cx| {
-                this.dispatch(Command::RequestQuit, Some(window), cx);
-            }))
-            .on_action(cx.listener(|this, _: &Undo, window, cx| {
-                this.dispatch(Command::Undo, Some(window), cx);
-            }))
-            .on_action(cx.listener(|this, _: &Redo, window, cx| {
-                this.dispatch(Command::Redo, Some(window), cx);
-            }))
-            .on_action(cx.listener(|this, action: &OpenRecent, window, cx| {
-                this.dispatch(
-                    Command::Recent(RecentCommand::Open(action.ix)),
-                    Some(window),
-                    cx,
-                );
-            }))
-            .on_action(cx.listener(|this, _: &ClearRecent, window, cx| {
-                this.dispatch(Command::Recent(RecentCommand::Clear), Some(window), cx);
-            }))
-            .on_action(cx.listener(Self::toggle_sidebar))
-            .on_action(cx.listener(Self::close_trace))
-            .on_action(cx.listener(Self::open_settings))
-            .on_action(cx.listener(Self::command_palette))
-            .on_action(cx.listener(|this, action: &GoToMarker, window, cx| {
-                if let Some(id) = volna_core::marker::MarkerId::new(action.n) {
-                    this.dispatch(Command::Action(Action::GoToMarker(id)), Some(window), cx);
-                }
-            }))
-            .on_action(cx.listener(|this, action: &SetMarker, window, cx| {
-                if let Some(id) = volna_core::marker::MarkerId::new(action.n) {
-                    this.dispatch(Command::Action(Action::SetMarker(id)), Some(window), cx);
-                }
-            }))
-            .on_action(cx.listener(|this, action: &SetTint, window, cx| {
-                this.dispatch(
-                    Command::Action(Action::SetTint(action.tint)),
-                    Some(window),
-                    cx,
-                );
-            }))
-            .on_action(cx.listener(|this, action: &ClockAction, window, cx| {
-                this.dispatch(Command::Clocks(action.command.clone()), Some(window), cx);
-            }))
-            .on_action(cx.listener(|this, action: &TraceAction, window, cx| {
-                let trace = action.trace;
-                match action.verb {
-                    TraceVerb::Reveal => {
-                        this.dispatch(Command::RevealTrace(trace), Some(window), cx);
-                    }
-                    TraceVerb::Rename => this.start_trace_rename(trace, window, cx),
-                    TraceVerb::Close => {
-                        this.dispatch(Command::RemoveTrace(trace), Some(window), cx);
-                    }
-                }
-            }))
-            .on_action(cx.listener(|this, action: &OpenPipelineTrack, window, cx| {
-                this.dispatch(
-                    Command::OpenPipeline {
-                        track: action.track,
-                    },
-                    Some(window),
-                    cx,
-                );
-            }))
-            .on_action(cx.listener(
-                |this, _: &crate::settings_panel::ToggleSettingsJson, window, cx| {
-                    if this.embedded {
-                        return;
-                    }
-                    if this.app.panels.settings_id().is_none() {
-                        this.dispatch(Command::Settings(SettingsCommand::Open), Some(window), cx);
-                    }
-                    if !this.app.settings_view.json {
-                        this.dispatch(
-                            Command::Settings(SettingsCommand::ToggleJson),
-                            Some(window),
-                            cx,
-                        );
-                    }
-                },
-            ));
-        root = focus_panel_actions!(
-            root,
-            cx,
-            [
-                (FocusPanel1, 0),
-                (FocusPanel2, 1),
-                (FocusPanel3, 2),
-                (FocusPanel4, 3),
-                (FocusPanel5, 4),
-                (FocusPanel6, 5),
-                (FocusPanel7, 6),
-                (FocusPanel8, 7),
-                (FocusPanel9, 8)
-            ]
-        );
-        root = root
-            .on_action(cx.listener(|this, _: &UiZoomIn, window, cx| {
-                this.dispatch(
-                    Command::Settings(SettingsCommand::Zoom(ZoomStep::In)),
-                    Some(window),
-                    cx,
-                );
-            }))
-            .on_action(cx.listener(|this, _: &UiZoomOut, window, cx| {
-                this.dispatch(
-                    Command::Settings(SettingsCommand::Zoom(ZoomStep::Out)),
-                    Some(window),
-                    cx,
-                );
-            }))
-            .on_action(|_: &CycleFrameOverlay, window, _| {
-                window.cycle_debug_frame_overlay_mode();
-            })
-            .on_action(cx.listener(|this, _: &UiZoomReset, window, cx| {
-                this.dispatch(
-                    Command::Settings(SettingsCommand::Zoom(ZoomStep::Reset)),
-                    Some(window),
-                    cx,
-                );
-            }));
-        root = wave_actions!(
-            root,
-            cx,
-            [
-                SplitRight,
-                SplitDown,
-                NewPanel,
-                ClosePanel,
-                FocusNextPanel,
-                FocusPrevPanel,
-                ToggleViewportLink,
-                ToggleCursorLink
-            ]
-        );
-        root = root.on_action(cx.listener(|this, _: &OpenSignalMenu, window, cx| {
-            let panel = this.app.panels.focused_id();
-            this.dispatch(Command::OpenSignalMenu(panel), Some(window), cx);
-        }));
-        root = root.on_action(cx.listener(|this, _: &ShowTransaction, window, cx| {
-            let panel = this.app.panels.focused_id();
-            this.dispatch(Command::ShowTransaction { from: panel }, Some(window), cx);
-        }));
-        root = wave_actions!(
-            root,
-            cx,
-            [
-                ZoomIn,
-                ZoomOut,
-                ZoomFit,
-                ZoomToCursor,
-                PanPageLeft,
-                PanPageRight,
-                GoToStart,
-                GoToEnd,
-                GoToCursor,
-                PanLeft,
-                PanRight,
-                NextEdge,
-                PrevEdge,
-                AddOrRenameMarker,
-                RemoveMarkerAtCursor,
-                RemoveAllMarkers,
-                NextMarker,
-                PrevMarker,
-                JumpBack,
-                SetReference,
-                ClearReference,
-                ZoomToMeasurement,
-                MarkerNavigator,
-                RemoveSelected,
-                CopySignals,
-                CutSignals,
-                PasteSignals,
-                SelectAll,
-                ClearSelection,
-                CycleFormat,
-                ToggleAnalog,
-                ToggleStack,
-                ToggleOverlaid,
-                IncreaseRowHeight,
-                DecreaseRowHeight,
-                ResetRowHeight,
-                MoveSelectionUp,
-                MoveSelectionDown,
-                NextCycle,
-                PrevCycle,
-                ToggleCycleOrigin,
-                GroupSelection,
-                Ungroup,
-                RenameGroup,
-                FoldGroupDeep,
-                UnfoldGroupDeep,
-            ]
-        );
-        #[cfg(not(target_family = "wasm"))]
-        {
-            root = root.on_drop(cx.listener(
-                |this, paths: &gpui_kit::ExternalPaths, window, cx| {
-                    let position = window.mouse_position();
-                    this.drop_paths(paths.paths().to_vec(), position, window, cx);
-                },
-            ));
-        }
+            .text_size(px(t.ui_size));
+        root = Self::panel_actions(root, cx.weak_entity());
         if let Some(i) = t.islands {
             root = root
                 .relative()
@@ -2742,18 +2635,182 @@ impl Render for Workspace {
                 ),
         )
         .child(self.render_statusbar(cx))
-        .children(
-            self.wave_menu
-                .as_ref()
-                .map(|menu| popup_at(menu.position, menu.popup.clone(), window, cx)),
-        )
-        .children(
-            self.status_menu
-                .as_ref()
-                .map(|(p, m)| popup_at(*p, m.clone(), window, cx)),
-        )
         .children(self.render_frame_details(cx))
-        .children(self.render_rename())
+        .children(self.window_overlays(window, cx))
         .children(drag.map(|d| Self::render_drag_surface(d, cx)))
+    }
+}
+
+impl Workspace {
+    fn close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(id) = self.windows.id_for(window.window_handle()) {
+            self.dispatch(
+                Command::Panels(volna_core::panels::PanelsCommand::ReturnWindow(id)),
+                Some(window),
+                cx,
+            );
+            return;
+        }
+        self.dispatch(Command::RequestQuit, Some(window), cx);
+    }
+
+    pub(crate) fn show_status_menu(
+        &mut self,
+        position: gpui_kit::Point<Pixels>,
+        menu: Entity<PopupMenu>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.subscribe(&menu, |this, menu, _: &gpui_kit::DismissEvent, cx| {
+            if this
+                .status_menu
+                .as_ref()
+                .is_some_and(|hosted| hosted.popup.entity_id() == menu.entity_id())
+            {
+                this.status_menu = None;
+                #[cfg(not(target_family = "wasm"))]
+                this.windows.invalidate(cx);
+                cx.notify();
+            }
+        })
+        .detach();
+        self.status_menu = Some(HostedMenu {
+            window: window.window_handle().window_id(),
+            position,
+            popup: menu,
+        });
+        #[cfg(not(target_family = "wasm"))]
+        self.windows.invalidate(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn window_overlays(
+        &self,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Vec<gpui_kit::AnyElement> {
+        let mut overlays = Vec::new();
+        if let Some(menu) = self
+            .wave_menu
+            .as_ref()
+            .filter(|menu| menu.window == window.window_handle().window_id())
+        {
+            overlays
+                .push(popup_at(menu.position, menu.popup.clone(), window, cx).into_any_element());
+        }
+        if let Some(menu) = self
+            .status_menu
+            .as_ref()
+            .filter(|menu| menu.window == window.window_handle().window_id())
+        {
+            overlays
+                .push(popup_at(menu.position, menu.popup.clone(), window, cx).into_any_element());
+        }
+        overlays.extend(self.render_rename(window));
+        overlays
+    }
+}
+
+impl Workspace {
+    pub(crate) fn window_focus(&self, window: &Window) -> FocusHandle {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(focus) = self.windows.focus_for(window.window_handle()) {
+            return focus;
+        }
+        #[cfg(target_family = "wasm")]
+        let _ = window;
+        self.focus_handle.clone()
+    }
+
+    pub(crate) fn panel_focus(
+        &self,
+        panel: volna_core::panels::PanelId,
+        cx: &App,
+    ) -> Option<FocusHandle> {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(volna_core::panels::Placement::Window(id)) =
+            self.app.panels.layout().placement(panel)
+        {
+            return self.windows.dock(id)?.read(cx).focus(panel, cx);
+        }
+        self.dock.as_ref()?.read(cx).focus(panel, cx)
+    }
+}
+
+impl Workspace {
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn activate_panel(
+        &mut self,
+        panel: volna_core::panels::PanelId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let preserve_focus =
+            self.window_focus(window).contains_focused(window, cx)
+                || gpui_kit::component::WindowExt::has_active_dialog(window, cx)
+                || self.trace_rename.as_ref().is_some_and(|rename| {
+                    rename.input.read(cx).focus_handle(cx).is_focused(window)
+                })
+                || self.rename.as_ref().is_some_and(|rename| {
+                    rename.input.read(cx).focus_handle(cx).is_focused(window)
+                });
+        self.dispatch(
+            Command::Panels(volna_core::panels::PanelsCommand::Focus(panel)),
+            Some(window),
+            cx,
+        );
+        if preserve_focus {
+            self.panel_focus_pending = false;
+        }
+    }
+
+    pub(crate) fn run_in_window(
+        &mut self,
+        target: gpui_kit::AnyWindowHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        operation: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        if target == window.window_handle() {
+            operation(self, window, cx);
+            return;
+        }
+        let generation = self.app.doc.generation();
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            drop(target.update(cx, |_, window, cx| {
+                drop(owner.update(cx, |ws, cx| {
+                    if ws.app.doc.generation() == generation {
+                        operation(ws, window, cx);
+                    }
+                }));
+            }));
+        });
+    }
+
+    fn focus_settings_search(
+        &mut self,
+        id: volna_core::panels::PanelId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let Some(target) = self.windows.handle_for(id, &self.app.panels) else {
+                return;
+            };
+            if target != window.window_handle() {
+                self.run_in_window(target, window, cx, move |ws, window, cx| {
+                    ws.focus_settings_search(id, window, cx);
+                });
+                return;
+            }
+        }
+        if self.app.panels.settings_id() == Some(id) {
+            let view = self.settings_view(id, window, cx);
+            view.update(cx, |view, cx| view.focus_search(window, cx));
+            self.panel_focus_pending = false;
+        }
     }
 }

@@ -127,7 +127,7 @@ try {
     workspace.timescale = timescale;
     const panel = workspace.panels.find((panel) => panel.kind === kind);
     workspace.panels = [panel];
-    workspace.layout = { center: { tabs: [panel.id], active: panel.id }, right: null };
+    workspace.layout = { center: { tabs: [panel.id], active: panel.id }, right: null, windows: {} };
     workspace.focused = panel.id;
     workspace.timeline_dividers = [];
     workspace.sidebar.expanded = [];

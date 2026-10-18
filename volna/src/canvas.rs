@@ -27,6 +27,13 @@ use std::{
 };
 
 #[derive(Default)]
+pub(crate) struct CanvasState {
+    scene: volna_core::Scene,
+    shaped: ShapedCache,
+    presence_images: PresenceImages,
+}
+
+#[derive(Default)]
 pub(crate) struct PresenceImages {
     panels: HashMap<volna_core::panels::PanelId, VecDeque<Vec<Arc<gpui_kit::RenderImage>>>>,
 }
@@ -678,13 +685,21 @@ impl Element for PanelCanvas {
         let t = *theme(cx);
         let core = self.core_theme(cx);
         let (mut scene, mut shaped, mut presence_images) = self.ws.update(cx, |ws, _| {
-            let mut scene = std::mem::take(&mut ws.scene);
+            let state = ws
+                .canvas
+                .entry(window.window_handle().window_id())
+                .or_default();
+            let mut scene = std::mem::take(&mut state.scene);
             let mut measure = GpuiMeasure { window, theme: &t };
             ws.app
                 .render_panel_into(self.panel, &core, &mut measure, &mut scene);
-            let mut images = std::mem::take(&mut ws.presence_images);
+            let state = ws
+                .canvas
+                .entry(window.window_handle().window_id())
+                .or_default();
+            let mut images = std::mem::take(&mut state.presence_images);
             images.begin(self.panel, &ws.app.panels, window);
-            (scene, std::mem::take(&mut ws.shaped), images)
+            (scene, std::mem::take(&mut state.shaped), images)
         });
         let mut i = 0;
         let mut images = Vec::new();
@@ -724,9 +739,13 @@ impl Element for PanelCanvas {
             }
         }
         self.ws.update(cx, |ws, _| {
-            ws.scene = scene;
-            ws.shaped = shaped;
-            ws.presence_images = presence_images;
+            let state = ws
+                .canvas
+                .entry(window.window_handle().window_id())
+                .or_default();
+            state.scene = scene;
+            state.shaped = shaped;
+            state.presence_images = presence_images;
             if let Some(panel) = ws.app.panels.get_mut(self.panel) {
                 panel.record_paint();
             }
@@ -1200,9 +1219,7 @@ impl PanelCanvas {
                 ws.update(cx, |ws, cx| ws.commit_rename(window, cx));
                 let focus = ws
                     .read(cx)
-                    .dock
-                    .as_ref()
-                    .and_then(|dock| dock.focus(panel, cx))
+                    .panel_focus(panel, cx)
                     .unwrap_or_else(|| ws.read(cx).waves_focus.clone());
                 window.focus(&focus, cx);
                 send(
@@ -1629,6 +1646,9 @@ mod presence_atlas_tests {
             });
             host.update(&mut vcx, |ws, window, _| {
                 let frames = ws
+                    .canvas
+                    .get(&window.window_handle().window_id())
+                    .unwrap()
                     .presence_images
                     .panels
                     .get(&panel)

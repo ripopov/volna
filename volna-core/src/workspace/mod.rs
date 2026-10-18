@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use volna_trace::data::source::Lookup;
 
 pub const FORMAT: &str = "volna-workspace";
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ROWS: usize = 100_000;
 

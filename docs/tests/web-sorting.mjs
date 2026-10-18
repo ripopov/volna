@@ -58,7 +58,7 @@ try {
   workspace.panels[0].id = 4;
   workspace.panels[0].source.path = ['sort', 'rows'];
   workspace.panels[0].widths = [210, 120, 105, 120, 100, 90, 360];
-  workspace.layout = { center: { tabs: [4], active: 4 }, right: null };
+  workspace.layout = { center: { tabs: [4], active: 4 }, right: null, windows: {} };
   workspace.focused = 4;
   workspace.timeline_dividers = [];
   workspace.timescale = -12;

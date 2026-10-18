@@ -939,6 +939,16 @@ impl App {
         let start =
             |panels: &Panels, id: PanelId| panels.get(id).is_some_and(|p| p.kind.is_start());
         let result = match command {
+            PanelsCommand::MoveToNewWindow(panel) => self
+                .restructure(Some("Move panel to new window".into()), |panels| {
+                    Ok((panels.move_to_new_window(panel)?, Vec::new()))
+                })
+                .map(|_| ()),
+            PanelsCommand::ReturnWindow(window) => self
+                .restructure(Some("Return window to main window".into()), |panels| {
+                    Ok((panels.return_window(window)?, Vec::new()))
+                })
+                .map(|_| ()),
             PanelsCommand::Split { panel, .. } | PanelsCommand::NewTab { group_of: panel }
                 if start(&self.panels, panel) =>
             {

@@ -1407,3 +1407,19 @@ fn a_shared_timeline_divider_drag_schedules_an_autosave() {
     assert_eq!(saved.timeline_dividers[0].panels, vec![first, second]);
     assert_eq!(saved.timeline_dividers[0].width, 500.0);
 }
+
+#[test]
+fn auxiliary_window_trees_round_trip_without_copying_panel_models() {
+    let mut app = app();
+    app.handle(Command::Action(Action::SplitRight));
+    let panel = app.panels.focused_id();
+    app.handle(Command::Panels(PanelsCommand::MoveToNewWindow(panel)));
+    app.handle(Command::Action(Action::SplitDown));
+    let before = value(&app);
+    assert_eq!(before["layout"]["windows"].as_object().unwrap().len(), 1);
+    assert_eq!(before["panels"].as_array().unwrap().len(), 3);
+    let plan = prepare(&before, &app).unwrap();
+    plan.commit(&mut app).unwrap();
+    assert_eq!(value(&app), before);
+    app.panels.validate().unwrap();
+}

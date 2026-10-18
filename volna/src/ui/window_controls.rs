@@ -7,7 +7,7 @@ use gpui_kit::{
     Styled, Window, WindowButton, WindowButtonLayout, WindowControlArea, WindowControls, div,
 };
 
-use crate::app::Quit;
+use crate::app::CloseWindow;
 use crate::theme::{ThemePx, theme};
 use crate::ui::{Icon, IconName};
 
@@ -135,7 +135,7 @@ impl Control {
         match self {
             Control::Minimize => window.minimize_window(),
             Control::Maximize | Control::Restore => window.zoom_window(),
-            Control::Close => window.dispatch_action(Box::new(Quit), cx),
+            Control::Close => window.dispatch_action(Box::new(CloseWindow), cx),
         }
     }
 }

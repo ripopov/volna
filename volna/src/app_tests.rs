@@ -4811,7 +4811,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
     vcx.run_until_parked();
     if let Some(island_theme) = island_theme {
         let snapshot = |ws: &Workspace, cx: &gpui_kit::App| {
-            let area = ws.dock.as_ref().unwrap().area.read(cx);
+            let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
             let regions = [DockPlacement::Center, DockPlacement::Right].map(|region| {
                 let tree = area.layout(region).unwrap();
                 (tree.node_ids(), tree.panels().collect::<Vec<_>>())
@@ -4853,7 +4853,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
         use gpui_kit::{Modifiers, MouseButton, point};
         let (start, width) = window
             .update(&mut vcx, |ws, _, cx| {
-                let area = ws.dock.as_ref().unwrap().area.read(cx);
+                let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
                 let width = area.dock_size(DockPlacement::Right).unwrap();
                 (
                     point(
@@ -4880,7 +4880,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
         vcx.run_until_parked();
         let resized = window
             .update(&mut vcx, |ws, _, cx| {
-                let area = ws.dock.as_ref().unwrap().area.read(cx);
+                let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
                 let resized = area.dock_size(DockPlacement::Right).unwrap();
                 assert!(
                     resized > width + px(60.),
@@ -4901,6 +4901,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
                     ws.dock
                         .as_ref()
                         .unwrap()
+                        .read(cx)
                         .area
                         .read(cx)
                         .dock_size(DockPlacement::Right),
@@ -4915,7 +4916,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
                 ws.app.panels.layout().placement(detail),
                 Some(Placement::Right)
             );
-            let area = ws.dock.as_ref().unwrap().area.clone();
+            let area = ws.dock.as_ref().unwrap().read(cx).area.clone();
             let node = area
                 .read(cx)
                 .layout(DockPlacement::Right)
@@ -4931,7 +4932,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
     vcx.run_until_parked();
     window
         .update(&mut vcx, |ws, window, cx| {
-            let area = ws.dock.as_ref().unwrap().area.clone();
+            let area = ws.dock.as_ref().unwrap().read(cx).area.clone();
             assert_eq!(
                 area.read(cx)
                     .layout(DockPlacement::Right)
@@ -4986,7 +4987,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
         .unwrap();
     vcx.run_until_parked();
     let nodes = |ws: &Workspace, cx: &gpui_kit::App| {
-        let area = ws.dock.as_ref().unwrap().area.read(cx);
+        let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
         [DockPlacement::Center, DockPlacement::Right]
             .map(|region| area.layout(region).unwrap().root().id())
     };
@@ -5013,6 +5014,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
                 !ws.dock
                     .as_ref()
                     .unwrap()
+                    .read(cx)
                     .area
                     .read(cx)
                     .is_dock_open(DockPlacement::Right)
@@ -5028,6 +5030,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
                 ws.dock
                     .as_ref()
                     .unwrap()
+                    .read(cx)
                     .area
                     .read(cx)
                     .is_dock_open(DockPlacement::Right)
@@ -5042,7 +5045,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     window
         .update(&mut vcx, |ws, _, cx| {
-            let area = ws.dock.as_ref().unwrap().area.read(cx);
+            let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
             assert_eq!(nodes(ws, cx), retained_nodes);
             assert!(area.dock_size(DockPlacement::Right).unwrap() < area.bounds().size.width);
             assert_eq!(ws.app.panels.layout().right.as_ref().unwrap().width, 480.0);
@@ -5060,14 +5063,8 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
         });
         window
             .update(vcx, |ws, window, cx| {
-                cx.subscribe(&menu, |ws, _, _: &gpui_kit::DismissEvent, cx| {
-                    ws.status_menu = None;
-                    cx.notify();
-                })
-                .detach();
                 window.focus(&menu.read(cx).focus_handle(cx), cx);
-                ws.status_menu = Some((point(px(20.0), px(80.0)), menu));
-                cx.notify();
+                ws.show_status_menu(point(px(20.0), px(80.0)), menu, window, cx);
             })
             .unwrap();
         vcx.run_until_parked();
@@ -5137,7 +5134,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
     // the accepted layout rather than leaving a divergent widget tree visible.
     let accepted = window
         .update(&mut vcx, |ws, window, cx| {
-            let area = ws.dock.as_ref().unwrap().area.clone();
+            let area = ws.dock.as_ref().unwrap().read(cx).area.clone();
             area.update(cx, |area, cx| {
                 area.set_dock(
                     DockPlacement::Bottom,
@@ -5157,6 +5154,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
                 !ws.dock
                     .as_ref()
                     .unwrap()
+                    .read(cx)
                     .area
                     .read(cx)
                     .has_dock(DockPlacement::Bottom)
@@ -5732,5 +5730,569 @@ fn column_filters_keep_input_focus_and_table_shortcuts_out_of_edits(cx: &mut Tes
                 })
                 .unwrap();
         }
+    }
+}
+
+#[gpui_kit::test]
+fn auxiliary_windows_route_keyboard_navigation_and_return_panels_without_losing_state(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+    use volna_core::panels::{PanelsCommand, Placement};
+    init(cx);
+    for (dark, width, zoom) in [(true, 1000.0, 1.0), (false, 360.0, 1.5)] {
+        let mut owner = None;
+        let root = cx.add_window(|window, cx| {
+            let ws = cx.new(|cx| Workspace::new(window, cx));
+            owner = Some(ws.clone());
+            gpui_kit::component::Root::new(ws, window, cx)
+        });
+        let main = RootWindow {
+            root,
+            workspace: owner.unwrap(),
+        };
+        let mut vcx = VisualTestContext::from_window(root.into(), cx);
+        main.update(&mut vcx, |ws, _, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+        })
+        .unwrap();
+        vcx.run_until_parked();
+        let (a, b) = main
+            .update(&mut vcx, |ws, window, cx| {
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                crate::theme::set_zoom(zoom, cx);
+                ws.dispatch(Command::AddVars(a_all(vec![0, 1])), Some(window), cx);
+                let a = ws.app.panels.focused_id();
+                ws.dispatch(
+                    Command::Panels(PanelsCommand::NewTab { group_of: a }),
+                    Some(window),
+                    cx,
+                );
+                let b = ws.app.panels.focused_id();
+                (a, b)
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let menu =
+            vcx.update(|window, _| gpui_kit::test::TestWindowExt::find(window, "menu").bounds());
+        vcx.simulate_click(menu.center(), Modifiers::default());
+        vcx.simulate_keystrokes("down enter");
+        vcx.run_until_parked();
+        let handle = main
+            .update(&mut vcx, |ws, _, cx| {
+                assert_eq!(cx.windows().len(), 2);
+                assert!(ws.dock.as_ref().unwrap().read(cx).focus(b, cx).is_none());
+                ws.windows.handle_for(b, &ws.app.panels).unwrap()
+            })
+            .unwrap();
+        {
+            let mut auxiliary = VisualTestContext::from_window(handle, &vcx);
+            auxiliary.simulate_resize(size(px(width), px(600.0)));
+            auxiliary.run_until_parked();
+            auxiliary.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+            });
+            main.workspace.update(&mut auxiliary, |ws, cx| {
+                assert!(ws.panel_focus(b, cx).is_some());
+                assert!(
+                    ws.canvas.len() >= 2,
+                    "each window has its own renderer cache"
+                );
+                assert_eq!(ws.app.panels.focused_id(), b);
+            });
+            auxiliary.simulate_keystrokes("=");
+            auxiliary.run_until_parked();
+            main.workspace.update(&mut auxiliary, |ws, _| {
+                assert_eq!(
+                    ws.app.panels.waves(a).unwrap().viewport(&ws.app.doc),
+                    ws.app.panels.waves(b).unwrap().viewport(&ws.app.doc)
+                );
+            });
+            auxiliary.update(|window, cx| window.draw(cx).clear(cx));
+            let bounds = auxiliary.update(|window, _| {
+                gpui_kit::test::TestWindowExt::find(window, "active-panel").bounds()
+            });
+            let bounds = volna_core::geometry::Rect::from_xywh(
+                f32::from(bounds.left()),
+                f32::from(bounds.top()),
+                f32::from(bounds.size.width),
+                f32::from(bounds.size.height),
+            );
+            let at = main.workspace.update(&mut auxiliary, |ws, cx| {
+                let layout = ws
+                    .app
+                    .layout_panel(b, bounds, crate::theme::canvas_theme(cx), 1.0)
+                    .unwrap();
+                let volna_core::app::PanelLayout::Waves(layout) = layout else {
+                    panic!()
+                };
+                point(px(layout.waves.left() + 8.0), px(layout.waves.top() + 8.0))
+            });
+            auxiliary.simulate_click(at, Modifiers::default());
+            auxiliary.run_until_parked();
+            main.workspace.update(&mut auxiliary, |ws, _| {
+                assert!(ws.app.doc.shared.cursor.is_some());
+                assert_eq!(
+                    ws.app.panels.waves(a).unwrap().cursor(&ws.app.doc),
+                    ws.app.panels.waves(b).unwrap().cursor(&ws.app.doc)
+                );
+            });
+            main.root
+                .update(&mut auxiliary, |_, window, _| window.activate_window())
+                .unwrap();
+            auxiliary.run_until_parked();
+            main.update(&mut auxiliary, |ws, window, cx| {
+                assert_eq!(ws.app.panels.focused_id(), a);
+                assert!(ws.panel_focus(a, cx).unwrap().contains_focused(window, cx));
+            })
+            .unwrap();
+            gpui_kit::TestAppContext::simulate_keystrokes(&mut auxiliary, root.into(), "=");
+            auxiliary.run_until_parked();
+            handle
+                .update(&mut auxiliary, |_, window, _| window.activate_window())
+                .unwrap();
+            auxiliary.run_until_parked();
+            main.workspace.update(&mut auxiliary, |ws, _| {
+                assert_eq!(ws.app.panels.focused_id(), b);
+            });
+            auxiliary.simulate_keystrokes("shift-l");
+            auxiliary.run_until_parked();
+            main.workspace.update(&mut auxiliary, |ws, _| {
+                assert!(ws.app.panels.waves(a).unwrap().nav.link.cursor);
+                assert!(!ws.app.panels.waves(b).unwrap().nav.link.cursor);
+            });
+            auxiliary.simulate_keystrokes("ctrl-,");
+            auxiliary.run_until_parked();
+            main.update(&mut auxiliary, |ws, window, cx| {
+                let settings = ws.app.panels.settings_id().unwrap();
+                let view = ws.settings_view(settings, window, cx);
+                assert!(view.read(cx).search_focus(cx).is_focused(window));
+            })
+            .unwrap();
+            handle
+                .update(&mut auxiliary, |_, window, _| window.activate_window())
+                .unwrap();
+            auxiliary.run_until_parked();
+            if dark {
+                let menu = auxiliary.update(|window, _| {
+                    gpui_kit::test::TestWindowExt::find(window, "menu").bounds()
+                });
+                auxiliary.simulate_click(menu.center(), Modifiers::default());
+                auxiliary.simulate_keystrokes("down enter");
+            } else {
+                auxiliary.dispatch_action(CloseWindow);
+            }
+            auxiliary.run_until_parked();
+        }
+        vcx.run_until_parked();
+        main.update(&mut vcx, |ws, _, cx| {
+            assert_eq!(cx.windows().len(), 1);
+            assert_eq!(ws.app.panels.layout().placement(b), Some(Placement::Center));
+            assert!(!ws.app.panels.waves(b).unwrap().nav.link.cursor);
+            ws.dispatch(Command::Undo, None, cx);
+        })
+        .unwrap();
+        vcx.run_until_parked();
+        main.update(&mut vcx, |ws, _, cx| {
+            assert_eq!(cx.windows().len(), 2);
+            assert!(matches!(
+                ws.app.panels.layout().placement(b),
+                Some(Placement::Window(_))
+            ));
+            ws.windows.close(cx);
+        })
+        .unwrap();
+        root.update(&mut vcx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn auxiliary_os_close_returns_tabs_and_main_close_disposes_its_windows(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use volna_core::panels::{PanelsCommand, Placement};
+    init(cx);
+    let owner = cx.update(|cx| crate::open_main_window(cx, false).unwrap());
+    let main = cx.update(|cx| cx.windows()[0]);
+    owner.update(cx, |ws, cx| {
+        ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+    });
+    cx.run_until_parked();
+    let panel = owner.update(cx, |ws, cx| {
+        ws.dispatch(Command::AddVars(a_all(vec![0])), None, cx);
+        let panel = ws.app.panels.focused_id();
+        ws.dispatch(
+            Command::Panels(PanelsCommand::MoveToNewWindow(panel)),
+            None,
+            cx,
+        );
+        panel
+    });
+    cx.run_until_parked();
+    let auxiliary = owner.update(cx, |ws, _| {
+        ws.windows.handle_for(panel, &ws.app.panels).unwrap()
+    });
+    {
+        let mut view = VisualTestContext::from_window(auxiliary, cx);
+        assert!(view.simulate_close());
+        owner.update(&mut view, |ws, _| {
+            assert_eq!(
+                ws.app.panels.layout().placement(panel),
+                Some(Placement::Center)
+            );
+        });
+        auxiliary
+            .update(&mut view, |_, window, _| window.remove_window())
+            .unwrap();
+        view.run_until_parked();
+    }
+    owner.update(cx, |ws, cx| ws.dispatch(Command::Undo, None, cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|cx| cx.windows().len()), 2);
+    {
+        let mut view = VisualTestContext::from_window(main, cx);
+        assert!(view.simulate_close());
+        assert_eq!(view.update(|_, cx| cx.windows().len()), 1);
+        main.update(&mut view, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    assert!(cx.update(|cx| cx.windows().is_empty()));
+}
+
+fn workspace_with_auxiliary_panel(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<Workspace>,
+    gpui_kit::AnyWindowHandle,
+    gpui_kit::AnyWindowHandle,
+) {
+    let owner = cx.update(|cx| crate::open_main_window(cx, false).unwrap());
+    let main = cx.update(|cx| cx.windows()[0]);
+    owner.update(cx, |ws, cx| {
+        ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+        ws.dispatch(Command::AddVars(a_all(vec![0])), None, cx);
+        let panel = ws.app.panels.focused_id();
+        ws.dispatch(
+            Command::Panels(volna_core::panels::PanelsCommand::MoveToNewWindow(panel)),
+            None,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let auxiliary = owner.read_with(cx, |ws, _| {
+        ws.windows
+            .handle_for(ws.app.panels.focused_id(), &ws.app.panels)
+            .unwrap()
+    });
+    (owner, main, auxiliary)
+}
+
+#[gpui_kit::test]
+fn auxiliary_palette_commands_dispatch_and_restore_local_keyboard_input(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    init(cx);
+    let (owner, main, auxiliary) = workspace_with_auxiliary_panel(cx);
+    owner.update(cx, |ws, _| {
+        ws.app.doc.shared.cursor = Some(25);
+        ws.app.doc.add_marker(10).unwrap();
+        ws.app.doc.add_marker(50).unwrap();
+    });
+    let mut view = VisualTestContext::from_window(auxiliary, cx);
+    view.simulate_keystrokes("ctrl-k");
+    view.run_until_parked();
+    view.simulate_input("remove all markers");
+    view.run_until_parked();
+    view.simulate_keystrokes("enter");
+    view.run_until_parked();
+    owner.read_with(&view, |ws, _| assert!(ws.app.doc.markers().is_empty()));
+
+    view.simulate_keystrokes("m");
+    view.run_until_parked();
+    owner.read_with(&view, |ws, _| assert_eq!(ws.app.doc.markers().len(), 1));
+    view.simulate_keystrokes("ctrl-k");
+    view.run_until_parked();
+    view.simulate_input("add or name marker");
+    view.run_until_parked();
+    view.simulate_keystrokes("enter");
+    view.run_until_parked();
+    view.simulate_input("auxiliary");
+    view.simulate_keystrokes("enter");
+    view.run_until_parked();
+    owner.read_with(&view, |ws, _| {
+        assert_eq!(ws.app.doc.markers()[0].label.as_deref(), Some("auxiliary"));
+    });
+    owner.update(&mut view, |ws, cx| ws.windows.close(cx));
+    main.update(&mut view, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn returning_a_panel_commits_its_window_owned_name_editor(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use volna_core::panels::{PanelsCommand, Placement};
+
+    init(cx);
+    let (owner, main, auxiliary) = workspace_with_auxiliary_panel(cx);
+    owner.update(cx, |ws, _| {
+        ws.app.doc.shared.cursor = Some(25);
+        ws.app.doc.add_marker(25).unwrap();
+    });
+    let mut view = VisualTestContext::from_window(auxiliary, cx);
+    view.dispatch_action(AddOrRenameMarker);
+    view.run_until_parked();
+    view.simulate_input("draft");
+    auxiliary
+        .update(&mut view, |_, window, cx| {
+            owner.update(cx, |ws, cx| {
+                ws.dispatch(
+                    Command::Panels(PanelsCommand::Move {
+                        panel: ws.app.panels.focused_id(),
+                        placement: Placement::Center,
+                    }),
+                    Some(window),
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+    view.run_until_parked();
+    owner.read_with(&view, |ws, _| {
+        assert!(ws.rename.is_none());
+        assert!(ws.app.text_edit().is_none());
+        assert_eq!(ws.app.doc.markers()[0].label.as_deref(), Some("draft"));
+    });
+    main.update(&mut view, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn auxiliary_palette_trace_rename_focuses_the_main_window_editor(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+
+    init(cx);
+    let (owner, main, auxiliary) = workspace_with_auxiliary_panel(cx);
+    owner.update(cx, |ws, cx| {
+        ws.add_path(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/examples/picorv32.vtr").into(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let mut view = VisualTestContext::from_window(auxiliary, cx);
+    view.simulate_keystrokes("ctrl-k");
+    view.run_until_parked();
+    view.simulate_input("rename trace b");
+    view.run_until_parked();
+    view.simulate_keystrokes("enter");
+    view.run_until_parked();
+    assert_eq!(view.update(|_, cx| cx.active_window()), Some(main));
+    main.update(&mut view, |_, window, cx| {
+        let ws = owner.read(cx);
+        let rename = ws.trace_rename.as_ref().expect("trace name editor");
+        assert!(rename.input.read(cx).focus_handle(cx).is_focused(window));
+    })
+    .unwrap();
+    let mut main_view = VisualTestContext::from_window(main, &view);
+    main_view.simulate_keystrokes("ctrl-a backspace");
+    main_view.simulate_input("renamed");
+    main_view.simulate_keystrokes("enter");
+    main_view.run_until_parked();
+    owner.read_with(&main_view, |ws, _| {
+        let b = TraceId::from_letter('B').unwrap();
+        assert_eq!(ws.app.trace_chip(b).unwrap().name, "renamed");
+        assert!(ws.trace_rename.is_none());
+    });
+    auxiliary
+        .update(&mut main_view, |_, window, cx| {
+            owner.update(cx, |ws, cx| {
+                ws.start_trace_rename(TraceId::from_letter('B').unwrap(), window, cx);
+                ws.set_session(Arc::new(ProceduralTrace::new(200)), cx);
+            });
+        })
+        .unwrap();
+    main_view.run_until_parked();
+    owner.read_with(&main_view, |ws, _| assert!(ws.trace_rename.is_none()));
+    owner.update(&mut main_view, |ws, cx| ws.windows.close(cx));
+    main.update(&mut main_view, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn switching_windows_preserves_settings_search_focus(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+
+    init(cx);
+    let (owner, main, auxiliary) = workspace_with_auxiliary_panel(cx);
+    let mut view = VisualTestContext::from_window(main, cx);
+    view.dispatch_action(OpenSettings);
+    view.run_until_parked();
+    let settings = owner.read_with(&view, |ws, _| ws.app.panels.settings_id().unwrap());
+    for detached in [false, true] {
+        if detached {
+            owner.update(&mut view, |ws, cx| {
+                ws.dispatch(
+                    Command::Panels(volna_core::panels::PanelsCommand::MoveToNewWindow(settings)),
+                    None,
+                    cx,
+                );
+            });
+            view.run_until_parked();
+        }
+        let host = owner.read_with(&view, |ws, _| {
+            ws.windows.handle_for(settings, &ws.app.panels).unwrap()
+        });
+        let mut local = VisualTestContext::from_window(host, &view);
+        local.dispatch_action(OpenSettings);
+        local.run_until_parked();
+        let search = host
+            .update(&mut local, |_, window, cx| {
+                owner.update(cx, |ws, cx| {
+                    ws.settings_view(settings, window, cx)
+                        .read(cx)
+                        .search_focus(cx)
+                })
+            })
+            .unwrap();
+        local.update(|window, _| assert!(search.is_focused(window)));
+        local.simulate_keystrokes("ctrl-a backspace");
+        local.simulate_input("font");
+        auxiliary
+            .update(&mut local, |_, window, _| window.activate_window())
+            .unwrap();
+        local.run_until_parked();
+        host.update(&mut local, |_, window, _| window.activate_window())
+            .unwrap();
+        local.run_until_parked();
+        local.update(|window, _| assert!(search.is_focused(window)));
+        local.simulate_input(" size");
+        local.run_until_parked();
+        owner.read_with(&local, |ws, _| {
+            assert_eq!(ws.app.settings_view.query, "font size");
+        });
+    }
+    owner.update(&mut view, |ws, cx| ws.windows.close(cx));
+    main.update(&mut view, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn auxiliary_file_drop_choosers_render_locally_and_add_or_replace_traces(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{ExternalPaths, FileDropEvent, PlatformInput, VisualTestContext, size};
+    init(cx);
+    for (dark, width, zoom) in [(true, 900.0, 1.0), (false, 360.0, 1.5)] {
+        let (owner, main, auxiliary) = workspace_with_auxiliary_panel(cx);
+        owner.update(cx, |_, cx| {
+            crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+            crate::theme::set_zoom(zoom, cx);
+        });
+        let trace = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/examples/picorv32.vtr"
+        ));
+        let mut view = VisualTestContext::from_window(auxiliary, cx);
+        view.simulate_resize(size(px(width), px(700.0)));
+        view.run_until_parked();
+        let drop_trace = |view: &mut VisualTestContext| {
+            view.simulate_mouse_move(
+                point(px(160.0), px(180.0)),
+                None,
+                gpui_kit::Modifiers::default(),
+            );
+            view.update(|window, cx| {
+                window.render_frame(cx);
+                let position = point(px(160.0), px(180.0));
+                window.dispatch_event(
+                    PlatformInput::FileDrop(FileDropEvent::Entered {
+                        position,
+                        paths: ExternalPaths([trace.clone()].into_iter().collect()),
+                    }),
+                    cx,
+                );
+                window.render_frame(cx);
+                window.dispatch_event(
+                    PlatformInput::FileDrop(FileDropEvent::Submit { position }),
+                    cx,
+                );
+                window.dispatch_event(PlatformInput::FileDrop(FileDropEvent::Exited), cx);
+                window.dispatch_event(PlatformInput::FileDrop(FileDropEvent::Ended), cx);
+            });
+            view.run_until_parked();
+            view.update(|window, cx| window.draw(cx).clear(cx));
+            view.simulate_mouse_move(
+                point(px(1.0), px(1.0)),
+                None,
+                gpui_kit::Modifiers::default(),
+            );
+            view.run_until_parked();
+        };
+        drop_trace(&mut view);
+        let menu = owner.read_with(&view, |ws, _| {
+            ws.status_menu.as_ref().unwrap().popup.clone()
+        });
+        let mut main_view = VisualTestContext::from_window(main, &view);
+        main_view.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(main_view.update(|window, _| window.try_find("popup-menu").is_none()));
+        let bounds = view.update(|window, _| window.find("popup-menu").bounds());
+        assert!(bounds.left() >= px(0.0) && bounds.right() <= px(width));
+        view.update(|window, cx| {
+            assert!(menu.read(cx).focus_handle(cx).contains_focused(window, cx));
+        });
+        view.simulate_keystrokes("escape");
+        view.run_until_parked();
+        owner.read_with(&view, |ws, _| assert!(ws.status_menu.is_none()));
+
+        drop_trace(&mut view);
+        let menu = owner.read_with(&view, |ws, _| {
+            ws.status_menu.as_ref().unwrap().popup.clone()
+        });
+        view.update(|window, cx| {
+            assert!(menu.read(cx).focus_handle(cx).contains_focused(window, cx));
+        });
+        view.simulate_keystrokes("down");
+        view.run_until_parked();
+        owner.read_with(&view, |ws, _| {
+            assert!(
+                ws.status_menu.is_some(),
+                "arrow key must keep the chooser open"
+            );
+        });
+        view.update(|window, cx| {
+            assert!(menu.read(cx).focus_handle(cx).contains_focused(window, cx));
+        });
+        view.simulate_keystrokes("enter");
+        view.run_until_parked();
+        owner.read_with(&view, |ws, _| {
+            assert!(ws.status_menu.is_none());
+            assert!(
+                ws.app
+                    .doc
+                    .traces()
+                    .get(TraceId::new(1).unwrap())
+                    .unwrap()
+                    .session()
+                    .is_some()
+            );
+        });
+        drop_trace(&mut view);
+        view.simulate_keystrokes("down down enter");
+        view.run_until_parked();
+        owner.read_with(&view, |ws, _| {
+            assert!(ws.status_menu.is_none());
+            assert!(ws.app.doc.traces().get(TraceId::new(1).unwrap()).is_none());
+            assert_eq!(
+                ws.app.doc.traces().get(TraceId::A).unwrap().uri.as_deref(),
+                Some(crate::native_workspace::file_uri(&trace).unwrap().as_str())
+            );
+        });
+        assert_eq!(
+            main.update(&mut view, |_, _, cx| cx.windows().len())
+                .unwrap(),
+            1
+        );
+        main.update(&mut view, |_, window, _| window.remove_window())
+            .unwrap();
     }
 }

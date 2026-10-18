@@ -13,6 +13,8 @@ mod native_import;
 #[cfg(not(target_family = "wasm"))]
 mod native_import_view;
 #[cfg(not(target_family = "wasm"))]
+mod native_windows;
+#[cfg(not(target_family = "wasm"))]
 pub mod native_workspace;
 mod palette;
 mod settings_json;
@@ -129,10 +131,14 @@ pub fn open_main_window(
                     ws.app.persist_workspace(volna_core::Instant::now(), true);
                     ws.after(Some(window), cx);
                     let scheduler = &ws.app.workspace.scheduler;
-                    !scheduler.enabled()
+                    let allow = !scheduler.enabled()
                         || scheduler.suspended()
                         || scheduler.target().is_none()
-                        || (!scheduler.dirty() && scheduler.outstanding().is_none())
+                        || (!scheduler.dirty() && scheduler.outstanding().is_none());
+                    if allow {
+                        ws.windows.close(cx);
+                    }
+                    allow
                 })
                 .unwrap_or(true)
             });

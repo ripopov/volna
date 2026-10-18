@@ -413,8 +413,8 @@ fn deterministic_random_commands_preserve_invariants_and_never_reuse_ids() {
         rng ^= rng >> 7;
         rng ^= rng << 17;
         let ids = p.layout().panels();
-        let id = ids[(rng as usize / 8) % ids.len()];
-        match rng % 8 {
+        let id = ids[(rng as usize / 12) % ids.len()];
+        match rng % 12 {
             0..=2 if p.len() < 40 => {
                 let axis = match rng % 3 {
                     0 => None,
@@ -440,6 +440,21 @@ fn deterministic_random_commands_preserve_invariants_and_never_reuse_ids() {
             7 => {
                 p.reset().unwrap();
                 assert!(seen.insert(p.focused_id()));
+            }
+            8 if !p.get(id).unwrap().kind.is_start() => {
+                p.move_to_new_window(id).unwrap();
+            }
+            9 => {
+                if let Some(window) = p.layout().windows.keys().next().copied() {
+                    p.return_window(window).unwrap();
+                }
+            }
+            10 => {
+                p.close_others(id).unwrap();
+            }
+            11 if !p.get(id).unwrap().kind.is_start() => {
+                p.move_panel(id, volna_core::panels::Placement::Right)
+                    .unwrap();
             }
             _ => {}
         }
@@ -595,6 +610,7 @@ fn moving_the_start_panel_to_the_sidebar_is_rejected_without_changing_the_layout
     let revision = panels.revision();
     assert!(panels.move_panel(start, Placement::Right).is_err());
     let proposal = DockLayout {
+        windows: Default::default(),
         center: None,
         right: Some(SideDock {
             layout: Layout::single(start),
@@ -708,4 +724,151 @@ fn settings_keep_their_region_across_panel_move_history_reset_and_restore() {
         assert_eq!(app.panels.layout().placement(settings), Some(placement));
         app.panels.validate().unwrap();
     }
+}
+
+#[test]
+fn auxiliary_moves_keep_navigation_state_and_share_undo_history() {
+    use volna_core::panels::Placement;
+    let mut app = linked_app();
+    let a = app.panels.focused_id();
+    panel(&mut app, PanelsCommand::NewTab { group_of: a });
+    let b = app.panels.focused_id();
+    let before = app.panels.layout().clone();
+    panel(&mut app, PanelsCommand::MoveToNewWindow(b));
+    let detached = app.panels.layout().clone();
+    let Placement::Window(window) = detached.placement(b).unwrap() else {
+        panic!("detached panel")
+    };
+    assert_eq!(detached.for_window(None).panels(), vec![a]);
+    assert_eq!(detached.for_window(Some(window)).panels(), vec![b]);
+    assert_eq!(app.panels.focused_id(), b);
+    app.doc.shared.cursor = Some(37);
+    for focused in [a, b] {
+        panel(&mut app, PanelsCommand::Focus(focused));
+        let now = Instant::now();
+        app.handle_at(Command::Action(Action::ZoomIn), now);
+        app.tick(now + std::time::Duration::from_secs(1));
+        assert_eq!(
+            app.panels.waves(a).unwrap().viewport(&app.doc),
+            app.panels.waves(b).unwrap().viewport(&app.doc)
+        );
+        assert_eq!(app.panels.waves(a).unwrap().cursor(&app.doc), Some(37));
+        assert_eq!(app.panels.waves(b).unwrap().cursor(&app.doc), Some(37));
+    }
+    panel(
+        &mut app,
+        PanelsCommand::ToggleLink {
+            panel: b,
+            dim: LinkDim::Cursor,
+        },
+    );
+    app.doc.shared.cursor = Some(51);
+    assert_eq!(app.panels.waves(a).unwrap().cursor(&app.doc), Some(51));
+    assert_eq!(app.panels.waves(b).unwrap().cursor(&app.doc), Some(37));
+    panel(&mut app, PanelsCommand::ReturnWindow(window));
+    assert!(app.panels.layout().windows.is_empty());
+    assert_eq!(app.panels.waves(b).unwrap().cursor(&app.doc), Some(37));
+    assert!(!app.panels.waves(b).unwrap().nav.link.cursor);
+    app.handle(Command::Undo);
+    assert_eq!(app.panels.layout(), &detached);
+    app.handle(Command::Redo);
+    assert!(app.panels.layout().windows.is_empty());
+    app.panels.validate().unwrap();
+    assert_eq!(before.panels(), app.panels.layout().panels());
+}
+
+#[test]
+fn auxiliary_groups_return_all_tabs_and_moves_never_reuse_window_ids() {
+    use volna_core::panels::Placement;
+    let mut panels = wave_panels();
+    let a = panels.focused_id();
+    panels.move_to_new_window(a).unwrap();
+    let Placement::Window(first) = panels.layout().placement(a).unwrap() else {
+        panic!()
+    };
+    assert!(panels.layout().center.is_none());
+    let b = panels.create(a, Some(Axis::Vertical)).unwrap();
+    assert_eq!(panels.layout().placement(b), Some(Placement::Window(first)));
+    panels.move_panel(a, Placement::Center).unwrap();
+    panels.move_to_new_window(a).unwrap();
+    let Placement::Window(second) = panels.layout().placement(a).unwrap() else {
+        panic!()
+    };
+    assert_ne!(first, second);
+    panels.return_window(first).unwrap();
+    panels.return_window(second).unwrap();
+    assert_eq!(panels.layout().panels(), vec![b, a]);
+    assert!(panels.layout().windows.is_empty());
+    panels.validate().unwrap();
+}
+
+#[test]
+fn window_allocation_reserves_ids_introduced_by_layout_edits() {
+    use volna_core::panels::{Placement, WindowId};
+
+    let mut panels = wave_panels();
+    let a = panels.focused_id();
+    let b = panels.create(a, None).unwrap();
+    let first = WindowId(1);
+    panels.move_panel(a, Placement::Window(first)).unwrap();
+    panels.move_to_new_window(b).unwrap();
+    assert_ne!(panels.layout().placement(b), Some(Placement::Window(first)));
+    assert_eq!(panels.layout().windows.len(), 2);
+
+    let reserved = WindowId(100);
+    let mut layout = panels.layout().clone();
+    let tree = layout.windows.remove(&first).unwrap();
+    layout.windows.insert(reserved, tree);
+    panels.set_layout(layout, panels.revision()).unwrap();
+    panels.return_window(reserved).unwrap();
+    panels.move_to_new_window(a).unwrap();
+    let Some(Placement::Window(next)) = panels.layout().placement(a) else {
+        panic!("detached panel")
+    };
+    assert!(next > reserved);
+    panels.validate().unwrap();
+}
+
+#[test]
+fn auxiliary_layout_proposals_cannot_steal_or_duplicate_another_windows_panels() {
+    use volna_core::panels::{DockLayout, Placement};
+    let mut panels = wave_panels();
+    let a = panels.focused_id();
+    let b = panels.create(a, None).unwrap();
+    panels.move_to_new_window(b).unwrap();
+    let layout = panels.layout().clone();
+    let Placement::Window(window) = layout.placement(b).unwrap() else {
+        panic!()
+    };
+    assert!(layout.with_window(None, DockLayout::single(b)).is_err());
+    assert!(
+        layout
+            .with_window(Some(window), DockLayout::single(a))
+            .is_err()
+    );
+    let mut invalid = layout.clone();
+    invalid.center = Some(Layout::single(b));
+    assert!(panels.set_layout(invalid, panels.revision()).is_err());
+    assert_eq!(panels.layout(), &layout);
+    let local = layout.for_window(Some(window));
+    assert_eq!(layout.with_window(Some(window), local).unwrap(), layout);
+}
+
+#[test]
+fn closing_last_auxiliary_content_restores_a_main_start_and_undo_reopens_the_window() {
+    use volna_core::panels::Placement;
+    let mut app = linked_app();
+    let a = app.panels.focused_id();
+    panel(&mut app, PanelsCommand::MoveToNewWindow(a));
+    let detached = app.panels.layout().clone();
+    panel(&mut app, PanelsCommand::Close(a));
+    assert!(app.panels.layout().windows.is_empty());
+    let start = app.panels.first_start().unwrap();
+    assert_eq!(
+        app.panels.layout().placement(start),
+        Some(Placement::Center)
+    );
+    app.handle(Command::Undo);
+    assert_eq!(app.panels.layout(), &detached);
+    app.panels.validate().unwrap();
 }

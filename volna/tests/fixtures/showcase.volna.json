@@ -1,6 +1,6 @@
 {
   "format": "volna-workspace",
-  "version": 7,
+  "version": 8,
   "traces": [
     {
       "letter": "A",
@@ -22,7 +22,8 @@
       ],
       "active": 17
     },
-    "right": null
+    "right": null,
+    "windows": {}
   },
   "timeline_dividers": [],
   "focused": 17,

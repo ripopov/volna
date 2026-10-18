@@ -20,7 +20,9 @@ use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Axis as GAxis, Context, Div, Empty, Entity, EventEmitter,
     FocusHandle, Focusable, IntoElement, Render, Stateful, WeakEntity, Window, div, px,
 };
-use volna_core::panels::{Axis, DockLayout, Layout, PanelId, PanelsCommand, Placement, SideDock};
+use volna_core::panels::{
+    Axis, DockLayout, Layout, PanelId, PanelsCommand, Placement, SideDock, WindowId,
+};
 use volna_core::{App as CoreApp, Command};
 
 use crate::app::Workspace;
@@ -134,6 +136,9 @@ pub(crate) fn tab_title(
 }
 
 pub(crate) struct DockHost {
+    window: Option<WindowId>,
+    owner: WeakEntity<Workspace>,
+    render_owner: Option<gpui_kit::EntityId>,
     pub area: Entity<base::DockArea>,
     views: BTreeMap<PanelId, PanelView>,
     single: Rc<Cell<bool>>,
@@ -146,7 +151,12 @@ pub(crate) struct DockHost {
 }
 
 impl DockHost {
-    pub fn new(window: &mut Window, cx: &mut Context<Workspace>) -> Self {
+    pub fn new(
+        owner: WeakEntity<Workspace>,
+        window_id: Option<WindowId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let single = Rc::new(Cell::new(true));
         let mut skin_handle = None;
         let area = cx.new(|cx| {
@@ -164,11 +174,10 @@ impl DockHost {
         skin_handle
             .unwrap()
             .set_panel_style(gpui_kit::component::dock::PanelStyle::TabBar, cx);
-        cx.subscribe(&area, |ws, area, event, cx| {
+        cx.subscribe(&area, |host, area, event, cx| {
             if !matches!(event, base::DockEvent::LayoutChanged) {
                 return;
             }
-            let Some(host) = &mut ws.dock else { return };
             let snapshot = area.read(cx).dump(cx);
             let measured_width = snapshot
                 .right_dock
@@ -195,25 +204,54 @@ impl DockHost {
                     host.right_width = measured_width;
                     host.installed = Some(layout.clone());
                     host.echo = Some(layout.clone());
-                    ws.dispatch(
-                        Command::Panels(PanelsCommand::SetLayout {
-                            layout,
-                            from_revision: revision,
-                        }),
-                        None,
-                        cx,
-                    );
+                    let owner = host.owner.clone();
+                    let window_id = host.window;
+                    let weak = cx.weak_entity();
+                    cx.defer(move |cx| {
+                        let result = owner.update(cx, |ws, cx| {
+                            match ws.app.panels.layout().with_window(window_id, layout) {
+                                Ok(layout) => {
+                                    ws.dispatch(
+                                        Command::Panels(PanelsCommand::SetLayout {
+                                            layout,
+                                            from_revision: revision,
+                                        }),
+                                        None,
+                                        cx,
+                                    );
+                                    true
+                                }
+                                Err(error) => {
+                                    log::warn!("invalid window layout: {error:#}");
+                                    false
+                                }
+                            }
+                        });
+                        if matches!(result, Ok(false)) {
+                            drop(weak.update(cx, |host, cx| {
+                                host.installed = None;
+                                if let Some(owner) = host.render_owner {
+                                    App::notify(cx, owner);
+                                }
+                            }));
+                        }
+                    });
                 }
                 Err(e) => {
                     log::warn!("invalid dock layout: {e:#}");
                     // A rejected widget proposal must not remain on screen.
                     host.installed = None;
-                    cx.notify();
+                    if let Some(owner) = host.render_owner {
+                        App::notify(cx, owner);
+                    }
                 }
             }
         })
         .detach();
         Self {
+            owner,
+            window: window_id,
+            render_owner: None,
             area,
             views: BTreeMap::new(),
             single,
@@ -229,10 +267,12 @@ impl DockHost {
     pub fn sync(
         &mut self,
         app: &CoreApp,
-        ws: WeakEntity<Workspace>,
+        render_owner: gpui_kit::EntityId,
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.render_owner = Some(render_owner);
+        let ws = self.owner.clone();
         if self.generation != app.doc.generation() {
             self.views
                 .retain(|_, view| matches!(view, PanelView::Settings(_)));
@@ -244,8 +284,10 @@ impl DockHost {
         // Content panels keep their placement menu even when they are alone.
         self.single
             .set(app.panels.len() == 1 && app.panels.focused().kind.is_start());
-        self.views.retain(|id, _| app.panels.get(*id).is_some());
-        for panel in app.panels.iter() {
+        let local = app.panels.layout().for_window(self.window);
+        let ids = local.panels();
+        self.views.retain(|id, _| ids.contains(id));
+        for panel in app.panels.iter().filter(|panel| ids.contains(&panel.id)) {
             self.views.entry(panel.id).or_insert_with(|| {
                 if panel.kind.is_settings() {
                     PanelView::Settings(
@@ -286,7 +328,7 @@ impl DockHost {
                 }
             });
         }
-        let layout = app.panels.layout();
+        let layout = &local;
         let zoom = crate::theme::theme(cx).zoom;
         let bounds = self.area.read(cx).bounds();
         let available = f32::from(bounds.size.width);
@@ -307,9 +349,7 @@ impl DockHost {
             if (app.panels.len() > 1 || layout.right.is_some())
                 && (bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0))
             {
-                window.on_next_frame(move |_, cx| {
-                    drop(ws.update(cx, |_, cx| cx.notify()));
-                });
+                window.on_next_frame(move |_, cx| cx.notify(render_owner));
                 return;
             }
             let same_trees = self.zoom == zoom
@@ -402,17 +442,17 @@ impl DockHost {
     }
 
     pub fn focus(&self, panel: PanelId, cx: &App) -> Option<FocusHandle> {
-        self.installed.as_ref()?;
+        self.installed.as_ref()?.active_for(panel)?;
         self.views.get(&panel).map(|view| view.focus(cx))
     }
 
     pub fn settings_view(
         &mut self,
         id: PanelId,
-        ws: WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<SettingsPanelView> {
+        let ws = self.owner.clone();
         let view = self.views.entry(id).or_insert_with(|| {
             PanelView::Settings(cx.new(|cx| SettingsPanelView::new(ws, id, window, cx)))
         });
@@ -422,10 +462,13 @@ impl DockHost {
         }
     }
 
-    pub fn invalidate_panels(&self, cx: &mut App) {
-        cx.notify(self.area.entity_id());
-        for view in self.views.values() {
-            cx.notify(view.entity_id());
+    pub fn invalidate_panels(host: &Entity<Self>, cx: &mut App) {
+        let host = host.read(cx);
+        let ids: Vec<_> = std::iter::once(host.area.entity_id())
+            .chain(host.views.values().map(PanelView::entity_id))
+            .collect();
+        for id in ids {
+            cx.notify(id);
         }
     }
 }
@@ -439,6 +482,7 @@ fn from_area(state: &base::DockAreaState, zoom: f32) -> Result<DockLayout> {
         !matches!(state.info, base::PanelInfo::Panel(_)) && state.children.is_empty()
     };
     Ok(DockLayout {
+        windows: BTreeMap::new(),
         center: if empty(&state.center) {
             None
         } else {
@@ -471,6 +515,37 @@ pub(crate) fn placement_menu(
     let placement = ws
         .upgrade()
         .and_then(|ws| ws.read(cx).app.panels.layout().placement(id));
+    #[cfg(not(target_family = "wasm"))]
+    let menu = {
+        let command = if matches!(placement, Some(Placement::Window(_))) {
+            PanelsCommand::Move {
+                panel: id,
+                placement: Placement::Center,
+            }
+        } else {
+            PanelsCommand::MoveToNewWindow(id)
+        };
+        let label = if matches!(placement, Some(Placement::Window(_))) {
+            "Return to main window"
+        } else {
+            "Move to new window"
+        };
+        let owner = ws.clone();
+        let menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+            drop(owner.update(cx, |ws, cx| {
+                ws.dispatch_if_current(
+                    generation,
+                    Command::Panels(command.clone()),
+                    Some(window),
+                    cx,
+                );
+            }));
+        }));
+        if matches!(placement, Some(Placement::Window(_))) {
+            return menu;
+        }
+        menu
+    };
     let (label, destination) = if placement == Some(Placement::Right) {
         ("Move to center", Placement::Center)
     } else {

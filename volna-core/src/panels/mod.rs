@@ -3,7 +3,7 @@
 pub(crate) mod content;
 mod dock;
 mod layout;
-pub use dock::{DockLayout, Placement, SideDock};
+pub use dock::{DockLayout, Placement, SideDock, WindowId};
 mod timeline;
 pub(crate) mod workspace;
 pub use layout::{Axis, Layout, MAX_LAYOUT_DEPTH, MAX_PANELS};
@@ -25,6 +25,8 @@ use crate::wave::model::{PointerEvent, WaveModel};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PanelsCommand {
+    MoveToNewWindow(PanelId),
+    ReturnWindow(WindowId),
     Move {
         panel: PanelId,
         placement: Placement,
@@ -368,6 +370,7 @@ pub struct Panels {
     panels: BTreeMap<PanelId, Panel>,
     focused: PanelId,
     next_id: u64,
+    next_window: u64,
     revision: u64,
 }
 
@@ -378,6 +381,17 @@ impl Default for Panels {
 }
 
 impl Panels {
+    fn next_window_id(layout: &DockLayout, previous: u64) -> Result<u64> {
+        Ok(layout
+            .windows
+            .keys()
+            .next_back()
+            .map_or(0, |id| id.0)
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("window IDs exhausted"))?
+            .max(previous))
+    }
+
     #[must_use]
     pub fn new() -> Self {
         let id = PanelId(1);
@@ -388,6 +402,7 @@ impl Panels {
             panels: BTreeMap::from([(id, Panel::new(id, PanelKind::Start))]),
             focused: id,
             next_id: 2,
+            next_window: 1,
             revision: 0,
         }
     }
@@ -408,7 +423,9 @@ impl Panels {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("panel IDs exhausted"))?;
+        let next_window = Self::next_window_id(&layout, previous.next_window)?;
         let mut result = Self {
+            next_window,
             layout,
             timeline: Vec::new(),
             timeline_revision: None,
@@ -696,7 +713,9 @@ impl Panels {
         if layout == self.layout {
             return Ok(false);
         }
+        let next_window = Self::next_window_id(&layout, self.next_window)?;
         self.advance()?;
+        self.next_window = next_window;
         let visible = layout.visible();
         if !visible.contains(&self.focused) {
             let active = layout.active_for(self.focused).unwrap();
@@ -720,6 +739,7 @@ impl Panels {
         layout = layout.normalized().unwrap_or(DockLayout {
             center: None,
             right: None,
+            windows: BTreeMap::new(),
         });
         layout.insert(id, placement);
         self.set_layout(layout, self.revision)?;
@@ -734,6 +754,33 @@ impl Panels {
         let mut layout = self.layout.clone();
         layout.right.as_mut().unwrap().open = !dock.open;
         self.set_layout(layout, self.revision)
+    }
+
+    pub fn move_to_new_window(&mut self, id: PanelId) -> Result<bool> {
+        ensure!(
+            self.get(id).is_some_and(|panel| !panel.kind.is_start()),
+            "the start panel stays in the main window"
+        );
+        self.move_panel(id, Placement::Window(WindowId(self.next_window)))
+    }
+
+    pub fn return_window(&mut self, window: WindowId) -> Result<bool> {
+        let Some(tree) = self.layout.windows.get(&window) else {
+            return Ok(false);
+        };
+        let ids = tree.panels();
+        let active = tree
+            .active_for(self.focused)
+            .unwrap_or_else(|| tree.visible()[0]);
+        let mut layout = self.layout.clone();
+        layout.windows.remove(&window);
+        for id in ids {
+            layout.insert(id, Placement::Center);
+        }
+        layout.activate(active);
+        self.set_layout(layout, self.revision)?;
+        self.focus(active)?;
+        Ok(true)
     }
 
     /// Reveal the reusable inspector in its current region, or create one in
@@ -769,6 +816,7 @@ impl Panels {
         let tree = match placement {
             Placement::Center => self.layout.center.as_ref(),
             Placement::Right => self.layout.right.as_ref().map(|dock| &dock.layout),
+            Placement::Window(window) => self.layout.windows.get(&window),
         }?;
         tree.active_for(preferred)
             .or_else(|| tree.visible().first().copied())
@@ -904,11 +952,12 @@ impl Panels {
         ensure!(self.panels.contains_key(&id), "unknown panel");
         let new = self.unused_id()?;
         let mut layout = self.layout.clone();
-        if kind.is_start() && layout.placement(id) == Some(Placement::Right) {
+        if kind.is_start() && layout.placement(id) != Some(Placement::Center) {
             layout.remove(id);
             layout = layout.normalized().unwrap_or(DockLayout {
                 center: None,
                 right: None,
+                windows: BTreeMap::new(),
             });
             layout.insert(new, Placement::Center);
             if self.focused != id {
@@ -1002,12 +1051,13 @@ impl Panels {
             .partition(|(other, _)| *other == id);
         self.panels = kept.into_iter().collect();
         let mut tabs = vec![id];
-        let in_right = self.layout.placement(id) == Some(Placement::Right);
+        let placement = self.layout.placement(id).unwrap();
+        let in_right = placement == Placement::Right;
         if let Some(start) = start {
             self.next_id = start.0 + 1;
             self.panels
                 .insert(start, Panel::new(start, PanelKind::Start));
-            if !in_right {
+            if placement == Placement::Center {
                 tabs.push(start);
             }
         }
@@ -1020,6 +1070,13 @@ impl Panels {
                     width: self.layout.right.as_ref().unwrap().width,
                     open: true,
                 }),
+                windows: BTreeMap::new(),
+            }
+        } else if let Placement::Window(window) = placement {
+            DockLayout {
+                center: start.map(Layout::single),
+                right: None,
+                windows: BTreeMap::from([(window, kept)]),
             }
         } else {
             kept.into()

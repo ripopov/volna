@@ -166,7 +166,7 @@ impl Workspace {
                     .ok();
             }
         };
-        let focus = self.focus_handle.clone();
+        let focus = self.window_focus(window);
         let min_w = theme(cx).px(200.0);
         let menu = PopupMenu::build(window, cx, move |menu, _, _| {
             let close = if chip.closable {
@@ -202,13 +202,7 @@ impl Workspace {
                 .min_w(min_w)
                 .action_context(focus)
         });
-        cx.subscribe(&menu, move |this, _, _: &gpui_kit::DismissEvent, cx| {
-            this.status_menu = None;
-            cx.notify();
-        })
-        .detach();
-        self.status_menu = Some((position, menu));
-        cx.notify();
+        self.show_status_menu(position, menu, window, cx);
     }
 
     pub(crate) fn start_trace_rename(
@@ -217,6 +211,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(not(target_family = "wasm"))]
+        let target = self.windows.main();
+        #[cfg(target_family = "wasm")]
+        let target = window.window_handle();
+        self.run_in_window(target, window, cx, move |ws, window, cx| {
+            ws.edit_trace_name(trace, window, cx);
+            #[cfg(not(target_family = "wasm"))]
+            if !window.is_window_active() {
+                window.activate_window();
+            }
+        });
+    }
+
+    fn edit_trace_name(&mut self, trace: TraceId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(chip) = self.app.trace_chip(trace) else {
             return;
         };
@@ -379,7 +387,7 @@ impl Workspace {
                     .ok();
             }
         };
-        let focus = self.focus_handle.clone();
+        let focus = self.window_focus(window);
         let min_w = theme(cx).px(200.0);
         let menu = PopupMenu::build(window, cx, move |menu, _, _| {
             menu.item(PopupMenuItem::new(add_label.clone()).on_click(choose(true, paths.clone())))
@@ -390,12 +398,6 @@ impl Workspace {
                 .min_w(min_w)
                 .action_context(focus)
         });
-        cx.subscribe(&menu, move |this, _, _: &gpui_kit::DismissEvent, cx| {
-            this.status_menu = None;
-            cx.notify();
-        })
-        .detach();
-        self.status_menu = Some((position, menu));
-        cx.notify();
+        self.show_status_menu(position, menu, window, cx);
     }
 }
