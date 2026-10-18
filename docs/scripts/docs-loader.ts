@@ -1,6 +1,6 @@
 // Render canonical crate guides as documentation pages with repository links and source includes.
 
-import { readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import { posix, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Loader } from 'astro/loaders';
@@ -33,6 +33,21 @@ export function volnaDocsLoader(): Loader {
         const guide = guides.get(path)!;
         let body = await readFile(guide.fileURL, 'utf8');
         body = body.replace(/^# [^\n]+\n+/, '');
+        const imagePaths = new Set<string>();
+        for (const [match, label, href] of body.matchAll(/(!\[[^\]]*\])\(([^)]+)\)/g)) {
+          if (/^(?:[a-z]+:|#|\/)/i.test(href)) continue;
+          const target = new URL(href, guide.fileURL);
+          const fragment = target.hash;
+          target.hash = '';
+          const path = fileURLToPath(target);
+          const repoPath = relative(fileURLToPath(new URL('../../', import.meta.url)), path).split(sep).join('/');
+          const asset = `assets/guides/${repoPath}`;
+          const output = new URL(asset, context.config.publicDir);
+          await mkdir(new URL('.', output), { recursive: true });
+          await copyFile(target, output);
+          imagePaths.add(path);
+          body = body.replace(match, () => `${label}(${posix.join(context.config.base, asset)}${fragment})`);
+        }
         body = body.replace(/\]\(([^)]+)\)/g, (match, href: string) => {
           if (/^(?:[a-z]+:|#|\/)/i.test(href)) return match;
           const target = new URL(href, guide.fileURL);
@@ -50,9 +65,8 @@ export function volnaDocsLoader(): Loader {
           const sourcePath = repository === 'vtr' ? repoPath.slice(4) : repoPath;
           return `](https://github.com/ripopov/${repository}/blob/main/${sourcePath}${fragment})`;
         });
-        body = body.replace('src="docs/diagrams/transaction-file-structure.drawio.svg"', 'src="../assets/transaction-file-structure.drawio.svg"');
         const includes = [...body.matchAll(/^<!-- include-code: (\S+) (\w+) -->[ \t]*$/gm)];
-        const includedPaths = new Set(includes.map((match) => fileURLToPath(new URL(match[1], guide.fileURL))));
+        const includedPaths = new Set([...imagePaths, ...includes.map((match) => fileURLToPath(new URL(match[1], guide.fileURL)))]);
         dependencies.set(path, includedPaths);
         context.watcher?.add([...includedPaths]);
         for (const match of includes) {

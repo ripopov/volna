@@ -76,8 +76,9 @@ this site currently makes no comparative benchmark claims.
 
 ## SVG figures
 
-Store original SVGs under `public/assets/` and reference them with a relative
-Markdown image or an HTML `figure`. Give each image useful alternative text.
+Keep SVGs with their source documentation and reference them with relative
+Markdown images. The documentation loader publishes images from crate guides.
+Give each image useful alternative text.
 Include `title` and `desc` inside the SVG. Label schematic layouts so their
 geometry cannot be mistaken for measured data.
 
