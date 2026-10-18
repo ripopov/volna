@@ -26,6 +26,8 @@ configuration. Focus tests on meaningful behavior, edge cases, and nontrivial in
 Stage completed changes. Commit only when explicitly requested by the user.
 Include only task-related changes; preserve unrelated work and its staging state.
 
+When committing changes to VTR, also update and commit Volna's `vtr` submodule pin.
+
 # Temporary plans
 
 `./atemp` is a temporary directory for plans. Never commit this directory or its contents.
