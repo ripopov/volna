@@ -7,8 +7,8 @@ Volna is a hardware debug environment under development.
 | Package | Responsibility |
 | --- | --- |
 | [`vtr`](vtr/vtr/README.md) | Versatile Trace Record: runtime trace format, reader, writer, and derived indexes |
-| [`vtr-capi`](vtr/vtr-capi/README.md) | C ABI, public C/C++ headers, and simulator integration helpers for VTR |
-| [`vtr-guard`](vtr/vtr-guard/README.md) | Linux crash and stop guard for VTR writers, used by the C API |
+| [`vtr-cpp`](vtr/vtr-cpp/README.md) | Native C++20 VTR reader/writer, C headers, and simulator integration helpers |
+| [`vtr-guard`](vtr/vtr-guard/README.md) | Linux crash and stop guard for Rust VTR writers |
 | [`volna-trace`](volna-trace/README.md) | Immutable VTR sessions, complete objects, memory admission, and remote client |
 | [`vtr-convert`](vtr/vtr-convert/README.md) | Shared FST, Kanata, and VCD importers |
 | [`vtr-convert-wasm`](vtr/vtr-convert-wasm/README.md) | Browser worker host for in-memory trace conversion |
@@ -26,8 +26,9 @@ VTR stores runtime signal values, transactions, logs, clocks, hierarchy, and ide
 ## Development
 
 Use the pinned nightly toolchain in `rust-toolchain.toml` and a C compiler
-(for vendored Zstandard and C smoke tests). The C++ smoke tests also need a
-C++17 compiler.
+for vendored Zstandard. The native VTR library additionally requires a C++20
+compiler, CMake, and LZ4, Zstandard, and zlib development packages; see its
+[build instructions](vtr/vtr-cpp/README.md).
 VTR is developed in [ripopov/vtr](https://github.com/ripopov/vtr) and pinned by
 this repository's `vtr` submodule. Initialize it before building:
 
@@ -35,7 +36,7 @@ this repository's `vtr` submodule. Initialize it before building:
 git submodule update --init vtr
 ```
 
-The VTR workspace contains `vtr/vtr`, `vtr/vtr-capi`, the converter crates,
+The VTR workspace contains `vtr/vtr`, `vtr/vtr-cpp`, the converter crates,
 and `vtr/ext/verilator`. Its Rust libraries need no simulator or GUI SDK.
 Initialize its nested Verilator submodules only for simulator development:
 

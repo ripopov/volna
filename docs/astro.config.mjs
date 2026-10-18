@@ -65,7 +65,7 @@ export default defineConfig({
         { label: 'Structured logging', slug: 'vtr/logging' },
       ] },
       { label: 'C and simulator integration', items: [
-        { label: 'C API', slug: 'vtr-capi' },
+        { label: 'C++ and C', slug: 'vtr-cpp' },
         { label: 'Crash guard', slug: 'vtr-guard' },
       ] },
       { label: 'Trace access', items: [

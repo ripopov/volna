@@ -5,19 +5,39 @@ import { posix, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Loader } from 'astro/loaders';
 import { docsLoader } from '@astrojs/starlight/loaders';
+import { fromMarkdown } from 'mdast-util-from-markdown';
 
 const sources = [
   ['vtr/vtr/README.md', 'vtr', 'VTR trace library', 'What a VTR recording contains, and how to write, read, and recover one.'],
   ['vtr/vtr/docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR 2.0 container, encodings, recovery rules, and activity sidecar.'],
   ['vtr/vtr/docs/RATIONALE.md', 'vtr/rationale', 'VTR design rationale', 'Trace storage decisions, library boundaries, and derived indexes.'],
   ['vtr/vtr/docs/LOGGING.md', 'vtr/logging', 'Structured logging', 'Declare typed log sites, write records, and query messages.'],
-  ['vtr/vtr-capi/README.md', 'vtr-capi', 'VTR C API', 'Build and link libvtr, use opaque handles, and write a trace from C.'],
+  ['vtr/vtr-cpp/README.md', 'vtr-cpp', 'VTR C++ and C', 'Build and link the native C++20 library and its C interface.'],
   ['vtr/vtr-guard/README.md', 'vtr-guard', 'VTR crash guard', 'Finish watched VTR writers after Linux faults, stop requests, and exit.'],
   ['volna-trace/README.md', 'volna-trace', 'Volna trace loading', 'Read immutable VTR recordings locally or through a cooperative remote client.'],
   ['volna-server/README.md', 'volna-server', 'Volna server', 'Host one immutable recording over framed pipes, with complete objects and activity sidecars.'],
   ['volna-core/README.md', 'volna-core', 'Volna viewer core', 'Toolkit-independent viewer state, commands, panel models, and display lists.'],
   ['volna/README.md', 'volna', 'Volna desktop viewer', 'Build and run the GPUI viewer for VTR recordings.'],
 ] as const;
+type MarkdownNode = {
+  type: string;
+  children?: MarkdownNode[];
+  position?: { start: { offset?: number }; end: { offset?: number } };
+};
+function codeRanges(markdown: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  function visit(node: MarkdownNode) {
+    if (node.type === 'code' || node.type === 'inlineCode') {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (start !== undefined && end !== undefined) ranges.push([start, end]);
+    } else {
+      node.children?.forEach(visit);
+    }
+  }
+  visit(fromMarkdown(markdown));
+  return ranges;
+}
 export function volnaDocsLoader(): Loader {
   const authored = docsLoader();
   return {
@@ -34,7 +54,11 @@ export function volnaDocsLoader(): Loader {
         let body = await readFile(guide.fileURL, 'utf8');
         body = body.replace(/^# [^\n]+\n+/, '');
         const imagePaths = new Set<string>();
-        for (const [match, label, href] of body.matchAll(/(!\[[^\]]*\])\(([^)]+)\)/g)) {
+        let code = codeRanges(body);
+        const imageEdits: { start: number; end: number; replacement: string }[] = [];
+        for (const image of body.matchAll(/(!\[[^\]]*\])\(([^)]+)\)/g)) {
+          if (code.some(([start, end]) => start <= image.index! && image.index! < end)) continue;
+          const [match, label, href] = image;
           if (/^(?:[a-z]+:|#|\/)/i.test(href)) continue;
           const target = new URL(href, guide.fileURL);
           const fragment = target.hash;
@@ -46,9 +70,15 @@ export function volnaDocsLoader(): Loader {
           await mkdir(new URL('.', output), { recursive: true });
           await copyFile(target, output);
           imagePaths.add(path);
-          body = body.replace(match, () => `${label}(${posix.join(context.config.base, asset)}${fragment})`);
+          imageEdits.push({ start: image.index!, end: image.index! + match.length,
+            replacement: `${label}(${posix.join(context.config.base, asset)}${fragment})` });
         }
-        body = body.replace(/\]\(([^)]+)\)/g, (match, href: string) => {
+        for (const edit of imageEdits.reverse()) {
+          body = body.slice(0, edit.start) + edit.replacement + body.slice(edit.end);
+        }
+        code = codeRanges(body);
+        body = body.replace(/\]\(([^)]+)\)/g, (match, href: string, offset: number) => {
+          if (code.some(([start, end]) => start <= offset && offset < end)) return match;
           if (/^(?:[a-z]+:|#|\/)/i.test(href)) return match;
           const target = new URL(href, guide.fileURL);
           const fragment = target.hash;

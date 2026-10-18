@@ -260,7 +260,7 @@ try {
   report.behavior.push('mobile menu, server navigation, and canonical crate cross-links');
   await page.close();
   await behaviorContext.close();
-  const routes = ['', 'docs/', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'vtr-capi/', 'vtr-guard/', 'volna-trace/', 'volna-server/', 'volna-core/', 'volna/', 'authoring/', 'design/', '404.html'];
+  const routes = ['', 'docs/', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'vtr-cpp/', 'vtr-guard/', 'volna-trace/', 'volna-server/', 'volna-core/', 'volna/', 'authoring/', 'design/', '404.html'];
   for (const theme of ['dark', 'light']) {
     for (const width of [1440, 360]) {
       const context = await browser.newContext({ viewport: { width, height: 1000 }, colorScheme: theme, reducedMotion: 'reduce' });
@@ -295,13 +295,20 @@ try {
         assert.equal(state.movement, false);
         const content = await page.locator('.sl-markdown-content').textContent();
         assert.ok(content.trim().length > 20, `${route}: rendered content must not be empty`);
+        if (route === 'vtr-cpp/') {
+          const code = await page.locator('pre').allTextContents();
+          assert.ok(code.some(text => text.includes('[](const vtr::Transaction& transaction)')),
+            'C++ lambdas must survive Markdown link rewriting');
+          assert.ok(code.some(text => text.includes('[](vtr::Time time')),
+            'C++ signal callbacks must remain valid source');
+        }
         assert.deepEqual(errors, [], `${route}: browser errors`);
         if (width === 1440) {
           const audit = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
           report.accessibility.push({ route, theme, violations: audit.violations });
           assert.deepEqual(audit.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target).join(', ')}`), [], `${route} ${theme}: accessibility`);
         }
-        if (['', 'vtr/', 'authoring/', 'vtr/specification/', 'volna-trace/', 'volna-server/'].includes(route)) {
+        if (['', 'docs/', 'vtr-cpp/', 'vtr/', 'authoring/', 'vtr/specification/', 'volna-trace/', 'volna-server/'].includes(route)) {
           await page.screenshot({ path: `${results}/${route.replaceAll('/', '-') || 'landing'}-${theme}-${width}.png`, fullPage: true });
         }
         report.pages.push({ route, theme, width, ...state });

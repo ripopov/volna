@@ -21,7 +21,7 @@ hero:
 
 Volna is a hardware debug environment under development. The workspace includes
 **VTR (Versatile Trace Record)** for writing and querying
-hardware simulation traces, **vtr-capi** for C and simulator integrations,
+hardware simulation traces, **vtr-cpp** for native C++ and C producers and readers,
 **vtr-guard** for Linux crash handling, **volna-trace** for immutable VTR
 access, and **volna-server** for serving a recording to a remote client.
 **volna-core** owns viewer state and rendering models; **volna** is the GPUI
@@ -36,7 +36,7 @@ belong to the separate VDB and application layers.
 <a class="v-guide" href="../vtr/specification/"><span class="v-guide__label">02 / REFERENCE</span><strong>File format</strong><span>Container layout, binary encodings, recovery, and conformance.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="../vtr/rationale/"><span class="v-guide__label">03 / DECISIONS</span><strong>Design rationale</strong><span>Why sections, local compression, stable identity, and derived indexes.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="../vtr/logging/"><span class="v-guide__label">04 / GUIDE</span><strong>Structured logging</strong><span>Typed call sites and timestamped records alongside transactions.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="../vtr-capi/"><span class="v-guide__label">05 / C API</span><strong>Build with C</strong><span>Link libvtr, manage handles, and write a trace from C.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
+<a class="v-guide" href="../vtr-cpp/"><span class="v-guide__label">05 / C++ AND C</span><strong>Build with C++ or C</strong><span>Link the native library and record signals and transactions.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="../vtr-guard/"><span class="v-guide__label">06 / RECOVERY</span><strong>Crash guard</strong><span>Finish watched writers after Linux faults, stop requests, and exit.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="../volna-trace/"><span class="v-guide__label">07 / LOADING</span><strong>Local and remote traces</strong><span>Open VTR recordings, load complete objects, and manage memory.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="../volna-server/"><span class="v-guide__label">08 / HOSTING</span><strong>Headless server</strong><span>Process hosting, framed protocol, and activity sidecar transfers.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
@@ -52,7 +52,7 @@ supports Rust 1.97.1 or newer.
 
 The [VTR guide](../vtr/) includes a complete waveform
 round trip and instructions for browsing the Rust API documentation.
-The [C API guide](../vtr-capi/) covers building, linking, ownership, and errors;
+The [C++ and C guide](../vtr-cpp/) covers building, linking, ownership, and errors;
 the [crash guard guide](../vtr-guard/) covers Linux process recovery.
 The [trace loading guide](../volna-trace/) explains the shared session API.
 The [server guide](../volna-server/) covers building and hosting the executable.
