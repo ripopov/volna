@@ -77,6 +77,14 @@ impl Panel for StartPanelView {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::dock::tab_title(&self.ws, self.id, Some(self.generation), cx)
     }
+    fn dropdown_menu(
+        &mut self,
+        menu: gpui_kit::component::menu::PopupMenu,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        crate::dock::panel_menu(menu, &self.ws, self.id, self.generation, cx)
+    }
     fn inner_padding(&self, _: &App) -> bool {
         false
     }

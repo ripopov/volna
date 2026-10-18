@@ -189,6 +189,11 @@ remains available to reopen it. **Close tab** (or the tab's × button) removes a
 individual panel. Central panels retain **Close panel**. Requesting details again
 reveals an existing unpinned inspector in its current location.
 
+Right-click a tab name to open its panel actions, including placement, splitting,
+new waveform tabs, closing, and renaming. Actions target that tab even when another
+tab is active. Timed panels also offer viewport and cursor links; transaction
+panels offer record pinning. The same actions appear in the panel's overflow menu.
+
 The GPUI Kit `DockArea` renders both regions, including their tabs, splits, and
 resize handles. The core owns panel identities and validates the complete
 layout before accepting widget changes. Moving a panel preserves its view and

@@ -188,8 +188,7 @@ impl Panel for TransactionPanelView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> PopupMenu {
-        let menu = crate::dock::placement_menu(menu, &self.ws, self.id, self.generation, cx);
-        crate::dock::close_menu(menu, &self.ws, self.id, self.generation, cx)
+        crate::dock::panel_menu(menu, &self.ws, self.id, self.generation, cx)
     }
 
     fn toolbar_buttons(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<Vec<Button>> {

@@ -13,12 +13,13 @@ use gpui_kit::component::{
     Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     input::{Input, InputState},
-    menu::{PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext, Axis as GAxis, Context, Div, Empty, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, Render, Stateful, WeakEntity, Window, div, px,
+    FocusHandle, Focusable, IntoElement, Render, Stateful, TestSupportExt, WeakEntity, Window, div,
+    px,
 };
 use volna_core::panels::{
     Axis, DockLayout, Layout, PanelId, PanelsCommand, Placement, SideDock, WindowId,
@@ -93,9 +94,7 @@ pub(crate) fn tab_title(
             el.child(crate::traces::letter_badge(trace, cx))
         })
         .child(gpui_kit::SharedString::from(panel.title()));
-    if !panels.can_close(id) {
-        return title.into_any_element();
-    }
+    let can_close = panels.can_close(id);
     let close = {
         let ws = ws.clone();
         move |window: &mut Window, cx: &mut App| {
@@ -111,27 +110,46 @@ pub(crate) fn tab_title(
         }
     };
     let middle = close.clone();
+    let menu_owner = ws.clone();
     div()
+        .id(("panel-tab", id.0))
+        .test_support()
         .flex()
         .items_center()
         .gap_1()
         .debug_selector(|| format!("tab-{}", id.0))
-        .on_mouse_down(MouseButton::Middle, move |_, window, cx| {
-            cx.stop_propagation();
-            middle(window, cx);
+        .when(can_close, |el| {
+            el.on_mouse_down(MouseButton::Middle, move |_, window, cx| {
+                cx.stop_propagation();
+                middle(window, cx);
+            })
         })
         .child(title)
-        .child(
-            action_button(("close-tab", id.0 as usize), IconName::X, cx)
-                .ghost()
-                .tab_stop(false)
-                .tooltip("Close tab")
-                .debug_selector(|| format!("tab-close-{}", id.0))
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    close(window, cx);
-                }),
-        )
+        .when(can_close, |el| {
+            el.child(
+                action_button(("close-tab", id.0 as usize), IconName::X, cx)
+                    .ghost()
+                    .tab_stop(false)
+                    .tooltip("Close tab")
+                    .debug_selector(|| format!("tab-close-{}", id.0))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        close(window, cx);
+                    }),
+            )
+        })
+        .context_menu(move |menu, _, cx| {
+            let Some(owner) = menu_owner.upgrade() else {
+                return menu;
+            };
+            let generation = generation.unwrap_or(owner.read(cx).app.doc.generation());
+            panel_menu(menu, &menu_owner, id, generation, cx)
+                .separator()
+                .menu(
+                    "Toggle panel zoom",
+                    Box::new(gpui_kit::component::dock::ToggleZoom),
+                )
+        })
         .into_any_element()
 }
 
@@ -505,7 +523,7 @@ fn from_area(state: &base::DockAreaState, zoom: f32) -> Result<DockLayout> {
 
 /// Panel placement is a core command so menu moves share history and persistence
 /// with drag-and-drop proposals from `DockArea`.
-pub(crate) fn placement_menu(
+fn placement_menu(
     menu: PopupMenu,
     ws: &WeakEntity<Workspace>,
     id: PanelId,
@@ -565,6 +583,124 @@ pub(crate) fn placement_menu(
             );
         }));
     }))
+}
+
+pub(crate) fn panel_menu(
+    mut menu: PopupMenu,
+    ws: &WeakEntity<Workspace>,
+    id: PanelId,
+    generation: u64,
+    cx: &App,
+) -> PopupMenu {
+    let Some(owner) = ws.upgrade() else {
+        return menu;
+    };
+    let app = &owner.read(cx).app;
+    let Some(panel) = app
+        .panels
+        .get(id)
+        .filter(|_| app.doc.generation() == generation)
+    else {
+        return menu;
+    };
+    let start = panel.kind.is_start();
+    let can_split = start || panel.kind.is_canvas() || panel.kind.transaction().is_some();
+    let can_close = app.panels.can_close(id);
+    let links = panel.kind.nav().map(|nav| nav.link);
+    let pinned = panel
+        .kind
+        .transaction()
+        .map(volna_core::transaction::TransactionModel::pinned);
+    let other_content = app
+        .panels
+        .iter()
+        .any(|panel| panel.id != id && panel.kind.is_content());
+    let item = |label: &'static str, command: PanelsCommand| {
+        let ws = ws.clone();
+        PopupMenuItem::new(label).on_click(move |_, window, cx| {
+            drop(ws.update(cx, |ws, cx| {
+                if start
+                    && matches!(
+                        &command,
+                        PanelsCommand::NewTab { .. } | PanelsCommand::Split { .. }
+                    )
+                {
+                    // Start replacements retain source focus; an inactive source
+                    // would otherwise leave the new view unfocused.
+                    ws.dispatch_if_current(
+                        generation,
+                        Command::Panels(PanelsCommand::Focus(id)),
+                        Some(window),
+                        cx,
+                    );
+                }
+                ws.dispatch_if_current(
+                    generation,
+                    Command::Panels(command.clone()),
+                    Some(window),
+                    cx,
+                );
+            }));
+        })
+    };
+    if !start {
+        menu = placement_menu(menu, ws, id, generation, cx);
+    }
+    if can_split {
+        for (label, axis) in [
+            ("Split Right", Axis::Horizontal),
+            ("Split Down", Axis::Vertical),
+        ] {
+            menu = menu.item(item(label, PanelsCommand::Split { panel: id, axis }));
+        }
+    }
+    menu = menu.item(item(
+        "New waveform tab",
+        PanelsCommand::NewTab { group_of: id },
+    ));
+    if can_close {
+        menu = close_menu(menu, ws, id, generation, cx);
+    }
+    menu = menu
+        .item(item("Close Other Panels", PanelsCommand::CloseOthers(id)).disabled(!other_content));
+    let rename_owner = ws.clone();
+    menu = menu.item(
+        PopupMenuItem::new("Rename…").on_click(move |_, window, cx| {
+            rename_panel(&rename_owner, id, generation, window, cx);
+        }),
+    );
+    if let Some(links) = links {
+        use volna_core::nav::LinkDim;
+        menu = menu.separator();
+        for (label, dim, linked) in [
+            ("Follow shared viewport", LinkDim::Viewport, links.viewport),
+            ("Follow shared cursor", LinkDim::Cursor, links.cursor),
+        ] {
+            menu = menu
+                .item(item(label, PanelsCommand::ToggleLink { panel: id, dim }).checked(linked));
+        }
+    }
+    if let Some(pinned) = pinned {
+        let ws = ws.clone();
+        menu = menu
+            .separator()
+            .item(PopupMenuItem::new("Pin record").checked(pinned).on_click(
+                move |_, window, cx| {
+                    drop(ws.update(cx, |ws, cx| {
+                        ws.dispatch_if_current(
+                            generation,
+                            Command::Transaction(
+                                id,
+                                volna_core::transaction::TransactionCommand::Pin(!pinned),
+                            ),
+                            Some(window),
+                            cx,
+                        );
+                    }));
+                },
+            ));
+    }
+    menu
 }
 
 /// Hiding the sidebar preserves all its tabs; closing a tab removes only that
@@ -719,6 +855,75 @@ fn panel_id(state: &base::PanelState) -> Result<PanelId> {
     }
 }
 
+fn rename_panel(
+    ws: &WeakEntity<Workspace>,
+    id: PanelId,
+    generation: u64,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let Some(owner) = ws.upgrade() else {
+        return;
+    };
+    if owner.read(cx).app.doc.generation() != generation {
+        return;
+    }
+    let Some(panel) = owner.read(cx).app.panels.get(id) else {
+        return;
+    };
+    let title = panel.title.get().clone().unwrap_or_default();
+    let input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .default_value(title)
+            .placeholder("Default panel title")
+    });
+    let input_focus = input.read(cx).focus_handle(cx);
+    window.open_dialog(cx, move |dialog, _, _| {
+        let owner = owner.clone();
+        let value = input.clone();
+        dialog
+            .title("Rename panel")
+            .child(Input::new(&input))
+            .footer(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        Button::new("cancel-rename")
+                            .label("Cancel")
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        Button::new("confirm-rename")
+                            .label("Rename")
+                            .primary()
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(gpui_kit::component::dialog::Confirm {
+                                        secondary: false,
+                                    }),
+                                    cx,
+                                );
+                            }),
+                    ),
+            )
+            .on_ok(move |_, window, cx| {
+                let title = value.read(cx).value().to_string();
+                owner.update(cx, |ws, cx| {
+                    ws.dispatch_if_current(
+                        generation,
+                        Command::Panels(PanelsCommand::Rename(id, Some(title))),
+                        Some(window),
+                        cx,
+                    );
+                });
+                true
+            })
+    });
+    window.focus(&input_focus, cx);
+}
+
 pub(crate) struct CanvasPanelView {
     pub(crate) table_columns: Option<Entity<crate::table_columns::ColumnPicker>>,
     pub(crate) table_filters: Option<Entity<crate::table_filters::FilterRow>>,
@@ -730,67 +935,6 @@ pub(crate) struct CanvasPanelView {
 }
 
 impl CanvasPanelView {
-    fn rename(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(owner) = self.ws.upgrade() else {
-            return;
-        };
-        let Some(panel) = owner.read(cx).app.panels.get(self.id) else {
-            return;
-        };
-        let title = panel.title.get().clone().unwrap_or_default();
-        let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(title)
-                .placeholder("Default panel title")
-        });
-        let id = self.id;
-        let generation = self.generation;
-        let input_focus = input.read(cx).focus_handle(cx);
-        window.open_dialog(cx, move |dialog, _, _| {
-            let owner = owner.clone();
-            let value = input.clone();
-            dialog
-                .title("Rename panel")
-                .child(Input::new(&input))
-                .footer(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap_2()
-                        .child(
-                            Button::new("cancel-rename")
-                                .label("Cancel")
-                                .on_click(|_, window, cx| window.close_dialog(cx)),
-                        )
-                        .child(
-                            Button::new("confirm-rename")
-                                .label("Rename")
-                                .primary()
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(gpui_kit::component::dialog::Confirm {
-                                            secondary: false,
-                                        }),
-                                        cx,
-                                    );
-                                }),
-                        ),
-                )
-                .on_ok(move |_, window, cx| {
-                    let title = value.read(cx).value().to_string();
-                    owner.update(cx, |ws, cx| {
-                        ws.dispatch_if_current(
-                            generation,
-                            Command::Panels(PanelsCommand::Rename(id, Some(title))),
-                            Some(window),
-                            cx,
-                        );
-                    });
-                    true
-                })
-        });
-        window.focus(&input_focus, cx);
-    }
     fn dispatch(&self, command: PanelsCommand, window: &mut Window, cx: &mut Context<Self>) {
         drop(self.ws.update(cx, |ws, cx| {
             ws.dispatch_if_current(self.generation, Command::Panels(command), Some(window), cx);
@@ -1089,40 +1233,11 @@ impl Panel for CanvasPanelView {
 
     fn dropdown_menu(
         &mut self,
-        mut menu: PopupMenu,
+        menu: PopupMenu,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> PopupMenu {
-        menu = placement_menu(menu, &self.ws, self.id, self.generation, cx);
-        for (title, axis) in [
-            ("Split Right", Axis::Horizontal),
-            ("Split Down", Axis::Vertical),
-        ] {
-            menu = menu.item(PopupMenuItem::new(title).on_click(cx.listener(
-                move |view, _, window, cx| {
-                    view.dispatch(
-                        PanelsCommand::Split {
-                            panel: view.id,
-                            axis,
-                        },
-                        window,
-                        cx,
-                    );
-                },
-            )));
-        }
-        menu = close_menu(menu, &self.ws, self.id, self.generation, cx);
-        menu = menu.item(
-            PopupMenuItem::new("Close Other Panels").on_click(cx.listener(
-                |view, _, window, cx| {
-                    view.dispatch(PanelsCommand::CloseOthers(view.id), window, cx);
-                },
-            )),
-        );
-        menu.item(
-            PopupMenuItem::new("Rename…")
-                .on_click(cx.listener(|view, _, window, cx| view.rename(window, cx))),
-        )
+        panel_menu(menu, &self.ws, self.id, self.generation, cx)
     }
 }
 impl Render for CanvasPanelView {

@@ -855,7 +855,6 @@ impl Panel for SettingsPanelView {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::dock::tab_title(&self.ws, self.id, None, cx)
     }
-    #[cfg(not(target_family = "wasm"))]
     fn dropdown_menu(
         &mut self,
         menu: PopupMenu,
@@ -866,8 +865,7 @@ impl Panel for SettingsPanelView {
             return menu;
         };
         let generation = owner.read(cx).app.doc.generation();
-        let menu = crate::dock::placement_menu(menu, &self.ws, self.id, generation, cx);
-        crate::dock::close_menu(menu, &self.ws, self.id, generation, cx)
+        crate::dock::panel_menu(menu, &self.ws, self.id, generation, cx)
     }
     fn inner_padding(&self, _: &App) -> bool {
         false

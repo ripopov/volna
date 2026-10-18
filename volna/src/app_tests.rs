@@ -1376,6 +1376,257 @@ fn tab_close_buttons_and_middle_click_close_their_own_tab(cx: &mut TestAppContex
         .unwrap();
 }
 
+fn choose_tab_action(
+    view: &mut gpui_kit::VisualTestContext,
+    panel: volna_core::panels::PanelId,
+    label: &str,
+    keyboard: bool,
+) {
+    use gpui_kit::test::TestWindowExt as _;
+    view.run_until_parked();
+    let at = view.update(|window, cx| {
+        window.render_frame(cx);
+        let bounds = window.find(("panel-tab", panel.0)).bounds();
+        point(bounds.left() + px(2.0), bounds.center().y)
+    });
+    view.simulate_mouse_move(at, None, Default::default());
+    view.simulate_mouse_down(at, gpui_kit::MouseButton::Right, Default::default());
+    view.simulate_mouse_up(at, gpui_kit::MouseButton::Right, Default::default());
+    view.run_until_parked();
+    let items = view.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("popup-menu").is_some(),
+            "menu did not open for {panel:?}: {label}"
+        );
+        let menu = window.within("popup-menu");
+        (0..32usize)
+            .filter_map(|ix| {
+                let item = menu.try_find(ix)?;
+                Some((ix, item.label()?.to_owned()))
+            })
+            .collect::<Vec<_>>()
+    });
+    let position = items
+        .iter()
+        .position(|(_, text)| text == label)
+        .unwrap_or_else(|| panic!("missing {label}: {items:?}"));
+    if keyboard {
+        view.simulate_mouse_move(point(px(1.0), px(1.0)), None, Default::default());
+        view.simulate_keystrokes(&format!("{}enter", "down ".repeat(position + 1)));
+    } else {
+        view.update(|window, cx| window.within("popup-menu").click(items[position].0, cx));
+    }
+    view.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn tab_context_actions_target_the_clicked_tab_across_themes_and_windows(cx: &mut TestAppContext) {
+    use gpui_kit::{VisualTestContext, size};
+    use volna_core::panels::{PanelsCommand, Placement};
+    init(cx);
+    for (theme, width, zoom) in [
+        ("volna-dark", 1000.0, 1.0),
+        ("volna-light", 360.0, 1.5),
+        ("volna-islands-dark", 1000.0, 1.0),
+        ("volna-islands-light", 360.0, 1.5),
+    ] {
+        let owner = cx.update(|cx| crate::open_main_window(cx, false).unwrap());
+        let main = cx.update(|cx| cx.windows()[0]);
+        let mut view = VisualTestContext::from_window(main, cx);
+        view.simulate_resize(size(px(width), px(850.0)));
+        let (a, b) = owner.update(&mut view, |ws, cx| {
+            crate::theme::install_themes(
+                volna_core::theme::builtin::resolve(theme, true).unwrap(),
+                cx,
+            );
+            crate::theme::set_zoom(zoom, cx);
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.app.sidebar_visible = false;
+            ws.dispatch(Command::AddVars(a_all(vec![0, 1])), None, cx);
+            let a = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::Panels(PanelsCommand::Rename(a, Some("A".into()))),
+                None,
+                cx,
+            );
+            ws.dispatch(
+                Command::Panels(PanelsCommand::NewTab { group_of: a }),
+                None,
+                cx,
+            );
+            let b = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::Panels(PanelsCommand::Rename(b, Some("B".into()))),
+                None,
+                cx,
+            );
+            (a, b)
+        });
+        choose_tab_action(&mut view, a, "Rename…", true);
+        view.simulate_keystrokes("ctrl-a");
+        view.simulate_input("Named");
+        view.simulate_keystrokes("enter");
+        view.run_until_parked();
+        owner.read_with(&view, |ws, _| {
+            assert_eq!(ws.app.panels.get(a).unwrap().title(), "Named");
+            assert_eq!(ws.app.panels.get(b).unwrap().title(), "B");
+        });
+        choose_tab_action(
+            &mut view,
+            a,
+            if width < 500.0 {
+                "Split Down"
+            } else {
+                "Split Right"
+            },
+            false,
+        );
+        owner.read_with(&view, |ws, _| {
+            let copy = ws.app.panels.focused_id();
+            assert_ne!(copy, a);
+            assert_ne!(copy, b);
+            assert_eq!(ws.app.panels.waves(copy).unwrap().items().len(), 2);
+            ws.app.panels.validate().unwrap();
+        });
+        owner.update(&mut view, |ws, cx| {
+            ws.dispatch(Command::Panels(PanelsCommand::Focus(b)), None, cx);
+        });
+        view.simulate_resize(size(px(width.max(900.0)), px(850.0)));
+        choose_tab_action(&mut view, b, "Move to right sidebar", false);
+        owner.read_with(&view, |ws, _| {
+            assert_eq!(ws.app.panels.layout().placement(b), Some(Placement::Right));
+        });
+        choose_tab_action(&mut view, b, "Move to new window", false);
+        let auxiliary = owner.read_with(&view, |ws, _| {
+            ws.windows.handle_for(b, &ws.app.panels).unwrap()
+        });
+        let mut detached = VisualTestContext::from_window(auxiliary, &view);
+        detached.simulate_resize(size(px(width), px(850.0)));
+        choose_tab_action(&mut detached, b, "Follow shared cursor", true);
+        owner.read_with(&detached, |ws, _| {
+            assert!(!ws.app.panels.waves(b).unwrap().nav.link.cursor);
+            assert!(ws.app.panels.waves(a).unwrap().nav.link.cursor);
+        });
+        choose_tab_action(&mut detached, b, "Return to main window", false);
+        owner.read_with(&view, |ws, _| {
+            assert_eq!(ws.app.panels.layout().placement(b), Some(Placement::Center));
+        });
+        choose_tab_action(&mut view, b, "Toggle panel zoom", false);
+        owner.read_with(&view, |ws, cx| {
+            assert!(ws.dock.as_ref().unwrap().read(cx).area.read(cx).is_zoomed());
+        });
+        choose_tab_action(&mut view, b, "Toggle panel zoom", false);
+        owner.read_with(&view, |ws, cx| {
+            assert!(!ws.dock.as_ref().unwrap().read(cx).area.read(cx).is_zoomed());
+        });
+        choose_tab_action(&mut view, b, "New waveform tab", false);
+        owner.read_with(&view, |ws, _| assert_ne!(ws.app.panels.focused_id(), b));
+        owner.update(&mut view, |ws, cx| {
+            ws.dispatch(Command::Panels(PanelsCommand::Focus(b)), None, cx);
+        });
+        choose_tab_action(&mut view, b, "Close Other Panels", false);
+        owner.read_with(&view, |ws, _| {
+            assert_eq!(ws.app.panels.len(), 1);
+            assert_eq!(ws.app.panels.focused_id(), b);
+        });
+        view.simulate_resize(size(px(width), px(850.0)));
+        choose_tab_action(&mut view, b, "Close panel", false);
+        owner.read_with(&view, |ws, _| {
+            assert!(ws.app.panels.focused().kind.is_start());
+        });
+        main.update(&mut view, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn tab_context_rename_and_close_work_for_every_panel_kind(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use volna_core::panels::{PanelId, PanelsCommand};
+    init(cx);
+    let owner = cx.update(|cx| crate::open_main_window(cx, false).unwrap());
+    let main = cx.update(|cx| cx.windows()[0]);
+    let mut view = VisualTestContext::from_window(main, cx);
+    let settings = owner.update(&mut view, |ws, cx| {
+        let trace =
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/landing.vtr"));
+        ws.set_session(OpenSpec::Path(trace.into()).open().unwrap(), cx);
+        let saved: volna_core::workspace::Workspace =
+            serde_json::from_str(include_str!("../examples/landing-page.volna.json")).unwrap();
+        saved
+            .prepare(
+                &ws.app,
+                &crate::native_workspace::file_uri(trace).unwrap(),
+                &crate::native_workspace::file_uri(std::path::Path::new(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/examples/landing-page.volna.json"
+                )))
+                .unwrap(),
+            )
+            .unwrap()
+            .commit(&mut ws.app)
+            .unwrap();
+        ws.dispatch(Command::Settings(SettingsCommand::Open), None, cx);
+        ws.app.panels.settings_id().unwrap()
+    });
+    for panel in [PanelId(37), PanelId(38), PanelId(39), PanelId(40), settings] {
+        owner.update(&mut view, |ws, cx| {
+            ws.dispatch(Command::Panels(PanelsCommand::Focus(panel)), None, cx);
+        });
+        choose_tab_action(&mut view, panel, "Rename…", false);
+        view.simulate_keystrokes("ctrl-a");
+        view.simulate_input("Custom");
+        view.simulate_keystrokes("enter");
+        view.run_until_parked();
+        owner.read_with(&view, |ws, _| {
+            assert_eq!(ws.app.panels.get(panel).unwrap().title(), "Custom");
+        });
+    }
+    let pinned = owner.read_with(&view, |ws, _| {
+        ws.app.panels.transaction(PanelId(37)).unwrap().pinned()
+    });
+    choose_tab_action(&mut view, PanelId(37), "Pin record", false);
+    owner.read_with(&view, |ws, _| {
+        assert_eq!(
+            ws.app.panels.transaction(PanelId(37)).unwrap().pinned(),
+            !pinned
+        );
+    });
+    choose_tab_action(&mut view, settings, "Close panel", true);
+    owner.read_with(&view, |ws, _| {
+        assert!(ws.app.panels.settings_id().is_none());
+    });
+    owner.update(&mut view, |ws, cx| {
+        ws.dispatch(Command::Panels(PanelsCommand::Focus(PanelId(37))), None, cx);
+    });
+    choose_tab_action(&mut view, PanelId(37), "Close tab", false);
+    owner.read_with(&view, |ws, _| {
+        assert!(ws.app.panels.get(PanelId(37)).is_none());
+    });
+    let settings = owner.update(&mut view, |ws, cx| {
+        ws.dispatch(Command::Settings(SettingsCommand::Open), None, cx);
+        ws.app.panels.settings_id().unwrap()
+    });
+    choose_tab_action(&mut view, settings, "Close Other Panels", false);
+    let start = owner.read_with(&view, |ws, _| ws.app.panels.first_start().unwrap());
+    choose_tab_action(&mut view, start, "Rename…", false);
+    view.simulate_keystrokes("ctrl-a");
+    view.simulate_input("Welcome");
+    view.simulate_keystrokes("enter");
+    view.run_until_parked();
+    owner.read_with(&view, |ws, _| {
+        assert_eq!(ws.app.panels.get(start).unwrap().title(), "Welcome");
+    });
+    choose_tab_action(&mut view, start, "New waveform tab", true);
+    owner.read_with(&view, |ws, _| {
+        assert!(ws.app.panels.first_start().is_none());
+        assert!(ws.app.panels.focused().kind.waves().is_some());
+    });
+    main.update(&mut view, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
 #[gpui_kit::test]
 fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
