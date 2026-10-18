@@ -1420,6 +1420,31 @@ fn choose_tab_action(
     view.run_until_parked();
 }
 
+fn assert_titlebar_panel(
+    view: &mut gpui_kit::VisualTestContext,
+    panel: volna_core::panels::PanelId,
+    promoted: bool,
+) {
+    use gpui_kit::test::TestWindowExt as _;
+    view.run_until_parked();
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        let header = window.find("auxiliary-titlebar").bounds();
+        let tab = window.find(("panel-tab", panel.0)).bounds();
+        if promoted {
+            let toolbar = window.find("auxiliary-panel-toolbar").bounds();
+            assert!(header.contains(&tab.center()));
+            assert!(header.contains(&toolbar.center()));
+            assert!(toolbar.right() <= header.right());
+            assert!(toolbar.left() >= tab.left());
+            assert!(window.try_find(("close-tab", panel.0 as usize)).is_none());
+        } else {
+            assert!(window.try_find("auxiliary-panel-toolbar").is_none());
+            assert!(tab.top() >= header.bottom());
+        }
+    });
+}
+
 #[gpui_kit::test]
 fn tab_context_actions_target_the_clicked_tab_across_themes_and_windows(cx: &mut TestAppContext) {
     use gpui_kit::{VisualTestContext, size};
@@ -1503,6 +1528,35 @@ fn tab_context_actions_target_the_clicked_tab_across_themes_and_windows(cx: &mut
         });
         let mut detached = VisualTestContext::from_window(auxiliary, &view);
         detached.simulate_resize(size(px(width), px(850.0)));
+        assert_titlebar_panel(&mut detached, b, true);
+        detached.update(|window, cx| {
+            use gpui_kit::test::TestWindowExt as _;
+            window
+                .within("auxiliary-panel-toolbar")
+                .click("new-tab", cx);
+        });
+        detached.run_until_parked();
+        let extra = owner.update(&mut detached, |ws, cx| {
+            let extra = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::Panels(PanelsCommand::Rename(extra, Some("C".into()))),
+                None,
+                cx,
+            );
+            extra
+        });
+        assert_ne!(extra, b);
+        assert_titlebar_panel(&mut detached, b, false);
+        detached.simulate_resize(size(px(width.max(900.0)), px(850.0)));
+        choose_tab_action(&mut detached, extra, "Close panel", false);
+        detached.simulate_resize(size(px(width), px(850.0)));
+        assert_titlebar_panel(&mut detached, b, true);
+        choose_tab_action(&mut detached, b, "Split Down", true);
+        let extra = owner.read_with(&detached, |ws, _| ws.app.panels.focused_id());
+        assert_ne!(extra, b);
+        assert_titlebar_panel(&mut detached, b, false);
+        choose_tab_action(&mut detached, extra, "Close panel", false);
+        assert_titlebar_panel(&mut detached, b, true);
         choose_tab_action(&mut detached, b, "Follow shared cursor", true);
         owner.read_with(&detached, |ws, _| {
             assert!(!ws.app.panels.waves(b).unwrap().nav.link.cursor);
@@ -6128,7 +6182,7 @@ fn auxiliary_windows_route_keyboard_navigation_and_return_panels_without_losing_
             auxiliary.run_until_parked();
             if dark {
                 let menu = auxiliary.update(|window, _| {
-                    gpui_kit::test::TestWindowExt::find(window, "menu").bounds()
+                    gpui_kit::test::TestWindowExt::find(window, "auxiliary-panel-menu").bounds()
                 });
                 auxiliary.simulate_click(menu.center(), Modifiers::default());
                 auxiliary.simulate_keystrokes("down enter");

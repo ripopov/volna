@@ -8,6 +8,8 @@ use std::sync::Arc;
 use anyhow::{Result, bail, ensure};
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::dock as base;
+#[cfg(not(target_family = "wasm"))]
+use gpui_kit::component::dock::PanelHandle;
 use gpui_kit::component::dock::{DockSkin, Panel, panel_handle};
 use gpui_kit::component::{
     Selectable, Sizable, WindowExt,
@@ -82,6 +84,14 @@ pub(crate) fn tab_title(
     let Some(panel) = panels.get(id) else {
         return Empty.into_any_element();
     };
+    let in_titlebar = match panels.layout().placement(id) {
+        Some(Placement::Window(window)) => panels
+            .layout()
+            .windows
+            .get(&window)
+            .is_some_and(|layout| layout.panels().len() == 1),
+        _ => false,
+    };
     let letter = panel
         .kind
         .trace()
@@ -93,8 +103,13 @@ pub(crate) fn tab_title(
         .when_some(letter, |el, trace| {
             el.child(crate::traces::letter_badge(trace, cx))
         })
-        .child(gpui_kit::SharedString::from(panel.title()));
-    let can_close = panels.can_close(id);
+        .when(in_titlebar, |el| el.min_w_0().overflow_hidden())
+        .child(
+            div()
+                .when(in_titlebar, gpui_kit::Styled::truncate)
+                .child(gpui_kit::SharedString::from(panel.title())),
+        );
+    let can_close = panels.can_close(id) && !in_titlebar;
     let close = {
         let ws = ws.clone();
         move |window: &mut Window, cx: &mut App| {
@@ -116,6 +131,7 @@ pub(crate) fn tab_title(
         .test_support()
         .flex()
         .items_center()
+        .when(in_titlebar, gpui_kit::Styled::min_w_0)
         .gap_1()
         .debug_selector(|| format!("tab-{}", id.0))
         .when(can_close, |el| {
@@ -143,12 +159,12 @@ pub(crate) fn tab_title(
                 return menu;
             };
             let generation = generation.unwrap_or(owner.read(cx).app.doc.generation());
-            panel_menu(menu, &menu_owner, id, generation, cx)
-                .separator()
-                .menu(
+            panel_menu(menu, &menu_owner, id, generation, cx).when(!in_titlebar, |menu| {
+                menu.separator().menu(
                     "Toggle panel zoom",
                     Box::new(gpui_kit::component::dock::ToggleZoom),
                 )
+            })
         })
         .into_any_element()
 }
@@ -159,7 +175,7 @@ pub(crate) struct DockHost {
     render_owner: Option<gpui_kit::EntityId>,
     pub area: Entity<base::DockArea>,
     views: BTreeMap<PanelId, PanelView>,
-    single: Rc<Cell<bool>>,
+    hide_tab_bar: Rc<Cell<bool>>,
     revision: Option<u64>,
     installed: Option<DockLayout>,
     echo: Option<DockLayout>,
@@ -175,7 +191,7 @@ impl DockHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let single = Rc::new(Cell::new(true));
+        let hide_tab_bar = Rc::new(Cell::new(true));
         let mut skin_handle = None;
         let area = cx.new(|cx| {
             let skin = DockSkin::new(cx);
@@ -183,7 +199,7 @@ impl DockHost {
             base::DockArea::new("volna-dock", None, window, cx).with_renderer(Rc::new(
                 DockRenderer {
                     skin,
-                    single: single.clone(),
+                    hide_tab_bar: hide_tab_bar.clone(),
                     area: cx.weak_entity(),
                     resize: crate::islands::DockResize::default(),
                 },
@@ -272,7 +288,7 @@ impl DockHost {
             render_owner: None,
             area,
             views: BTreeMap::new(),
-            single,
+            hide_tab_bar,
             revision: None,
             installed: None,
             echo: None,
@@ -280,6 +296,15 @@ impl DockHost {
             right_width: None,
             generation: 0,
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn titlebar_panel(&self) -> Option<Arc<dyn gpui_kit::component::dock::PanelView>> {
+        if self.window.is_none() || self.views.len() != 1 || !self.hide_tab_bar.get() {
+            return None;
+        }
+        let handle = self.views.values().next()?.handle();
+        PanelHandle::of(&handle).map(PanelHandle::panel)
     }
 
     pub fn sync(
@@ -299,11 +324,12 @@ impl DockHost {
             self.revision = None;
             self.generation = app.doc.generation();
         }
-        // Content panels keep their placement menu even when they are alone.
-        self.single
-            .set(app.panels.len() == 1 && app.panels.focused().kind.is_start());
         let local = app.panels.layout().for_window(self.window);
         let ids = local.panels();
+        self.hide_tab_bar.set(
+            (self.window.is_some() && ids.len() == 1)
+                || (app.panels.len() == 1 && app.panels.focused().kind.is_start()),
+        );
         self.views.retain(|id, _| ids.contains(id));
         for panel in app.panels.iter().filter(|panel| ids.contains(&panel.id)) {
             self.views.entry(panel.id).or_insert_with(|| {
@@ -1282,7 +1308,7 @@ impl Render for CanvasPanelView {
 
 struct DockRenderer {
     skin: Rc<DockSkin>,
-    single: Rc<Cell<bool>>,
+    hide_tab_bar: Rc<Cell<bool>>,
     area: WeakEntity<base::DockArea>,
     resize: crate::islands::DockResize,
 }
@@ -1345,7 +1371,7 @@ impl base::DockAreaRenderer for DockRenderer {
     fn tab_group_renderer(&self) -> Rc<dyn base::TabGroupRenderer> {
         Rc::new(TabRenderer {
             skin: self.skin.tab_group_renderer(),
-            single: self.single.clone(),
+            hide_tab_bar: self.hide_tab_bar.clone(),
             islands: crate::islands::Tabs::default(),
         })
     }
@@ -1353,7 +1379,7 @@ impl base::DockAreaRenderer for DockRenderer {
 struct TabRenderer {
     islands: crate::islands::Tabs,
     skin: Rc<dyn base::TabGroupRenderer>,
-    single: Rc<Cell<bool>>,
+    hide_tab_bar: Rc<Cell<bool>>,
 }
 impl base::TabGroupRenderer for TabRenderer {
     fn frame(&self, group: &base::TabGroupContext, w: &mut Window, cx: &mut App) -> Stateful<Div> {
@@ -1382,7 +1408,7 @@ impl base::TabGroupRenderer for TabRenderer {
         w: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        if self.single.get() {
+        if self.hide_tab_bar.get() {
             Empty.into_any_element()
         } else if crate::theme::theme(cx).islands.is_some() {
             self.islands.render(group, w, cx)
@@ -1401,7 +1427,7 @@ impl base::TabGroupRenderer for TabRenderer {
         if crate::theme::theme(cx).islands.is_none() {
             return content;
         }
-        if self.single.get() {
+        if self.hide_tab_bar.get() {
             return crate::islands::rounded(content, cx);
         }
         div()

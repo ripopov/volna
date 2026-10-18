@@ -2,10 +2,11 @@
 
 use std::collections::BTreeMap;
 
+use gpui_kit::component::{button::ButtonVariants, menu::DropdownMenu};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyWindowHandle, App, AppContext, Context, Entity, FocusHandle, IntoElement, Render,
-    SharedString, WeakEntity, Window, WindowControlArea, div, px, size,
+    SharedString, TestSupportExt, WeakEntity, Window, WindowControlArea, div, px, size,
 };
 use volna_core::panels::{PanelId, Panels, PanelsCommand, Placement, WindowId};
 use volna_core::{Command, Instant};
@@ -356,8 +357,57 @@ impl Render for AuxiliaryWindow {
         });
         window.set_window_title(&title);
         let t = *theme(cx);
+        let panel = dock.read(cx).titlebar_panel();
+        let title = panel.as_ref().map_or_else(
+            || {
+                div()
+                    .truncate()
+                    .child(SharedString::from(title))
+                    .into_any_element()
+            },
+            |panel| panel.title(window, cx),
+        );
+        let toolbar = panel.map(|panel| {
+            let suffix = panel.title_suffix(window, cx);
+            let buttons = panel.toolbar_buttons(window, cx).unwrap_or_default();
+            div()
+                .id("auxiliary-panel-toolbar")
+                .test_support()
+                .flex()
+                .items_center()
+                .min_w_0()
+                .gap_1()
+                .px_1()
+                .child(
+                    div()
+                        .id("auxiliary-panel-buttons")
+                        .flex()
+                        .items_center()
+                        .min_w_0()
+                        .gap_1()
+                        .overflow_x_scroll()
+                        .children(suffix)
+                        .children(
+                            buttons
+                                .into_iter()
+                                .map(|button| button.ghost().tab_stop(false)),
+                        ),
+                )
+                .child(
+                    crate::ui::action_button(
+                        "auxiliary-panel-menu",
+                        gpui_kit::assets::IconName::Ellipsis,
+                        cx,
+                    )
+                    .ghost()
+                    .tab_stop(false)
+                    .tooltip("Panel menu")
+                    .dropdown_menu(move |menu, window, cx| panel.dropdown_menu(menu, window, cx)),
+                )
+        });
         let header = div()
             .id("auxiliary-titlebar")
+            .test_support()
             .flex()
             .flex_none()
             .items_center()
@@ -372,6 +422,7 @@ impl Render for AuxiliaryWindow {
                 div()
                     .id("auxiliary-titlebar-drag")
                     .flex_1()
+                    .min_w(px(48.0 * t.zoom))
                     .h_full()
                     .flex()
                     .items_center()
@@ -385,8 +436,9 @@ impl Render for AuxiliaryWindow {
                             window.start_window_move();
                         }
                     })
-                    .child(SharedString::from(title)),
+                    .child(title),
             )
+            .children(toolbar)
             .children(render_window_controls(Side::Right, window, cx));
         let root = Workspace::panel_actions(
             div()

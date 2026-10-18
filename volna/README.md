@@ -200,7 +200,9 @@ layout before accepting widget changes. Moving a panel preserves its view and
 record state and is undoable. In the native app, panel menus also offer **Move
 to new window** and **Return to main window**. Auxiliary windows share the
 document, navigation links, settings, and undo history, and support tabs and
-splits. Closing an auxiliary window returns its panels to the main window.
+splits. A single-panel auxiliary window shows its title and panel controls in the
+window header; adding a tab or split restores the dock tab bar. Closing an auxiliary
+window returns its panels to the main window.
 Workspace version 8 stores the center tree, optional right dock (including its
 width and visibility), and auxiliary pane trees. The native app restores those
 windows; the web app opens their panels in the main window.
