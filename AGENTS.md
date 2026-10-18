@@ -16,6 +16,11 @@ acknowledgments, and change narration. Before finishing, review added or edited
 comments and documentation: would they still help someone understand or safely
 change the code if the conversation disappeared?
 
+Diagrams embedded in Markdown should illustrate the document without repeating
+its prose. Omit titles, subtitles, and explanations already present in the
+surrounding text. Keep labels, legends, and annotations needed to understand the
+illustration.
+
 # Search
 
 Prefer `rg` to `grep`. Search outside the worktree only when the user explicitly
