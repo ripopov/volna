@@ -50,7 +50,7 @@ export function volnaDocsLoader(): Loader {
           const sourcePath = repository === 'vtr' ? repoPath.slice(4) : repoPath;
           return `](https://github.com/ripopov/${repository}/blob/main/${sourcePath}${fragment})`;
         });
-        body = body.replace('src="docs/container.svg"', 'src="../assets/container.svg"');
+        body = body.replace('src="docs/diagrams/transaction-file-structure.drawio.svg"', 'src="../assets/transaction-file-structure.drawio.svg"');
         const includes = [...body.matchAll(/^<!-- include-code: (\S+) (\w+) -->[ \t]*$/gm)];
         const includedPaths = new Set(includes.map((match) => fileURLToPath(new URL(match[1], guide.fileURL))));
         dependencies.set(path, includedPaths);

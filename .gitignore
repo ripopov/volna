@@ -37,7 +37,7 @@ rustc-ice-*.txt
 /docs/dist/
 /docs/test-results/
 /docs/public/assets/volna.svg
-/docs/public/assets/container.svg
+/docs/public/assets/transaction-file-structure.drawio.svg
 /docs/public/viewer/pkg/
 /docs/public/viewer/converter/
 /docs/public/examples/
