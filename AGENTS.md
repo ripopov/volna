@@ -16,6 +16,11 @@ acknowledgments, and change narration. Before finishing, review added or edited
 comments and documentation: would they still help someone understand or safely
 change the code if the conversation disappeared?
 
+# Search
+
+Prefer `rg` to `grep`. Search outside the worktree only when the user explicitly
+requests it or provides links to those locations.
+
 # Testing
 
 Do not add trivial unit tests that merely mirror static declarations or
