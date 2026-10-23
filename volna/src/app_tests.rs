@@ -10,6 +10,12 @@ use volna_core::testing::a_all;
 use volna_core::trace::TraceId;
 use volna_trace::session::OpenSpec;
 
+const SELECT_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
+
 fn init(cx: &mut TestAppContext) {
     cx.update(crate::init_app);
 }
@@ -1497,7 +1503,7 @@ fn tab_context_actions_target_the_clicked_tab_across_themes_and_windows(cx: &mut
             (a, b)
         });
         choose_tab_action(&mut view, a, "Rename…", true);
-        view.simulate_keystrokes("ctrl-a");
+        view.simulate_keystrokes(SELECT_ALL);
         view.simulate_input("Named");
         view.simulate_keystrokes("enter");
         view.run_until_parked();
@@ -1637,7 +1643,7 @@ fn tab_context_rename_and_close_work_for_every_panel_kind(cx: &mut TestAppContex
             ws.dispatch(Command::Panels(PanelsCommand::Focus(panel)), None, cx);
         });
         choose_tab_action(&mut view, panel, "Rename…", false);
-        view.simulate_keystrokes("ctrl-a");
+        view.simulate_keystrokes(SELECT_ALL);
         view.simulate_input("Custom");
         view.simulate_keystrokes("enter");
         view.run_until_parked();
@@ -1673,7 +1679,7 @@ fn tab_context_rename_and_close_work_for_every_panel_kind(cx: &mut TestAppContex
     choose_tab_action(&mut view, settings, "Close Other Panels", false);
     let start = owner.read_with(&view, |ws, _| ws.app.panels.first_start().unwrap());
     choose_tab_action(&mut view, start, "Rename…", false);
-    view.simulate_keystrokes("ctrl-a");
+    view.simulate_keystrokes(SELECT_ALL);
     view.simulate_input("Welcome");
     view.simulate_keystrokes("enter");
     view.run_until_parked();
@@ -6414,7 +6420,7 @@ fn auxiliary_palette_trace_rename_focuses_the_main_window_editor(cx: &mut TestAp
     })
     .unwrap();
     let mut main_view = VisualTestContext::from_window(main, &view);
-    main_view.simulate_keystrokes("ctrl-a backspace");
+    main_view.simulate_keystrokes(&format!("{SELECT_ALL} backspace"));
     main_view.simulate_input("renamed");
     main_view.simulate_keystrokes("enter");
     main_view.run_until_parked();
@@ -6475,7 +6481,7 @@ fn switching_windows_preserves_settings_search_focus(cx: &mut TestAppContext) {
             })
             .unwrap();
         local.update(|window, _| assert!(search.is_focused(window)));
-        local.simulate_keystrokes("ctrl-a backspace");
+        local.simulate_keystrokes(&format!("{SELECT_ALL} backspace"));
         local.simulate_input("font");
         auxiliary
             .update(&mut local, |_, window, _| window.activate_window())
