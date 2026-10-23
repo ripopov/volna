@@ -1543,12 +1543,16 @@ fn tab_context_actions_target_the_clicked_tab_across_themes_and_windows(cx: &mut
         let mut detached = VisualTestContext::from_window(auxiliary, &view);
         detached.simulate_resize(size(px(width), px(850.0)));
         assert_titlebar_panel(&mut detached, b, true);
-        detached.update(|window, cx| {
-            use gpui_kit::test::TestWindowExt as _;
-            window
-                .within("auxiliary-panel-toolbar")
-                .click("new-tab", cx);
-        });
+        if width < 500.0 {
+            choose_tab_action(&mut detached, b, "New waveform tab", false);
+        } else {
+            detached.update(|window, cx| {
+                use gpui_kit::test::TestWindowExt as _;
+                window
+                    .within("auxiliary-panel-toolbar")
+                    .click("new-tab", cx);
+            });
+        }
         detached.run_until_parked();
         let extra = owner.update(&mut detached, |ws, cx| {
             let extra = ws.app.panels.focused_id();

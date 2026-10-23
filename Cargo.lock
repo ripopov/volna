@@ -7741,6 +7741,7 @@ dependencies = [
  "lz4-sys",
  "lz4_flex 0.11.6",
  "memmap2",
+ "same-file",
  "thiserror 2.0.21",
  "unicode-segmentation",
  "unicode-width",
