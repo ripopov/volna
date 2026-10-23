@@ -297,6 +297,7 @@ fn frame(app: &mut App) -> &volna_core::Scene {
         volna_core::geometry::Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
         &theme,
         1.0,
+        &mut volna_core::scene::MonoMeasure,
     );
     app.render_panel(id, &theme, &mut volna_core::scene::MonoMeasure)
 }

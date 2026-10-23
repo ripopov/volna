@@ -570,13 +570,19 @@ impl Element for PanelCanvas {
         cx: &mut App,
     ) -> CanvasPrepaint {
         let t = self.core_theme(cx);
+        let paint_theme = *theme(cx);
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        let mut measure = GpuiMeasure {
+            window,
+            theme: &paint_theme,
+        };
         let rects = self.ws.update(cx, |ws, _| {
             match ws.app.layout_panel(
                 self.panel,
                 cbounds(bounds),
                 &t,
                 f64::from(window.scale_factor()),
+                &mut measure,
             ) {
                 Some(PanelLayout::Waves(layout)) => {
                     let mut rects = vec![layout.names_split, layout.values_split];

@@ -211,7 +211,8 @@ fn pointer_targets_do_not_drift_when_focus_changes_or_a_trace_is_replaced() {
         },
     );
     let bounds = volna_core::geometry::Rect::from_xywh(0.0, 0.0, 1200.0, 600.0);
-    app.layout_panel(a, bounds, &theme, 1.0).unwrap();
+    app.layout_panel(a, bounds, &theme, 1.0, &mut volna_core::scene::MonoMeasure)
+        .unwrap();
     let layout = app.panels.waves(a).unwrap().last_layout().clone();
     let click = PointerEvent::Down {
         position: volna_core::geometry::point(layout.waves.left() + 100.0, layout.row_y(0) + 10.0),

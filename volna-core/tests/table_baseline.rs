@@ -36,7 +36,7 @@ fn pump(app: &mut App) {
 fn frame(app: &mut App, panel: volna_core::panels::PanelId) {
     let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 500.0);
     assert!(matches!(
-        app.layout_panel(panel, bounds, &Theme::one_dark(), 1.0),
+        app.layout_panel(panel, bounds, &Theme::one_dark(), 1.0, &mut MonoMeasure),
         Some(PanelLayout::Table(_))
     ));
     app.render_panel(panel, &Theme::one_dark(), &mut MonoMeasure);

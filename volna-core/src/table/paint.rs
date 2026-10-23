@@ -1,5 +1,6 @@
 //! Paint the bounded prepared window.
 
+use super::layout::CELL_PADDING;
 use super::model::{RowIdentity, TableModel};
 use crate::geometry::{Rect, point};
 use crate::icons::IconName;
@@ -24,7 +25,8 @@ pub fn paint(
     scene.fill(layout.vertical_thumb, theme.panel.text_muted);
     scene.fill(layout.horizontal_thumb, theme.panel.text_muted);
 
-    let pad = 7.0 * theme.zoom;
+    let pad = CELL_PADDING * theme.zoom;
+    let digit_width = cache.width(measure, "0", FontRole::Mono, theme.mono_size);
     let label = |scene: &mut Scene, rect: Rect, text: &str, color| {
         scene.clipped(rect, |scene| {
             scene.text(
@@ -94,15 +96,16 @@ pub fn paint(
     scene.clipped(layout.gutter, |scene| {
         for row in &model.window.rows {
             let y = layout.body.top() + model.viewport.y_of(row.ordinal, layout.row_height);
-            label(
-                scene,
-                Rect::from_xywh(
-                    layout.gutter.left(),
+            let text = row.ordinal.saturating_add(1).to_string();
+            scene.text(
+                point(
+                    layout.gutter.right() - pad - text.len() as f32 * digit_width,
                     y,
-                    layout.gutter.width(),
-                    layout.row_height,
                 ),
-                &row.ordinal.saturating_add(1).to_string(),
+                layout.row_height,
+                text,
+                FontRole::Mono,
+                theme.mono_size,
                 theme.panel.text_muted,
             );
         }

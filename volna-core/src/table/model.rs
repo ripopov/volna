@@ -8,8 +8,8 @@ use web_time::Instant;
 use super::columns::{ColumnSet, TransactionColumn};
 use super::format::{self, FormatChoice, TableFormats};
 use super::layout::{
-    ColumnHeader, HEADER_HEIGHT, MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, ROW_HEIGHT, RowViewport,
-    TableLayout,
+    CELL_PADDING, ColumnHeader, HEADER_HEIGHT, MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, ROW_HEIGHT,
+    RowViewport, TableLayout,
 };
 use super::source::TableSource;
 use crate::data::loaded_tracks::LoadedGenerator;
@@ -1736,7 +1736,12 @@ impl TableModel {
         };
     }
 
-    pub fn layout(&mut self, bounds: Rect, theme: &Theme) -> &TableLayout {
+    pub fn layout(
+        &mut self,
+        bounds: Rect,
+        theme: &Theme,
+        measure: &mut dyn TextMeasure,
+    ) -> &TableLayout {
         let zoom = theme.zoom;
         let row_height = ROW_HEIGHT * zoom;
         let header_height = HEADER_HEIGHT * zoom;
@@ -1745,7 +1750,11 @@ impl TableModel {
         } else {
             0.0
         };
-        let gutter_width = 64.0 * zoom;
+        let digits = self.len().max(1).ilog10() + 1;
+        let digit_width = measure.text_width("0", FontRole::Mono, theme.mono_size);
+        let gutter_width = (digits as f32 * digit_width + 2.0 * CELL_PADDING * zoom)
+            .max(64.0 * zoom)
+            .ceil();
         let bar = 12.0 * zoom;
         let status_height = row_height;
         let header = Rect::from_xywh(
@@ -2528,7 +2537,11 @@ mod tests {
         );
         model.build_signal_rows(histories).unwrap();
         model.state = TableState::Ready;
-        model.layout(Rect::from_xywh(0.0, 0.0, 320.0, 240.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 320.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         let first: Vec<_> = model
             .layout
             .columns
@@ -2545,7 +2558,11 @@ mod tests {
         assert!(first.len() < 21);
 
         model.horizontal = 2_000.0;
-        model.layout(Rect::from_xywh(0.0, 0.0, 320.0, 240.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 320.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         let second: Vec<_> = model
             .layout
             .columns
@@ -2600,14 +2617,22 @@ mod tests {
             })])
             .unwrap();
         model.state = TableState::Ready;
-        model.layout(Rect::from_xywh(0.0, 0.0, 500.0, 240.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 500.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         assert!(model.window.rows[0].cells[1].text.len() <= PREVIEW_BYTES);
         assert_eq!(
             model.column_fit_width(1, &Theme::one_dark(), &mut crate::scene::MonoMeasure),
             Some(MAX_COLUMN_WIDTH)
         );
         model.resize_column(1, 1200.0);
-        model.layout(Rect::from_xywh(0.0, 0.0, 500.0, 240.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 500.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         assert!(model.window.rows[0].cells[1].text.len() > PREVIEW_BYTES);
         assert!(model.window.rows[0].cells[1].text.ends_with('…'));
         model.selected = Some(RowIdentity::SignalTime(7));
@@ -2998,7 +3023,11 @@ mod tests {
         for mut theme in [Theme::one_dark(), Theme::volna(false)] {
             for zoom in [1.0, 1.5, 2.0] {
                 theme.zoom = zoom;
-                model.layout(Rect::from_xywh(0.0, 0.0, 360.0, 500.0), &theme);
+                model.layout(
+                    Rect::from_xywh(0.0, 0.0, 360.0, 500.0),
+                    &theme,
+                    &mut crate::scene::MonoMeasure,
+                );
                 assert_eq!(model.layout.header.bottom(), model.layout.filter_row.top());
                 assert_eq!(model.layout.filter_row.bottom(), model.layout.body.top());
                 assert_eq!(
@@ -3081,7 +3110,11 @@ mod tests {
             now
         ));
         assert_eq!(model.cell_text(0, 7, 64).unwrap(), "0b10000000");
-        model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 1400.0, 400.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         let slot = model
             .layout
             .columns
@@ -3109,7 +3142,11 @@ mod tests {
             ])
             .unwrap();
         model.state = TableState::Ready;
-        model.layout(Rect::from_xywh(0.0, 0.0, 800.0, 240.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 800.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         assert_eq!(model.window.rows[0].cells[1].text, "0x3fc00000");
         let choices = model.column_formats(1).unwrap();
         assert!(
@@ -3138,7 +3175,11 @@ mod tests {
                 Instant::now()
             ));
         }
-        model.layout(Rect::from_xywh(0.0, 0.0, 800.0, 240.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 800.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         assert_eq!(model.window.rows[0].cells[1].text, "1.5");
         assert_eq!(model.window.rows[0].cells[2].text, "-1");
         model.selected = Some(RowIdentity::SignalTime(7));
@@ -3153,7 +3194,11 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert!(model.query_error.is_none(), "{:?}", model.query_error);
-        model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 1400.0, 400.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
     }
 
     #[test]
@@ -3169,7 +3214,11 @@ mod tests {
         let attribute = TransactionColumn::Attribute("addr".into());
         assert!(model.edit_columns(|c| c.toggle_transaction(attribute.clone())));
         let slot = 7;
-        model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 1400.0, 400.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         let cell = model
             .layout
             .columns
@@ -3478,7 +3527,7 @@ mod tests {
         let bounds = Rect::from_xywh(20.0, 30.0, 800.0, 400.0);
         model.horizontal = 80.0;
         model.viewport.top = 20;
-        model.layout(bounds, &theme);
+        model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         let column = model.layout.columns[0];
         let start = point(column.rect.right() - 1.0, model.layout.body.bottom() - 1.0);
         let mut doc = Document::new();
@@ -3524,7 +3573,7 @@ mod tests {
         );
 
         model.horizontal = model.widths[column.source_index].unwrap() * theme.zoom;
-        model.layout(bounds, &theme);
+        model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         let body = model.layout.body;
         let clipped_edge = point(body.left() - 2.0, body.top() + 5.0);
         assert!(model.layout.columns[0].resize.contains(clipped_edge));
@@ -3551,7 +3600,11 @@ mod tests {
             for horizontal in [0.0, 20.0] {
                 let theme = Theme::volna(true).zoomed(zoom);
                 model.horizontal = horizontal;
-                model.layout(Rect::from_xywh(0.0, 0.0, 360.0, 400.0), &theme);
+                model.layout(
+                    Rect::from_xywh(0.0, 0.0, 360.0, 400.0),
+                    &theme,
+                    &mut crate::scene::MonoMeasure,
+                );
                 let column = model.layout.columns[0];
                 let header = column.header;
                 let format = header.format.unwrap();
@@ -3613,7 +3666,11 @@ mod tests {
         let mut model = generator_model(vec![transaction(2, 0, "row"), transaction(1, 1, "row")]);
         model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Id));
         let theme = Theme::volna(true);
-        model.layout(Rect::from_xywh(0.0, 0.0, 1400.0, 400.0), &theme);
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 1400.0, 400.0),
+            &theme,
+            &mut crate::scene::MonoMeasure,
+        );
         let header = model
             .layout
             .columns
@@ -3673,7 +3730,7 @@ mod tests {
         let mut model = generator_model(vec![transaction(1, 0, "row")]);
         let theme = Theme::one_dark().zoomed(1.5);
         let bounds = Rect::from_xywh(20.0, 30.0, 1600.0, 240.0);
-        model.layout(bounds, &theme);
+        model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         let attributes = *model.layout.columns.last().unwrap();
         assert!((attributes.rect.right() - model.layout.header.right()).abs() < 0.01);
         let start =
@@ -3705,7 +3762,7 @@ mod tests {
         assert!((model.widths[attributes.source_index].unwrap() - width).abs() < 0.01);
         assert_eq!(model.selected, None);
         assert!(!model.dragging());
-        model.layout(bounds, &theme);
+        model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         assert!(model.layout.content_width > model.layout.header.width());
         assert_eq!(model.clone_view().widths.get(), model.widths.get());
 
@@ -3717,10 +3774,14 @@ mod tests {
                 now,
             );
         }
-        model.layout(Rect::from_xywh(0.0, 0.0, 2000.0, 240.0), &Theme::one_dark());
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 2000.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
         assert!((model.layout.columns.last().unwrap().rect.width() - width).abs() < 0.01);
         model.command(&mut doc, panel, TableCommand::ResetColumns, now);
-        model.layout(bounds, &theme);
+        model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         assert!(model.widths.iter().all(Option::is_none));
         assert!(
             (model.layout.columns.last().unwrap().rect.right() - model.layout.header.right()).abs()
@@ -3749,11 +3810,11 @@ mod tests {
         let mut model = generator_model(records);
         let theme = Theme::one_dark();
         let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 10_000.0);
-        model.layout(bounds, &theme);
+        model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         let first = &model.window.rows[0].cells.last().unwrap().text;
         assert!(!first.contains("field19="));
         assert!(model.resize_column(6, 4000.0));
-        model.layout(bounds, &theme);
+        model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         let expanded = &model.window.rows[0].cells.last().unwrap().text;
         assert!(expanded.contains("field19="), "{expanded}");
         assert!(expanded.len() > PREVIEW_BYTES);
@@ -3776,7 +3837,7 @@ mod tests {
         ]);
         let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 100.0);
         let theme = Theme::one_dark();
-        model.layout(bounds, &theme);
+        model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         let short = model
             .column_fit_width(0, &theme, &mut crate::scene::MonoMeasure)
             .unwrap();
@@ -3787,7 +3848,11 @@ mod tests {
             .unwrap();
         assert!(long > 2100.0);
         let zoomed = theme.zoomed(2.0);
-        model.layout(Rect::from_xywh(0.0, 0.0, 2000.0, 200.0), &zoomed);
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 2000.0, 200.0),
+            &zoomed,
+            &mut crate::scene::MonoMeasure,
+        );
         let zoomed_width = model
             .column_fit_width(0, &zoomed, &mut crate::scene::MonoMeasure)
             .unwrap();
@@ -3849,6 +3914,134 @@ mod tests {
         viewport.reveal(u64::MAX - 10, u64::MAX, 240.0, 24.0);
         assert_eq!(viewport.top, u64::MAX - 19);
         assert_eq!(viewport.row_at(216.0, u64::MAX, 24.0), Some(u64::MAX - 10));
+    }
+
+    #[test]
+    fn row_numbers_fit_and_align_without_gutter_changes_while_scrolling() {
+        use crate::scene::{MonoMeasure, Prim, Scene, TextCache};
+
+        struct History(usize);
+        impl SignalHistory for History {
+            fn shape(&self) -> SignalShape {
+                SignalShape::Bit
+            }
+            fn len(&self) -> usize {
+                self.0
+            }
+            fn time(&self, index: usize) -> u64 {
+                index as u64
+            }
+            fn value(&self, _: Option<usize>) -> WaveValue {
+                WaveValue::Bits("0".into())
+            }
+            fn bit(&self, _: Option<usize>) -> volna_trace::data::Bit {
+                volna_trace::data::Bit::Zero
+            }
+            fn index_at_hint(&self, time: u64, _: usize) -> Option<usize> {
+                self.index_at(time)
+            }
+        }
+
+        let bounds = Rect::from_xywh(15.0, 20.0, 360.0, 500.0);
+        for count in [0, 1, 9, 10, 99_999, 100_000, 999_999, 1_000_000, usize::MAX] {
+            let mut model = TableModel::new(
+                TableSource::Signals(vec![signal_source("a", 1)]),
+                Link::default(),
+                MemoryBudget::new(16 * 1024 * 1024),
+                Translators::builtin(),
+            );
+            model
+                .build_signal_rows(vec![Arc::new(History(count))])
+                .unwrap();
+            model.state = if count == 0 {
+                TableState::Empty
+            } else {
+                TableState::Ready
+            };
+            for base in [Theme::volna(true), Theme::volna(false)] {
+                for zoom in [0.75, 1.0, 1.5, 2.0] {
+                    let theme = base.zoomed(zoom);
+                    model.viewport = RowViewport::default();
+                    model.layout(bounds, &theme, &mut MonoMeasure);
+                    let gutter_width = model.layout.gutter.width();
+                    let text_width =
+                        MonoMeasure.text_width(&count.to_string(), FontRole::Mono, theme.mono_size);
+                    let padding = CELL_PADDING * zoom;
+                    assert!(
+                        gutter_width + 0.001 >= text_width + 2.0 * padding,
+                        "{count} rows, zoom {zoom}: gutter {gutter_width}, text {text_width}, padding {padding}"
+                    );
+                    assert!(gutter_width >= 64.0 * zoom);
+                    assert_eq!(model.layout.body.left(), model.layout.gutter.right());
+                    assert_eq!(model.layout.header.left(), model.layout.body.left());
+
+                    let mut cache = TextCache::default();
+                    for top in [0, 9, count.saturating_sub(1)] {
+                        model.viewport.top = top as u64;
+                        model.layout(bounds, &theme, &mut MonoMeasure);
+                        assert_eq!(model.layout.gutter.width(), gutter_width);
+                        let mut scene = Scene::default();
+                        super::super::paint::paint(
+                            &model,
+                            &theme,
+                            &mut cache,
+                            &mut MonoMeasure,
+                            &mut scene,
+                        );
+                        let labels: Vec<_> = scene
+                            .prims
+                            .iter()
+                            .filter_map(|prim| {
+                                if let Prim::Text { origin, text, .. } = prim
+                                    && origin.x < model.layout.gutter.right()
+                                    && origin.y >= model.layout.body.top()
+                                    && origin.y < model.layout.body.bottom()
+                                {
+                                    Some((origin, text))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        assert_eq!(labels.is_empty(), count == 0);
+                        for (origin, text) in labels {
+                            let width =
+                                MonoMeasure.text_width(text, FontRole::Mono, theme.mono_size);
+                            assert!(origin.x >= model.layout.gutter.left() + padding - 0.001);
+                            assert!(
+                                (origin.x + width - (model.layout.gutter.right() - padding)).abs()
+                                    < 0.001
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn row_number_gutter_resizes_to_filtered_count_and_font_size() {
+        use super::super::filter::FilterMode;
+        use crate::scene::MonoMeasure;
+
+        let mut model = generator_model((0..1000).map(|i| transaction(i, i, "row")).collect());
+        let mut theme = Theme::volna(true);
+        theme.mono_size = 32.0;
+        let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 500.0);
+        model.layout(bounds, &theme, &mut MonoMeasure);
+        let full_width = model.layout.gutter.width();
+        set_filter(&mut model, 1, FilterMode::Expression, "< 10");
+        finish_sort(&mut model);
+        assert_eq!(model.len(), 10);
+        model.layout(bounds, &theme, &mut MonoMeasure);
+        assert!(model.layout.gutter.width() < full_width);
+        theme.mono_size = 64.0;
+        model.layout(bounds, &theme, &mut MonoMeasure);
+        assert!(
+            model.layout.gutter.width()
+                >= MonoMeasure.text_width("10", FontRole::Mono, theme.mono_size)
+                    + 2.0 * CELL_PADDING
+        );
     }
 
     #[test]

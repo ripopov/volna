@@ -6136,7 +6136,13 @@ fn auxiliary_windows_route_keyboard_navigation_and_return_panels_without_losing_
             let at = main.workspace.update(&mut auxiliary, |ws, cx| {
                 let layout = ws
                     .app
-                    .layout_panel(b, bounds, crate::theme::canvas_theme(cx), 1.0)
+                    .layout_panel(
+                        b,
+                        bounds,
+                        crate::theme::canvas_theme(cx),
+                        1.0,
+                        &mut volna_core::scene::MonoMeasure,
+                    )
                     .unwrap();
                 let volna_core::app::PanelLayout::Waves(layout) = layout else {
                     panic!()

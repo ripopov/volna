@@ -807,7 +807,13 @@ fn row_heights_round_trip_and_restore_tall_row_geometry() {
     assert_eq!(row_heights(&restored), [1, 3, 8]);
     assert_eq!(value(&restored), saved);
     let id = restored.panels.focused_id();
-    restored.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1200.0, 800.0), &theme, 1.0);
+    restored.layout_panel(
+        id,
+        Rect::from_xywh(0.0, 0.0, 1200.0, 800.0),
+        &theme,
+        1.0,
+        &mut volna_core::scene::MonoMeasure,
+    );
     let layout = restored.panels.focused_waves().unwrap().last_layout();
     let top = layout.names.top();
     assert_eq!(
@@ -1295,6 +1301,7 @@ fn cancelling_a_table_resize_after_a_save_persists_the_restored_width() {
         Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
         &volna_core::Theme::one_dark(),
         1.0,
+        &mut volna_core::scene::MonoMeasure,
     )
     .unwrap();
     let edge = app
@@ -1374,6 +1381,7 @@ fn a_shared_timeline_divider_drag_schedules_an_autosave() {
         Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
         &theme,
         1.0,
+        &mut volna_core::scene::MonoMeasure,
     )
     .unwrap();
     let split = app.panels.waves(second).unwrap().last_layout().values_split;

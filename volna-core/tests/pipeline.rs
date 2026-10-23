@@ -168,7 +168,8 @@ fn pump(app: &mut App) {
 const BOUNDS: Rect = Rect::from_xywh(0.0, 0.0, 1200.0, 600.0);
 
 fn frame(app: &mut App, id: PanelId, theme: &Theme) {
-    app.layout_panel(id, BOUNDS, theme, 1.0).unwrap();
+    app.layout_panel(id, BOUNDS, theme, 1.0, &mut MonoMeasure)
+        .unwrap();
     app.render_panel(id, theme, &mut MonoMeasure);
 }
 
@@ -450,7 +451,10 @@ fn activity_keeps_long_overlaps_and_points_in_one_generator() {
 }
 
 fn cells(app: &mut App, id: PanelId, theme: &Theme) -> Rect {
-    match app.layout_panel(id, BOUNDS, theme, 1.0).unwrap() {
+    match app
+        .layout_panel(id, BOUNDS, theme, 1.0, &mut MonoMeasure)
+        .unwrap()
+    {
         PanelLayout::Pipeline(l) => l.cells,
         PanelLayout::Waves(_) | PanelLayout::Table(_) => panic!("not a pipeline panel"),
     }
@@ -1122,11 +1126,17 @@ fn box_zoom_tiny_boxes_escape_and_resizing_cancel_without_clicking() {
             match cancel {
                 1 => app.handle_at(Command::Action(Action::ClearSelection), now),
                 2 => {
-                    app.layout_panel(id, Rect::from_xywh(30.0, 20.0, 1200.0, 600.0), &theme, 1.0)
-                        .unwrap();
+                    app.layout_panel(
+                        id,
+                        Rect::from_xywh(30.0, 20.0, 1200.0, 600.0),
+                        &theme,
+                        1.0,
+                        &mut MonoMeasure,
+                    )
+                    .unwrap();
                 }
                 3 => {
-                    app.layout_panel(id, BOUNDS, &theme.zoomed(zoom * 1.1), 1.0)
+                    app.layout_panel(id, BOUNDS, &theme.zoomed(zoom * 1.1), 1.0, &mut MonoMeasure)
                         .unwrap();
                 }
                 _ => {}
@@ -1854,7 +1864,10 @@ fn zoom_fit_keeps_square_cells_and_fits_short_and_tall_traces() {
 }
 
 fn marker_lane(app: &mut App, id: PanelId, theme: &Theme) -> volna_core::wave::overlay::MarkerLane {
-    match app.layout_panel(id, BOUNDS, theme, 1.0).unwrap() {
+    match app
+        .layout_panel(id, BOUNDS, theme, 1.0, &mut MonoMeasure)
+        .unwrap()
+    {
         PanelLayout::Waves(l) => l.marker_lane.clone(),
         PanelLayout::Pipeline(l) => l.marker_lane.clone(),
         PanelLayout::Table(_) => panic!("a table panel has no time axis"),
@@ -2184,7 +2197,8 @@ fn each_layout_uses_its_own_device_scale() {
             row_px: 1.0,
         });
     for (scale, expected) in [(3.0, 3.0), (1.25, 1.25), (f64::NAN, 1.0), (0.0, 1.0)] {
-        let Some(PanelLayout::Pipeline(layout)) = app.layout_panel(pipeline, BOUNDS, &theme, scale)
+        let Some(PanelLayout::Pipeline(layout)) =
+            app.layout_panel(pipeline, BOUNDS, &theme, scale, &mut MonoMeasure)
         else {
             panic!("pipeline layout");
         };
@@ -2213,6 +2227,7 @@ fn overview_uses_physical_pixel_presence_with_bounded_output() {
         Rect::from_xywh(0.37, 0.23, BOUNDS.width(), BOUNDS.height()),
         &theme,
         1.25,
+        &mut MonoMeasure,
     )
     .unwrap();
     app.render_panel(pipeline, &theme, &mut MonoMeasure);
@@ -3207,7 +3222,10 @@ fn the_pipeline_measures_from_the_reference_like_the_waves() {
         frame(&mut app, id, &theme);
         assert!(app.scene().texts().any(|t| t == "R → cursor"));
     }
-    let cells_top = match app.layout_panel(pipeline, BOUNDS, &theme, 1.0).unwrap() {
+    let cells_top = match app
+        .layout_panel(pipeline, BOUNDS, &theme, 1.0, &mut MonoMeasure)
+        .unwrap()
+    {
         PanelLayout::Pipeline(l) => l.cells.top(),
         _ => unreachable!(),
     };
@@ -3354,10 +3372,17 @@ fn timeline_frames(app: &mut App, waves: PanelId, pipeline: PanelId, width: f32,
         Rect::from_xywh(25.0, 350.0, width, 300.0),
         theme,
         1.0,
+        &mut MonoMeasure,
     )
     .unwrap();
-    app.layout_panel(waves, Rect::from_xywh(25.0, 20.0, width, 300.0), theme, 1.0)
-        .unwrap();
+    app.layout_panel(
+        waves,
+        Rect::from_xywh(25.0, 20.0, width, 300.0),
+        theme,
+        1.0,
+        &mut MonoMeasure,
+    )
+    .unwrap();
 }
 
 fn aligned_metadata(app: &App, waves: PanelId, pipeline: PanelId) -> f32 {
@@ -3623,6 +3648,7 @@ fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans
         Rect::from_xywh(1240.0, 20.0, 500.0, 600.0),
         &theme,
         1.0,
+        &mut MonoMeasure,
     )
     .unwrap();
     assert!(

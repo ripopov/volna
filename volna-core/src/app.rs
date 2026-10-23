@@ -2503,6 +2503,7 @@ impl App {
         bounds: Rect,
         theme: &Theme,
         device_scale: f64,
+        measure: &mut dyn TextMeasure,
     ) -> Option<PanelLayout<'_>> {
         let device_scale = if device_scale.is_finite() && device_scale > 0.0 {
             device_scale
@@ -2518,7 +2519,7 @@ impl App {
             PanelKind::Pipeline(p) => {
                 PanelLayout::Pipeline(p.layout(bounds, doc, theme, metadata, device_scale))
             }
-            PanelKind::Table(table) => PanelLayout::Table(table.layout(bounds, theme)),
+            PanelKind::Table(table) => PanelLayout::Table(table.layout(bounds, theme, measure)),
             _ => return None,
         })
     }

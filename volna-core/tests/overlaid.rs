@@ -135,8 +135,14 @@ fn pump(app: &mut App) {
 }
 
 fn frame<'a>(app: &'a mut App, id: PanelId, t: &Theme) -> &'a Scene {
-    app.layout_panel(id, Rect::from_xywh(0.0, 0.0, 1200.0, 600.0), t, 1.0)
-        .unwrap();
+    app.layout_panel(
+        id,
+        Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
+        t,
+        1.0,
+        &mut MonoMeasure,
+    )
+    .unwrap();
     app.render_panel(id, t, &mut MonoMeasure)
 }
 

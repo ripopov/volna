@@ -57,10 +57,12 @@ fn landing_waveforms_render_at_full_range_and_saved_zoom() {
     let (first, last) = app.doc.limits();
     let saved_viewport = app.doc.shared.viewport.value;
     let render = |app: &mut App| {
-        app.layout_panel(PanelId(39), bounds, &theme, 1.0).unwrap();
+        app.layout_panel(PanelId(39), bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
         app.render_panel(PanelId(39), &theme, &mut MonoMeasure);
         pump(app);
-        app.layout_panel(PanelId(39), bounds, &theme, 1.0).unwrap();
+        app.layout_panel(PanelId(39), bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
         let scene = app.render_panel(PanelId(39), &theme, &mut MonoMeasure);
         let texts: Vec<String> = scene.texts().map(str::to_owned).collect();
         let quads: Vec<_> = scene.quads().collect();
@@ -110,7 +112,8 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
     let theme = Theme::one_dark();
     let bounds = Rect::from_xywh(0.0, 0.0, 900.0, 420.0);
     for id in [39, 38, 40] {
-        app.layout_panel(PanelId(id), bounds, &theme, 1.0).unwrap();
+        app.layout_panel(PanelId(id), bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
         app.render_panel(PanelId(id), &theme, &mut MonoMeasure);
     }
     pump(&mut app);
@@ -124,7 +127,8 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         .count();
     assert_eq!(signals, 13);
     assert_eq!(waves.loaded_count(), signals, "every signal row loaded");
-    app.layout_panel(PanelId(39), bounds, &theme, 1.0).unwrap();
+    app.layout_panel(PanelId(39), bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
     let texts: Vec<String> = app
         .render_panel(PanelId(39), &theme, &mut MonoMeasure)
         .texts()

@@ -121,7 +121,8 @@ fn pump(app: &mut App) {
 }
 
 fn frame(app: &mut App, id: PanelId, theme: &Theme) {
-    app.layout_panel(id, BOUNDS, theme, 1.0).unwrap();
+    app.layout_panel(id, BOUNDS, theme, 1.0, &mut MonoMeasure)
+        .unwrap();
     app.render_panel(id, theme, &mut MonoMeasure);
 }
 
@@ -801,7 +802,8 @@ fn spans_between_markers_count_cycles_and_zoom_on_a_double_click() {
         "counted in each ruler clock: 0.37 and 0.05 into bus cycles 1 and 8"
     );
     let texts = |app: &mut App| -> Vec<String> {
-        app.layout_panel(panel, BOUNDS, &theme, 1.0).unwrap();
+        app.layout_panel(panel, BOUNDS, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
         app.render_panel(panel, &theme, &mut MonoMeasure)
             .texts()
             .map(str::to_owned)
