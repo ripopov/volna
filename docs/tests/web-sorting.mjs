@@ -106,7 +106,8 @@ try {
 
   await page.mouse.click(350, 108);
   await sorting();
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  // Capture a painted pending toolbar before clicking its canvas-rendered Cancel button.
+  await page.screenshot({ path: `${results}/sorting-pending-dark.png` });
   await page.mouse.click(678, 84); // Cancel in the table toolbar.
   await settled();
   assert.match(await state(), /column: 0, descending: false/, 'cancel retains the applied order');
