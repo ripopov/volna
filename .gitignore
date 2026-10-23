@@ -30,6 +30,7 @@ rustc-ice-*.txt
 *.index
 *.index.lock
 *.volna.json
+/volna/examples/large_*
 
 # Documentation build
 /docs/node_modules/
