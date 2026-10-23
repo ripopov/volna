@@ -155,23 +155,28 @@ def verify_vsix(vsix, target, binaries):
 
 def package(target):
     check_media(lambda item: (EXT / "media" / item).read_bytes())
-    result = subprocess.run(
-        [
-            "cargo", "build", "--locked", "-p", "volna-server", "-p", "vtr-cli",
-            "--release", "--message-format=json-render-diagnostics",
-        ],
-        cwd=ROOT,
-        check=True,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
     binaries = {}
-    for line in result.stdout.splitlines():
-        message = json.loads(line)
-        if message.get("reason") == "compiler-artifact" and message.get("executable"):
-            name = message["target"]["name"]
-            if name in ("volna-server", "vtr"):
-                binaries[name] = Path(message["executable"])
+    for manifest, package_name in (
+        (ROOT / "Cargo.toml", "volna-server"),
+        (ROOT / "vtr/Cargo.toml", "vtr-cli"),
+    ):
+        result = subprocess.run(
+            [
+                "cargo", "build", "--locked", "--manifest-path", str(manifest),
+                "--target-dir", str(ROOT / "target"), "-p", package_name,
+                "--release", "--message-format=json-render-diagnostics",
+            ],
+            cwd=ROOT,
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        for line in result.stdout.splitlines():
+            message = json.loads(line)
+            if message.get("reason") == "compiler-artifact" and message.get("executable"):
+                name = message["target"]["name"]
+                if name in ("volna-server", "vtr"):
+                    binaries[name] = Path(message["executable"])
     if binaries.keys() != {"volna-server", "vtr"}:
         raise ValueError("Cargo did not report both native executables")
     bin_dir = EXT / "bin"

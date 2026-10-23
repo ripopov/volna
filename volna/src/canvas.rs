@@ -1472,6 +1472,7 @@ mod presence_tests {
 mod text_tests {
     use super::*;
     use gpui_kit::{TestAppContext, VisualTestContext};
+    use vtr::Recorder;
 
     #[gpui_kit::test]
     fn pipeline_draws_multiline_trace_labels(cx: &mut TestAppContext) {
@@ -1479,18 +1480,22 @@ mod text_tests {
 
         let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
         let mut writer = vtr::Writer::create(file.path()).unwrap();
-        let generator = writer.add_generator(None, "thread0", "PIPELINE").unwrap();
-        let tx = writer.begin_tx(generator, 0).unwrap();
-        let label = "0x800013f4: \naddi a2, a2, 8";
-        let key = writer.intern("vtr.label");
-        writer
-            .tx_attr(tx, key, &vtr::Value::Text(label.into()))
+        let generator = writer
+            .transactions::<()>(vtr::SourceOptions::new("thread0", None), "PIPELINE")
             .unwrap();
-        let stage = writer.intern("F\nD");
-        let lane = writer.intern("0");
-        writer.tx_stage(tx, stage, lane, 0, 10, &[]).unwrap();
-        writer.end_tx(tx, 10, vtr::TxStatus::Ok).unwrap();
-        writer.set_time(10).unwrap();
+        let tx = writer.begin_at(generator, 0, &(), None).unwrap();
+        let label = "0x800013f4: \naddi a2, a2, 8";
+        let key = writer.intern("vtr.label").unwrap();
+        writer
+            .attribute(tx.owner(), key, vtr::Value::Text(label.into()))
+            .unwrap();
+        let stage = writer.intern("F\nD").unwrap();
+        let lane = writer.intern("0").unwrap();
+        writer
+            .embedded_stage(tx.owner(), 0, stage, lane, Some(10), vec![])
+            .unwrap();
+        writer.end_at(tx, 10, vtr::Status::Ok).unwrap();
+        writer.advance_time(10).unwrap();
         writer.close().unwrap();
 
         cx.update(crate::init_app);
@@ -1577,29 +1582,44 @@ mod presence_atlas_tests {
         pipeline::{FollowActivity, RowView},
         wave::viewport::Viewport,
     };
+    use vtr::Recorder;
 
     #[gpui_kit::test]
     fn fragmented_pipeline_uploads_and_releases_obsolete_atlas_images(cx: &mut TestAppContext) {
         let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
         let mut writer = vtr::Writer::create(file.path()).unwrap();
         let stream = writer
-            .add_scope(None, "pipeline", vtr::ScopeType::Generic, "")
+            .scope_with(
+                vtr::SourceOptions::new("pipeline", None),
+                vtr::ScopeType::Generic,
+                "",
+            )
             .unwrap();
         let generator = writer
-            .add_generator(Some(stream), "instruction", "PIPELINE")
+            .transactions::<()>(
+                vtr::SourceOptions::new("instruction", Some(stream)),
+                "PIPELINE",
+            )
             .unwrap();
-        let name = writer.intern("stage");
-        let lane = writer.intern("0");
+        let name = writer.intern("stage").unwrap();
+        let lane = writer.intern("0").unwrap();
         for row in 0..600 {
-            let tx = writer.begin_tx(generator, row).unwrap();
+            let tx = writer.begin_at(generator, row, &(), None).unwrap();
             for column in 0..80 {
                 writer
-                    .tx_stage(tx, name, lane, column * 24, column * 24, &[])
+                    .embedded_stage(
+                        tx.owner(),
+                        column * 24,
+                        name,
+                        lane,
+                        Some(column * 24),
+                        vec![],
+                    )
                     .unwrap();
             }
-            writer.end_tx(tx, row + 1, vtr::TxStatus::Ok).unwrap();
+            writer.end_at(tx, row + 1, vtr::Status::Ok).unwrap();
         }
-        writer.set_time(2000).unwrap();
+        writer.advance_time(2000).unwrap();
         writer.close().unwrap();
         cx.update(crate::init_app);
         let host = cx.add_window(crate::app::Workspace::new);

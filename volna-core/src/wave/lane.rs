@@ -7,7 +7,7 @@ use crate::pipeline::{PipelineModel, TrackSource};
 use crate::trace::{TraceId, Traced};
 use crate::wave::model::RowHeight;
 use crate::wave::viewport::Viewport;
-use volna_trace::data::transactions::{TrackRef, Transaction, TxStatus};
+use volna_trace::data::transactions::{Status, TrackRef, Transaction};
 
 pub const DENSITY_PX: f64 = 4.0;
 const SUB_ROW: f32 = 2.0 / 3.0;
@@ -216,7 +216,7 @@ pub fn density(
         let (a, b) = (column(tx.begin), column(tx.end) + 1);
         open[a] += 1;
         open[b] -= 1;
-        if tx.status == TxStatus::Error {
+        if tx.status == Status::Error {
             failed[a] += 1;
             failed[b] -= 1;
         }
@@ -344,7 +344,7 @@ pub fn label(tx: &Transaction) -> String {
 #[must_use]
 pub fn value_text(generator: &LoadedGenerator, cursor: u64) -> (String, bool) {
     let open = open_at(generator, cursor);
-    let failed = open.iter().any(|tx| tx.status == TxStatus::Error);
+    let failed = open.iter().any(|tx| tx.status == Status::Error);
     let text = match open.as_slice() {
         [] => "–".to_owned(),
         [tx] => label(tx),
@@ -364,16 +364,16 @@ pub fn value_text(generator: &LoadedGenerator, cursor: u64) -> (String, bool) {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use volna_trace::data::transactions::{TransactionRef, TxKind};
+    use volna_trace::data::transactions::{SpanKind, TransactionRef};
 
-    fn tx(id: u64, begin: u64, end: u64, status: TxStatus) -> Transaction {
+    fn tx(id: u64, begin: u64, end: u64, status: Status) -> Transaction {
         Transaction {
             id: TransactionRef(id),
             generator: TrackRef(1),
             begin,
             end,
             status,
-            kind: TxKind::Producer,
+            kind: SpanKind::Producer,
             parent: None,
             attributes: vec![],
             events: vec![],
@@ -385,10 +385,10 @@ mod tests {
         LoadedGenerator::new(
             TrackRef(1),
             vec![
-                tx(0, 2, 20, TxStatus::Ok),
-                tx(1, 8, 26, TxStatus::Ok),
-                tx(2, 14, 40, TxStatus::Error),
-                tx(3, 22, 34, TxStatus::Ok),
+                tx(0, 2, 20, Status::Ok),
+                tx(1, 8, 26, Status::Ok),
+                tx(2, 14, 40, Status::Error),
+                tx(3, 22, 34, Status::Ok),
             ],
             HashMap::new(),
             vec![],

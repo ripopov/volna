@@ -1577,7 +1577,7 @@ mod tests {
     }
 
     fn clock(name: &str, stretches: &[(u64, u64, u64)]) -> Clock {
-        let timeline = vtr::ClockTimeline::new(stretches.to_vec(), false).unwrap();
+        let timeline = crate::clock::ClockTimeline::new(stretches.to_vec(), false).unwrap();
         Clock {
             trace: crate::trace::TraceId::A,
             track: volna_trace::data::transactions::TrackRef(0),

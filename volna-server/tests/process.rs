@@ -12,6 +12,7 @@ use volna_trace::remote::{ClientStep, signals::SignalTransfer};
 use volna_trace::remote::{client::RemoteClient, memory::MemoryBudget};
 use volna_trace::session::LoadResult;
 use volna_trace::session::OpenSpec;
+use vtr::Recorder;
 
 struct Server {
     child: std::sync::Arc<std::sync::Mutex<Child>>,
@@ -400,23 +401,42 @@ fn process_preserves_full_tracks_and_parallel_relations() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
     let stream = w
-        .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("stream", None),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
-    let a = w.add_generator(Some(stream), "a", "transaction").unwrap();
-    let b = w.add_generator(Some(stream), "b", "transaction").unwrap();
-    w.add_generator(Some(stream), "empty", "transaction")
+    let a = w
+        .transactions::<()>(vtr::SourceOptions::new("a", Some(stream)), "transaction")
         .unwrap();
-    let x = w.begin_tx(a, 1).unwrap();
-    w.end_tx(x, 100, vtr::TxStatus::Ok).unwrap();
-    let y = w.begin_tx(b, 2).unwrap();
-    w.set_tx_parent(y, x).unwrap();
-    let key = w.intern("bytes");
-    w.tx_attr(y, key, &vtr::Value::Bytes(vec![0, 255])).unwrap();
-    w.end_tx(y, 2, vtr::TxStatus::Aborted).unwrap();
-    let kind = w.intern("cause");
+    let b = w
+        .transactions::<()>(vtr::SourceOptions::new("b", Some(stream)), "transaction")
+        .unwrap();
+    w.transactions::<()>(
+        vtr::SourceOptions::new("empty", Some(stream)),
+        "transaction",
+    )
+    .unwrap();
+    let x = w.begin_at(a, 1, &(), None).unwrap();
+    let y = w.begin_at(b, 2, &(), Some(x.owner())).unwrap();
+    let key = w.intern("bytes").unwrap();
+    w.attribute(y.owner(), key, vtr::Value::Bytes(vec![0, 255]))
+        .unwrap();
+    w.end_at(y, 2, vtr::Status::Aborted).unwrap();
+    w.end_at(x, 100, vtr::Status::Ok).unwrap();
+    let kind = w.intern("cause").unwrap();
     for _ in 0..2 {
-        w.relate(kind, x, y, &[(key, vtr::Value::F64(f64::NAN))])
-            .unwrap();
+        w.relate(
+            kind,
+            x.id(),
+            y.id(),
+            vec![vtr::Attribute {
+                key,
+                value: vtr::Value::F64(f64::NAN),
+            }],
+        )
+        .unwrap();
     }
     w.close().unwrap();
     let mut server = Server::start(file.path());
@@ -438,7 +458,7 @@ fn process_preserves_full_tracks_and_parallel_relations() {
                 session: session.clone(),
                 generation: 11,
                 request_id: 71,
-                track: TrackRef(a.0)
+                track: TrackRef(a.id())
             })
             .is_ok()
     );
@@ -452,12 +472,12 @@ fn process_preserves_full_tracks_and_parallel_relations() {
     else {
         panic!("track result");
     };
-    assert_eq!(track, TrackRef(a.0));
+    assert_eq!(track, TrackRef(a.id()));
     let loaded = result.unwrap();
     let local = OpenSpec::Path(file.path().into())
         .open()
         .unwrap()
-        .load_track(volna_trace::data::transactions::TrackRef(a.0))
+        .load_track(volna_trace::data::transactions::TrackRef(a.id()))
         .unwrap();
     assert_eq!(loaded.generators.len(), 1);
     for (a, b) in loaded.generators.iter().zip(&local.generators) {
@@ -488,7 +508,7 @@ fn process_preserves_full_tracks_and_parallel_relations() {
                 session: session.clone(),
                 generation: 11,
                 request_id: 73,
-                track: TrackRef(a.0)
+                track: TrackRef(a.id())
             })
             .is_ok()
     );
@@ -519,7 +539,7 @@ fn process_preserves_full_tracks_and_parallel_relations() {
                 session: session.clone(),
                 generation: 11,
                 request_id: 74,
-                track: TrackRef(a.0)
+                track: TrackRef(a.id())
             })
             .is_ok()
     );
@@ -530,7 +550,7 @@ fn process_preserves_full_tracks_and_parallel_relations() {
                 session: session.clone(),
                 generation: 11,
                 request_id: 75,
-                track: TrackRef(b.0)
+                track: TrackRef(b.id())
             })
             .is_ok()
     );

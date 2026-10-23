@@ -9,7 +9,7 @@ import { fromMarkdown } from 'mdast-util-from-markdown';
 
 const sources = [
   ['vtr/vtr/README.md', 'vtr', 'VTR trace library', 'What a VTR recording contains, and how to write, read, and recover one.'],
-  ['vtr/vtr/docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR 2.0 container, encodings, recovery rules, and activity sidecar.'],
+  ['vtr/vtr/docs/SPEC.md', 'vtr/specification', 'VTR file format specification', 'The normative VTR container, encodings, recovery rules, and exact activity sidecar.'],
   ['vtr/vtr/docs/RATIONALE.md', 'vtr/rationale', 'VTR design rationale', 'Trace storage decisions, library boundaries, and derived indexes.'],
   ['vtr/vtr/docs/LOGGING.md', 'vtr/logging', 'Structured logging', 'Declare typed log sites, write records, and query messages.'],
   ['vtr/vtr-cpp/README.md', 'vtr-cpp', 'VTR C++ and C', 'Build and link the native C++20 library and its C interface.'],

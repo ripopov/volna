@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use volna_trace::data::{SignalRef, WaveValue};
 use volna_trace::session::OpenSpec;
+use vtr::Recorder as _;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -16,14 +17,12 @@ fn converted(bytes: Vec<u8>) -> anyhow::Result<Arc<dyn volna_trace::Session>> {
     let input = dir.path().join("input.fst");
     let output = dir.path().join("output.vtr");
     std::fs::write(&input, bytes)?;
-    let mut writer = vtr::Writer::create_with(
-        &output,
-        vtr::WriterOptions {
-            dedup: false,
-            background: false,
-            ..Default::default()
-        },
-    )?;
+    let mut options = vtr::WriterOptions {
+        mode: vtr::ExecutionMode::Inline,
+        ..Default::default()
+    };
+    options.encoding.waveform_deduplicate = false;
+    let mut writer = vtr::Writer::create_with(&output, options)?;
     vtr_convert::fst::convert_fst(&input, &mut writer, &Default::default())?;
     writer.close()?;
     OpenSpec::Bytes {
@@ -296,21 +295,20 @@ fn raw_bytes_reals_nine_states_and_time_boundaries() {
     );
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let (_, signal) = writer
-        .add_var(
-            None,
-            "bytes",
+    let signal = writer
+        .signal(
+            vtr::SourceOptions::new("bytes", None),
+            vtr::SignalKind::VarLen,
             vtr::VarType::String,
             vtr::Direction::Implicit,
-            vtr::SignalKind::VarLen,
         )
         .unwrap();
-    writer.set_time(5).unwrap();
+    writer.advance_time(5).unwrap();
     writer
-        .emit_varlen(signal, &[b'a', 0, 255, b'\\', b'\n', 128])
+        .emit_bytes(signal, &[b'a', 0, 255, b'\\', b'\n', 128])
         .unwrap();
-    writer.set_time(10).unwrap();
-    writer.emit_varlen(signal, &[]).unwrap();
+    writer.advance_time(10).unwrap();
+    writer.emit_bytes(signal, &[]).unwrap();
     writer.close().unwrap();
     let vtr = OpenSpec::Path(file.path().into()).open().unwrap();
     let twin = vtr.load_signal(vtr.hierarchy().var(0).signal).unwrap();

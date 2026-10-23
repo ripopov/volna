@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use vtr::{NodeData, Reader, SignalData, SignalKind, SignalValue};
+use vtr::{NodeData, Reader, SignalKind, SignalValue, trace::SignalData};
 
 use super::history::SignalHistory;
 use super::source::{Generator, Hierarchy, SignalRef, TraceInfo};
@@ -47,7 +47,7 @@ impl LocalSession {
         let activity = vtr::activity::Identity::of(&reader)
             .ok()
             .map(|id| super::activity::ActivitySource::new(path, id));
-        let mut session = Self::from_reader(name, reader, source_bytes);
+        let mut session = Self::from_reader(name, reader, source_bytes)?;
         session.activity = activity;
         Ok(session)
     }
@@ -66,7 +66,7 @@ impl LocalSession {
             .ok()
             .map(|id| super::activity::ActivitySource::new_temporary(path, id));
         let mut session =
-            Self::from_owned_reader(name, reader, source_bytes, Some(Box::new(owner)));
+            Self::from_owned_reader(name, reader, source_bytes, Some(Box::new(owner)))?;
         session.activity = activity;
         session.temporary = true;
         Ok(session)
@@ -75,10 +75,10 @@ impl LocalSession {
     pub fn from_bytes(name: impl Into<String>, bytes: Vec<u8>) -> anyhow::Result<Self> {
         let source_bytes = bytes.capacity() as u64;
         let reader = Reader::from_bytes(bytes).context("parse VTR image")?;
-        Ok(Self::from_reader(name.into(), reader, source_bytes))
+        Self::from_reader(name.into(), reader, source_bytes)
     }
 
-    fn from_reader(name: String, reader: Reader, source_bytes: u64) -> Self {
+    fn from_reader(name: String, reader: Reader, source_bytes: u64) -> anyhow::Result<Self> {
         Self::from_owned_reader(name, reader, source_bytes, None)
     }
 
@@ -87,33 +87,37 @@ impl LocalSession {
         reader: Reader,
         source_bytes: u64,
         owner: Option<Box<dyn Send + Sync>>,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
         let reader = Arc::new(LocalReader {
             reader,
             _owner: owner,
         });
         let hierarchy = build_hierarchy(Arc::clone(&reader));
         let file_text = |name: &str| {
-            reader.meta().attrs.iter().find_map(|(key, value)| {
-                if reader.strings().get(*key) == name
-                    && let vtr::Value::Str(value) = value
-                {
-                    Some(reader.strings().get(*value).to_owned())
-                } else {
-                    None
+            reader.metadata().attributes.iter().find_map(|attr| {
+                let (key, value) = (attr.key, &attr.value);
+                if reader.string(key).expect("metadata key") != name {
+                    return None;
+                }
+                match value {
+                    vtr::Value::Str(value) => {
+                        Some(reader.string(*value).expect("metadata text").to_owned())
+                    }
+                    vtr::Value::Text(value) => Some(value.clone()),
+                    _ => None,
                 }
             })
         };
         let info = TraceInfo {
             name,
             design_id: file_text("design.vdb_id"),
-            timescale: reader.meta().timescale,
-            time_range: reader.time_range().unwrap_or((0, 0)),
+            timescale: reader.metadata().timescale,
+            time_range: reader.time_range()?.map_or((0, 0), |w| (w.first, w.last)),
             signal_count: reader.signal_count() as usize,
             change_count: None,
             time_unit: file_text("time.unit").filter(|unit| !unit.is_empty()),
         };
-        LocalSession {
+        Ok(LocalSession {
             tracks: super::vtr_transactions::tracks(&reader),
             reader,
             info,
@@ -121,8 +125,84 @@ impl LocalSession {
             source_bytes,
             activity: None,
             temporary: false,
+        })
+    }
+}
+
+fn declaration_bytes(reader: &Reader) -> u64 {
+    fn attributes(values: &vtr::Attributes) -> usize {
+        values.capacity() * std::mem::size_of::<vtr::Attribute>()
+            + values
+                .iter()
+                .map(|attr| owned_value(&attr.value))
+                .sum::<usize>()
+    }
+    fn owned_value(value: &vtr::Value) -> usize {
+        match value {
+            vtr::Value::Text(text) => text.capacity(),
+            vtr::Value::Bytes(bytes)
+            | vtr::Value::Bits { data: bytes, .. }
+            | vtr::Value::Logic { data: bytes, .. }
+            | vtr::Value::Logic9 { data: bytes, .. } => bytes.capacity(),
+            vtr::Value::List(values) => {
+                values.capacity() * std::mem::size_of::<vtr::Value>()
+                    + values.iter().map(owned_value).sum::<usize>()
+            }
+            vtr::Value::Map(values) => attributes(values),
+            _ => 0,
         }
     }
+    let declarations = reader.declarations();
+    let nodes = declarations.nodes.capacity() * std::mem::size_of::<vtr::Node>()
+        + declarations
+            .nodes
+            .iter()
+            .map(|node| {
+                attributes(&node.attributes)
+                    + match &node.data {
+                        NodeData::EnumTable { entries } => {
+                            entries.capacity() * std::mem::size_of::<(u32, u32)>()
+                        }
+                        _ => 0,
+                    }
+            })
+            .sum::<usize>();
+    let strings = declarations.strings.capacity() * std::mem::size_of::<String>()
+        + declarations
+            .strings
+            .iter()
+            .map(String::capacity)
+            .sum::<usize>();
+    let types = (0..reader.types().len())
+        .map(|id| {
+            if id == vtr::schema::Primitive::Enum.id() as usize {
+                // The enum tag reserves a table slot but is not a usable scalar datatype.
+                return std::mem::size_of::<vtr::schema::Datatype>();
+            }
+            let datatype = reader.types().get(id as u32).expect("declared datatype");
+            std::mem::size_of::<vtr::schema::Datatype>()
+                + datatype.name.capacity()
+                + match &datatype.kind {
+                    vtr::schema::TypeKind::Struct(fields) => {
+                        fields.capacity() * std::mem::size_of::<vtr::schema::Field>()
+                            + fields
+                                .iter()
+                                .map(|field| field.name.capacity())
+                                .sum::<usize>()
+                    }
+                    vtr::schema::TypeKind::Enum { values, .. } => {
+                        values.capacity() * std::mem::size_of::<vtr::schema::Enumerator>()
+                            + values
+                                .iter()
+                                .map(|value| value.name.capacity())
+                                .sum::<usize>()
+                    }
+                    _ => 0,
+                }
+        })
+        .sum::<usize>();
+    (nodes + strings + types + declarations.signals.capacity() * std::mem::size_of::<SignalKind>())
+        as u64
 }
 
 fn shape_of(kind: SignalKind, var_type: vtr::VarType) -> SignalShape {
@@ -141,13 +221,10 @@ fn shape_of(kind: SignalKind, var_type: vtr::VarType) -> SignalShape {
 
 struct ReaderHierarchy {
     reader: Arc<LocalReader>,
-    scopes: vtr::hierarchy_index::NodeIndex,
-    vars: vtr::hierarchy_index::NodeIndex,
-    generators: vtr::hierarchy_index::NodeIndex,
-    roots: Vec<u32>,
+    scopes: Vec<vtr::NodeId>,
+    vars: Vec<vtr::NodeId>,
+    links: super::hierarchy_columns::Links,
     root_owner: Option<usize>,
-    root_vars: Vec<u32>,
-    root_generators: Vec<u32>,
     top: Option<usize>,
 }
 impl std::fmt::Debug for ReaderHierarchy {
@@ -160,13 +237,19 @@ impl std::fmt::Debug for ReaderHierarchy {
 }
 impl ReaderHierarchy {
     fn node(&self, id: usize) -> vtr::NodeId {
-        self.scopes
-            .node(id - usize::from(self.top.is_some_and(|top| id > top)))
+        self.scopes[id - usize::from(self.top.is_some_and(|top| id > top))]
     }
     fn scope_id(&self, node: vtr::NodeId) -> Option<usize> {
         self.scopes
-            .ordinal(node)
+            .binary_search(&node)
+            .ok()
             .map(|id| id + usize::from(self.top.is_some_and(|top| id >= top)))
+    }
+    fn owner(&self, node: &vtr::Node) -> usize {
+        node.parent
+            .and_then(|parent| self.scope_id(parent))
+            .or(self.root_owner)
+            .expect("declared member scope")
     }
 }
 impl super::source::HierarchySource for ReaderHierarchy {
@@ -177,223 +260,167 @@ impl super::source::HierarchySource for ReaderHierarchy {
         self.vars.len()
     }
     fn roots(&self) -> super::source::Ids<'_> {
-        super::source::Ids::from_slice(&self.roots)
+        super::source::Ids::from_slice(&self.links.roots)
     }
     fn scope(&self, id: usize) -> super::source::ScopeView<'_> {
-        use super::source::ScopeView;
-        let (name, kind, component) = if Some(id) == self.top {
-            ("(top)", "module", "")
+        let (name, kind, component, parent) = if Some(id) == self.top {
+            ("(top)", "module", "", None)
         } else {
-            let node = self.node(id);
-            let (kind, component) = match self.reader.hierarchy().node_data(node) {
-                NodeData::Scope {
-                    scope_type,
-                    component,
-                } => (scope_type.name(), self.reader.str(component)),
-                _ => unreachable!(),
+            let node = self.reader.node(self.node(id)).expect("declared scope");
+            let NodeData::Scope {
+                scope_type,
+                component,
+            } = node.data
+            else {
+                unreachable!()
             };
             (
-                self.reader.str(self.reader.hierarchy().name(node)),
-                kind,
-                component,
+                self.reader.string(node.name).expect("scope name"),
+                vtr::ScopeType::from_code(scope_type).name(),
+                self.reader.string(component).expect("scope component"),
+                node.parent.and_then(|parent| self.scope_id(parent)),
             )
         };
-        ScopeView {
+        super::source::ScopeView {
             name,
             kind,
             component,
-            parent: if Some(id) == self.top {
-                None
-            } else {
-                self.reader
-                    .hierarchy()
-                    .parent(self.node(id))
-                    .and_then(|p| self.scope_id(p))
-            },
-            children: if Some(id) == self.top {
-                super::source::Ids::default()
-            } else {
-                super::source::Ids::reader(
-                    self.scopes.children(self.reader.hierarchy(), self.node(id)),
-                )
-                .shifted(self.top)
-            },
-            vars: if Some(id) == self.root_owner {
-                super::source::Ids::from_slice(&self.root_vars)
-            } else {
-                super::source::Ids::reader(
-                    self.vars.children(self.reader.hierarchy(), self.node(id)),
-                )
-            },
-            generators: if Some(id) == self.root_owner {
-                super::source::Ids::from_slice(&self.root_generators)
-            } else {
-                super::source::Ids::reader(
-                    self.generators
-                        .children(self.reader.hierarchy(), self.node(id)),
-                )
-            },
+            parent,
+            children: self.links.children(id),
+            vars: self.links.vars(id),
+            generators: self.links.generators(id),
         }
     }
     fn var_name(&self, id: usize) -> &str {
-        let h = self.reader.hierarchy();
-        self.reader.str(h.name(self.vars.node(id)))
+        self.reader.name(self.vars[id]).expect("variable name")
     }
     fn var(&self, id: usize) -> super::source::VariableView<'_> {
-        let node = self.vars.node(id);
-        let h = self.reader.hierarchy();
-        let NodeData::Var {
+        let node = self.reader.node(self.vars[id]).expect("declared variable");
+        let NodeData::Signal {
             var_type,
             direction,
             signal,
             ..
-        } = h.node_data(node)
+        } = node.data
         else {
             unreachable!()
         };
+        let var_type = vtr::VarType::from_code(var_type);
         super::source::VariableView {
-            name: self.reader.str(h.name(node)),
-            scope: h
-                .parent(node)
-                .and_then(|p| self.scope_id(p))
-                .or(self.root_owner)
-                .expect("variable scope"),
+            name: self.reader.string(node.name).expect("variable name"),
+            scope: self.owner(node),
             shape: shape_of(
-                h.signal_kind(signal).expect("signal"),
-                h.signal_var_type(signal).expect("signal type"),
+                self.reader.signal_kind(signal).expect("signal kind"),
+                var_type,
             ),
             var_type: var_type.name(),
-            direction: direction.into(),
+            direction: vtr::Direction::from_u8(direction).into(),
             signal: SignalRef(signal.0),
-            enum_table: h.attrs(node).iter().find_map(|(key, value)| {
-                if self.reader.str(*key) == "enum_table"
-                    && let vtr::Value::U64(id) = value
-                {
-                    u32::try_from(*id).ok()
+            enum_table: node.attributes.iter().find_map(|attr| {
+                if self.reader.string(attr.key).expect("attribute key") == "enum_table" {
+                    match attr.value {
+                        vtr::Value::U32(id) => Some(id),
+                        vtr::Value::U64(id) => u32::try_from(id).ok(),
+                        _ => None,
+                    }
                 } else {
                     None
                 }
             }),
         }
     }
-    fn signal(&self, id: usize) -> SignalRef {
-        SignalRef(
-            self.reader
-                .hierarchy()
-                .signal_of(self.vars.node(id))
-                .expect("variable")
-                .0,
-        )
-    }
     fn resident_bytes(&self) -> u64 {
-        self.scopes.resident_bytes()
-            + self.vars.resident_bytes()
-            + self.generators.resident_bytes()
-            + ((self.roots.capacity() + self.root_vars.capacity()) * 4) as u64
+        ((self.scopes.capacity() + self.vars.capacity()) * std::mem::size_of::<vtr::NodeId>())
+            as u64
+            + self.links.resident_bytes()
     }
 }
 
 fn build_hierarchy(reader: Arc<LocalReader>) -> Hierarchy {
-    use vtr::{NodeKind, hierarchy_index::NodeIndex};
-    let h = reader.hierarchy();
-    let scopes = NodeIndex::new(h, &[NodeKind::Scope]);
-    let vars = NodeIndex::new(h, &[NodeKind::Var]);
-    let generator_index = NodeIndex::new(h, &[NodeKind::Generator]);
-    let mut root_vars: Vec<_> = h
-        .roots()
-        .filter_map(|id| vars.ordinal(id).map(|id| id as u32))
-        .collect();
-    let mut root_generators: Vec<_> = h
-        .roots()
-        .filter_map(|id| generator_index.ordinal(id).map(|id| id as u32))
-        .collect();
-    let first_root_member = root_vars
-        .first()
-        .map(|&id| vars.node(id as usize))
-        .into_iter()
-        .chain(
-            root_generators
-                .first()
-                .map(|&id| generator_index.node(id as usize)),
-        )
+    use super::hierarchy_columns::{Links, NONE};
+    use super::source::HierarchySource as _;
+    let mut scopes = Vec::new();
+    let mut vars = Vec::new();
+    let mut generator_nodes = Vec::new();
+    for (id, node) in reader.declarations().nodes.iter().enumerate() {
+        let target = match node.data {
+            NodeData::Scope { .. } => &mut scopes,
+            NodeData::Signal { .. } => &mut vars,
+            NodeData::Generator { .. } => &mut generator_nodes,
+            NodeData::EnumTable { .. } => continue,
+        };
+        target.push(vtr::NodeId(id as u32));
+    }
+    let first_root_member = vars
+        .iter()
+        .chain(&generator_nodes)
+        .copied()
+        .filter(|id| reader.node(*id).expect("declared node").parent.is_none())
         .min();
-    let existing_top = h
-        .roots()
-        .filter(|&node| first_root_member.is_some_and(|first| node.0 < first.0))
-        .find(|&node| scopes.ordinal(node).is_some() && reader.str(h.name(node)) == "(top)")
-        .and_then(|node| scopes.ordinal(node));
+    let existing_top = scopes.iter().position(|&id| {
+        first_root_member.is_some_and(|first| id < first)
+            && reader.node(id).expect("declared scope").parent.is_none()
+            && reader.name(id).expect("scope name") == "(top)"
+    });
     let top = first_root_member
         .filter(|_| existing_top.is_none())
-        .map(|first| {
-            (0..scopes.len())
-                .take_while(|&id| scopes.node(id).0 < first.0)
-                .count()
-        });
-    let scope_id = |node| {
-        scopes
-            .ordinal(node)
-            .map(|id| id + usize::from(top.is_some_and(|top| id >= top)))
+        .map(|first| scopes.partition_point(|id| *id < first));
+    scopes.shrink_to_fit();
+    vars.shrink_to_fit();
+    let mut source = ReaderHierarchy {
+        reader,
+        scopes,
+        vars,
+        links: Links::default(),
+        root_owner: existing_top.or(top),
+        top,
     };
-    let mut roots: Vec<_> = h
-        .roots()
-        .filter_map(|node| scope_id(node).map(|id| id as u32))
-        .collect();
-    if let Some(top) = top {
-        roots.insert(roots.partition_point(|&id| id < top as u32), top as u32);
-    }
-    let root_owner = existing_top.or(top);
-    if let Some(id) = existing_top {
-        root_vars.extend(vars.children(h, scopes.node(id)).iter().map(|id| id as u32));
-        root_vars.sort_unstable();
-        root_generators.extend(
-            generator_index
-                .children(h, scopes.node(id))
-                .iter()
-                .map(|id| id as u32),
-        );
-        root_generators.sort_unstable();
-    }
-    let generators: Vec<_> = (0..generator_index.len())
+    let generators: Vec<_> = generator_nodes
+        .into_iter()
         .map(|id| {
-            let node = generator_index.node(id);
+            let node = source.reader.node(id).expect("declared generator");
+            let NodeData::Generator { kind, .. } = node.data else {
+                unreachable!()
+            };
             Generator {
-                name: reader.str(h.name(node)).into(),
-                scope: h
-                    .parent(node)
-                    .and_then(scope_id)
-                    .or(root_owner)
-                    .expect("generator scope"),
-                root: h.parent(node).is_none(),
-                kind: match h.node_data(node) {
-                    NodeData::Generator { kind } => reader.str(kind).into(),
-                    _ => unreachable!(),
-                },
-                track: TrackRef(node.0),
-                attributes: h
-                    .attrs(node)
-                    .iter()
-                    .map(|(key, value)| {
-                        (
-                            reader.str(*key).into(),
-                            super::vtr_transactions::value(&reader, value),
-                        )
-                    })
-                    .collect(),
+                name: source
+                    .reader
+                    .string(node.name)
+                    .expect("generator name")
+                    .into(),
+                scope: source.owner(node),
+                root: node.parent.is_none(),
+                kind: source.reader.string(kind).expect("generator kind").into(),
+                track: TrackRef(id.0),
+                attributes: super::vtr_transactions::attributes(&source.reader, &node.attributes),
             }
         })
         .collect();
+    let parents: Vec<_> = (0..source.scope_count())
+        .map(|id| {
+            if Some(id) == source.top {
+                NONE
+            } else {
+                source
+                    .reader
+                    .node(source.node(id))
+                    .expect("declared scope")
+                    .parent
+                    .and_then(|parent| source.scope_id(parent))
+                    .map_or(NONE, |id| id as u32)
+            }
+        })
+        .collect();
+    source.links = Links::build(
+        &parents,
+        source
+            .vars
+            .iter()
+            .map(|&id| source.owner(source.reader.node(id).expect("declared variable"))),
+        &generators,
+    );
     Hierarchy {
-        source: Arc::new(ReaderHierarchy {
-            reader,
-            scopes,
-            vars,
-            generators: generator_index,
-            roots,
-            root_owner,
-            root_vars,
-            root_generators,
-            top,
-        }),
+        source: Arc::new(source),
         generators: Arc::new(generators),
     }
 }
@@ -401,8 +428,7 @@ fn build_hierarchy(reader: Arc<LocalReader>) -> Hierarchy {
 impl Session for LocalSession {
     fn resident_bytes(&self) -> u64 {
         self.source_bytes
-            + self.reader.hierarchy().resident_bytes()
-            + self.reader.strings().resident_bytes()
+            + declaration_bytes(&self.reader)
             + self.hierarchy.resident_bytes()
             + self
                 .activity
@@ -454,18 +480,6 @@ impl Session for LocalSession {
             |w| vtr::activity::build(&self.reader, w, options),
         )
     }
-    fn resolve_activity(
-        &self,
-        signals: &[SignalRef],
-        t0: u64,
-        t1: u64,
-    ) -> anyhow::Result<Vec<SignalRef>> {
-        let ids: Vec<vtr::SignalId> = signals.iter().map(|s| vtr::SignalId(s.0)).collect();
-        Ok(vtr::activity::resolve(&self.reader, &ids, t0, t1)?
-            .into_iter()
-            .map(|s| SignalRef(s.0))
-            .collect())
-    }
     fn load_track(
         &self,
         track: super::transactions::TrackRef,
@@ -499,7 +513,20 @@ impl Session for LocalSession {
         Ok(Arc::new(VtrHistory {
             shape: shape_of(
                 data.kind(),
-                self.reader.signal_var_type(vtr::SignalId(signal.0))?,
+                self.reader
+                    .declarations()
+                    .nodes
+                    .iter()
+                    .find_map(|node| match node.data {
+                        NodeData::Signal {
+                            signal: id,
+                            var_type,
+                            alias: false,
+                            ..
+                        } if id.0 == signal.0 => Some(vtr::VarType::from_code(var_type)),
+                        _ => None,
+                    })
+                    .context("signal declaration")?,
             ),
             data,
         }))
@@ -544,19 +571,24 @@ impl SignalHistory for VtrHistory {
                 width,
                 states,
                 data,
-            } => ValueView::Logic(LogicView::packed_lsb(width, states, data)),
+            } => ValueView::Logic(LogicView::packed_lsb(u64::from(width), states, data)),
             SignalValue::Real(value) => ValueView::Real(value),
             SignalValue::VarLen(bytes) => ValueView::Bytes(bytes.into()),
         }
     }
     fn resident_bytes(&self) -> u64 {
-        let value_bytes = match self.shape {
-            SignalShape::Bit | SignalShape::Event => 1,
-            SignalShape::Vector { width } => u64::from(width).div_ceil(2).max(1),
-            SignalShape::Real => 8,
-            SignalShape::Text => 24,
-        };
-        (self.data.len() as u64).saturating_mul(8 + value_bytes)
+        fn owned_bytes(value: &vtr::OwnedSignalValue) -> usize {
+            match value {
+                vtr::OwnedSignalValue::Bits { data, .. } | vtr::OwnedSignalValue::VarLen(data) => {
+                    data.capacity()
+                }
+                vtr::OwnedSignalValue::Real(_) => 0,
+            }
+        }
+        (self.data.times.capacity() * std::mem::size_of::<u64>()
+            + self.data.values.capacity() * std::mem::size_of::<vtr::OwnedSignalValue>()
+            + owned_bytes(&self.data.initial)
+            + self.data.values.iter().map(owned_bytes).sum::<usize>()) as u64
     }
 
     fn shape(&self) -> SignalShape {
@@ -572,7 +604,10 @@ impl SignalHistory for VtrHistory {
         self.data.times()[i]
     }
     fn index_at(&self, t: u64) -> Option<usize> {
-        self.data.index_at(t)
+        self.data
+            .times
+            .partition_point(|time| *time <= t)
+            .checked_sub(1)
     }
     fn value(&self, i: Option<usize>) -> WaveValue {
         match i {

@@ -43,7 +43,7 @@ impl Ancestry {
             };
             let location = parent.map(|p| TransactionLocation {
                 transaction: TransactionRef(p.into()),
-                generator: TrackRef(if same_track { 1 } else { p }),
+                generator: Some(TrackRef(if same_track { 1 } else { p })),
             });
             let txs = records.entry(generator).or_default();
             if missing_root && i == depth {
@@ -55,8 +55,8 @@ impl Ancestry {
                 generator,
                 begin: 0,
                 end: 10,
-                status: TxStatus::Ok,
-                kind: TxKind::Unspecified,
+                status: Status::Ok,
+                kind: SpanKind::Unspecified,
                 parent: location.map(|p| p.transaction),
                 attributes: vec![TransactionAttribute {
                     key: "vtr.label".into(),

@@ -197,19 +197,24 @@ mod tests {
     use crate::session::OpenSpec;
 
     fn fixture() -> (Arc<dyn Session>, TrackRef, Vec<u8>) {
+        use vtr::Recorder as _;
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut writer = vtr::Writer::create(file.path()).unwrap();
         let stream = writer
-            .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+            .scope_with(
+                vtr::SourceOptions::new("stream", None),
+                vtr::ScopeType::Generic,
+                "",
+            )
             .unwrap();
         let generator = writer
-            .add_generator(Some(stream), "generator", "raw")
+            .transactions::<()>(vtr::SourceOptions::new("generator", Some(stream)), "raw")
             .unwrap();
-        let tx = writer.begin_tx(generator, 4).unwrap();
-        writer.end_tx(tx, 4, vtr::TxStatus::Ok).unwrap();
+        let tx = writer.begin_at(generator, 4, &(), None).unwrap();
+        writer.end_at(tx, 4, vtr::Status::Ok).unwrap();
         writer.close().unwrap();
         let local = OpenSpec::Path(file.path().into()).open().unwrap();
-        let track = TrackRef(generator.0);
+        let track = TrackRef(generator.id());
         let bytes = bincode::serialize(&TrackPayload::from_loaded(
             &local.load_track(track).unwrap(),
         ))

@@ -17,7 +17,7 @@ use volna_core::wave::model::{MenuAction, RowHeight, WaveRow};
 use volna_core::wave::viewport::Viewport;
 use volna_core::workspace::Workspace;
 use volna_trace::data::Member;
-use volna_trace::data::transactions::{TrackRef, TxStatus};
+use volna_trace::data::transactions::{Status, TrackRef};
 use volna_trace::session::{OpenSpec, Session};
 
 const TRACE: &str = "file:///tmp/trace.vtr";
@@ -513,7 +513,7 @@ fn a_failed_record_is_red_in_bars_and_values() {
             .unwrap();
         g.transactions()
             .iter()
-            .find(|t| t.status == TxStatus::Error)
+            .find(|t| t.status == Status::Error)
             .unwrap()
             .clone()
     };

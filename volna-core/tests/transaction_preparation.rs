@@ -14,13 +14,14 @@ fn prepare(distinct_lanes: bool) {
         generator: TrackRef(1),
         begin: 0,
         end: 10,
-        status: TxStatus::Ok,
-        kind: TxKind::Unspecified,
+        status: Status::Ok,
+        kind: SpanKind::Unspecified,
         parent: None,
         attributes: vec![],
         events: vec![],
         stages: (0..COUNT)
             .map(|i| TransactionStage {
+                id: TransactionRef(i as u64 + 2),
                 name: if distinct_lanes {
                     "stage".into()
                 } else {

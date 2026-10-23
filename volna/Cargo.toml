@@ -24,6 +24,22 @@ path = "examples/analog_showcase.rs"
 name = "gpu_transaction_trace"
 path = "examples/gpu_transaction_trace.rs"
 
+[[example]]
+name = "pipeline_showcase"
+path = "examples/pipeline_showcase.rs"
+
+[[example]]
+name = "landing"
+path = "examples/landing.rs"
+
+[[example]]
+name = "feature_showcase"
+path = "examples/feature_showcase.rs"
+
+[[example]]
+name = "volna_theme"
+path = "examples/volna_theme.rs"
+
 [features]
 default = []
 

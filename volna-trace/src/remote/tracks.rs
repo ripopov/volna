@@ -7,8 +7,8 @@ use super::objects::{GeneratorPayload, TrackPayload};
 use crate::data::loaded_tracks::LoadedTrack;
 use crate::data::loaded_tracks::{LoadedRelation, TransactionLocation};
 use crate::data::transactions::{
-    Relation, TrackRef, Transaction, TransactionAttribute, TransactionEvent, TransactionRef,
-    TransactionStage, TxKind, TxStatus,
+    Relation, SpanKind, Status, TrackRef, Transaction, TransactionAttribute, TransactionEvent,
+    TransactionRef, TransactionStage,
 };
 use crate::session::Session;
 use std::sync::Arc;
@@ -70,6 +70,14 @@ impl TrackDecoder {
     }
 }
 
+async fn optional_track(r: &Reader) -> anyhow::Result<Option<TrackRef>> {
+    Ok(if r.boolean().await? {
+        Some(TrackRef(r.u32().await?))
+    } else {
+        None
+    })
+}
+
 async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
     Ok(TrackPayload {
         track: TrackRef(r.u32().await?),
@@ -86,7 +94,7 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
                                 TransactionRef(r.u64().await?),
                                 TransactionLocation {
                                     transaction: TransactionRef(r.u64().await?),
-                                    generator: TrackRef(r.u32().await?),
+                                    generator: optional_track(r).await?,
                                 },
                             ))
                         })
@@ -95,8 +103,8 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
                         .vector(48, || async {
                             Ok(LoadedRelation {
                                 id: r.u64().await?,
-                                from_generator: TrackRef(r.u32().await?),
-                                to_generator: TrackRef(r.u32().await?),
+                                from_generator: optional_track(r).await?,
+                                to_generator: optional_track(r).await?,
                                 relation: Relation {
                                     kind: r.string().await?,
                                     from: TransactionRef(r.u64().await?),
@@ -145,16 +153,8 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
         generator: TrackRef(r.u32().await?),
         begin: r.u64().await?,
         end: r.u64().await?,
-        status: {
-            let code = r.u8().await?;
-            anyhow::ensure!(code <= 4, "unknown transaction status");
-            TxStatus::from_u8(code)
-        },
-        kind: {
-            let code = r.u8().await?;
-            anyhow::ensure!(code <= 5, "unknown transaction kind");
-            TxKind::from_u8(code)
-        },
+        status: Status::try_from(r.u8().await?)?,
+        kind: SpanKind::try_from(r.u8().await?)?,
         parent: if r.boolean().await? {
             Some(TransactionRef(r.u64().await?))
         } else {
@@ -171,6 +171,7 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
         events: r
             .vector(24, || async {
                 Ok(TransactionEvent {
+                    id: TransactionRef(r.u64().await?),
                     time: r.u64().await?,
                     name: r.string().await?,
                     attributes: attributes(r, 0).await?,
@@ -180,6 +181,7 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
         stages: r
             .vector(33, || async {
                 Ok(TransactionStage {
+                    id: TransactionRef(r.u64().await?),
                     name: r.string().await?,
                     lane: r.string().await?,
                     begin: r.u64().await?,
@@ -208,8 +210,8 @@ mod tests {
                 generator: TrackRef(1),
                 begin: id,
                 end: if id == 0 { 10000 } else { id },
-                status: TxStatus::from_u8((id % 5) as u8),
-                kind: TxKind::from_u8((id % 6) as u8),
+                status: Status::try_from((id % 5) as u8).unwrap(),
+                kind: SpanKind::try_from((id % 6) as u8).unwrap(),
                 parent: (id > 0).then_some(TransactionRef(0)),
                 attributes: (0..3)
                     .map(|index| TransactionAttribute {
@@ -218,11 +220,13 @@ mod tests {
                     })
                     .collect(),
                 events: vec![TransactionEvent {
+                    id: TransactionRef(1000 + id * 2),
                     time: id,
                     name: "event".into(),
                     attributes: vec![("bytes".into(), AttributeValue::Bytes(vec![0, 255]))],
                 }],
                 stages: vec![TransactionStage {
+                    id: TransactionRef(1001 + id * 2),
                     name: "stage".into(),
                     lane: "raw lane".into(),
                     begin: id,
@@ -250,7 +254,7 @@ mod tests {
                             TransactionRef(id),
                             TransactionLocation {
                                 transaction: TransactionRef(0),
-                                generator: TrackRef(1),
+                                generator: Some(TrackRef(1)),
                             },
                         )
                     })
@@ -258,8 +262,8 @@ mod tests {
                 relations: (0..2)
                     .map(|id| LoadedRelation {
                         id,
-                        from_generator: TrackRef(1),
-                        to_generator: TrackRef(3),
+                        from_generator: Some(TrackRef(1)),
+                        to_generator: Some(TrackRef(3)),
                         relation: Relation {
                             kind: "parallel".into(),
                             from: TransactionRef(0),

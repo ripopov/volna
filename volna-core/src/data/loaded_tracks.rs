@@ -441,15 +441,15 @@ fn scale_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use volna_trace::data::transactions::{TxKind, TxStatus};
+    use volna_trace::data::transactions::{SpanKind, Status};
     fn tx(id: u64, begin: u64, end: u64) -> Transaction {
         Transaction {
             id: TransactionRef(id),
             generator: TrackRef(1),
             begin,
             end,
-            status: TxStatus::Ok,
-            kind: TxKind::Producer,
+            status: Status::Ok,
+            kind: SpanKind::Producer,
             parent: None,
             attributes: vec![],
             events: vec![],
@@ -459,7 +459,8 @@ mod tests {
 
     #[test]
     fn stage_census_counts_lanes_names_and_positions_in_any_order() {
-        let stage = |name: &str, lane: &str| TransactionStage {
+        let stage = |id, name: &str, lane: &str| TransactionStage {
+            id: TransactionRef(id),
             name: name.into(),
             lane: lane.into(),
             begin: 0,
@@ -468,13 +469,17 @@ mod tests {
         };
         let mut a = tx(0, 0, 4);
         a.stages = vec![
-            stage("F", ""),
-            stage("s", "x"),
-            stage("E", ""),
-            stage("W", ""),
+            stage(100, "F", ""),
+            stage(101, "s", "x"),
+            stage(102, "E", ""),
+            stage(103, "W", ""),
         ];
         let mut b = tx(1, 1, 5);
-        b.stages = vec![stage("F", ""), stage("W", ""), stage("E", "")];
+        b.stages = vec![
+            stage(104, "F", ""),
+            stage(105, "W", ""),
+            stage(106, "E", ""),
+        ];
         let loaded = LoadedGenerator::new(TrackRef(1), vec![a, b], HashMap::new(), vec![]).unwrap();
         let census = loaded.stage_census();
         let lanes: Vec<_> = census
@@ -504,6 +509,7 @@ mod tests {
     fn unrepresentable_placement_keeps_the_source_and_indexes_unchanged() {
         let mut record = tx(1, 1, 3);
         record.stages.push(TransactionStage {
+            id: TransactionRef(2),
             name: "outlier".into(),
             lane: "0".into(),
             begin: u64::MAX,

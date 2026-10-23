@@ -162,7 +162,7 @@ impl Program {
                         TransactionColumn::Id => predicate.integer(i128::from(tx.id.0)),
                         TransactionColumn::Begin => predicate.integer(i128::from(tx.begin)),
                         TransactionColumn::End | TransactionColumn::Duration => {
-                            if tx.status == vtr::TxStatus::Open {
+                            if tx.status == vtr::Status::Open {
                                 predicate.missing()
                             } else {
                                 predicate.integer(i128::from(
@@ -174,7 +174,9 @@ impl Program {
                                 ))
                             }
                         }
-                        TransactionColumn::Status => predicate.text(tx.status.name()),
+                        TransactionColumn::Status => {
+                            predicate.text(crate::data::text::status_name(tx.status))
+                        }
                         TransactionColumn::Label | TransactionColumn::Attribute(_) => {
                             let key = if let TransactionColumn::Attribute(key) = column {
                                 key
@@ -298,7 +300,7 @@ impl Predicate {
     fn integer(&self, value: i128) -> bool {
         self.number(value, 0)
     }
-    fn number(&self, value: i128, scale: i32) -> bool {
+    fn number(&self, value: i128, scale: i64) -> bool {
         if self.missing == Missing::Only {
             return false;
         }
@@ -332,7 +334,7 @@ impl Predicate {
             AttributeValue::Text(v) => self.text(v),
             AttributeValue::Enum { value, name } => {
                 if matches!(self.matcher, Matcher::Numeric(_)) {
-                    self.integer(i128::from(*value))
+                    self.integer(*value)
                 } else {
                     self.text(name)
                 }

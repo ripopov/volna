@@ -1,5 +1,7 @@
 //! Analysis admission must precede reading histories or allocating derived arrays.
 
+use vtr::Recorder;
+
 use std::sync::{
     Arc,
     atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -196,9 +198,7 @@ fn assert_refused_without_arrays(request: LoadRequest) {
     let peak = LARGEST_ALLOCATION.with(|peak| peak.replace(None).unwrap());
     let refused = match result {
         LoadResult::ActivityCounter { result, .. } => result.is_err(),
-        LoadResult::Activity { result, .. } | LoadResult::ActivityResolved { result, .. } => {
-            result.is_err()
-        }
+        LoadResult::Activity { result, .. } => result.is_err(),
         _ => unreachable!(),
     };
     assert!(refused);
@@ -214,26 +214,29 @@ fn activity_session() -> (tempfile::NamedTempFile, Arc<dyn volna_trace::Session>
     let mut signals = Vec::new();
     for i in 0..1024 {
         let scope = w
-            .add_scope(None, &format!("scope{i}"), vtr::ScopeType::Module, "")
+            .scope_with(
+                vtr::SourceOptions::new(format!("scope{i}"), None),
+                vtr::ScopeType::Module,
+                "",
+            )
             .unwrap();
-        let (_, signal) = w
-            .add_var(
-                Some(scope),
-                "bit",
-                vtr::VarType::Wire,
-                vtr::Direction::Input,
+        let signal = w
+            .signal(
+                vtr::SourceOptions::new("bit", Some(scope)),
                 vtr::SignalKind::Bits {
                     width: 1,
                     states: 2,
                 },
+                vtr::VarType::Wire,
+                vtr::Direction::Input,
             )
             .unwrap();
         signals.push(signal);
     }
     for time in [0, 10, 20] {
-        w.set_time(time).unwrap();
+        w.advance_time(time).unwrap();
         for &signal in &signals {
-            w.emit_bit(signal, vtr::Logic::from(time == 10)).unwrap();
+            w.emit_u64(signal, u64::from(time == 10)).unwrap();
         }
     }
     w.close().unwrap();
@@ -286,33 +289,6 @@ fn activity_classification_admission_precedes_array_allocation() {
         index: session.activity().unwrap(),
         counter: counter(&session),
         window: (1, 9),
-        budget: MemoryBudget::new(1),
-    });
-}
-
-#[test]
-fn activity_resolution_admission_precedes_array_allocation() {
-    let (_file, session) = activity_session();
-    let counter = counter(&session);
-    let counts = match (LoadRequest::Activity {
-        trace: volna_core::trace::TraceId::A,
-        generation: 1,
-        index: session.activity().unwrap(),
-        counter: counter.clone(),
-        window: (1, 9),
-        budget: MemoryBudget::new(8 << 20),
-    })
-    .perform()
-    {
-        LoadResult::Activity { result, .. } => result.unwrap(),
-        _ => unreachable!(),
-    };
-    assert_refused_without_arrays(LoadRequest::ResolveActivity {
-        trace: volna_core::trace::TraceId::A,
-        generation: 1,
-        session,
-        counter,
-        counts,
         budget: MemoryBudget::new(1),
     });
 }

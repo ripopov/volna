@@ -1,8 +1,5 @@
-//! Scope activity: how many of each scope's signals change in a window, from the trace's
-//! activity index at once, and exactly once the signals the index leaves undecided are
-//! read.
+//! Exact scope change counts from the recording’s activity index.
 
-use volna_trace::data::SignalRef;
 use volna_trace::data::source::{Hierarchy, ScopeId};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
@@ -68,17 +65,10 @@ impl ActivityCounter {
     }
 }
 
-fn counts_bytes(changing: &Vec<u32>, upper: &Vec<u32>, undecided: &Vec<SignalRef>) -> u64 {
-    ((changing.capacity() + upper.capacity()) * std::mem::size_of::<u32>()
-        + undecided.capacity() * std::mem::size_of::<SignalRef>()) as u64
-}
-
 #[derive(Debug)]
 pub struct ActivityCounts {
     pub window: (u64, u64),
     changing: Vec<u32>,
-    upper: Vec<u32>,
-    pub undecided: Vec<SignalRef>,
     _reservation: Reservation,
 }
 
@@ -96,134 +86,63 @@ impl ActivityCounts {
         ])?;
         let reservation = budget.reserve_object("the scope activity", upper)?;
         let c = index.classify(window.0, window.1);
-        let changing = counter.count(c.active.iter().map(|s| s.0));
-        let upper = if c.undecided.is_empty() {
-            Vec::new()
-        } else {
-            let may = counter.count(c.undecided.iter().map(|s| s.0));
-            changing.iter().zip(may).map(|(a, b)| a + b).collect()
-        };
-        let undecided: Vec<_> = c.undecided.into_iter().map(|s| SignalRef(s.0)).collect();
-        drop(c.active);
-        let resident = counts_bytes(&changing, &upper, &undecided);
+        let changing = counter.count(c.iter().map(|s| s.0));
+        drop(c);
+        let resident = (changing.capacity() * std::mem::size_of::<u32>()) as u64;
         Ok(Self {
             window,
             changing,
-            upper,
-            undecided,
-            _reservation: super::admission::finish(reservation, resident)?,
-        })
-    }
-
-    pub(crate) fn admit_resolution(
-        &self,
-        counter: &ActivityCounter,
-        budget: &MemoryBudget,
-    ) -> anyhow::Result<Reservation> {
-        budget.reserve_object(
-            "the scope activity",
-            super::admission::sum([
-                super::admission::bytes::<[u8; 12]>(counter.order.len())?,
-                super::admission::bytes::<[SignalRef; 2]>(self.undecided.len())?,
-                32,
-            ])?,
-        )
-    }
-
-    pub(crate) fn resolved(
-        &self,
-        counter: &ActivityCounter,
-        changed: Vec<SignalRef>,
-        reservation: Reservation,
-    ) -> anyhow::Result<Self> {
-        let more = counter.count(changed.iter().map(|s| s.0));
-        let changing: Vec<_> = self.changing.iter().zip(more).map(|(a, b)| a + b).collect();
-        drop(changed);
-        let resident = counts_bytes(&changing, &Vec::new(), &Vec::new());
-        Ok(Self {
-            window: self.window,
-            changing,
-            upper: Vec::new(),
-            undecided: Vec::new(),
             _reservation: super::admission::finish(reservation, resident)?,
         })
     }
 
     #[must_use]
     pub fn resident_bytes(&self) -> u64 {
-        counts_bytes(&self.changing, &self.upper, &self.undecided)
+        (self.changing.capacity() * std::mem::size_of::<u32>()) as u64
     }
 
     #[must_use]
-    pub fn exact(&self) -> bool {
-        self.undecided.is_empty()
-    }
-
-    #[must_use]
-    pub fn get(&self, scope: ScopeId) -> Option<(u32, u32)> {
-        let changing = *self.changing.get(scope)?;
-        Some((changing, self.upper.get(scope).copied().unwrap_or(changing)))
+    pub fn get(&self, scope: ScopeId) -> Option<u32> {
+        self.changing.get(scope).copied()
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopeActivity {
     pub changing: u32,
-    pub upper: u32,
     pub total: u32,
 }
 
 impl ScopeActivity {
     #[must_use]
-    pub fn exact(&self) -> bool {
-        self.changing == self.upper
-    }
-
-    #[must_use]
     pub fn quiet(&self) -> bool {
-        self.total > 0 && self.upper == 0
+        self.total > 0 && self.changing == 0
     }
 
     #[must_use]
     pub fn label(&self) -> String {
-        let total = super::sizes::grouped(self.total);
-        if self.exact() {
-            format!("{} / {total}", super::sizes::grouped(self.changing))
-        } else {
-            format!(
-                "{}–{} / {total}",
-                super::sizes::grouped(self.changing),
-                super::sizes::grouped(self.upper)
-            )
-        }
+        format!(
+            "{} / {}",
+            super::sizes::grouped(self.changing),
+            super::sizes::grouped(self.total)
+        )
     }
 
     #[must_use]
-    pub fn shares(&self) -> (f32, f32) {
+    pub fn share(&self) -> f32 {
         match self.total {
-            0 => (0.0, 0.0),
-            t => (
-                self.changing as f32 / t as f32,
-                self.upper as f32 / t as f32,
-            ),
+            0 => 0.0,
+            total => self.changing as f32 / total as f32,
         }
     }
 
     #[must_use]
     pub fn detail(&self) -> String {
-        let total = super::sizes::grouped(self.total);
-        if self.exact() {
-            format!(
-                "{} of {total} signals change in the view",
-                super::sizes::grouped(self.changing)
-            )
-        } else {
-            format!(
-                "{} to {} of {total} signals change in the view; reading the rest from the trace",
-                super::sizes::grouped(self.changing),
-                super::sizes::grouped(self.upper)
-            )
-        }
+        format!(
+            "{} of {} signals change in the view",
+            super::sizes::grouped(self.changing),
+            super::sizes::grouped(self.total)
+        )
     }
 }
 

@@ -2,6 +2,17 @@
 
 use volna_trace::data::transactions::AttributeValue;
 
+#[must_use]
+pub fn status_name(status: vtr::Status) -> &'static str {
+    match status {
+        vtr::Status::Unset => "unset",
+        vtr::Status::Ok => "ok",
+        vtr::Status::Error => "error",
+        vtr::Status::Aborted => "aborted",
+        vtr::Status::Open => "open",
+    }
+}
+
 pub const PREVIEW_BYTES: usize = 256;
 pub const COPY_BYTES: usize = 64 * 1024;
 

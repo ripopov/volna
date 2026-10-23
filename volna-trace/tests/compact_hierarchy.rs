@@ -1,4 +1,4 @@
-//! Compact hierarchy parity and protocol-v7 admission/lifecycle tests.
+//! Compact hierarchy parity and remote admission/lifecycle tests.
 
 use std::sync::Arc;
 use volna_trace::data::{Hierarchy, ScopeSizes};
@@ -442,64 +442,78 @@ fn empty_forest_and_deep_hierarchy_roundtrip_without_recursion() {
 
 #[test]
 fn vtr_views_equal_reader_declarations_node_by_node() {
-    use vtr::{NodeData, NodeKind};
+    use vtr::NodeData;
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     for name in ["counter", "picorv32", "landing"] {
         let path = base.join(format!("tests/fixtures/{name}.vtr"));
         let reader = vtr::Reader::open(&path).unwrap();
         let local = OpenSpec::Path(path).open().unwrap();
-        let h = reader.hierarchy();
-        let scopes: Vec<_> = h
-            .ids()
-            .filter(|&id| matches!(h.kind(id), NodeKind::Scope))
+        let scopes: Vec<_> = reader
+            .declarations()
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(id, node)| {
+                matches!(node.data, NodeData::Scope { .. }).then_some(vtr::NodeId(id as u32))
+            })
             .collect();
-        let vars: Vec<_> = h.ids().filter(|&id| h.kind(id) == NodeKind::Var).collect();
+        let vars: Vec<_> = reader
+            .declarations()
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(id, node)| {
+                matches!(node.data, NodeData::Signal { .. }).then_some(vtr::NodeId(id as u32))
+            })
+            .collect();
         assert_eq!(scopes.len(), local.hierarchy().scope_count());
         assert_eq!(vars.len(), local.hierarchy().var_count());
-        for (id, &node) in scopes.iter().enumerate() {
+        for (id, &node_id) in scopes.iter().enumerate() {
+            let node = reader.node(node_id).unwrap();
             let scope = local.hierarchy().scope(id);
-            assert_eq!(scope.name, reader.str(h.name(node)));
+            assert_eq!(scope.name, reader.string(node.name).unwrap());
             assert_eq!(
                 scope.parent,
-                h.parent(node)
-                    .map(|p| scopes.iter().position(|&id| id == p).unwrap())
+                node.parent
+                    .map(|parent| scopes.iter().position(|&id| id == parent).unwrap())
             );
-            let children: Vec<_> = h
-                .children(node)
-                .filter_map(|n| scopes.iter().position(|&id| id == n))
+            let children: Vec<_> = reader
+                .children(Some(node_id))
+                .iter()
+                .filter_map(|node| scopes.iter().position(|id| id == node))
                 .collect();
-            let members: Vec<_> = h
-                .children(node)
-                .filter_map(|n| vars.iter().position(|&id| id == n))
+            let members: Vec<_> = reader
+                .children(Some(node_id))
+                .iter()
+                .filter_map(|node| vars.iter().position(|id| id == node))
                 .collect();
             assert_eq!(scope.children.iter().collect::<Vec<_>>(), children);
             assert_eq!(scope.vars.iter().collect::<Vec<_>>(), members);
-            match h.node_data(node) {
-                NodeData::Scope {
-                    scope_type,
-                    component,
-                } => {
-                    assert_eq!(scope.kind, scope_type.name());
-                    assert_eq!(scope.component, reader.str(component));
-                }
-
-                _ => unreachable!(),
-            }
+            let NodeData::Scope {
+                scope_type,
+                component,
+            } = node.data
+            else {
+                unreachable!()
+            };
+            assert_eq!(scope.kind, vtr::ScopeType::from_code(scope_type).name());
+            assert_eq!(scope.component, reader.string(component).unwrap());
         }
-        for (id, &node) in vars.iter().enumerate() {
+        for (id, &node_id) in vars.iter().enumerate() {
+            let node = reader.node(node_id).unwrap();
             let var = local.hierarchy().var(id);
-            assert_eq!(var.name, reader.str(h.name(node)));
-            let NodeData::Var {
+            assert_eq!(var.name, reader.string(node.name).unwrap());
+            let NodeData::Signal {
                 var_type,
                 direction,
                 signal,
                 ..
-            } = h.node_data(node)
+            } = node.data
             else {
                 unreachable!()
             };
-            assert_eq!(var.var_type, var_type.name());
-            assert_eq!(var.direction, direction.into());
+            assert_eq!(var.var_type, vtr::VarType::from_code(var_type).name());
+            assert_eq!(var.direction, vtr::Direction::from_u8(direction).into());
             assert_eq!(var.signal.0, signal.0);
             assert_eq!(local.hierarchy().signal(id), var.signal);
         }
@@ -519,9 +533,15 @@ fn invalid_catalog_owners_and_capabilities_release_the_private_open() {
     let path = dir.path().join("raw.vtr");
     let mut writer = vtr::Writer::create(&path).unwrap();
     let stream = writer
-        .add_scope(None, "raw", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("raw", None),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
-    writer.add_generator(Some(stream), "site", "TX").unwrap();
+    writer
+        .transactions::<()>(vtr::SourceOptions::new("site", Some(stream)), "TX")
+        .unwrap();
     writer.close().unwrap();
     let local = OpenSpec::Path(path).open().unwrap();
     for case in 0..3 {
@@ -562,9 +582,8 @@ fn root_variables_keep_synthetic_scope_declaration_order_and_later_top_is_distin
         let mut writer = Writer::create(&path).unwrap();
         let before = (mode != 0).then(|| {
             writer
-                .add_scope(
-                    None,
-                    if mode == 2 { "(top)" } else { "before" },
+                .scope_with(
+                    SourceOptions::new(if mode == 2 { "(top)" } else { "before" }, None),
                     ScopeType::Module,
                     "REAL",
                 )
@@ -572,47 +591,58 @@ fn root_variables_keep_synthetic_scope_declaration_order_and_later_top_is_distin
         });
         if let Some(parent) = before {
             writer
-                .add_scope(Some(parent), "nested", ScopeType::Module, "")
+                .scope_with(
+                    SourceOptions::new("nested", Some(parent)),
+                    ScopeType::Module,
+                    "",
+                )
                 .unwrap();
         }
-        let (_, signal) = writer
-            .add_var(
-                None,
-                "root_var",
-                VarType::Wire,
-                Direction::Implicit,
+        let signal = writer
+            .signal(
+                SourceOptions::new("root_var", None),
                 SignalKind::Bits {
                     width: 1,
                     states: 2,
                 },
+                VarType::Wire,
+                Direction::Implicit,
             )
             .unwrap();
         if let Some(parent) = before {
             writer
-                .add_alias(
-                    Some(parent),
-                    "alias",
+                .alias(
+                    signal,
+                    SourceOptions::new("alias", Some(parent)),
                     VarType::Wire,
                     Direction::Input,
-                    signal,
                 )
                 .unwrap();
         }
         let after = writer
-            .add_scope(
-                None,
-                if mode == 0 { "(top)" } else { "after" },
+            .scope_with(
+                SourceOptions::new(if mode == 0 { "(top)" } else { "after" }, None),
                 ScopeType::Module,
                 "LATER",
             )
             .unwrap();
         writer
-            .add_scope(Some(after), "child", ScopeType::Module, "")
+            .scope_with(
+                SourceOptions::new("child", Some(after)),
+                ScopeType::Module,
+                "",
+            )
             .unwrap();
         let stream = writer
-            .add_scope(Some(after), "TX", vtr::ScopeType::Generic, "")
+            .scope_with(
+                SourceOptions::new("TX", Some(after)),
+                vtr::ScopeType::Generic,
+                "",
+            )
             .unwrap();
-        writer.add_generator(Some(stream), "site", "raw").unwrap();
+        writer
+            .transactions::<()>(vtr::SourceOptions::new("site", Some(stream)), "raw")
+            .unwrap();
         writer.close().unwrap();
         let local = OpenSpec::Path(path).open().unwrap();
         let h = local.hierarchy();
@@ -694,13 +724,20 @@ fn root_and_module_generators_keep_paths_and_kinds_over_remote_transfer() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
     writer
-        .add_generator(None, "requests", "MEMORY_BUS")
+        .transactions::<()>(vtr::SourceOptions::new("requests", None), "MEMORY_BUS")
         .unwrap();
     let module = writer
-        .add_scope(None, "cpu", vtr::ScopeType::Module, "")
+        .scope_with(
+            vtr::SourceOptions::new("cpu", None),
+            vtr::ScopeType::Module,
+            "",
+        )
         .unwrap();
     writer
-        .add_generator(Some(module), "instructions", "PIPELINE")
+        .transactions::<()>(
+            vtr::SourceOptions::new("instructions", Some(module)),
+            "PIPELINE",
+        )
         .unwrap();
     writer.close().unwrap();
     let local = OpenSpec::Path(file.path().into()).open().unwrap();
@@ -735,14 +772,20 @@ fn root_generators_do_not_alias_members_of_a_real_top_scope() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
     let top = writer
-        .add_scope(None, "(top)", vtr::ScopeType::Module, "")
+        .scope_with(
+            vtr::SourceOptions::new("(top)", None),
+            vtr::ScopeType::Module,
+            "",
+        )
         .unwrap();
     writer
-        .add_generator(None, "requests", "MEMORY_BUS")
+        .transactions::<()>(vtr::SourceOptions::new("requests", None), "MEMORY_BUS")
         .unwrap();
-    writer.add_generator(None, "root_only", "TX").unwrap();
     writer
-        .add_generator(Some(top), "requests", "PIPELINE")
+        .transactions::<()>(vtr::SourceOptions::new("root_only", None), "TX")
+        .unwrap();
+    writer
+        .transactions::<()>(vtr::SourceOptions::new("requests", Some(top)), "PIPELINE")
         .unwrap();
     writer.close().unwrap();
     let local = OpenSpec::Path(file.path().into()).open().unwrap();

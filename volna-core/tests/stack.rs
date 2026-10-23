@@ -1,5 +1,7 @@
 //! Headless stacked waveform tests for arithmetic, editing, persistence, and painting.
 
+use vtr::Recorder;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -462,33 +464,35 @@ fn a_long_layer_waits_for_its_summary_rather_than_walk() {
 
 fn long_trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
-    let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-9)).unwrap();
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = -9;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
     let top = w
-        .add_scope(None, "top", vtr::ScopeType::Module, "top")
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top",
+        )
         .unwrap();
     let ids: Vec<_> = ["a", "b"]
         .iter()
         .map(|n| {
-            w.add_var(
-                Some(top),
-                n,
-                vtr::VarType::Wire,
-                vtr::Direction::Output,
+            w.signal(
+                vtr::SourceOptions::new(*n, Some(top)),
                 vtr::SignalKind::Bits {
                     width: 1,
                     states: 2,
                 },
+                vtr::VarType::Wire,
+                vtr::Direction::Output,
             )
             .unwrap()
-            .1
         })
         .collect();
     for t in 0..30_000u64 {
-        w.set_time(t).unwrap();
-        w.emit_bit(ids[0], vtr::Logic::from(((t & 1) as u8) != 0))
-            .unwrap();
-        w.emit_bit(ids[1], vtr::Logic::from((u8::from(t % 3 == 0)) != 0))
+        w.advance_time(t).unwrap();
+        w.emit_u64(ids[0], u64::from(((t & 1) as u8) != 0)).unwrap();
+        w.emit_u64(ids[1], u64::from((u8::from(t % 3 == 0)) != 0))
             .unwrap();
     }
     w.close().unwrap();
@@ -688,15 +692,24 @@ fn the_summarys_peaks_agree_with_a_walk() {
 
 fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
-    let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-9)).unwrap();
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = -9;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
     let top = w
-        .add_scope(None, "top", vtr::ScopeType::Module, "top")
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top",
+        )
         .unwrap();
     let var = |w: &mut vtr::Writer, name: &str, typ, kind| {
-        w.add_var(Some(top), name, typ, vtr::Direction::Output, kind)
-            .unwrap()
-            .1
+        w.signal(
+            vtr::SourceOptions::new(name, Some(top)),
+            kind,
+            typ,
+            vtr::Direction::Output,
+        )
+        .unwrap()
     };
     let p = var(
         &mut w,
@@ -741,33 +754,36 @@ fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
         },
     );
     let other = w
-        .add_scope(None, "other", vtr::ScopeType::Module, "other")
+        .scope_with(
+            vtr::SourceOptions::new("other", None),
+            vtr::ScopeType::Module,
+            "other",
+        )
         .unwrap();
-    let (_, flow) = w
-        .add_var(
-            Some(other),
-            "flow",
+    let flow = w
+        .signal(
+            vtr::SourceOptions::new("flow", Some(other)),
+            vtr::SignalKind::Real,
             vtr::VarType::Real,
             vtr::Direction::Output,
-            vtr::SignalKind::Real,
         )
         .unwrap();
     for t in [0u64, 40, 50, 60, 70, 100] {
-        w.set_time(t).unwrap();
+        w.advance_time(t).unwrap();
         if t == 0 {
             w.emit_u64(p, 2).unwrap();
-            w.emit_bit(r, vtr::Logic::One).unwrap();
-            w.emit_varlen(mode, b"run").unwrap();
+            w.emit_u64(r, 1).unwrap();
+            w.emit_bytes(mode, b"run").unwrap();
             w.emit_real(flow, 0.5).unwrap();
         }
         match t {
-            40 => w.emit_logic_str(q, b"xxxx").unwrap(),
+            40 => w.emit_packed(q, 4, &[0xaa; 1]).unwrap(),
             0 | 50 => w.emit_u64(q, 3).unwrap(),
-            60 => w.emit_bit(r, vtr::Logic::Zero).unwrap(),
+            60 => w.emit_u64(r, 0).unwrap(),
             70 => w.emit_real(flow, -1.5).unwrap(),
             _ => {}
         }
-        w.emit_bit(tick, vtr::Logic::One).unwrap();
+        w.emit_u64(tick, 1).unwrap();
     }
     w.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
@@ -1227,16 +1243,22 @@ fn the_analog_showcase_stacks_related_contributions_and_preserves_gaps() {
     let reader = vtr::Reader::open_with(
         &path,
         vtr::ReadOptions {
-            verify_crc: true,
+            verify_checksums: true,
             ..vtr::ReadOptions::default()
         },
     )
     .unwrap();
     assert_eq!(reader.signal_count(), 38);
-    assert_eq!(reader.meta().timescale, -9);
-    assert_eq!(reader.time_range(), Some((0, 102_400)));
+    assert_eq!(reader.metadata().timescale, -9);
+    assert_eq!(
+        reader.waveform_time_range(),
+        Some(vtr::TimeWindow {
+            first: 0,
+            last: 102_400
+        })
+    );
     let real = |name: &str, t| {
-        let signal = reader.find_signal(name, '.').unwrap();
+        let signal = reader.find_signal(name).unwrap();
         match reader.value_at(signal, t).unwrap().borrow() {
             vtr::SignalValue::Real(value) => value,
             _ => panic!("{name} is not a real"),

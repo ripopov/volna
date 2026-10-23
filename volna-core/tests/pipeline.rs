@@ -1,6 +1,8 @@
 //! Headless pipeline panel tests: open a track from the sidebar, load it, paint it,
 //! navigate it, save and restore it.
 
+use vtr::Recorder;
+
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,77 +33,101 @@ fn fixture(n: u64) -> Arc<dyn Session> {
 }
 
 fn fixture_with_stages(n: u64, stages: &[&str]) -> Arc<dyn Session> {
-    use vtr::{Direction, ScopeType, SignalKind, TxStatus, Value, VarType};
+    use vtr::{Direction, ScopeType, SignalKind, Status, Value, VarType};
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
-    let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(0)).unwrap();
-    let unit = w.intern("cycle");
-    w.set_file_attr("time.unit", Value::Str(unit)).unwrap();
-    let cpu = w.add_scope(None, "cpu", ScopeType::Core, "").unwrap();
-    let (_, counter) = w
-        .add_var(
-            Some(cpu),
-            "counter",
-            VarType::Logic,
-            Direction::Implicit,
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = 0;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
+    let unit = w.intern("cycle").unwrap();
+    let time_unit = w.intern("time.unit").unwrap();
+    let mut metadata = w.metadata().unwrap();
+    metadata.attributes.push(vtr::Attribute {
+        key: time_unit,
+        value: Value::Str(unit),
+    });
+    w.set_metadata(metadata).unwrap();
+    let cpu = w
+        .scope_with(vtr::SourceOptions::new("cpu", None), ScopeType::Core, "")
+        .unwrap();
+    let counter = w
+        .signal(
+            vtr::SourceOptions::new("counter", Some(cpu)),
             SignalKind::Bits {
                 width: 8,
                 states: 2,
             },
+            VarType::Logic,
+            Direction::Implicit,
         )
         .unwrap();
     let stream = w
-        .add_scope(Some(cpu), "thread0", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("thread0", Some(cpu)),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
     let insn = w
-        .add_generator(Some(stream), "instruction", "PIPELINE")
+        .transactions::<()>(
+            vtr::SourceOptions::new("instruction", Some(stream)),
+            "PIPELINE",
+        )
         .unwrap();
     let bus = w
-        .add_scope(Some(cpu), "bus", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("bus", Some(cpu)),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
-    let req = w.add_generator(Some(bus), "request", "TX").unwrap();
+    let req = w
+        .transactions::<()>(vtr::SourceOptions::new("request", Some(bus)), "TX")
+        .unwrap();
     let last = n + 4;
     for t in 0..=last {
-        w.set_time(t).unwrap();
+        w.advance_time(t).unwrap();
         w.emit_u64(counter, t % 256).unwrap();
     }
-    let label = w.intern("vtr.label");
-    let lane0 = w.intern("0");
-    let lane1 = w.intern("1");
-    let stl = w.intern("stl");
-    let names: Vec<_> = stages.iter().map(|s| w.intern(s)).collect();
+    let label = w.intern("vtr.label").unwrap();
+    let lane0 = w.intern("0").unwrap();
+    let lane1 = w.intern("1").unwrap();
+    let stl = w.intern("stl").unwrap();
+    let names: Vec<_> = stages.iter().map(|s| w.intern(s).unwrap()).collect();
     for i in 0..n {
-        let tx = w.begin_tx(insn, i).unwrap();
+        let tx = w.begin_at(insn, i, &(), None).unwrap();
         let caption = format!("{:08x}: op{i}", 0x1000 + 4 * i);
         let value = if i == 0 {
             Value::Text(caption)
         } else {
-            Value::Str(w.intern(&caption))
+            Value::Str(w.intern(&caption).unwrap())
         };
-        w.tx_attr(tx, label, &value).unwrap();
+        w.attribute(tx.owner(), label, value).unwrap();
         let flushed = i == 3;
         let open = i + 1 == n;
         let count = if flushed { 2 } else { 3 };
         for (k, name) in names.iter().enumerate().take(count) {
             let (b, e) = (i + k as u64, i + k as u64 + 1);
             if open && k + 1 == count {
-                w.tx_stage_begin(tx, *name, lane0, b).unwrap();
+                w.embedded_stage(tx.owner(), b, *name, lane0, None, vec![])
+                    .unwrap();
             } else {
-                w.tx_stage(tx, *name, lane0, b, e, &[]).unwrap();
+                w.embedded_stage(tx.owner(), b, *name, lane0, Some(e), vec![])
+                    .unwrap();
             }
         }
         if i % 7 == 0 {
-            w.tx_stage(tx, stl, lane1, i + 1, i + 3, &[]).unwrap();
+            w.embedded_stage(tx.owner(), i + 1, stl, lane1, Some(i + 3), vec![])
+                .unwrap();
         }
         if flushed {
-            w.end_tx(tx, i + 2, TxStatus::Aborted).unwrap();
+            w.end_at(tx, i + 2, Status::Aborted).unwrap();
         } else if !open {
-            w.end_tx(tx, i + 3, TxStatus::Unset).unwrap();
+            w.end_at(tx, i + 3, Status::Unset).unwrap();
         }
     }
-    let tx = w.begin_tx(req, 2).unwrap();
-    w.end_tx(tx, 9, TxStatus::Ok).unwrap();
-    w.set_time(last).unwrap();
+    let tx = w.begin_at(req, 2, &(), None).unwrap();
+    w.end_at(tx, 9, Status::Ok).unwrap();
+    w.advance_time(last).unwrap();
     w.close().unwrap();
     OpenSpec::Path(file.path().into()).open().unwrap()
 }
@@ -351,23 +377,27 @@ fn activity_keeps_long_overlaps_and_points_in_one_generator() {
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
     let stream = writer
-        .add_scope(None, "pipeline", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("pipeline", None),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
     let first = writer
-        .add_generator(Some(stream), "first", "PIPELINE")
+        .transactions::<()>(vtr::SourceOptions::new("first", Some(stream)), "PIPELINE")
         .unwrap();
     let _second = writer
-        .add_generator(Some(stream), "second", "PIPELINE")
+        .transactions::<()>(vtr::SourceOptions::new("second", Some(stream)), "PIPELINE")
         .unwrap();
-    let long = writer.begin_tx(first, 0).unwrap();
-    writer.end_tx(long, 1000, vtr::TxStatus::Ok).unwrap();
+    let long = writer.begin_at(first, 0, &(), None).unwrap();
+    writer.end_at(long, 1000, vtr::Status::Ok).unwrap();
     for i in 1..100 {
-        let tx = writer.begin_tx(first, i).unwrap();
-        writer.end_tx(tx, i, vtr::TxStatus::Ok).unwrap();
+        let tx = writer.begin_at(first, i, &(), None).unwrap();
+        writer.end_at(tx, i, vtr::Status::Ok).unwrap();
     }
-    let point_tx = writer.begin_tx(first, 500).unwrap();
-    writer.end_tx(point_tx, 500, vtr::TxStatus::Ok).unwrap();
-    writer.set_time(1000).unwrap();
+    let point_tx = writer.begin_at(first, 500, &(), None).unwrap();
+    writer.end_at(point_tx, 500, vtr::Status::Ok).unwrap();
+    writer.advance_time(1000).unwrap();
     writer.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
     let track = generator_track(session.as_ref(), &["pipeline"]);
@@ -553,7 +583,7 @@ fn enter_on_a_generator_opens_a_panel_loads_the_track_once_and_paints_cells() {
                 (end as f64) > viewport.start && (s.begin as f64) < viewport.end
             })
             .count();
-        if tx.status == vtr::TxStatus::Aborted {
+        if tx.status == vtr::Status::Aborted {
             hollow += visible;
         } else {
             expected += visible;
@@ -1528,24 +1558,25 @@ fn square_cells_use_the_stream_clock_period_instead_of_time_units() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../volna/examples/pipeline_demo.vtr");
         let session = OpenSpec::Path(path).open().unwrap();
+        let nanosecond = 10f64.powi(-9 - i32::from(session.info().timescale));
+        let period = 10.0 * nanosecond;
         let mut app = App::new();
         app.set_session(session.clone());
-        let stream = scope(session.as_ref(), &["TOP", "tb", "core", "pipeline"]);
+        let Lookup::Found(generator) = session
+            .hierarchy()
+            .find_generator(&["TOP", "tb", "core", "pipeline"])
+        else {
+            panic!("the bound pipeline generator exists")
+        };
         app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-            session
-                .hierarchy()
-                .scope(stream)
-                .generators
-                .iter()
-                .next()
-                .unwrap(),
+            generator,
         )])));
         pump(&mut app);
         let pipeline = app.panels.focused_id();
         let theme = Theme::one_dark().zoomed(zoom);
         let cells = cells(&mut app, pipeline, &theme);
         let before = scales(&mut app, pipeline, &theme);
-        let nearest = (f64::from(cells.width()) / before.0 * 10.0 * f64::from(before.1))
+        let nearest = (f64::from(cells.width()) / before.0 * period * f64::from(before.1))
             .sqrt()
             .min(24.0 * f64::from(zoom));
         wheel_with(
@@ -1556,7 +1587,7 @@ fn square_cells_use_the_stream_clock_period_instead_of_time_units() {
             30.0,
             ctrl(),
         );
-        assert_square_cells(&mut app, pipeline, &theme, 10.0);
+        assert_square_cells(&mut app, pipeline, &theme, period);
         let expected = (nearest * 2.0f64.powf(0.25)).min(24.0 * f64::from(zoom));
         let actual = scales(&mut app, pipeline, &theme).1;
         assert!(
@@ -2593,10 +2624,10 @@ fn the_checked_in_showcase_has_two_pipeline_generators_on_a_cycle_time_base() {
         );
         assert_eq!(p.palette().primary_lane(), "0");
         let flushed = (0..set.len())
-            .filter(|r| set.get(*r).unwrap().1.status == vtr::TxStatus::Aborted)
+            .filter(|r| set.get(*r).unwrap().1.status == vtr::Status::Aborted)
             .count();
         let open = (0..set.len())
-            .filter(|r| set.get(*r).unwrap().1.status == vtr::TxStatus::Open)
+            .filter(|r| set.get(*r).unwrap().1.status == vtr::Status::Open)
             .count();
         assert!(
             flushed > 0 && open > 0,
@@ -2647,7 +2678,7 @@ fn the_feature_showcase_cpu_paints_stage_cells_and_stall_bands() {
         panic!("loaded")
     };
     let aborted = (0..set.len())
-        .filter(|r| set.get(*r).unwrap().1.status == vtr::TxStatus::Aborted)
+        .filter(|r| set.get(*r).unwrap().1.status == vtr::Status::Aborted)
         .count();
     assert_eq!((set.len(), aborted), (146, 0));
     let fills: Vec<_> = stages
@@ -2709,7 +2740,7 @@ fn the_theme_showcase_runs_the_c910_stage_ladder_with_flushed_and_open_rows() {
                 .filter(|r| set.get(*r).unwrap().1.status == status)
                 .count()
         };
-        let (flushed, open) = (count(vtr::TxStatus::Aborted), count(vtr::TxStatus::Open));
+        let (flushed, open) = (count(vtr::Status::Aborted), count(vtr::Status::Open));
         assert!(
             set.len() > 1500 && flushed > 50 && open > 0,
             "{core}: {} rows, {flushed} flushed, {open} open",
@@ -2725,18 +2756,22 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../volna/examples/pipeline_demo.vtr");
     let session = OpenSpec::Path(path).open().unwrap();
+    let nanosecond = 10u64.pow(
+        (-9 - i32::from(session.info().timescale))
+            .try_into()
+            .unwrap(),
+    );
     let mut app = App::new();
     app.set_session(session.clone());
     pump(&mut app);
-    let stream = scope(session.as_ref(), &["TOP", "tb", "core", "pipeline"]);
+    let Lookup::Found(generator) = session
+        .hierarchy()
+        .find_generator(&["TOP", "tb", "core", "pipeline"])
+    else {
+        panic!("the bound pipeline generator exists")
+    };
     app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        session
-            .hierarchy()
-            .scope(stream)
-            .generators
-            .iter()
-            .next()
-            .unwrap(),
+        generator,
     )])));
     pump(&mut app);
     let id = app.panels.focused_id();
@@ -2768,17 +2803,18 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     assert_eq!(statuses.len(), 12);
     assert_eq!(
         [
-            count(vtr::TxStatus::Ok),
-            count(vtr::TxStatus::Error),
-            count(vtr::TxStatus::Aborted),
-            count(vtr::TxStatus::Open)
+            count(vtr::Status::Ok),
+            count(vtr::Status::Error),
+            count(vtr::Status::Aborted),
+            count(vtr::Status::Open)
         ],
         [5, 1, 5, 1]
     );
     let layout = p.last_layout().clone();
     let viewport = p.nav.viewport(&app.doc);
     let y = layout.row_y(0) + layout.rows.row_px / 2.0;
-    let x = layout.cells.left() + viewport.x_of(50.0, layout.cells_width_f64()) as f32;
+    let x = layout.cells.left()
+        + viewport.x_of((50 * nanosecond) as f64, layout.cells_width_f64()) as f32;
     app.handle(Command::Pointer(
         id,
         PointerEvent::Move {
@@ -2796,7 +2832,7 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
         },
     ));
     app.handle(Command::Pointer(id, PointerEvent::Up));
-    assert_eq!(app.doc.shared.cursor, Some(45));
+    assert_eq!(app.doc.shared.cursor, Some(45 * nanosecond));
     let selection = app.doc.selection().unwrap();
     app.handle(Command::ShowTransaction { from: id });
     let panel = app.panels.focused_id();
@@ -2805,7 +2841,7 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     };
     assert_eq!(v.identity.id, selection.id);
     assert_eq!(v.identity.label.as_deref(), Some("0100 add a0,a0,a1"));
-    assert_eq!(v.identity.scope, ["TOP", "tb", "core", "pipeline"]);
+    assert_eq!(v.identity.scope, ["TOP", "tb", "core"]);
     let names: Vec<_> = v.lifeline[0]
         .cells
         .iter()
@@ -2820,6 +2856,88 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
         "{:?}",
         v.related.rows.iter().map(|r| &r.group).collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn stages_outside_owner_lifetimes_fit_paint_and_select_at_their_recorded_times() {
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let scope = writer.scope("cpu", None).unwrap();
+    let source = writer
+        .transactions::<()>(
+            vtr::SourceOptions::new("operations", Some(scope)),
+            "PIPELINE",
+        )
+        .unwrap();
+    let name = writer.intern("execute").unwrap();
+    let owner = writer.begin_at(source, 100, &(), None).unwrap();
+    writer
+        .embedded_stage(owner.owner(), 50, name, name, Some(160), vec![])
+        .unwrap();
+    writer
+        .embedded_event(owner.owner(), 180, name, vec![])
+        .unwrap();
+    writer.end_at(owner, 110, vtr::Status::Ok).unwrap();
+    writer.close().unwrap();
+    let session = OpenSpec::Path(file.path().into()).open().unwrap();
+    let mut app = App::new();
+    app.set_session(session);
+    assert_eq!(app.doc.limits(), (50, 180));
+    app.handle(Command::OpenPipeline {
+        track: a(TrackRef(source.id())),
+    });
+    pump(&mut app);
+    let panel = app.panels.focused_id();
+    let theme = Theme::one_dark();
+    frame(&mut app, panel, &theme);
+    app.handle(Command::Action(Action::ZoomFit));
+    app.tick(Instant::now() + Duration::from_secs(1));
+    frame(&mut app, panel, &theme);
+    let p = app.panels.pipeline(panel).unwrap();
+    let viewport = p.nav.viewport(&app.doc);
+    assert!(viewport.start <= 50.0 && viewport.end >= 180.0);
+    for (begin, end, sample) in [(50.0, 80.0, 60.0), (140.0, 170.0, 150.0)] {
+        app.handle(Command::Action(Action::ClearSelection));
+        app.doc
+            .shared
+            .viewport
+            .set(volna_core::wave::viewport::Viewport { start: begin, end });
+        frame(&mut app, panel, &theme);
+        let p = app.panels.pipeline(panel).unwrap();
+        let layout = p.last_layout();
+        let fill = p.palette().style("execute", &theme).fill;
+        let position = point(
+            layout.cells.left()
+                + p.nav
+                    .viewport(&app.doc)
+                    .x_of(sample, layout.cells_width_f64()) as f32,
+            layout.row_y(0) + layout.rows.row_px / 2.0,
+        );
+        assert!(layout.cells.contains(position));
+        assert!(
+            app.scene()
+                .quads()
+                .any(|(rect, color)| rect.contains(position) && color == fill)
+        );
+        app.handle(Command::Pointer(panel, PointerEvent::Move { position }));
+        assert_eq!(
+            app.panels.pipeline(panel).unwrap().hover,
+            Some(Hit::Cell { row: 0, stage: 0 })
+        );
+        app.handle(Command::Pointer(
+            panel,
+            PointerEvent::Down {
+                position,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        ));
+        app.handle(Command::Pointer(panel, PointerEvent::Up));
+        assert_eq!(
+            app.doc.selection().unwrap().id,
+            volna_trace::data::transactions::TransactionRef(owner.id())
+        );
+    }
 }
 
 #[test]
@@ -2844,29 +2962,45 @@ fn half_million_rows_load_lay_out_and_paint() {
             std::env::var("VOLNA_PIPELINE_STREAM").expect("VOLNA_PIPELINE_STREAM"),
         )
     } else {
-        use vtr::{TxStatus, Value};
+        use vtr::{Status, Value};
         let t0 = Clock::now();
-        let mut w = vtr::Writer::create(file.path()).unwrap();
-        w.set_timescale(vtr::Timescale::Exponent(-10)).unwrap();
+        let mut w_options = vtr::WriterOptions::default();
+        w_options.metadata.timescale = -10;
+        let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
         let core = w
-            .add_scope(None, "core", vtr::ScopeType::Module, "")
+            .scope_with(
+                vtr::SourceOptions::new("core", None),
+                vtr::ScopeType::Module,
+                "",
+            )
             .unwrap();
         let stream = w
-            .add_scope(Some(core), "pipeline", vtr::ScopeType::Generic, "")
+            .scope_with(
+                vtr::SourceOptions::new("pipeline", Some(core)),
+                vtr::ScopeType::Generic,
+                "",
+            )
             .unwrap();
         let insn = w
-            .add_generator(Some(stream), "instruction", "PIPELINE")
+            .transactions::<()>(
+                vtr::SourceOptions::new("instruction", Some(stream)),
+                "PIPELINE",
+            )
             .unwrap();
         let names: Vec<_> = [
             "ID", "IR", "IS", "IQ", "RF", "EX", "CM", "RT", "BJ", "FX", "AG", "DC", "DA", "WB",
         ]
         .iter()
-        .map(|s| w.intern(s))
+        .map(|s| w.intern(s).unwrap())
         .collect();
-        let lane = w.intern("");
-        let (label, pc_key, iid_key) = (w.intern("vtr.label"), w.intern("pc"), w.intern("iid"));
+        let lane = w.intern("").unwrap();
+        let (label, pc_key, iid_key) = (
+            w.intern("vtr.label").unwrap(),
+            w.intern("pc").unwrap(),
+            w.intern("iid").unwrap(),
+        );
         let captions: Vec<_> = (0..2000u64)
-            .map(|pc| w.intern(&format!("0x{:04x} op{pc}", pc * 4)))
+            .map(|pc| w.intern(&format!("0x{:04x} op{pc}", pc * 4)).unwrap())
             .collect();
         let mut rng = 0x2545_f491_4f6c_dd1du64;
         let mut next = || {
@@ -2877,7 +3011,7 @@ fn half_million_rows_load_lay_out_and_paint() {
         };
         for i in 0..500_000u64 {
             let begin = 2 * (i * 10 / 13);
-            let tx = w.begin_tx(insn, begin).unwrap();
+            let tx = w.begin_at(insn, begin, &(), None).unwrap();
             let r = next();
             let aborted = r % 5 == 0;
             let mut path = vec![0usize, 1, 2, 3, 4];
@@ -2894,25 +3028,20 @@ fn half_million_rows_load_lay_out_and_paint() {
             let mut t = begin;
             for &s in &path {
                 let len = 2 * (1 + (next() % 3));
-                w.tx_stage(tx, names[s], lane, t, t + len, &[]).unwrap();
+                w.embedded_stage(tx.owner(), t, names[s], lane, Some(t + len), vec![])
+                    .unwrap();
                 t += len;
             }
-            w.tx_attr(tx, label, &Value::Str(captions[(i % 2000) as usize]))
+            w.attribute(tx.owner(), label, Value::Str(captions[(i % 2000) as usize]))
                 .unwrap();
-            w.tx_attr(tx, pc_key, &Value::U64((i % 2000) * 4)).unwrap();
+            w.attribute(tx.owner(), pc_key, Value::U64((i % 2000) * 4))
+                .unwrap();
             if !aborted {
-                w.tx_attr(tx, iid_key, &Value::U64(i % 128)).unwrap();
+                w.attribute(tx.owner(), iid_key, Value::U64(i % 128))
+                    .unwrap();
             }
-            w.end_tx(
-                tx,
-                t,
-                if aborted {
-                    TxStatus::Aborted
-                } else {
-                    TxStatus::Ok
-                },
-            )
-            .unwrap();
+            w.end_at(tx, t, if aborted { Status::Aborted } else { Status::Ok })
+                .unwrap();
         }
         w.close().unwrap();
         println!(

@@ -1,6 +1,8 @@
 //! Headless tests of row colours: the Color menu and command, inheritance through groups,
 //! Default, ungrouping, the clipboard, undo, workspaces and the painter.
 
+use vtr::Recorder;
+
 use std::sync::Arc;
 
 use volna_core::Theme;
@@ -23,8 +25,9 @@ const ERR: usize = 3;
 
 fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
-    let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-9)).unwrap();
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = -9;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
     let bit = vtr::SignalKind::Bits {
         width: 1,
         states: 4,
@@ -34,36 +37,42 @@ fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
         states: 4,
     };
     let top = w
-        .add_scope(None, "top", vtr::ScopeType::Module, "top")
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top",
+        )
         .unwrap();
     let axi = w
-        .add_scope(Some(top), "axi", vtr::ScopeType::Module, "axi")
+        .scope_with(
+            vtr::SourceOptions::new("axi", Some(top)),
+            vtr::ScopeType::Module,
+            "axi",
+        )
         .unwrap();
     let mut var = |scope, name: &str, kind| {
-        w.add_var(
-            Some(scope),
-            name,
+        w.signal(
+            vtr::SourceOptions::new(name, Some(scope)),
+            kind,
             vtr::VarType::Wire,
             vtr::Direction::Output,
-            kind,
         )
         .unwrap()
-        .1
     };
     let clk = var(top, "clk", bit);
     let valid = var(axi, "valid", bit);
     let data = var(axi, "data", bus);
     let err = var(top, "err", bit);
     for t in (0..1000).step_by(10) {
-        w.set_time(t).unwrap();
-        w.emit_bit(clk, vtr::Logic::from((u8::from((t / 10) % 2 == 0)) != 0))
+        w.advance_time(t).unwrap();
+        w.emit_u64(clk, u64::from((u8::from((t / 10) % 2 == 0)) != 0))
             .unwrap();
         if t % 100 == 0 {
-            w.emit_bit(valid, vtr::Logic::from((u8::from(t % 200 == 0)) != 0))
+            w.emit_u64(valid, u64::from((u8::from(t % 200 == 0)) != 0))
                 .unwrap();
-            w.emit_bit(err, vtr::Logic::Zero).unwrap();
+            w.emit_u64(err, 0).unwrap();
             if (400..600).contains(&t) {
-                w.emit_logic_str(data, b"xxxxxxxxxxxxxxxx").unwrap();
+                w.emit_packed(data, 4, &[0xaa; 4]).unwrap();
             } else {
                 w.emit_u64(data, t).unwrap();
             }

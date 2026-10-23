@@ -11,7 +11,6 @@ use volna_core::scene::MonoMeasure;
 use volna_core::transaction::TxPanelState;
 use volna_core::workspace::Workspace;
 use volna_core::{App, Command, Instant, Theme};
-use volna_trace::data::transactions::TransactionRef;
 use volna_trace::session::OpenSpec;
 
 fn examples() -> PathBuf {
@@ -141,18 +140,16 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         Rows::Ready(rows) => assert_eq!(rows.len(), 420),
         _ => panic!("the pipeline rows are not ready"),
     }
-    match app.panels.transaction(PanelId(37)).unwrap().state(&app.doc) {
+    let initial_record = match app.panels.transaction(PanelId(37)).unwrap().state(&app.doc) {
         TxPanelState::Ready(view) => {
-            assert_eq!(view.identity.id, TransactionRef(23));
-            assert!(
-                view.identity
-                    .label
-                    .as_deref()
-                    .is_some_and(|l| !l.is_empty())
+            assert_eq!(
+                view.identity.label.as_deref(),
+                Some("80000054: addi a4, a4, 4")
             );
+            view.identity.id
         }
         _ => panic!("the initial record is not ready"),
-    }
+    };
     assert_eq!(
         app.panels
             .get(PanelId(40))
@@ -185,7 +182,7 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         }
         _ => panic!("the pipeline rows are not ready"),
     };
-    assert_ne!(id, TransactionRef(23));
+    assert_ne!(id, initial_record);
     app.handle(Command::SelectTransaction {
         panel: PanelId(38),
         track,

@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use vtr::ClockTimeline;
+use crate::clock::ClockTimeline;
 
 use crate::clock::Clock;
 

@@ -16,7 +16,7 @@ use crate::trace::Traced;
 use crate::wave::timeline::format_time;
 use volna_trace::data::loaded_tracks::TransactionLocation;
 use volna_trace::data::transactions::{
-    AttributeValue, Attributes, TrackRef, Transaction, TransactionRef, TxKind, TxStatus,
+    AttributeValue, Attributes, SpanKind, Status, TrackRef, Transaction, TransactionRef,
 };
 
 pub const VIEW_BYTES: usize = 128 * 1024;
@@ -177,7 +177,7 @@ pub struct Identity {
     pub ordinal: usize,
     pub id: TransactionRef,
     pub label: Option<String>,
-    pub status: TxStatus,
+    pub status: Status,
     pub status_text: &'static str,
     pub kind: Option<&'static str>,
     pub parent: Option<TransactionRef>,
@@ -282,8 +282,10 @@ pub struct RefRow {
 
 impl RefRow {
     #[must_use]
-    pub fn target_track(&self) -> Traced<TrackRef> {
-        Traced::new(self.trace, self.target.generator)
+    pub fn target_track(&self) -> Option<Traced<TrackRef>> {
+        self.target
+            .generator
+            .map(|generator| Traced::new(self.trace, generator))
     }
 }
 
@@ -357,7 +359,7 @@ pub fn view(
         parent: tx.parent,
     };
 
-    let open = tx.status == TxStatus::Open;
+    let open = tx.status == Status::Open;
     let duration = tx.end.saturating_sub(tx.begin);
     let timing = Timing {
         begin: tx.begin,
@@ -526,24 +528,24 @@ fn contains_folded(text: &str, needle: &str) -> bool {
     })
 }
 
-fn status_text(status: TxStatus) -> &'static str {
+fn status_text(status: Status) -> &'static str {
     match status {
-        TxStatus::Unset => "ended",
-        TxStatus::Ok => "ok",
-        TxStatus::Error => "error",
-        TxStatus::Aborted => "aborted",
-        TxStatus::Open => "open",
+        Status::Unset => "ended",
+        Status::Ok => "ok",
+        Status::Error => "error",
+        Status::Aborted => "aborted",
+        Status::Open => "open",
     }
 }
 
-fn kind_name(kind: TxKind) -> Option<&'static str> {
+fn kind_name(kind: SpanKind) -> Option<&'static str> {
     match kind {
-        TxKind::Unspecified => None,
-        TxKind::Internal => Some("internal"),
-        TxKind::Server => Some("server"),
-        TxKind::Client => Some("client"),
-        TxKind::Producer => Some("producer"),
-        TxKind::Consumer => Some("consumer"),
+        SpanKind::Unspecified => None,
+        SpanKind::Internal => Some("internal"),
+        SpanKind::Server => Some("server"),
+        SpanKind::Client => Some("client"),
+        SpanKind::Producer => Some("producer"),
+        SpanKind::Consumer => Some("consumer"),
     }
 }
 
@@ -818,7 +820,7 @@ fn related(
 ) -> Section<RefRow> {
     let here = TransactionLocation {
         transaction: tx.id,
-        generator: track.item,
+        generator: Some(track.item),
     };
     let parent = generator.parent(tx.id);
     let children = || {
@@ -828,12 +830,14 @@ fn related(
                 .iter()
                 .map(move |&child| TransactionLocation {
                     transaction: child,
-                    generator: other.generator(),
+                    generator: Some(other.generator()),
                 })
         })
     };
     let outgoing = |e: &volna_trace::data::loaded_tracks::LoadedRelation| {
-        e.relation.from == tx.id && e.from_generator == track.item
+        e.from_generator == Some(track.item)
+            && generator.transaction_ordinal(e.relation.from)
+                == generator.transaction_ordinal(tx.id)
     };
     let edge_count = generator.relations_of(tx.id).count();
     let edges = budget.ordered(
@@ -883,18 +887,29 @@ fn related(
         if !budget.slot(&mut rows) {
             break;
         }
-        let resident = doc.resident_generator(track.with(target.generator));
+        let resident = target
+            .generator
+            .and_then(|generator| doc.resident_generator(track.with(generator)));
         let label = resident
             .as_ref()
             .and_then(|g| g.transaction(target.transaction))
             .and_then(|tx| tx.attributes.iter().find(|a| a.key == LABEL_ATTRIBUTE))
             .map(|a| budget.value(&a.value, Radix::Dec).0)
-            .filter(|label| !label.is_empty());
-        let path = (target.generator != track.item)
+            .filter(|label| !label.is_empty())
+            .or_else(|| {
+                target.generator.is_none().then(|| {
+                    budget.text(if target.transaction.0 == 0 {
+                        "outside recording"
+                    } else {
+                        "record unavailable"
+                    })
+                })
+            });
+        let path = (target.generator != Some(track.item))
             .then(|| {
                 catalog
                     .iter()
-                    .find(|t| t.id == target.generator)
+                    .find(|t| Some(t.id) == target.generator)
                     .map(|t| budget.path(&t.path))
             })
             .flatten();
@@ -975,7 +990,7 @@ pub fn copy_tsv(
             &tx.begin.to_string(),
             &tx.end.to_string(),
             &tx.end.saturating_sub(tx.begin).to_string(),
-            tx.status.name(),
+            crate::data::text::status_name(tx.status),
             kind_name(tx.kind).unwrap_or("—"),
         ],
     )?;

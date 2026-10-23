@@ -50,8 +50,8 @@ Building the workspace requires the pinned nightly toolchain in `rust-toolchain.
 and a C compiler to build the Zstandard dependency. The standalone VTR crate
 supports Rust 1.97.1 or newer.
 
-The [VTR guide](../vtr/) includes a complete waveform
-round trip and instructions for browsing the Rust API documentation.
+The [VTR guide](../vtr/) links runnable Rust examples and documents the recording
+and reading APIs, verification commands, and standalone crate requirements.
 The [C++ and C guide](../vtr-cpp/) covers building, linking, ownership, and errors;
 the [crash guard guide](../vtr-guard/) covers Linux process recovery.
 The [trace loading guide](../volna-trace/) explains the shared session API.

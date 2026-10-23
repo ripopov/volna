@@ -84,7 +84,7 @@ impl ParentTrace {
         while let Some((track, id)) = self.next {
             let location = TransactionLocation {
                 transaction: id,
-                generator: track.item,
+                generator: Some(track.item),
             };
             if self.seen.contains(&location) {
                 self.fail(doc, format!("Parent cycle at transaction #{}.", id.0));
@@ -138,9 +138,11 @@ impl ParentTrace {
                 _reservation: reservation,
             });
             self.seen.insert(location);
-            self.next = generator
-                .parent(id)
-                .map(|parent| (track.with(parent.generator), parent.transaction));
+            self.next = generator.parent(id).and_then(|parent| {
+                parent
+                    .generator
+                    .map(|generator| (track.with(generator), parent.transaction))
+            });
         }
         self.state = ParentTraceState::Ready;
     }

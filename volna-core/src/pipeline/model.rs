@@ -20,7 +20,7 @@ use crate::wave::model::PointerEvent;
 use crate::wave::overlay::SpanClocks;
 use crate::wave::viewport::{FIT_MARGIN_PX, Viewport};
 use volna_trace::data::transactions::{
-    AttributeValue, TrackRef, Transaction, TransactionRef, TransactionStage, TxStatus,
+    AttributeValue, Status, TrackRef, Transaction, TransactionRef, TransactionStage,
 };
 
 pub const LABEL_ATTRIBUTE: &str = "vtr.label";
@@ -426,9 +426,9 @@ impl PipelineModel {
         let (_, tx) = set.get(row)?;
         let mut text = format!("#{row}");
         match tx.status {
-            TxStatus::Aborted => text.push_str(" flushed"),
-            TxStatus::Open => text.push_str(" open"),
-            TxStatus::Error => text.push_str(" error"),
+            Status::Aborted => text.push_str(" flushed"),
+            Status::Open => text.push_str(" open"),
+            Status::Error => text.push_str(" error"),
             _ => {}
         }
         match stage.and_then(|s| tx.stages.get(s)) {

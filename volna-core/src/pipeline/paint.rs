@@ -10,7 +10,7 @@ use crate::scene::{FontRole, Scene, TextCache, TextMeasure};
 use crate::theme::{Theme, contrast};
 use crate::wave::marks;
 use crate::wave::overlay::{self, TextPainter, TimeColumn};
-use volna_trace::data::transactions::TxStatus;
+use volna_trace::data::transactions::Status;
 
 use super::model::{Drag, Hit, PipelineModel, Rows};
 
@@ -174,7 +174,7 @@ pub fn paint(
                     let Some((_, tx)) = set.get(r) else { continue };
                     let y = layout.row_y(r);
                     let row_rect = Rect::new(point(cells.left(), y), size(cells.width(), row_px));
-                    if tx.status == TxStatus::Aborted {
+                    if tx.status == Status::Aborted {
                         p.scene
                             .clipped(cells, |scene| scene.fill(row_rect, t.wave_flush));
                     }
@@ -220,7 +220,7 @@ pub fn paint(
                         let style = palette.style(&stage.name, t);
                         let rect =
                             Rect::from_xywh(xa, y + pad, xb - xa, (row_px - 2.0 * pad).max(1.0));
-                        let flushed = tx.status == TxStatus::Aborted;
+                        let flushed = tx.status == Status::Aborted;
                         if flushed {
                             let ink = if contrast(style.fill, t.editor.bg)
                                 >= contrast(style.edge, t.editor.bg)
@@ -286,7 +286,7 @@ pub fn paint(
                         });
                         last_right = Some(xb);
                     }
-                    if tx.status == TxStatus::Open
+                    if tx.status == Status::Open
                         && let Some(xr) = last_right
                     {
                         let x = snap(xr) + 0.5;
@@ -325,14 +325,17 @@ pub fn paint(
                     let mut incoming = Vec::new();
                     let mut outgoing = Vec::new();
                     for edge in generator.relations_of(selection.id) {
-                        let forward = edge.relation.from == selection.id
-                            && edge.from_generator == selection.track.item;
+                        let forward = generator.transaction_ordinal(edge.relation.from)
+                            == generator.transaction_ordinal(selection.id)
+                            && edge.from_generator == Some(selection.track.item);
                         let (other, other_generator) = if forward {
                             (edge.relation.to, edge.to_generator)
                         } else {
                             (edge.relation.from, edge.from_generator)
                         };
-                        let Some(other_row) = set.row_of(other_generator, other) else {
+                        let Some(other_row) =
+                            other_generator.and_then(|generator| set.row_of(generator, other))
+                        else {
                             continue;
                         };
                         let Some((_, tx)) = set.get(other_row) else {
@@ -385,7 +388,7 @@ pub fn paint(
                     ));
                     let label = PipelineModel::label(tx);
                     let (label, color) = match tx.status {
-                        TxStatus::Aborted => {
+                        Status::Aborted => {
                             fills.push((
                                 Rect::new(
                                     point(labels.left(), y + pad),
@@ -395,7 +398,7 @@ pub fn paint(
                             ));
                             (label, t.panel.text_muted)
                         }
-                        TxStatus::Open => (label, t.panel.text_muted),
+                        Status::Open => (label, t.panel.text_muted),
                         _ => (label, t.panel.text),
                     };
                     if !label.is_empty() {

@@ -51,14 +51,6 @@ pub enum LoadRequest {
         counter: Arc<crate::data::ActivityCounter>,
         budget: volna_trace::remote::memory::MemoryBudget,
     },
-    ResolveActivity {
-        trace: TraceId,
-        generation: u64,
-        session: Arc<dyn Session>,
-        counter: Arc<crate::data::ActivityCounter>,
-        counts: Arc<crate::data::ActivityCounts>,
-        budget: volna_trace::remote::memory::MemoryBudget,
-    },
     Summary {
         generation: u64,
         signal: Traced<SignalRef>,
@@ -92,7 +84,6 @@ impl LoadRequest {
         match self {
             Self::Signals { session, .. }
             | Self::Track { session, .. }
-            | Self::ResolveActivity { session, .. }
             | Self::BuildActivity { session, .. } => session.remote_id(),
             Self::Open { .. }
             | Self::Sizes { .. }
@@ -171,17 +162,6 @@ impl LoadRequest {
                 trace,
                 generation,
                 window,
-                result: Err(error),
-            },
-            Self::ResolveActivity {
-                trace,
-                generation,
-                counts,
-                ..
-            } => LoadResult::ActivityResolved {
-                trace,
-                generation,
-                window: counts.window,
                 result: Err(error),
             },
             Self::Summary {
@@ -314,29 +294,6 @@ impl LoadRequest {
                 result: crate::data::ActivityCounts::classify(&index, &counter, window, &budget)
                     .map(Arc::new),
             },
-            LoadRequest::ResolveActivity {
-                trace,
-                generation,
-                session,
-                counter,
-                counts,
-                budget,
-            } => LoadResult::ActivityResolved {
-                trace,
-                generation,
-                window: counts.window,
-                result: counts
-                    .admit_resolution(&counter, &budget)
-                    .and_then(|reservation| {
-                        let changed = session.resolve_activity(
-                            &counts.undecided,
-                            counts.window.0,
-                            counts.window.1,
-                        )?;
-                        counts.resolved(&counter, changed, reservation)
-                    })
-                    .map(Arc::new),
-            },
             LoadRequest::Summary {
                 generation,
                 signal,
@@ -429,12 +386,6 @@ pub enum LoadResult {
         result: anyhow::Result<Arc<crate::data::ActivityCounter>>,
     },
     Activity {
-        trace: TraceId,
-        generation: u64,
-        window: (u64, u64),
-        result: anyhow::Result<Arc<crate::data::ActivityCounts>>,
-    },
-    ActivityResolved {
         trace: TraceId,
         generation: u64,
         window: (u64, u64),

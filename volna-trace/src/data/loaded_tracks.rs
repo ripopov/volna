@@ -12,14 +12,14 @@ const SCAN_LEAVES: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TransactionLocation {
     pub transaction: TransactionRef,
-    pub generator: TrackRef,
+    pub generator: Option<TrackRef>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LoadedRelation {
     pub id: u64,
-    pub from_generator: TrackRef,
-    pub to_generator: TrackRef,
+    pub from_generator: Option<TrackRef>,
+    pub to_generator: Option<TrackRef>,
     pub relation: Relation,
 }
 
@@ -168,6 +168,17 @@ impl LoadedGenerator {
                 by_id.insert(tx.id, index).is_none(),
                 "duplicate transaction identity"
             );
+            for id in tx
+                .events
+                .iter()
+                .map(|event| event.id)
+                .chain(tx.stages.iter().map(|stage| stage.id))
+            {
+                anyhow::ensure!(
+                    by_id.insert(id, index).is_none(),
+                    "duplicate embedded record identity"
+                );
+            }
             anyhow::ensure!(
                 tx.parent == parents.get(&tx.id).map(|p| p.transaction),
                 "parent location does not match transaction"
@@ -175,11 +186,16 @@ impl LoadedGenerator {
         }
         for id in parents.keys() {
             checkpoint().await;
-            anyhow::ensure!(by_id.contains_key(id), "unknown child in parent locations");
+            anyhow::ensure!(
+                by_id
+                    .get(id)
+                    .is_some_and(|&index| transactions[index].id == *id),
+                "unknown child in parent locations"
+            );
         }
         for parent in parents.values() {
             checkpoint().await;
-            if parent.generator == generator {
+            if parent.generator == Some(generator) {
                 anyhow::ensure!(
                     by_id.contains_key(&parent.transaction),
                     "missing parent in complete generator"
@@ -190,8 +206,8 @@ impl LoadedGenerator {
         for edge in &relations {
             checkpoint().await;
             anyhow::ensure!(relation_ids.insert(edge.id), "duplicate relation identity");
-            let from_here = edge.from_generator == generator;
-            let to_here = edge.to_generator == generator;
+            let from_here = edge.from_generator == Some(generator);
+            let to_here = edge.to_generator == Some(generator);
             anyhow::ensure!(from_here || to_here, "relation does not touch generator");
             anyhow::ensure!(
                 !from_here || by_id.contains_key(&edge.relation.from),
@@ -213,14 +229,20 @@ impl LoadedGenerator {
         for (index, edge) in relations.iter().enumerate() {
             checkpoint().await;
             let index = u32::try_from(index).map_err(|_| anyhow::anyhow!("too many relations"))?;
-            if edge.from_generator == generator {
-                by_endpoint
-                    .entry(edge.relation.from)
-                    .or_default()
-                    .push(index);
-            }
-            if edge.to_generator == generator && edge.relation.to != edge.relation.from {
-                by_endpoint.entry(edge.relation.to).or_default().push(index);
+            let from = (edge.from_generator == Some(generator)).then_some(edge.relation.from);
+            let to = (edge.to_generator == Some(generator)).then_some(edge.relation.to);
+            let keys = [
+                from,
+                to,
+                from.map(|id| transactions[by_id[&id]].id),
+                to.map(|id| transactions[by_id[&id]].id),
+            ];
+            for (position, key) in keys.iter().enumerate() {
+                if let Some(key) = key
+                    && !keys[..position].contains(&Some(*key))
+                {
+                    by_endpoint.entry(*key).or_default().push(index);
+                }
             }
         }
         let leaves = transactions
@@ -309,6 +331,7 @@ impl LoadedGenerator {
             .iter()
             .map(|&index| &self.relations[index as usize])
     }
+    /// Embedded IDs resolve to their owning row.
     #[must_use]
     pub fn transaction(&self, id: TransactionRef) -> Option<&Transaction> {
         self.by_id.get(&id).map(|&index| &self.transactions[index])
@@ -454,7 +477,7 @@ pub struct LoadedTrack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::transactions::{TxKind, TxStatus};
+    use crate::data::transactions::{SpanKind, Status};
 
     fn tx(id: u64, begin: u64, end: u64) -> Transaction {
         Transaction {
@@ -462,8 +485,8 @@ mod tests {
             generator: TrackRef(1),
             begin,
             end,
-            status: TxStatus::Ok,
-            kind: TxKind::Producer,
+            status: Status::Ok,
+            kind: SpanKind::Producer,
             parent: None,
             attributes: vec![],
             events: vec![],
@@ -629,12 +652,12 @@ mod tests {
         child.parent = Some(TransactionRef(9));
         let parent = TransactionLocation {
             transaction: TransactionRef(9),
-            generator: TrackRef(3),
+            generator: Some(TrackRef(3)),
         };
         let edge = LoadedRelation {
             id: 0,
-            from_generator: TrackRef(3),
-            to_generator: TrackRef(1),
+            from_generator: Some(TrackRef(3)),
+            to_generator: Some(TrackRef(1)),
             relation: Relation {
                 from: parent.transaction,
                 to: child.id,

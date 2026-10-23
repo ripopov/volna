@@ -1,5 +1,7 @@
 //! Headless viewer tests: feed commands, assert on model state and on the display list.
 
+use vtr::Recorder;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::time::Duration;
@@ -1726,20 +1728,19 @@ fn status_reports_memory_budget_use_as_signals_load_and_unload() {
     use volna_core::app::MemoryStatus;
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let (_, bus) = writer
-        .add_var(
-            None,
-            "bus",
-            vtr::VarType::Wire,
-            vtr::Direction::Output,
+    let bus = writer
+        .signal(
+            vtr::SourceOptions::new("bus", None),
             vtr::SignalKind::Bits {
                 width: 32,
                 states: 2,
             },
+            vtr::VarType::Wire,
+            vtr::Direction::Output,
         )
         .unwrap();
     for time in 0..10_000u64 {
-        writer.set_time(time).unwrap();
+        writer.advance_time(time).unwrap();
         writer.emit_u64(bus, time * 7).unwrap();
     }
     writer.close().unwrap();

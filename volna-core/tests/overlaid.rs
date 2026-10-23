@@ -1,6 +1,8 @@
 //! Group overlays: shared scales, independent gaps and envelopes, exact probes, row edits,
 //! workspace persistence, and worker summary lifetimes.
 
+use vtr::Recorder;
+
 use std::sync::Arc;
 use volna_core::Theme;
 use volna_core::app::{Action, App, Command};
@@ -25,15 +27,24 @@ const LOCATION: &str = "file:///tmp/overlaid.vtr.volna.json";
 
 fn fixture(changes: usize) -> (tempfile::NamedTempFile, App, PanelId) {
     let file = tempfile::NamedTempFile::new().unwrap();
-    let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-9)).unwrap();
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = -9;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
     let top = w
-        .add_scope(None, "top", vtr::ScopeType::Module, "top")
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top",
+        )
         .unwrap();
     let mut var = |name, typ, kind| {
-        w.add_var(Some(top), name, typ, vtr::Direction::Output, kind)
-            .unwrap()
-            .1
+        w.signal(
+            vtr::SourceOptions::new(name, Some(top)),
+            kind,
+            typ,
+            vtr::Direction::Output,
+        )
+        .unwrap()
     };
     let p = var(
         "p",
@@ -69,7 +80,7 @@ fn fixture(changes: usize) -> (tempfile::NamedTempFile, App, PanelId) {
         },
     );
     for t in 0..changes.max(101) as u64 {
-        w.set_time(t).unwrap();
+        w.advance_time(t).unwrap();
         if changes > 101 {
             w.emit_u64(p, if t == 77 { 200 } else { t % 2 }).unwrap();
             w.emit_u64(q, 3 + t % 2).unwrap();
@@ -79,20 +90,20 @@ fn fixture(changes: usize) -> (tempfile::NamedTempFile, App, PanelId) {
                     w.emit_u64(p, 2).unwrap();
                     w.emit_u64(q, 3).unwrap();
                 }
-                40 => w.emit_logic_str(q, b"xxxxxxxx").unwrap(),
+                40 => w.emit_packed(q, 4, &[0xaa; 2]).unwrap(),
                 50 => w.emit_u64(q, 4).unwrap(),
                 70 => w.emit_u64(p, 250).unwrap(),
                 _ => {}
             }
         }
         if t == 0 {
-            w.emit_bit(bit, vtr::Logic::One).unwrap();
-            w.emit_varlen(mode, b"run").unwrap();
+            w.emit_u64(bit, 1).unwrap();
+            w.emit_bytes(mode, b"run").unwrap();
         }
         if t == 60 {
-            w.emit_bit(bit, vtr::Logic::Zero).unwrap();
+            w.emit_u64(bit, 0).unwrap();
         }
-        w.emit_bit(event, vtr::Logic::One).unwrap();
+        w.emit_u64(event, 1).unwrap();
     }
     w.close().unwrap();
     let mut app = App::new();

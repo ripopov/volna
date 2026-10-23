@@ -158,13 +158,7 @@ pub struct VariableView<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Ids<'a> {
-    storage: IdStorage<'a>,
-    gap: Option<usize>,
-}
-#[derive(Clone, Copy, Debug)]
-enum IdStorage<'a> {
-    Slice(&'a [u32]),
-    Reader(vtr::hierarchy_index::IndexedNodes<'a>),
+    ids: &'a [u32],
 }
 impl Default for Ids<'_> {
     fn default() -> Self {
@@ -174,41 +168,19 @@ impl Default for Ids<'_> {
 impl<'a> Ids<'a> {
     #[must_use]
     pub fn from_slice(ids: &'a [u32]) -> Self {
-        Self {
-            storage: IdStorage::Slice(ids),
-            gap: None,
-        }
-    }
-    pub(crate) fn reader(ids: vtr::hierarchy_index::IndexedNodes<'a>) -> Self {
-        Self {
-            storage: IdStorage::Reader(ids),
-            gap: None,
-        }
-    }
-    pub(crate) fn shifted(mut self, gap: Option<usize>) -> Self {
-        self.gap = gap;
-        self
+        Self { ids }
     }
     #[must_use]
     pub fn len(self) -> usize {
-        match self.storage {
-            IdStorage::Slice(ids) => ids.len(),
-            IdStorage::Reader(ids) => ids.len(),
-        }
+        self.ids.len()
     }
     #[must_use]
     pub fn is_empty(self) -> bool {
-        self.iter().next().is_none()
+        self.ids.is_empty()
     }
     #[must_use]
     pub fn iter(self) -> IdsIter<'a> {
-        IdsIter {
-            storage: match self.storage {
-                IdStorage::Slice(ids) => IterStorage::Slice(ids.iter()),
-                IdStorage::Reader(ids) => IterStorage::Reader(ids.iter()),
-            },
-            gap: self.gap,
-        }
+        IdsIter(self.ids.iter())
     }
     #[must_use]
     pub fn first(self) -> Option<usize> {
@@ -222,39 +194,22 @@ impl<'a> IntoIterator for Ids<'a> {
         self.iter()
     }
 }
-pub struct IdsIter<'a> {
-    storage: IterStorage<'a>,
-    gap: Option<usize>,
-}
-enum IterStorage<'a> {
-    Slice(std::slice::Iter<'a, u32>),
-    Reader(vtr::hierarchy_index::IndexedIter<'a>),
-}
+pub struct IdsIter<'a>(std::slice::Iter<'a, u32>);
 impl Iterator for IdsIter<'_> {
     type Item = usize;
     fn next(&mut self) -> Option<usize> {
-        let id = match &mut self.storage {
-            IterStorage::Slice(ids) => ids.next().map(|&id| id as usize),
-            IterStorage::Reader(ids) => ids.next(),
-        }?;
-        Some(id + usize::from(self.gap.is_some_and(|gap| id >= gap)))
+        self.0.next().map(|&id| id as usize)
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match &self.storage {
-            IterStorage::Slice(ids) => ids.size_hint(),
-            IterStorage::Reader(ids) => ids.size_hint(),
-        }
+        self.0.size_hint()
     }
 }
 impl DoubleEndedIterator for IdsIter<'_> {
     fn next_back(&mut self) -> Option<usize> {
-        let id = match &mut self.storage {
-            IterStorage::Slice(ids) => ids.next_back().map(|&id| id as usize),
-            IterStorage::Reader(ids) => ids.next_back(),
-        }?;
-        Some(id + usize::from(self.gap.is_some_and(|gap| id >= gap)))
+        self.0.next_back().map(|&id| id as usize)
     }
 }
+impl ExactSizeIterator for IdsIter<'_> {}
 
 pub(crate) trait HierarchySource: Send + Sync + std::fmt::Debug {
     fn scope_count(&self) -> usize;

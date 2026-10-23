@@ -3,7 +3,7 @@
 use super::{activity::Activity, occupancy::raster_source, raster::PixelMap};
 use crate::{data::loaded_tracks::LoadedGenerator, scene::PresenceMask, wave::viewport::Viewport};
 use std::{ops::Range, sync::Arc};
-use volna_trace::data::transactions::{TrackRef, Transaction, TransactionRef, TxStatus};
+use volna_trace::data::transactions::{Status, TrackRef, Transaction, TransactionRef};
 
 pub struct RowSet<'a> {
     generators: &'a [Arc<LoadedGenerator>],
@@ -80,7 +80,7 @@ impl RowSet<'_> {
                 index.raster_aborted(generator.transactions(), offset, map, &mut mask);
             } else {
                 for (row, tx) in generator.transactions().iter().enumerate() {
-                    if tx.status == TxStatus::Aborted {
+                    if tx.status == Status::Aborted {
                         map.aborted(offset + row, &mut mask);
                     }
                 }
@@ -170,7 +170,7 @@ mod tests {
         geometry::Rect,
         pipeline::{raster::oracle, rows::RowView},
     };
-    use volna_trace::data::transactions::{TransactionStage, TxKind};
+    use volna_trace::data::transactions::{SpanKind, TransactionStage};
 
     #[test]
     fn queries_preserve_global_rows_with_mixed_indexes_and_empty_generators() {
@@ -186,15 +186,16 @@ mod tests {
                             begin: row * 3,
                             end: row * 3 + 8,
                             status: if row % 3 == 0 {
-                                TxStatus::Aborted
+                                Status::Aborted
                             } else {
-                                TxStatus::Ok
+                                Status::Ok
                             },
-                            kind: TxKind::Unspecified,
+                            kind: SpanKind::Unspecified,
                             parent: None,
                             attributes: vec![],
                             events: vec![],
                             stages: vec![TransactionStage {
+                                id: TransactionRef(((g as u64 + 1) << 48) | ((row + 1) << 16)),
                                 name: "stage".into(),
                                 lane: "0".into(),
                                 begin: row * 3 + 10,

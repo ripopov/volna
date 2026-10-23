@@ -22,7 +22,7 @@ use crate::ui::{Icon, IconName, icon_button, panel_header};
 const METER_WIDTH: f32 = 26.0;
 
 fn activity_meter(a: volna_core::data::ScopeActivity, t: &crate::theme::Theme) -> gpui_kit::Div {
-    let (changing, upper) = a.shares();
+    let changing = a.share();
     let length = |share: f32, count: u32| {
         if count == 0 {
             0.0
@@ -39,7 +39,6 @@ fn activity_meter(a: volna_core::data::ScopeActivity, t: &crate::theme::Theme) -
         .rounded(t.px(2.0))
         .overflow_hidden()
         .bg(t.border)
-        .child(bar(length(upper, a.upper)).bg(gpui_kit::pattern_slash(t.wave_signal, 1.0, 2.0)))
         .child(bar(length(changing, a.changing)).bg(t.wave_signal))
 }
 

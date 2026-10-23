@@ -42,6 +42,7 @@ try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   await context.addInitScript(() => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 }));
   const page = await context.newPage();
+  const settings = values => page.evaluate(async ({ base, values }) => (await import(`${base}viewer/pkg/volna.js`)).set_settings(JSON.stringify(values)), { base, values });
   page.setDefaultTimeout(30000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -50,6 +51,8 @@ try {
   await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
   assert.equal(page.workers().length, 4);
   assert.equal(await page.evaluate(() => crossOriginIsolated), true);
+  // The complete typed million-row track exceeds the default per-object cap.
+  await settings({ 'memory.objectMiB': 512 });
   await page.locator('#recording-file').setInputFiles(fixture);
   await page.locator('body[data-local-trace-opened="rows.vtr"]').waitFor({ timeout: 60000 });
   const workspace = JSON.parse(await readFile(new URL('../../volna/examples/landing-page.volna.json', import.meta.url)));
@@ -72,7 +75,14 @@ try {
   });
   const state = () => page.evaluate(() => window.volnaCurrentState);
   const sorting = () => page.waitForFunction(() => window.volnaCurrentState?.includes('sorting…'), {}, { timeout: 10000 });
-  const settled = () => page.waitForFunction(() => /panel=4 table .*rows=1000000.*status=1000000 rows$/.test(window.volnaCurrentState), {}, { timeout: 30000 });
+  const settled = async () => {
+    try {
+      await page.waitForFunction(() => /panel=4 table .*rows=1000000.*status=1000000 rows$/.test(window.volnaCurrentState), {}, { timeout: 30000 });
+    } catch (error) {
+      console.error(await state());
+      throw error;
+    }
+  };
   await settled();
   await page.mouse.click(350, 148);
   const selected = (await state()).match(/selected=(.*?) sort=/)[1];
@@ -107,7 +117,6 @@ try {
   await settled();
   assert.match(await state(), /column: 1, descending: false.*first_time=Some\(0\)/);
 
-  const settings = values => page.evaluate(async ({ base, values }) => (await import(`${base}viewer/pkg/volna.js`)).set_settings(JSON.stringify(values)), { base, values });
   await settings({ 'memory.budgetMiB': 1, 'appearance.theme': 'volna-light' });
   // Wait for the rendered settings change before exercising the disabled header.
   await page.waitForTimeout(100);

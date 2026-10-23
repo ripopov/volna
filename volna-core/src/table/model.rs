@@ -2194,7 +2194,7 @@ impl TableModel {
                         tx.begin,
                         tx.end,
                         tx.end.saturating_sub(tx.begin),
-                        tx.status.name()
+                        crate::data::text::status_name(tx.status)
                     ),
                     COPY_BYTES,
                 )?;
@@ -2273,7 +2273,7 @@ impl TableModel {
                 requested,
                 limit,
             ),
-            TransactionColumn::Status => tx.status.name().into(),
+            TransactionColumn::Status => crate::data::text::status_name(tx.status).into(),
             TransactionColumn::Attributes => {
                 let mut text = String::new();
                 let mut attributes = tx
@@ -2393,7 +2393,7 @@ mod tests {
     use crate::table::SignalSource;
     use crate::table::layout::MIN_COLUMN_WIDTH;
     use volna_trace::data::history::VecHistory;
-    use volna_trace::data::transactions::{AttributeValue, TransactionAttribute, TxKind, TxStatus};
+    use volna_trace::data::transactions::{AttributeValue, SpanKind, Status, TransactionAttribute};
     use volna_trace::data::{SignalShape, WaveValue};
 
     fn history(times: &[u64], values: &[&str]) -> Arc<dyn SignalHistory> {
@@ -2620,8 +2620,8 @@ mod tests {
             generator: volna_trace::data::transactions::TrackRef(7),
             begin,
             end: begin + 8,
-            status: TxStatus::Ok,
-            kind: TxKind::Producer,
+            status: Status::Ok,
+            kind: SpanKind::Producer,
             parent: None,
             attributes: vec![
                 TransactionAttribute {
@@ -2691,8 +2691,8 @@ mod tests {
                 generator: volna_trace::data::transactions::TrackRef(7),
                 begin: i,
                 end: i + 1,
-                status: TxStatus::Ok,
-                kind: TxKind::Producer,
+                status: Status::Ok,
+                kind: SpanKind::Producer,
                 parent: None,
                 attributes: vec![],
                 events: vec![],
@@ -3293,7 +3293,7 @@ mod tests {
     #[test]
     fn missing_values_stay_last_and_signal_rows_use_sorted_time_axis() {
         let mut open = transaction(1, 1, "open");
-        open.status = vtr::TxStatus::Open;
+        open.status = vtr::Status::Open;
         let mut model = generator_model(vec![open, transaction(2, 2, "done")]);
         for _ in 0..2 {
             model.cycle_sort(2);
@@ -3388,9 +3388,9 @@ mod tests {
             transaction(3, 30, "m"),
         ];
         for (record, (duration, status, address)) in records.iter_mut().zip([
-            (5, vtr::TxStatus::Open, 300),
-            (100, vtr::TxStatus::Ok, 20),
-            (10, vtr::TxStatus::Aborted, 100),
+            (5, vtr::Status::Open, 300),
+            (100, vtr::Status::Ok, 20),
+            (10, vtr::Status::Aborted, 100),
         ]) {
             record.end = record.begin + duration;
             record.status = status;

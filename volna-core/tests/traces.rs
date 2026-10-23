@@ -492,7 +492,7 @@ fn the_landing_cpu_and_dram_traces_line_up_on_one_timeline() {
         let address = tx
             .attributes
             .iter()
-            .find(|a| a.key == "address")
+            .find(|a| a.key == "payload.address")
             .map(|a| match a.value {
                 volna_trace::data::transactions::AttributeValue::U64(v) => v,
                 ref other => panic!("{other:?}"),

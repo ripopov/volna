@@ -2,6 +2,7 @@ use volna_core::testing::a as in_a;
 use volna_core::trace::TraceId;
 use volna_trace::data::transactions::*;
 use volna_trace::session::OpenSpec;
+use vtr::Recorder;
 
 #[test]
 fn remote_metadata_queues_complete_tracks() {
@@ -14,13 +15,17 @@ fn remote_metadata_queues_complete_tracks() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
     let stream = writer
-        .add_scope(None, "bus", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("bus", None),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
     let generator = writer
-        .add_generator(Some(stream), "requests", "tlm")
+        .transactions::<()>(vtr::SourceOptions::new("requests", Some(stream)), "tlm")
         .unwrap();
-    let tx = writer.begin_tx(generator, 1).unwrap();
-    writer.end_tx(tx, 100, TxStatus::Ok).unwrap();
+    let tx = writer.begin_at(generator, 1, &(), None).unwrap();
+    writer.end_at(tx, 100, Status::Ok).unwrap();
     writer.close().unwrap();
     let local = OpenSpec::Path(file.path().into()).open().unwrap();
     assert_eq!(local.remote_id(), None);
@@ -38,7 +43,7 @@ fn remote_metadata_queues_complete_tracks() {
     for request in document.take_requests() {
         document.deliver(request.perform());
     }
-    let track = TrackRef(generator.0);
+    let track = TrackRef(generator.id());
     document.retain_track(in_a(track)).unwrap();
     document.retain_track(in_a(track)).unwrap();
     let mut requests = document.take_requests();
@@ -72,12 +77,14 @@ fn remote_metadata_queues_complete_tracks() {
             })
             .is_some()
     );
-    document.retain_track(in_a(TrackRef(generator.0))).unwrap();
+    document
+        .retain_track(in_a(TrackRef(generator.id())))
+        .unwrap();
     assert!(document.take_requests().is_empty());
     document.release_track(in_a(track));
     document.release_track(in_a(track));
     assert!(weak.upgrade().is_some());
-    document.release_track(in_a(TrackRef(generator.0)));
+    document.release_track(in_a(TrackRef(generator.id())));
     assert!(weak.upgrade().is_none());
 }
 
@@ -90,15 +97,22 @@ fn document_track_loads_coalesce_share_release_retry_and_reject_stale_results() 
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
     let stream = writer
-        .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("stream", None),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
     let generator = writer
-        .add_generator(Some(stream), "generator", "transactions")
+        .transactions::<()>(
+            vtr::SourceOptions::new("generator", Some(stream)),
+            "transactions",
+        )
         .unwrap();
     writer.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
-    let track = TrackRef(generator.0);
-    let stream = TrackRef(generator.0);
+    let track = TrackRef(generator.id());
+    let stream = TrackRef(generator.id());
     let mut doc = Document::new();
     doc.set_session(session.clone());
     for request in doc.take_requests() {

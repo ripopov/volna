@@ -1,4 +1,4 @@
-//! Resolve VTR's interned names at the adapter boundary.
+//! Project typed records and interned metadata into viewer values.
 
 use super::loaded_tracks::{LoadedGenerator, LoadedRelation, LoadedTrack, TransactionLocation};
 use super::transactions::{
@@ -8,7 +8,7 @@ use super::transactions::{
 use super::vtr_source::LocalSession;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use vtr::{NodeData, Reader, Value};
+use vtr::{NodeData, Reader, Value, schema::TypeKind};
 
 pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Result<LoadedTrack> {
     anyhow::ensure!(
@@ -16,113 +16,137 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
         "unknown transaction track {}",
         track.0
     );
-    let generators = vec![track];
-    let mut records: HashMap<_, Vec<Transaction>> =
-        generators.iter().map(|&id| (id, vec![])).collect();
-    let query = vtr::TxQuery {
-        generator: Some(vtr::NodeId(track.0)),
-        ..Default::default()
+    let mut records = Vec::new();
+    let mut failure = None;
+    let mut accept = |record: vtr::Record| {
+        if failure.is_some() {
+            return false;
+        }
+        match transaction(&session.reader, &record) {
+            Ok(record) => {
+                records.push(record);
+                true
+            }
+            Err(error) => {
+                failure = Some(error);
+                false
+            }
+        }
     };
-    let mut owners = HashMap::new();
-    session.reader.visit_transactions(&query, |tx| {
-        let generator = TrackRef(tx.generator.0);
-        owners.insert(TransactionRef(tx.id), generator);
-        records
-            .get_mut(&generator)
-            .expect("selected generator in catalog")
-            .push(transaction(&session.reader, tx));
-        true
-    })?;
+    session.reader.transactions(
+        vtr::TransactionQuery {
+            generator: Some(track.0),
+            ..Default::default()
+        },
+        &mut accept,
+    )?;
+    session.reader.records(
+        vtr::RecordQuery {
+            generator: Some(track.0),
+            ..Default::default()
+        },
+        &mut accept,
+    )?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    let mut owners: HashMap<_, _> = records
+        .iter()
+        .flat_map(|record| {
+            std::iter::once(record.id)
+                .chain(record.events.iter().map(|event| event.id))
+                .chain(record.stages.iter().map(|stage| stage.id))
+                .map(|id| (id, Some(track)))
+        })
+        .collect();
     let mut external = HashSet::new();
-    for tx in records.values().flatten() {
-        if let Some(parent) = tx.parent
+    for record in &records {
+        if let Some(parent) = record.parent
             && !owners.contains_key(&parent)
         {
-            external.insert(parent.0);
+            external.insert(parent);
         }
     }
     let mut incident = Vec::new();
-    let mut ordinal = 0u64;
-    session.reader.visit_relations(|edge| {
+    let mut ordinal = 0;
+    session.reader.scan_relations(|edge| {
         let id = ordinal;
         ordinal += 1;
-        if owners.contains_key(&TransactionRef(edge.from))
-            || owners.contains_key(&TransactionRef(edge.to))
+        if owners.contains_key(&TransactionRef(edge.source))
+            || owners.contains_key(&TransactionRef(edge.destination))
         {
-            for endpoint in [edge.from, edge.to] {
+            for endpoint in [edge.source, edge.destination] {
                 if !owners.contains_key(&TransactionRef(endpoint)) {
-                    external.insert(endpoint);
+                    external.insert(TransactionRef(endpoint));
                 }
             }
-            incident.push((id, relation(&session.reader, edge.clone())));
+            incident.push((id, relation(&session.reader, edge)));
         }
         true
     })?;
-    let external: Vec<_> = external.into_iter().collect();
-    for (id, generator) in external
-        .iter()
-        .zip(session.reader.transaction_generators(&external)?)
-    {
-        let generator =
-            generator.ok_or_else(|| anyhow::anyhow!("missing referenced transaction {id}"))?;
-        owners.insert(TransactionRef(*id), TrackRef(generator.0));
-    }
-    let mut edges: HashMap<_, Vec<LoadedRelation>> =
-        generators.iter().map(|&id| (id, vec![])).collect();
-    for (id, relation) in incident {
-        let from_generator = owners[&relation.from];
-        let to_generator = owners[&relation.to];
-        let loaded = LoadedRelation {
-            id,
-            from_generator,
-            to_generator,
-            relation,
-        };
-        if let Some(out) = edges.get_mut(&from_generator) {
-            out.push(loaded.clone());
-        }
-        if to_generator != from_generator
-            && let Some(out) = edges.get_mut(&to_generator)
+    for id in external {
+        let mut record = session.reader.lookup(id.0)?;
+        // Embedded endpoints belong to their runtime owner's track.
+        if record
+            .as_ref()
+            .is_some_and(|record| record.generator().is_none())
         {
-            out.push(loaded);
+            record = match record.unwrap().parent() {
+                Some(parent) => session.reader.lookup(parent)?,
+                None => None,
+            };
         }
+        owners.insert(
+            id,
+            record.and_then(|record| record.generator()).map(TrackRef),
+        );
     }
-    let mut loaded = Vec::with_capacity(generators.len());
-    for generator in generators {
-        let transactions = records.remove(&generator).expect("selected generator");
-        let mut parents = HashMap::new();
-        for tx in &transactions {
-            if let Some(parent) = tx.parent {
-                parents.insert(
-                    tx.id,
+    let edges = incident
+        .into_iter()
+        .map(|(id, relation)| LoadedRelation {
+            id,
+            from_generator: owners[&relation.from],
+            to_generator: owners[&relation.to],
+            relation,
+        })
+        .collect();
+    let parents = records
+        .iter()
+        .filter_map(|record| {
+            record.parent.map(|parent| {
+                (
+                    record.id,
                     TransactionLocation {
                         transaction: parent,
                         generator: owners[&parent],
                     },
-                );
-            }
-        }
-        loaded.push(Arc::new(LoadedGenerator::new(
-            generator,
-            transactions,
-            parents,
-            edges.remove(&generator).expect("selected generator"),
-        )?));
-    }
+                )
+            })
+        })
+        .collect();
     Ok(LoadedTrack {
         track,
-        generators: loaded,
+        generators: vec![Arc::new(LoadedGenerator::new(
+            track, records, parents, edges,
+        )?)],
     })
 }
 
-pub(super) fn value(reader: &Reader, v: &Value) -> AttributeValue {
-    match v {
+pub(super) fn value(reader: &Reader, value: &Value) -> AttributeValue {
+    match value {
         Value::Null => AttributeValue::Null,
         Value::Bool(x) => AttributeValue::Bool(*x),
+        Value::I8(x) => AttributeValue::I64(i64::from(*x)),
+        Value::I16(x) => AttributeValue::I64(i64::from(*x)),
+        Value::I32(x) => AttributeValue::I64(i64::from(*x)),
         Value::I64(x) => AttributeValue::I64(*x),
+        Value::U8(x) => AttributeValue::U64(u64::from(*x)),
+        Value::U16(x) => AttributeValue::U64(u64::from(*x)),
+        Value::U32(x) => AttributeValue::U64(u64::from(*x)),
         Value::U64(x) => AttributeValue::U64(*x),
+        Value::F32(x) => AttributeValue::F64(f64::from(*x)),
         Value::F64(x) => AttributeValue::F64(*x),
-        Value::Str(x) => AttributeValue::Text(reader.str(*x).into()),
+        Value::Str(x) => AttributeValue::Text(reader.string(*x).expect("validated string").into()),
         Value::Text(x) => AttributeValue::Text(x.clone()),
         Value::Bytes(x) => AttributeValue::Bytes(x.clone()),
         Value::Bits { width, data } => AttributeValue::Logic {
@@ -142,8 +166,8 @@ pub(super) fn value(reader: &Reader, v: &Value) -> AttributeValue {
         },
         Value::Time(x) => AttributeValue::Time(*x),
         Value::Enum { value, name } => AttributeValue::Enum {
-            value: *value,
-            name: reader.str(*name).into(),
+            value: i128::from(*value),
+            name: reader.string(*name).expect("enum label").into(),
         },
         Value::Pointer(x) => AttributeValue::Pointer(*x),
         Value::Fixed { raw, scale } => AttributeValue::Fixed {
@@ -154,92 +178,231 @@ pub(super) fn value(reader: &Reader, v: &Value) -> AttributeValue {
             raw: *raw,
             scale: *scale,
         },
-        Value::List(xs) => AttributeValue::List(xs.iter().map(|v| value(reader, v)).collect()),
-        Value::Map(xs) => AttributeValue::Map(attributes(reader, xs)),
+        Value::List(values) => AttributeValue::List(
+            values
+                .iter()
+                .map(|item| self::value(reader, item))
+                .collect(),
+        ),
+        Value::Map(values) => AttributeValue::Map(attributes(reader, values)),
     }
 }
 
-fn attributes(reader: &Reader, attrs: &[(vtr::StrId, Value)]) -> Attributes {
+pub(super) fn attributes(reader: &Reader, attrs: &[vtr::Attribute]) -> Attributes {
     attrs
         .iter()
-        .map(|(key, v)| (reader.str(*key).into(), value(reader, v)))
+        .map(|attr| {
+            (
+                reader.string(attr.key).expect("attribute name").into(),
+                value(reader, &attr.value),
+            )
+        })
         .collect()
 }
 
 pub(super) fn tracks(reader: &Reader) -> Vec<Track> {
-    let h = reader.hierarchy();
-    h.ids()
-        .filter_map(|id| {
-            let node = h.node(id);
-            let kind = match node.data {
-                NodeData::Generator { kind } => TrackKind::Generator {
-                    kind: reader.str(kind).into(),
-                },
-                _ => return None,
+    reader
+        .declarations()
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(id, node)| {
+            let NodeData::Generator { kind, .. } = node.data else {
+                return None;
             };
-            let mut path = vec![reader.str(node.name).into()];
+            let mut path = vec![reader.string(node.name).expect("generator name").into()];
             let mut parent = node.parent;
             while let Some(id) = parent {
-                let ancestor = h.node(id);
-                path.push(reader.str(ancestor.name).into());
+                let ancestor = reader.node(id).expect("ancestor");
+                path.push(reader.string(ancestor.name).expect("ancestor name").into());
                 parent = ancestor.parent;
             }
             path.reverse();
             Some(Track {
-                id: TrackRef(id.0),
+                id: TrackRef(id as u32),
                 path,
-                kind,
-                attributes: attributes(reader, &node.attrs),
+                kind: TrackKind::Generator {
+                    kind: reader.string(kind).expect("generator kind").into(),
+                },
+                attributes: attributes(reader, &node.attributes),
             })
         })
         .collect()
 }
 
-fn transaction(reader: &Reader, tx: &vtr::Transaction) -> Transaction {
-    Transaction {
-        id: TransactionRef(tx.id),
-        generator: TrackRef(tx.generator.0),
-        begin: tx.begin,
-        end: tx.end,
-        status: tx.status,
-        kind: tx.kind,
-        parent: tx.parent.map(TransactionRef),
-        attributes: tx
-            .attrs
-            .iter()
-            .map(|a| TransactionAttribute {
-                key: reader.str(a.key).into(),
-                value: value(reader, &a.value),
+fn spend(budget: &mut usize, bytes: usize) -> anyhow::Result<()> {
+    *budget = budget
+        .checked_sub(bytes)
+        .ok_or_else(|| anyhow::anyhow!("typed payload exceeds the viewer allocation limit"))?;
+    Ok(())
+}
+
+fn payload_value(
+    reader: &Reader,
+    payload: &vtr::PayloadView,
+    budget: &mut usize,
+) -> anyhow::Result<AttributeValue> {
+    let datatype = payload.schema().get(payload.datatype())?;
+    match &datatype.kind {
+        TypeKind::Struct(fields) => {
+            spend(
+                budget,
+                fields
+                    .len()
+                    .checked_mul(std::mem::size_of::<(String, AttributeValue)>())
+                    .context("payload size overflow")?,
+            )?;
+            let mut values = Vec::new();
+            values.try_reserve_exact(fields.len())?;
+            for (field, child) in fields.iter().zip(payload.children()?) {
+                spend(budget, field.name.len())?;
+                values.push((field.name.clone(), payload_value(reader, &child?, budget)?));
+            }
+            Ok(AttributeValue::Map(values))
+        }
+        TypeKind::Array { .. } | TypeKind::Sequence { .. } => {
+            let count = payload.len()?;
+            spend(
+                budget,
+                count
+                    .checked_mul(std::mem::size_of::<AttributeValue>())
+                    .context("payload size overflow")?,
+            )?;
+            let mut values = Vec::new();
+            values.try_reserve_exact(count)?;
+            for child in payload.children()? {
+                values.push(payload_value(reader, &child?, budget)?);
+            }
+            Ok(AttributeValue::List(values))
+        }
+        TypeKind::Enum { values, .. } => {
+            let scalar = payload.scalar()?;
+            let (number, bits) = match scalar {
+                Value::I8(x) => (i128::from(x), x as u64),
+                Value::I16(x) => (i128::from(x), x as u64),
+                Value::I32(x) => (i128::from(x), x as u64),
+                Value::I64(x) => (i128::from(x), x as u64),
+                Value::U8(x) => (i128::from(x), u64::from(x)),
+                Value::U16(x) => (i128::from(x), u64::from(x)),
+                Value::U32(x) => (i128::from(x), u64::from(x)),
+                Value::U64(x) => (i128::from(x), x),
+                _ => anyhow::bail!("enum has a noninteger base"),
+            };
+            let name = values
+                .iter()
+                .find(|entry| entry.value == bits)
+                .map_or("", |entry| entry.name.as_str());
+            spend(budget, name.len())?;
+            Ok(AttributeValue::Enum {
+                value: number,
+                name: name.into(),
             })
-            .collect(),
-        events: tx
-            .events
-            .iter()
-            .map(|e| TransactionEvent {
-                time: e.time,
-                name: reader.str(e.name).into(),
-                attributes: attributes(reader, &e.attrs),
-            })
-            .collect(),
-        stages: tx
-            .stages
-            .iter()
-            .map(|s| TransactionStage {
-                name: reader.str(s.name).into(),
-                lane: reader.str(s.lane).into(),
-                begin: s.begin,
-                end: s.end,
-                attributes: attributes(reader, &s.attrs),
-            })
-            .collect(),
+        }
+        TypeKind::Scalar(_) => {
+            spend(budget, payload.bytes().len())?;
+            Ok(value(reader, &payload.scalar()?))
+        }
     }
 }
 
-fn relation(reader: &Reader, r: vtr::Relation) -> Relation {
+use anyhow::Context as _;
+
+fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transaction> {
+    let mut attrs: Vec<_> = attributes(reader, record.attributes())
+        .into_iter()
+        .map(|(key, value)| TransactionAttribute {
+            key: if key == "vtr.label" && matches!(value, AttributeValue::Text(_)) {
+                key
+            } else {
+                format!("attributes.{key}")
+            },
+            value,
+        })
+        .collect();
+    attrs.push(TransactionAttribute {
+        key: "record.kind".into(),
+        value: AttributeValue::Text(
+            match record.kind() {
+                vtr::RecordKind::Transaction => "transaction",
+                vtr::RecordKind::Clock => "clock",
+                vtr::RecordKind::Event => "event",
+                vtr::RecordKind::Stage => "stage",
+                vtr::RecordKind::Log => "log",
+                vtr::RecordKind::EmbeddedEvent => "embedded event",
+                vtr::RecordKind::EmbeddedStage => "embedded stage",
+            }
+            .into(),
+        ),
+    });
+    let payload = record.payload();
+    let mut budget = vtr::schema::DEFAULT_PAYLOAD_LIMIT;
+    match payload_value(reader, &payload, &mut budget)? {
+        AttributeValue::Map(fields) => {
+            attrs.extend(fields.into_iter().map(|(key, value)| TransactionAttribute {
+                key: if key == "vtr.label" && matches!(value, AttributeValue::Text(_)) {
+                    key
+                } else {
+                    format!("payload.{key}")
+                },
+                value,
+            }));
+        }
+        AttributeValue::Null => {}
+        value => attrs.push(TransactionAttribute {
+            key: "payload".into(),
+            value,
+        }),
+    }
+    if record.kind() == vtr::RecordKind::Log {
+        let bytes = reader.format_log_bytes(record)?;
+        let message = match String::from_utf8(bytes) {
+            Ok(text) => AttributeValue::Text(text),
+            Err(error) => AttributeValue::Bytes(error.into_bytes()),
+        };
+        attrs.push(TransactionAttribute {
+            key: "log.message".into(),
+            value: message,
+        });
+    }
+    Ok(Transaction {
+        id: TransactionRef(record.id()),
+        generator: TrackRef(record.generator().context("record has no source")?),
+        begin: record.begin(),
+        end: record.end(),
+        status: record.status(),
+        kind: record.span_kind(),
+        parent: record.parent().map(TransactionRef),
+        attributes: attrs,
+        events: record
+            .events()
+            .iter()
+            .map(|event| TransactionEvent {
+                id: TransactionRef(event.id),
+                time: event.time,
+                name: reader.string(event.name).expect("event name").into(),
+                attributes: attributes(reader, &event.attributes),
+            })
+            .collect(),
+        stages: record
+            .stages()
+            .iter()
+            .map(|stage| TransactionStage {
+                id: TransactionRef(stage.id),
+                name: reader.string(stage.name).expect("stage name").into(),
+                lane: reader.string(stage.lane).expect("stage lane").into(),
+                begin: stage.begin,
+                end: stage.end,
+                attributes: attributes(reader, &stage.attributes),
+            })
+            .collect(),
+    })
+}
+
+fn relation(reader: &Reader, edge: vtr::Relation) -> Relation {
     Relation {
-        kind: reader.str(r.kind).into(),
-        from: TransactionRef(r.from),
-        to: TransactionRef(r.to),
-        attributes: attributes(reader, &r.attrs),
+        kind: reader.string(edge.kind).expect("relation kind").into(),
+        from: TransactionRef(edge.source),
+        to: TransactionRef(edge.destination),
+        attributes: attributes(reader, &edge.attributes),
     }
 }

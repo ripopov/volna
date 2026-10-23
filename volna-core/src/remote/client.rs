@@ -18,17 +18,8 @@ struct Preparation {
     request_id: u64,
     track: volna_trace::data::transactions::TrackRef,
 }
-struct Resolution {
-    trace: TraceId,
-    generation: u64,
-    window: (u64, u64),
-    counter: Arc<crate::data::ActivityCounter>,
-    counts: Arc<crate::data::ActivityCounts>,
-    budget: MemoryBudget,
-}
 pub struct RemoteClient {
     inner: TraceClient<TraceId>,
-    resolutions: Vec<Resolution>,
     preparing: Option<Preparation>,
 }
 impl RemoteClient {
@@ -40,7 +31,6 @@ impl RemoteClient {
     ) -> anyhow::Result<Self> {
         Ok(Self {
             inner: TraceClient::new(trace, generation, limit, budget)?,
-            resolutions: Vec::new(),
             preparing: None,
         })
     }
@@ -89,33 +79,6 @@ impl RemoteClient {
                 cache_dir,
                 budget,
             },
-            LoadRequest::ResolveActivity {
-                trace,
-                generation,
-                session,
-                counter,
-                counts,
-                budget,
-            } => {
-                let signals = counts.undecided.clone();
-                let window = counts.window;
-                self.resolutions.push(Resolution {
-                    trace,
-                    generation,
-                    window,
-                    counter,
-                    counts,
-                    budget: budget.clone(),
-                });
-                RawRequest::ResolveActivity {
-                    tag: trace,
-                    generation,
-                    session,
-                    signals,
-                    window,
-                    budget,
-                }
-            }
             job => {
                 return Err(job.fail(anyhow::anyhow!(
                     "viewer analysis is not remote loading work"
@@ -124,7 +87,7 @@ impl RemoteClient {
         };
         match self.inner.submit(raw) {
             Ok(()) => Ok(()),
-            Err(result) => Err(self.result(result)),
+            Err(result) => Err(Self::result(result)),
         }
     }
     pub fn take_command(&mut self) -> anyhow::Result<Option<Packet>> {
@@ -154,7 +117,7 @@ impl RemoteClient {
             } => app
                 .doc
                 .wants_track_request(*tag, *generation, *request_id, *track),
-            RawRequest::BuildActivity { .. } | RawRequest::ResolveActivity { .. } => true,
+            RawRequest::BuildActivity { .. } => true,
         });
     }
     pub fn accept(&mut self, packet: Packet) -> anyhow::Result<ClientStep> {
@@ -230,7 +193,7 @@ impl RemoteClient {
                 RawStep::Yield => ClientStep::Yield,
                 RawStep::Complete { ack, result } => ClientStep::Complete {
                     ack,
-                    result: self.result(result),
+                    result: Self::result(result),
                 },
             }
         }
@@ -250,7 +213,7 @@ impl RemoteClient {
             }
         }
     }
-    fn result(&mut self, raw: RawResult<TraceId>) -> LoadResult {
+    fn result(raw: RawResult<TraceId>) -> LoadResult {
         match raw {
             RawResult::Opened {
                 tag,
@@ -293,34 +256,6 @@ impl RemoteClient {
                 generation,
                 result,
             },
-            RawResult::ActivityResolved {
-                tag,
-                generation,
-                window,
-                result,
-            } => {
-                let pos = self
-                    .resolutions
-                    .iter()
-                    .position(|r| {
-                        r.trace == tag && r.generation == generation && r.window == window
-                    })
-                    .expect("submitted activity resolution");
-                let work = self.resolutions.remove(pos);
-                let result = result
-                    .and_then(|changed| {
-                        let reservation =
-                            work.counts.admit_resolution(&work.counter, &work.budget)?;
-                        work.counts.resolved(&work.counter, changed, reservation)
-                    })
-                    .map(Arc::new);
-                LoadResult::ActivityResolved {
-                    trace: tag,
-                    generation,
-                    window,
-                    result,
-                }
-            }
         }
     }
     pub fn disconnect(&mut self, message: &str) -> Vec<LoadResult> {
@@ -328,7 +263,7 @@ impl RemoteClient {
             .inner
             .disconnect(message)
             .into_iter()
-            .map(|r| self.result(r))
+            .map(Self::result)
             .collect();
         if let Some(p) = self.preparing.take() {
             results.push(LoadResult::Track {
@@ -545,14 +480,18 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut writer = vtr::Writer::create(file.path()).unwrap();
         let stream = writer
-            .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+            .scope_with(
+                vtr::SourceOptions::new("stream", None),
+                vtr::ScopeType::Generic,
+                "",
+            )
             .unwrap();
         let generator = writer
-            .add_generator(Some(stream), "generator", "raw")
+            .transactions::<()>(vtr::SourceOptions::new("generator", Some(stream)), "raw")
             .unwrap();
         writer.close().unwrap();
         let local = OpenSpec::Path(file.path().into()).open().unwrap();
-        let track = Traced::new(TraceId::A, TrackRef(generator.0));
+        let track = Traced::new(TraceId::A, TrackRef(generator.id()));
         let mut client = RemoteClient::new(
             TraceId::A,
             1,
@@ -600,14 +539,18 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         let mut writer = vtr::Writer::create(file.path()).unwrap();
         let stream = writer
-            .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+            .scope_with(
+                vtr::SourceOptions::new("stream", None),
+                vtr::ScopeType::Generic,
+                "",
+            )
             .unwrap();
         let generator = writer
-            .add_generator(Some(stream), "generator", "raw")
+            .transactions::<()>(vtr::SourceOptions::new("generator", Some(stream)), "raw")
             .unwrap();
         for time in 0..5000 {
-            let tx = writer.begin_tx(generator, time * 10).unwrap();
-            writer.end_tx(tx, time * 10 + 5, vtr::TxStatus::Ok).unwrap();
+            let tx = vtr::Recorder::begin_at(&mut writer, generator, time * 10, &(), None).unwrap();
+            vtr::Recorder::end_at(&mut writer, tx, time * 10 + 5, vtr::Status::Ok).unwrap();
         }
         writer.close().unwrap();
         let budget = MemoryBudget::new(16 << 20);
@@ -617,7 +560,7 @@ mod tests {
         )
         .unwrap();
         let baseline = budget.used();
-        let track = TrackRef(generator.0);
+        let track = TrackRef(generator.id());
         let ack = acknowledgement(&Packet {
             session: 31,
             request: 17,

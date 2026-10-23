@@ -223,13 +223,25 @@ impl TrackPayload {
         for generator in &result {
             for tx in generator.transactions() {
                 checkpoint().await;
-                anyhow::ensure!(
-                    transactions.insert(tx.id, generator.generator()).is_none(),
-                    "duplicate transaction across generators"
-                );
+                for id in std::iter::once(tx.id)
+                    .chain(tx.events.iter().map(|event| event.id))
+                    .chain(tx.stages.iter().map(|stage| stage.id))
+                {
+                    anyhow::ensure!(
+                        transactions.insert(id, generator.generator()).is_none(),
+                        "duplicate record across generators"
+                    );
+                }
             }
         }
-        let endpoint = |id: TransactionRef, owner: TrackRef| -> anyhow::Result<()> {
+        let endpoint = |id: TransactionRef, owner: Option<TrackRef>| -> anyhow::Result<()> {
+            let Some(owner) = owner else {
+                anyhow::ensure!(
+                    !transactions.contains_key(&id),
+                    "known endpoint has no generator"
+                );
+                return Ok(());
+            };
             anyhow::ensure!(
                 catalog_generators.contains(&owner),
                 "unknown endpoint generator"

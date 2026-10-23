@@ -1,4 +1,6 @@
-//! Scope activity meter tests covering exact counts, deferred reads, and stale results.
+//! Scope activity meter tests covering exact counts, sidecar builds, and stale results.
+
+use vtr::Recorder;
 
 #[cfg(unix)]
 #[path = "../../volna-server/src/server.rs"]
@@ -19,12 +21,10 @@ use volna_trace::session::{OpenSpec, Session};
 use vtr::{Direction, ScopeType, SignalKind, VarType, Writer, WriterOptions};
 
 fn write_trace(path: &Path, seed: u64) {
-    let opts = WriterOptions {
-        block_records: 400,
-        ..Default::default()
-    };
+    let mut opts = WriterOptions::default();
+    opts.encoding.waveform_records = 400;
+    opts.metadata.timescale = -9;
     let mut w = Writer::create_with(path, opts).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-9)).unwrap();
     let bit = SignalKind::Bits {
         width: 1,
         states: 2,
@@ -33,30 +33,70 @@ fn write_trace(path: &Path, seed: u64) {
         width: 8,
         states: 2,
     };
-    let top = Some(w.add_scope(None, "top", ScopeType::Module, "top").unwrap());
-    let (_, clk) = w
-        .add_var(top, "clk", VarType::Wire, Direction::Input, bit)
+    let top = Some(
+        w.scope_with(
+            vtr::SourceOptions::new("top", None),
+            ScopeType::Module,
+            "top",
+        )
+        .unwrap(),
+    );
+    let clk = w
+        .signal(
+            vtr::SourceOptions::new("clk", top),
+            bit,
+            VarType::Wire,
+            Direction::Input,
+        )
         .unwrap();
     let mut units = Vec::new();
     for u in 0..3 {
         let unit = Some(
-            w.add_scope(top, &format!("unit{u}"), ScopeType::Module, "unit")
-                .unwrap(),
+            w.scope_with(
+                vtr::SourceOptions::new(format!("unit{u}"), top),
+                ScopeType::Module,
+                "unit",
+            )
+            .unwrap(),
         );
-        w.add_alias(unit, "clk", VarType::Wire, Direction::Input, clk)
-            .unwrap();
-        let (_, a) = w
-            .add_var(unit, "a", VarType::Reg, Direction::Implicit, byte)
+        w.alias(
+            clk,
+            vtr::SourceOptions::new("clk", unit),
+            VarType::Wire,
+            Direction::Input,
+        )
+        .unwrap();
+        let a = w
+            .signal(
+                vtr::SourceOptions::new("a", unit),
+                byte,
+                VarType::Reg,
+                Direction::Implicit,
+            )
             .unwrap();
         let core = Some(
-            w.add_scope(unit, "core", ScopeType::Module, "core")
-                .unwrap(),
+            w.scope_with(
+                vtr::SourceOptions::new("core", unit),
+                ScopeType::Module,
+                "core",
+            )
+            .unwrap(),
         );
-        let (_, b) = w
-            .add_var(core, "b", VarType::Reg, Direction::Implicit, bit)
+        let b = w
+            .signal(
+                vtr::SourceOptions::new("b", core),
+                bit,
+                VarType::Reg,
+                Direction::Implicit,
+            )
             .unwrap();
-        let (_, c) = w
-            .add_var(core, "c", VarType::Reg, Direction::Implicit, byte)
+        let c = w
+            .signal(
+                vtr::SourceOptions::new("c", core),
+                byte,
+                VarType::Reg,
+                Direction::Implicit,
+            )
             .unwrap();
         units.push([a, b, c]);
     }
@@ -69,9 +109,8 @@ fn write_trace(path: &Path, seed: u64) {
     };
     for step in 0..3000u64 {
         let t = step * 10 + if step >= 1500 { 50_000 } else { 0 };
-        w.set_time(t).unwrap();
-        w.emit_bit(clk, vtr::Logic::from(((step & 1) as u8) != 0))
-            .unwrap();
+        w.advance_time(t).unwrap();
+        w.emit_u64(clk, u64::from(((step & 1) as u8) != 0)).unwrap();
         for (u, sigs) in units.iter().enumerate() {
             if u == 2 && step >= 1500 {
                 continue;
@@ -164,7 +203,6 @@ fn check_exact(app: &App, session: &Arc<dyn Session>, t0: u64, t1: u64) {
     let want = brute(session, t_min, t0, t1);
     for (scope, &n) in want.iter().enumerate() {
         let a = app.scope_activity(node(scope)).unwrap();
-        assert!(a.exact(), "[{t0}, {t1}] scope {scope} still a range");
         assert_eq!(a.changing, n, "[{t0}, {t1}] scope {scope}");
     }
 }
@@ -203,111 +241,24 @@ fn meters_count_the_viewport_exactly() {
 }
 
 #[test]
-fn a_narrow_view_shows_a_range_until_read() {
+fn a_narrow_view_is_exact_without_waveform_reads() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.vtr");
     write_trace(&path, 2);
     index_beside(&path);
     let (mut app, session) = open(&path);
-    let top = node(session.hierarchy().roots().first().unwrap());
-    let index = session.activity().unwrap();
     let (t0, t1) = (5_003, 5_004);
-    assert!(index.exact_width(t0, t1) > t1 - t0 + 1);
     view(&mut app, t0, t1);
-    let classify = app.take_requests();
-    assert!(
-        classify
-            .iter()
-            .all(|r| matches!(r, LoadRequest::Activity { .. }))
-            && classify.len() == 1
-    );
-    for r in classify {
-        app.deliver(r.perform());
-    }
-    let pending = app.scope_activity(top).unwrap();
-    assert!(
-        !pending.exact() && pending.changing < pending.upper,
-        "{pending:?}"
-    );
-    assert!(pending.label().contains('–'));
-    let read = app.take_requests();
+    let requests = app.take_requests();
     assert!(matches!(
-        read.as_slice(),
-        [LoadRequest::ResolveActivity { .. }]
+        requests.as_slice(),
+        [LoadRequest::Activity { .. }]
     ));
-    for r in read {
-        app.deliver(r.perform());
+    for request in requests {
+        app.deliver(request.perform());
     }
-    let exact = app.scope_activity(top).unwrap();
-    assert!(exact.exact() && pending.changing <= exact.changing && exact.changing <= pending.upper);
     check_exact(&app, &session, t0, t1);
-    assert!(app.take_requests().is_empty(), "nothing left to do");
-}
-
-#[test]
-fn a_read_for_a_window_the_view_left_is_dropped() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("run.vtr");
-    write_trace(&path, 3);
-    index_beside(&path);
-    let (mut app, session) = open(&path);
-    let top = node(session.hierarchy().roots().first().unwrap());
-    view(&mut app, 5_003, 5_004);
-    for r in app.take_requests() {
-        app.deliver(r.perform());
-    }
-    let read: Vec<LoadResult> = app
-        .take_requests()
-        .into_iter()
-        .map(LoadRequest::perform)
-        .collect();
-    assert_eq!(read.len(), 1);
-    view(&mut app, 100, 1_000);
-    for r in app.take_requests() {
-        app.deliver(r.perform());
-    }
-    let wide = app.scope_activity(top).unwrap();
-    for r in read {
-        app.deliver(r);
-    }
-    assert!(wide.changing > 0);
-    assert_eq!(
-        app.scope_activity(top),
-        Some(wide),
-        "the late read changed nothing"
-    );
-    settle(&mut app);
-    check_exact(&app, &session, 100, 1_000);
-}
-
-#[test]
-fn a_late_read_is_dropped_before_the_next_classification() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("run.vtr");
-    write_trace(&path, 3);
-    index_beside(&path);
-    let (mut app, session) = open(&path);
-    let top = node(session.hierarchy().roots().first().unwrap());
-    view(&mut app, 5_003, 5_004);
-    for r in app.take_requests() {
-        app.deliver(r.perform());
-    }
-    let pending = Arc::clone(app.activity.counts(TraceId::A).unwrap());
-    assert!(!pending.exact());
-    let read = app.take_requests().pop().unwrap().perform();
-    view(&mut app, 100, 1_000);
-    assert_eq!(
-        app.scope_activity(top),
-        None,
-        "old meters must not describe the new view"
-    );
-    app.deliver(read);
-    assert!(
-        Arc::ptr_eq(app.activity.counts(TraceId::A).unwrap(), &pending),
-        "a late read must not replace the pending counts"
-    );
-    settle(&mut app);
-    check_exact(&app, &session, 100, 1_000);
+    assert!(app.take_requests().is_empty());
 }
 
 #[test]
@@ -464,8 +415,9 @@ fn meters_use_each_traces_timescale_and_round_inwards() {
     index_beside(&path);
     let (mut app, session) = open(&path);
     let fine = dir.path().join("fine.vtr");
-    let mut writer = Writer::create(&fine).unwrap();
-    writer.set_timescale(vtr::Timescale::Exponent(-12)).unwrap();
+    let mut writer_options = vtr::WriterOptions::default();
+    writer_options.metadata.timescale = -12;
+    let mut writer = Writer::create_with(&fine, writer_options).unwrap();
     writer.close().unwrap();
     let fine = OpenSpec::Path(fine).open().unwrap();
     app.doc.add_session(fine).unwrap();
@@ -491,7 +443,7 @@ fn meters_use_each_traces_timescale_and_round_inwards() {
 }
 
 #[test]
-fn failed_reads_report_errors_and_stop_showing_pending_meters() {
+fn failed_classifications_report_errors_and_hide_meters() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.vtr");
     write_trace(&path, 3);
@@ -500,13 +452,9 @@ fn failed_reads_report_errors_and_stop_showing_pending_meters() {
     let top = node(session.hierarchy().roots().first().unwrap());
     app.take_events();
     view(&mut app, 5_003, 5_004);
-    for r in app.take_requests() {
-        app.deliver(r.perform());
-    }
-    assert!(!app.scope_activity(top).unwrap().exact());
     let mut read = app.take_requests().pop().unwrap();
-    let LoadRequest::ResolveActivity { budget, .. } = &mut read else {
-        panic!("expected read")
+    let LoadRequest::Activity { budget, .. } = &mut read else {
+        panic!("expected classification")
     };
     *budget = volna_trace::remote::memory::MemoryBudget::new(0);
     app.deliver(read.perform());
@@ -514,7 +462,7 @@ fn failed_reads_report_errors_and_stop_showing_pending_meters() {
     assert_eq!(
         app.scope_activity(top),
         None,
-        "a failed read must not claim to be pending"
+        "a failed classification must hide the meter"
     );
     assert!(app.take_requests().is_empty(), "a failure must not loop");
     view(&mut app, 100, 1_000);
@@ -541,47 +489,28 @@ fn an_index_of_another_trace_is_ignored() {
 }
 
 #[test]
-fn a_row_labels_its_count_and_range() {
-    let exact = ScopeActivity {
+fn a_row_labels_its_count_and_dims_only_nonempty_quiet_scopes() {
+    let active = ScopeActivity {
         changing: 2483,
-        upper: 2483,
         total: 6779,
     };
-    assert_eq!(exact.label(), "2,483 / 6,779");
-    assert_eq!(exact.detail(), "2,483 of 6,779 signals change in the view");
-    let range = ScopeActivity {
-        changing: 1462,
-        upper: 2210,
-        total: 6779,
-    };
-    assert_eq!(range.label(), "1,462–2,210 / 6,779");
-    let (lo, hi) = range.shares();
-    assert!(lo < hi && hi < 1.0);
+    assert_eq!(active.label(), "2,483 / 6,779");
+    assert_eq!(active.detail(), "2,483 of 6,779 signals change in the view");
+    assert!((active.share() - 2483.0 / 6779.0).abs() < f32::EPSILON);
+    assert!(!active.quiet());
     assert!(
         ScopeActivity {
             changing: 0,
-            upper: 0,
             total: 5
         }
         .quiet()
     );
-    assert!(
-        !ScopeActivity {
-            changing: 0,
-            upper: 1,
-            total: 5
-        }
-        .quiet(),
-        "faint only when nothing can change"
-    );
-    assert!(
-        !ScopeActivity {
-            changing: 0,
-            upper: 0,
-            total: 0
-        }
-        .quiet()
-    );
+    let empty = ScopeActivity {
+        changing: 0,
+        total: 0,
+    };
+    assert!(!empty.quiet());
+    assert_eq!(empty.share(), 0.0);
 }
 
 fn build_views(app: &App) -> Vec<volna_core::sidebar::activity::ActivityBuildView> {
@@ -817,7 +746,6 @@ fn independent_sessions_share_a_single_sidecar_build() {
                             threads: 2,
                             memory: 1 << 20,
                             control: Some(control.clone()),
-                            ..Default::default()
                         },
                         &volna_trace::remote::memory::MemoryBudget::new(4 << 20),
                         None,
@@ -1143,8 +1071,8 @@ fn remote_build_and_scope_counts_match_local_without_pan_index_requests() {
     assert!(
         rig.commands
             .iter()
-            .any(|c| matches!(c, Command::Signals(_))),
-        "undecided windows use complete signal reads"
+            .all(|c| !matches!(c, Command::Signals(_))),
+        "exact sidecars answer activity without loading waveforms"
     );
     assert!(rig.budget.used() > remote.activity().unwrap().memory_bytes());
 }
@@ -1174,35 +1102,37 @@ fn remote_cached_index_loads_once_even_when_build_policy_is_never() {
 
 #[cfg(unix)]
 #[test]
-fn remote_exact_reads_span_multiple_complete_history_batches() {
+fn remote_exact_index_counts_many_signals_without_waveform_reads() {
     use volna_trace::remote::transport::{Command, MAX_BATCH};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("batch.vtr");
     let mut writer = Writer::create(&path).unwrap();
     let top = Some(
         writer
-            .add_scope(None, "top", ScopeType::Module, "top")
+            .scope_with(
+                vtr::SourceOptions::new("top", None),
+                ScopeType::Module,
+                "top",
+            )
             .unwrap(),
     );
     let signals: Vec<_> = (0..MAX_BATCH * 2 + 7)
         .map(|i| {
             writer
-                .add_var(
-                    top,
-                    &format!("s{i}"),
-                    VarType::Reg,
-                    Direction::Implicit,
+                .signal(
+                    vtr::SourceOptions::new(format!("s{i}"), top),
                     SignalKind::Bits {
                         width: 32,
                         states: 2,
                     },
+                    VarType::Reg,
+                    Direction::Implicit,
                 )
                 .unwrap()
-                .1
         })
         .collect();
     for step in 0..1000 {
-        writer.set_time(step * 10).unwrap();
+        writer.advance_time(step * 10).unwrap();
         for (i, signal) in signals.iter().enumerate() {
             writer.emit_u64(*signal, step + i as u64).unwrap();
         }
@@ -1210,7 +1140,7 @@ fn remote_exact_reads_span_multiple_complete_history_batches() {
     writer.close().unwrap();
     index_beside(&path);
     let local = OpenSpec::Path(path).open().unwrap();
-    assert!(local.activity().unwrap().classify(15, 15).undecided.len() > MAX_BATCH * 2);
+    assert_eq!(local.info().signal_count as usize, MAX_BATCH * 2 + 7);
     let (mut rig, remote) = RemoteRig::open(local.clone());
     let mut app = App::default();
     app.set_session(remote);
@@ -1225,7 +1155,7 @@ fn remote_exact_reads_span_multiple_complete_history_batches() {
                 .iter()
                 .filter(|c| matches!(c, Command::Signals(_)))
                 .count(),
-            3
+            0
         );
     }
 }

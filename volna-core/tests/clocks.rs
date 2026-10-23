@@ -9,6 +9,7 @@ mod server;
 use std::sync::Arc;
 use volna_core::testing::{a, a_all};
 use volna_core::trace::TraceId;
+use vtr::Recorder as _;
 
 use volna_core::app::{Action, App, ClockCommand, Command};
 use volna_core::geometry::{Modifiers, MouseButton, Point, Rect, point};
@@ -33,31 +34,36 @@ fn core_edges() -> Vec<u64> {
 }
 
 fn fixture() -> Arc<dyn Session> {
-    use vtr::{Direction, ScopeType, SignalKind, TxStatus, Value, VarType};
+    use vtr::{Direction, Recorder, ScopeType, SignalKind, SourceOptions, Status, VarType};
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-12)).unwrap();
-    let top = w.add_scope(None, "top", ScopeType::Module, "top").unwrap();
-    let (_, clk) = w
-        .add_var(
-            Some(top),
-            "core_clk",
-            VarType::Wire,
-            Direction::Implicit,
+    let top = w
+        .scope_with(SourceOptions::new("top", None), ScopeType::Module, "top")
+        .unwrap();
+    let clk = w
+        .signal(
+            SourceOptions::new("core_clk", Some(top)),
             SignalKind::Bits {
                 width: 1,
                 states: 2,
             },
+            VarType::Wire,
+            Direction::Implicit,
         )
         .unwrap();
-    let core = w.add_clock(Some(top), "core_clk").unwrap();
-    let bus = w.add_clock(Some(top), "bus_clk").unwrap();
+    let core = w.clock(SourceOptions::new("core_clk", Some(top))).unwrap();
+    let bus = w.clock(SourceOptions::new("bus_clk", Some(top))).unwrap();
     let pipe = w
-        .add_scope(Some(top), "pipe", vtr::ScopeType::Generic, "")
+        .scope_with(
+            SourceOptions::new("pipe", Some(top)),
+            ScopeType::Generic,
+            "",
+        )
         .unwrap();
-    let link = w.intern("top.core_clk");
-    let insn = w.add_generator(Some(pipe), "insn", "PIPELINE").unwrap();
-    w.node_attr(insn, "vtr.clock", Value::Str(link)).unwrap();
+    let insn = w
+        .transactions::<()>(SourceOptions::new("insn", Some(pipe)), "PIPELINE")
+        .unwrap();
+    w.associate_clock(insn, core).unwrap();
     for &(b, e, p) in &CORE {
         w.clock_run(core, b, p).unwrap();
         w.clock_stop(core, e + p / 2).unwrap();
@@ -72,25 +78,32 @@ fn fixture() -> Arc<dyn Session> {
             changes.push((b + k * p + p / 2, 0));
         }
     }
-    w.set_time(0).unwrap();
+    w.advance_time(0).unwrap();
     w.emit_u64(clk, 0).unwrap();
     for (t, v) in changes {
-        w.set_time(t).unwrap();
+        w.advance_time(t).unwrap();
         w.emit_u64(clk, v).unwrap();
     }
     let edges = core_edges();
-    let f = w.intern("F");
-    let x = w.intern("X");
-    let lane = w.intern("0");
+    let f = w.intern("F").unwrap();
+    let x = w.intern("X").unwrap();
+    let lane = w.intern("0").unwrap();
     for i in 0..20 {
-        let tx = w.begin_tx(insn, edges[i]).unwrap();
-        w.tx_stage(tx, f, lane, edges[i], edges[i + 1], &[])
+        let tx = w.begin_at(insn, edges[i], &(), None).unwrap();
+        w.embedded_stage(tx.owner(), edges[i], f, lane, Some(edges[i + 1]), vec![])
             .unwrap();
-        w.tx_stage(tx, x, lane, edges[i + 1], edges[i + 3], &[])
-            .unwrap();
-        w.end_tx(tx, edges[i + 3], TxStatus::Ok).unwrap();
+        w.embedded_stage(
+            tx.owner(),
+            edges[i + 1],
+            x,
+            lane,
+            Some(edges[i + 3]),
+            vec![],
+        )
+        .unwrap();
+        w.end_at(tx, edges[i + 3], Status::Ok).unwrap();
     }
-    w.set_time(101_000).unwrap();
+    w.advance_time(101_000).unwrap();
     w.close().unwrap();
     OpenSpec::Path(file.path().into()).open().unwrap()
 }
@@ -948,16 +961,19 @@ fn the_navigator_counts_distances_in_the_selected_clock() {
 fn sub_pixel_bursts_of_a_gated_clock_draw_a_band() {
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-12)).unwrap();
     let top = w
-        .add_scope(None, "top", vtr::ScopeType::Module, "top")
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top",
+        )
         .unwrap();
-    let clock = w.add_clock(Some(top), "gclk").unwrap();
+    let clock = w.clock(vtr::SourceOptions::new("gclk", Some(top))).unwrap();
     for k in 0..2000u64 {
         w.clock_run(clock, k * 1000, 10).unwrap();
         w.clock_stop(clock, k * 1000 + 25).unwrap();
     }
-    w.set_time(2_000_000).unwrap();
+    w.advance_time(2_000_000).unwrap();
     w.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
     let h = session.hierarchy();

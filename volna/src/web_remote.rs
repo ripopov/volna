@@ -40,11 +40,11 @@ impl Bridge {
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
-        let _ = call(
+        drop(call(
             "volnaTraceStop",
             &self.connection.clone().into(),
             &JsValue::UNDEFINED,
-        );
+        ));
     }
 }
 

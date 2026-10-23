@@ -26,7 +26,7 @@ use crate::wave::stack;
 use crate::wave::timeline::format_time;
 use crate::wave::tree;
 use crate::wave::viewport::Viewport;
-use volna_trace::data::transactions::TxStatus;
+use volna_trace::data::transactions::Status;
 use volna_trace::data::{Bit, SignalHistory, SignalShape, ValueKind, WaveValue};
 
 fn trace_pad(height: f32, t: &Theme) -> f32 {
@@ -1897,7 +1897,7 @@ const CLOCK_BAND_HALF_PX: f64 = 3.0;
 const GATED_LABEL_PX: f32 = 52.0;
 
 fn paint_clock_wave(
-    timeline: &std::sync::Arc<vtr::clock::ClockTimeline>,
+    timeline: &std::sync::Arc<crate::clock::ClockTimeline>,
     vp: &Viewport,
     area: Rect,
     clip: Rect,
@@ -3168,7 +3168,7 @@ fn paint_lane_bars(
         let xa = x_of(tx.begin);
         let xb = x_of(tx.end).max(xa + z(2.0));
         let rect = Rect::from_xywh(xa, geometry.sub_top(sub) + inset, xb - xa, bar_h);
-        let color = if tx.status == TxStatus::Error {
+        let color = if tx.status == Status::Error {
             t.editor.error
         } else {
             t.wave_signal
@@ -3639,7 +3639,7 @@ mod tests {
     fn clocks_show_periods_bands_and_gated_gaps() {
         let t = Theme::volna(true);
         let timeline = std::sync::Arc::new(
-            vtr::clock::ClockTimeline::new(vec![(0, 400, 2), (600, 1000, 4)], false).unwrap(),
+            crate::clock::ClockTimeline::new(vec![(0, 400, 2), (600, 1000, 4)], false).unwrap(),
         );
         let base = crate::wave::timeline::TimeBase {
             timescale: -9,

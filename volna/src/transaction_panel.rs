@@ -1096,12 +1096,15 @@ impl TransactionPanelView {
             .gap_2()
             .px_3()
             .py_1()
-            .cursor_pointer()
-            .hover(|style| style.bg(t.hover.bg))
-            .on_click(cx.listener(move |view, _, window, cx| {
-                window.focus(&view.focus, cx);
-                view.dispatch(TransactionCommand::Jump { track, id }, window, cx);
-            }))
+            .when_some(track, |element, track| {
+                element
+                    .cursor_pointer()
+                    .hover(|style| style.bg(t.hover.bg))
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        window.focus(&view.focus, cx);
+                        view.dispatch(TransactionCommand::Jump { track, id }, window, cx);
+                    }))
+            })
             .child(
                 div()
                     .w(t.px(52.0))
@@ -1178,15 +1181,15 @@ fn tag(t: &crate::theme::Theme, text: &str) -> AnyElement {
 fn status_badge(
     t: &crate::theme::Theme,
     text: &str,
-    status: volna_trace::data::transactions::TxStatus,
+    status: volna_trace::data::transactions::Status,
 ) -> AnyElement {
-    use volna_trace::data::transactions::TxStatus;
+    use volna_trace::data::transactions::Status;
     let color: Hsla = match status {
-        TxStatus::Error | TxStatus::Aborted => t.editor.error,
-        TxStatus::Open => t.wave_event_coalesced,
+        Status::Error | Status::Aborted => t.editor.error,
+        Status::Open => t.wave_event_coalesced,
         _ => t.panel.text_muted,
     };
-    let raw = status.name();
+    let raw = volna_core::data::text::status_name(status);
     div()
         .id("tx-status")
         .px_1p5()
@@ -1196,7 +1199,7 @@ fn status_badge(
         .border_color(color)
         .text_size(px(t.ui_size_small))
         .text_color(color)
-        .when(status == TxStatus::Open, gpui_kit::Styled::border_dashed)
+        .when(status == Status::Open, gpui_kit::Styled::border_dashed)
         .tooltip(move |w, cx| Tooltip::new(raw).build(w, cx))
         .child(SharedString::from(text.to_owned()))
         .into_any_element()

@@ -1,5 +1,7 @@
 //! Byte strings, logic states, aliases, and event rendering from VTR recordings.
 
+use vtr::Recorder;
+
 use std::sync::Arc;
 use volna_trace::data::{SignalRef, WaveValue};
 use volna_trace::session::OpenSpec;
@@ -108,21 +110,20 @@ fn raw_bytes_reals_nine_states_and_time_boundaries() {
 
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let (_, signal) = writer
-        .add_var(
-            None,
-            "bytes",
+    let signal = writer
+        .signal(
+            vtr::SourceOptions::new("bytes", None),
+            vtr::SignalKind::VarLen,
             vtr::VarType::String,
             vtr::Direction::Implicit,
-            vtr::SignalKind::VarLen,
         )
         .unwrap();
-    writer.set_time(5).unwrap();
+    writer.advance_time(5).unwrap();
     writer
-        .emit_varlen(signal, &[b'a', 0, 255, b'\\', b'\n', 128])
+        .emit_bytes(signal, &[b'a', 0, 255, b'\\', b'\n', 128])
         .unwrap();
-    writer.set_time(10).unwrap();
-    writer.emit_varlen(signal, &[]).unwrap();
+    writer.advance_time(10).unwrap();
+    writer.emit_bytes(signal, &[]).unwrap();
     writer.close().unwrap();
     let vtr = OpenSpec::Path(file.path().into()).open().unwrap();
     let twin = vtr.load_signal(vtr.hierarchy().var(0).signal).unwrap();
@@ -152,30 +153,28 @@ fn vtr_events_preserve_repeated_occurrences_and_render_arrows() {
     use volna_trace::data::SignalShape;
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let (_, signal) = writer
-        .add_var(
-            None,
-            "event",
-            vtr::VarType::Event,
-            vtr::Direction::Implicit,
+    let signal = writer
+        .signal(
+            vtr::SourceOptions::new("event", None),
             vtr::SignalKind::Bits {
                 width: 1,
                 states: 2,
             },
+            vtr::VarType::Event,
+            vtr::Direction::Implicit,
         )
         .unwrap();
     writer
-        .add_alias(
-            None,
-            "event_alias",
+        .alias(
+            signal,
+            vtr::SourceOptions::new("event_alias", None),
             vtr::VarType::Event,
             vtr::Direction::Implicit,
-            signal,
         )
         .unwrap();
     for time in [5, 5, 10, 11, 20, 20] {
-        writer.set_time(time).unwrap();
-        writer.emit_bit(signal, vtr::Logic::One).unwrap();
+        writer.advance_time(time).unwrap();
+        writer.emit_u64(signal, 1).unwrap();
     }
     writer.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();

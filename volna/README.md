@@ -120,6 +120,50 @@ continuous surrounding chrome. Choose another theme in Settings → Appearance.
 white islands, and a soft blue-to-sea-glass backdrop.
 See [geometry and implementation](ISLANDS.md).
 
+## Feature, pipeline, and landing examples
+
+[`verilator_pipeline`](examples/verilator_pipeline/README.md) contains the bound
+SystemVerilog tracer and verifier for `pipeline_demo.vtr`. It preserves the core's
+waveforms while recording pipeline stages, child bus requests, relations, clock
+timing, and diagnostics through the pinned Verilator integration.
+
+[`feature_showcase.rs`](examples/feature_showcase.rs) records a two-microsecond
+debugging lab with pipeline hazards, DMA traffic, an injected bus fault, and
+recovery. It includes all attribute value types, declaration types, repeated
+events, a recording gap, changing clocks, stacked waveforms, and typed logs.
+Regeneration validates the complete recording and checks its simulation
+invariants.
+
+[`volna_theme.rs`](examples/volna_theme.rs) records 4,096 cycles of two cores,
+including the C910 stage ladder, DMA descriptors, logs at five severities,
+weak and unknown signal states, analog spikes, gated clocks, deep hierarchy,
+flushes, and instructions still in flight at close.
+
+[`pipeline_showcase.rs`](examples/pipeline_showcase.rs) simulates two pipelines
+running the same instruction loop, including cache stalls, branch flushes,
+dependencies, and child memory requests. [`landing.rs`](examples/landing.rs)
+records a core, L2 cache, DRAM refills, an interrupt handler, declared clocks,
+and typed logs. Both generators validate their completed recording with VTR's
+reader and check the simulated populations and timing.
+
+From the workspace root:
+
+```sh
+cargo run --locked -p volna --example feature_showcase -- volna/examples/feature_showcase.vtr
+cargo run --locked -p volna --example volna_theme -- volna/examples/volna-theme.vtr
+cargo run --locked -p volna --example pipeline_showcase -- volna/examples/pipeline_showcase.vtr
+cargo run --locked -p volna --example landing -- volna/examples/landing.vtr --dram-vcd /tmp/landing_dram.vcd
+vtr convert /tmp/landing_dram.vcd /tmp/landing_dram.vtr
+```
+
+The optional VCD contains the landing simulation's DRAM controller at picosecond
+resolution. Its ACT commands and addresses align with the main recording's
+refill transactions. The delivered `landing_dram.vtr` is converted from the
+[matching FST fixture](../vtr/vtr-convert/tests/fixtures/README.md).
+After regenerating `landing.vtr`, retarget the transaction inspector in
+`landing-page.volna.json` to the instruction labelled
+`80000054: addi a4, a4, 4`; record IDs include embedded events and stages.
+
 ## GPU transaction example
 
 [`examples/gpu_transaction_trace.rs`](examples/gpu_transaction_trace.rs) generates
@@ -130,7 +174,10 @@ reuse those slots for 16 logical warps, each with exactly 5,000 instructions
 (80,000 total). Select a `MemoryPacket` under
 `gpu.memory_subsystem.illustrative_l3.requests` and follow its transaction parents
 through L2, L1, an LSU request, instruction, warp, workgroup, grid, and bounded
-command-stream execution. Hardware paths and logical TX ancestry are independent.
+command-stream execution. Hardware paths and logical TX ancestry are independent. Each generator binds
+a typed `InstanceLabel` payload whose `vtr.label` field supplies the displayed
+label. Optional attributes describe workload provenance; embedded stages and
+events describe execution within each owner.
 
 From the workspace root:
 

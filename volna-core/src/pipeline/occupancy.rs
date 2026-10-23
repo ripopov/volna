@@ -4,7 +4,7 @@ use super::{activity::Activity, raster::PixelMap};
 use crate::{scene::PresenceMask, wave::viewport::Viewport};
 use std::ops::Range;
 use volna_trace::{
-    data::transactions::{Transaction, TxStatus},
+    data::transactions::{Status, Transaction},
     remote::memory::{MemoryBudget, Reservation},
 };
 
@@ -105,7 +105,7 @@ impl RowIndex {
                 checkpoint().await;
                 node.min_end = node.min_end.min(tx.end);
                 node.max_end = node.max_end.max(tx.end);
-                node.aborted |= tx.status == TxStatus::Aborted;
+                node.aborted |= tx.status == Status::Aborted;
                 for span in geometry(tx) {
                     checkpoint().await;
                     node.begin = node.begin.min(span.begin);
@@ -293,7 +293,7 @@ impl RowIndex {
         }
         if i >= self.leaves {
             for (row, tx) in records[rows.start..end].iter().enumerate() {
-                if tx.status == TxStatus::Aborted {
+                if tx.status == Status::Aborted {
                     map.aborted(rows.start + row + offset, mask);
                 }
             }
@@ -540,7 +540,7 @@ mod tests {
         geometry::Rect,
         pipeline::{raster::oracle, rows::RowView},
     };
-    use volna_trace::data::transactions::{TrackRef, TransactionRef, TransactionStage, TxKind};
+    use volna_trace::data::transactions::{SpanKind, TrackRef, TransactionRef, TransactionStage};
 
     fn tx(id: u64, begin: u64, end: u64, spans: &[(u64, Option<u64>)]) -> Transaction {
         Transaction {
@@ -549,11 +549,11 @@ mod tests {
             begin,
             end,
             status: if id.is_multiple_of(7) {
-                TxStatus::Aborted
+                Status::Aborted
             } else {
-                TxStatus::Open
+                Status::Open
             },
-            kind: TxKind::Unspecified,
+            kind: SpanKind::Unspecified,
             parent: None,
             attributes: vec![],
             events: vec![],
@@ -561,6 +561,7 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(i, &(begin, end))| TransactionStage {
+                    id: TransactionRef(((id + 1) << 32) | i as u64),
                     name: "stage".into(),
                     lane: (i % 2).to_string(),
                     begin,
@@ -636,7 +637,7 @@ mod tests {
             index.raster_aborted(&records, 7, &map, &mut aborted);
             let mut expected_aborted = map.aborted_mask();
             for (row, tx) in records.iter().enumerate() {
-                if tx.status == TxStatus::Aborted {
+                if tx.status == Status::Aborted {
                     map.aborted(row + 7, &mut expected_aborted);
                 }
             }

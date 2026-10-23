@@ -7,11 +7,11 @@ use std::cmp::Ordering;
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Number {
     coefficient: i128,
-    exponent: i32,
+    exponent: i64,
 }
 
 impl Number {
-    pub fn new(coefficient: i128, exponent: i32) -> Self {
+    pub fn new(coefficient: i128, exponent: i64) -> Self {
         Self {
             coefficient,
             exponent,
@@ -33,7 +33,7 @@ impl Number {
             ("s", Some(0)),
         ];
         let mut number = input;
-        let mut exponent = 0i32;
+        let mut exponent = 0i64;
         for (suffix, scale) in units {
             if let Some(value) = input.strip_suffix(suffix) {
                 let base =
@@ -43,7 +43,7 @@ impl Number {
                     "Recording uses named time units; use raw ticks"
                 );
                 number = value.trim();
-                exponent = scale.map_or(0, |scale| scale - i32::from(base.timescale));
+                exponent = scale.map_or(0, |scale| scale - i64::from(base.timescale));
                 break;
             }
         }
@@ -60,7 +60,7 @@ impl Number {
         let (number, power) = number
             .split_once(['e', 'E'])
             .map_or(Ok((number, 0)), |(n, p)| {
-                Ok::<_, anyhow::Error>((n, p.parse::<i32>()?))
+                Ok::<_, anyhow::Error>((n, p.parse::<i64>()?))
             })?;
         exponent = exponent
             .checked_add(power)
@@ -72,7 +72,7 @@ impl Number {
         );
         let coefficient = format!("{whole}{fraction}").parse::<i128>()?;
         exponent = exponent
-            .checked_sub(i32::try_from(fraction.len())?)
+            .checked_sub(i64::try_from(fraction.len())?)
             .ok_or_else(|| anyhow::anyhow!("Exponent is too small"))?;
         Ok(Self::new(coefficient, exponent))
     }
@@ -90,8 +90,8 @@ impl Number {
             other.coefficient.unsigned_abs(),
         );
         let (da, db) = (a.ilog10(), b.ilog10());
-        let magnitude = (i64::from(self.exponent) + i64::from(da))
-            .cmp(&(i64::from(other.exponent) + i64::from(db)));
+        let magnitude = (i128::from(self.exponent) + i128::from(da))
+            .cmp(&(i128::from(other.exponent) + i128::from(db)));
         let order = if magnitude == Ordering::Equal {
             let (mut pa, mut pb) = (10u128.pow(da), 10u128.pow(db));
             loop {
@@ -126,7 +126,14 @@ impl Number {
         if self.coefficient == 0 {
             0.0
         } else {
-            self.coefficient as f64 * 10f64.powi(self.exponent)
+            self.coefficient as f64
+                * 10f64.powi(
+                    i32::try_from(self.exponent).unwrap_or(if self.exponent < 0 {
+                        i32::MIN
+                    } else {
+                        i32::MAX
+                    }),
+                )
         }
     }
 }
@@ -287,7 +294,7 @@ mod tests {
             Ordering::Equal
         );
         assert_eq!(
-            Number::new(i128::MAX, i32::MAX).compare(Number::new(99, i32::MAX)),
+            Number::new(i128::MAX, i64::MAX).compare(Number::new(99, i64::MAX)),
             Ordering::Greater
         );
         assert!(

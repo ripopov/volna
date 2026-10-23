@@ -161,7 +161,11 @@ try {
       `${origin}${base}local/${fixture}`
     );
     await open(`${fixture}.gz`, gzipSync(buffer));
-    assert.deepEqual(await page.evaluate(() => window.convertedImages.at(-1)), image);
+    const compressedImage = await page.evaluate(() => window.convertedImages.at(-1));
+    // Each conversion has a fresh recording identity in header bytes 16..32.
+    assert.notDeepEqual(compressedImage.slice(16, 32), image.slice(16, 32));
+    assert.deepEqual(compressedImage.slice(0, 16), image.slice(0, 16));
+    assert.deepEqual(compressedImage.slice(32), image.slice(32));
   }
   assert.ok(
     converterRequests.some((url) => /vtr_convert_[a-f0-9]{16}_bg\.wasm$/.test(url)),

@@ -82,9 +82,6 @@ Give each image useful alternative text.
 Include `title` and `desc` inside the SVG. Label schematic layouts so their
 geometry cannot be mistaken for measured data.
 
-The [VTR introduction](../vtr/#container-structure) includes a schematic
-container figure.
-
 ## Mermaid diagrams
 
 Use a fenced block tagged `mermaid`, with `accTitle` and `accDescr` for an
@@ -92,9 +89,15 @@ accessible description. The build converts it to inline SVG, so a diagram remain
 visible when browser JavaScript is disabled. Invalid diagrams fail the build.
 The shared style adapter applies the selected theme to the SVG.
 
-See the [component boundary diagram](../vtr/#trace-and-application-boundaries)
-for an example. Keep diagrams compact enough to read on a phone; split large
-models across figures.
+Keep diagrams compact enough to read on a phone; split large models across
+figures. For example:
+
+```mermaid
+flowchart LR
+  accTitle: Trace data flow
+  accDescr: A recorder writes a VTR file, which a reader exposes to the consuming application.
+  recorder[Recorder] --> file[VTR file] --> reader[Reader] --> app[Application]
+```
 
 ## HTML and JavaScript widgets
 

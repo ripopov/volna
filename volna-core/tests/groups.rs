@@ -1,5 +1,7 @@
 //! Headless waveform group tests for editing, navigation, persistence, and summaries.
 
+use vtr::Recorder;
+
 use std::sync::Arc;
 use volna_core::testing::{a, a_all};
 use volna_core::trace::TraceId;
@@ -27,8 +29,9 @@ const X_AT: u64 = 505;
 
 fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
-    let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-9)).unwrap();
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = -9;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
     let bit = vtr::SignalKind::Bits {
         width: 1,
         states: 4,
@@ -38,27 +41,41 @@ fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
         states: 4,
     };
     let top = w
-        .add_scope(None, "top", vtr::ScopeType::Module, "top")
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top",
+        )
         .unwrap();
     let axi = w
-        .add_scope(Some(top), "axi", vtr::ScopeType::Module, "axi")
+        .scope_with(
+            vtr::SourceOptions::new("axi", Some(top)),
+            vtr::ScopeType::Module,
+            "axi",
+        )
         .unwrap();
     let read = w
-        .add_scope(Some(axi), "read", vtr::ScopeType::Module, "read")
+        .scope_with(
+            vtr::SourceOptions::new("read", Some(axi)),
+            vtr::ScopeType::Module,
+            "read",
+        )
         .unwrap();
     let core = w
-        .add_scope(Some(top), "core", vtr::ScopeType::Module, "core")
+        .scope_with(
+            vtr::SourceOptions::new("core", Some(top)),
+            vtr::ScopeType::Module,
+            "core",
+        )
         .unwrap();
     let mut var = |scope, name: &str, kind| {
-        w.add_var(
-            Some(scope),
-            name,
+        w.signal(
+            vtr::SourceOptions::new(name, Some(scope)),
+            kind,
             vtr::VarType::Wire,
             vtr::Direction::Output,
-            kind,
         )
         .unwrap()
-        .1
     };
     let clk = var(top, "clk", bit);
     let rst = var(top, "rst_n", bit);
@@ -69,26 +86,26 @@ fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let rdata = var(read, "rdata", bus);
     let pc = var(core, "pc", bus);
     for t in (0..END).step_by(5) {
-        w.set_time(t).unwrap();
-        w.emit_bit(clk, vtr::Logic::from((u8::from((t / 5) % 2 == 0)) != 0))
+        w.advance_time(t).unwrap();
+        w.emit_u64(clk, u64::from((u8::from((t / 5) % 2 == 0)) != 0))
             .unwrap();
         if t == 0 || t == 40 {
-            w.emit_bit(rst, vtr::Logic::from((u8::from(t == 40)) != 0))
+            w.emit_u64(rst, u64::from((u8::from(t == 40)) != 0))
                 .unwrap();
         }
         if t % 100 == 0 {
-            w.emit_bit(awvalid, vtr::Logic::from((u8::from(t % 200 == 0)) != 0))
+            w.emit_u64(awvalid, u64::from((u8::from(t % 200 == 0)) != 0))
                 .unwrap();
-            w.emit_bit(rvalid, vtr::Logic::from((u8::from(t % 300 == 0)) != 0))
+            w.emit_u64(rvalid, u64::from((u8::from(t % 300 == 0)) != 0))
                 .unwrap();
             w.emit_u64(rdata, t / 10).unwrap();
         }
         if t % 100 == 50 || t == 0 {
-            w.emit_bit(bvalid, vtr::Logic::from((u8::from(t % 200 == 50)) != 0))
+            w.emit_u64(bvalid, u64::from((u8::from(t % 200 == 50)) != 0))
                 .unwrap();
         }
         if t == X_AT {
-            w.emit_logic_str(wdata, b"xxxxxxxxxxxxxxxx").unwrap();
+            w.emit_packed(wdata, 4, &[0xaa; 4]).unwrap();
         } else if t == X_AT + 10 || t % 80 == 0 {
             w.emit_u64(wdata, t).unwrap();
         }

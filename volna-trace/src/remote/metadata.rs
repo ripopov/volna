@@ -92,6 +92,11 @@ async fn metadata(r: &Reader) -> anyhow::Result<super::hierarchy::Header> {
             format: r.u8().await?,
             length: r.u64().await?,
             toc_crc: r.u32().await?,
+            recording: {
+                let mut recording = [0; 16];
+                r.read(&mut recording).await?;
+                recording
+            },
             available: r.boolean().await?,
         };
         descriptor.identity()?;
@@ -151,24 +156,55 @@ pub(super) fn attribute(
             4 => F64(f64::from_bits(r.u64().await?)),
             5 => Text(r.string().await?),
             6 => Bytes(r.bytes().await?),
-            7 => Logic {
-                width: r.u32().await?,
-                states: r.u8().await?,
-                data: r.bytes().await?,
-            },
+            7 => {
+                let width = r.u64().await?;
+                let states = r.u8().await?;
+                let data = r.bytes().await?;
+                anyhow::ensure!(
+                    usize::try_from(width).is_ok(),
+                    "logic width exceeds this platform's address space"
+                );
+                let stride = match states {
+                    2 => 1u64,
+                    4 => 2,
+                    9 => 4,
+                    _ => anyhow::bail!("invalid logic alphabet"),
+                };
+                let per_byte = 8 / stride;
+                anyhow::ensure!(
+                    data.len() as u64 == width.div_ceil(per_byte),
+                    "logic length does not match width"
+                );
+                let padding = (width % per_byte) * stride;
+                anyhow::ensure!(
+                    padding == 0 || data.last().is_none_or(|byte| byte >> padding == 0),
+                    "nonzero logic padding"
+                );
+                anyhow::ensure!(
+                    states != 9
+                        || data.iter().enumerate().all(|(index, byte)| byte & 15 <= 8
+                            && (index as u64 * 2 + 1 >= width || byte >> 4 <= 8)),
+                    "invalid logic state"
+                );
+                Logic {
+                    width,
+                    states,
+                    data,
+                }
+            }
             8 => Time(r.u64().await?),
             9 => Enum {
-                value: r.u64().await? as i64,
+                value: r.i128().await?,
                 name: r.string().await?,
             },
             10 => Pointer(r.u64().await?),
             11 => Fixed {
                 raw: r.u64().await? as i64,
-                scale: r.u32().await? as i32,
+                scale: r.u64().await? as i64,
             },
             12 => UFixed {
                 raw: r.u64().await?,
-                scale: r.u32().await? as i32,
+                scale: r.u64().await? as i64,
             },
             13 => List(r.vector(4, || attribute(r, depth + 1)).await?),
             14 => Map(attributes(r, depth + 1).await?),
@@ -207,9 +243,19 @@ mod tests {
                 value: -2,
                 name: "enum".into(),
             },
+            Enum {
+                value: i128::from(u64::MAX),
+                name: "maximum".into(),
+            },
             Pointer(u64::MAX),
-            Fixed { raw: -3, scale: -9 },
-            UFixed { raw: 3, scale: -9 },
+            Fixed {
+                raw: -3,
+                scale: i64::MIN,
+            },
+            UFixed {
+                raw: 3,
+                scale: i64::MAX,
+            },
             List(vec![Bool(false)]),
             Map(vec![("key".into(), I64(4))]),
         ];
@@ -236,10 +282,62 @@ mod tests {
                     header.tracks = expected.tracks;
                     header.capabilities = expected.capabilities;
                     header.generators = expected.hierarchy.generators.as_ref().clone();
+                    header.activity = Some(super::super::activity::Descriptor {
+                        format: 1,
+                        length: 123_456,
+                        toc_crc: 0x1234_abcd,
+                        recording: std::array::from_fn(|index| (index * 13) as u8),
+                        available: true,
+                    });
                     header
                 })
                 .unwrap(),
         );
+    }
+
+    #[test]
+    fn malformed_logic_attributes_are_rejected_and_release_admission() {
+        for (width, states, data) in [
+            (u64::MAX, 2, vec![]),
+            (9, 2, vec![1]),
+            (1, 4, vec![0x80]),
+            (1, 9, vec![9]),
+            (1, 3, vec![0]),
+        ] {
+            let mut header =
+                Header::from_session(crate::testing::ProceduralTrace::session(1).as_ref()).unwrap();
+            header.tracks.push(Track {
+                id: TrackRef(0),
+                path: vec!["raw".into()],
+                kind: TrackKind::Generator {
+                    kind: "OWNER".into(),
+                },
+                attributes: vec![(
+                    "logic".into(),
+                    AttributeValue::Logic {
+                        width,
+                        states,
+                        data,
+                    },
+                )],
+            });
+            let bytes = bincode::serialize(&header).unwrap();
+            let budget = MemoryBudget::new(1 << 20);
+            let mut decoder = MetadataDecoder::new(bytes.len() as u64, 1 << 20, &budget).unwrap();
+            decoder.feed(bytes).unwrap();
+            loop {
+                match decoder.step() {
+                    Err(error) => {
+                        assert!(error.to_string().contains("logic"));
+                        break;
+                    }
+                    Ok(MetadataStep::Yield) => {}
+                    Ok(_) => panic!("malformed logic was not rejected"),
+                }
+            }
+            drop(decoder);
+            assert_eq!(budget.used(), 0);
+        }
     }
 
     fn roundtrip(expected: Header) {

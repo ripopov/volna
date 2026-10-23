@@ -597,7 +597,7 @@ mod tests {
             for (i, c) in bits.bytes().rev().enumerate() {
                 vtr::signal::set_code(&mut packed, 4, i, vtr::signal::code_from_ascii(c));
             }
-            let view = ValueView::Logic(LogicView::packed_lsb(bits.len() as u32, 4, &packed));
+            let view = ValueView::Logic(LogicView::packed_lsb(bits.len() as u64, 4, &packed));
             for translator in translators.applicable(SignalShape::Vector {
                 width: bits.len() as u32,
             }) {

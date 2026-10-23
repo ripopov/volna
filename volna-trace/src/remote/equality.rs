@@ -163,8 +163,8 @@ mod tests {
     fn nested_attributes_compare_bitwise_and_large_values_yield() {
         let a = LoadedRelation {
             id: 1,
-            from_generator: TrackRef(1),
-            to_generator: TrackRef(2),
+            from_generator: Some(TrackRef(1)),
+            to_generator: Some(TrackRef(2)),
             relation: Relation {
                 kind: "raw".into(),
                 from: TransactionRef(1),

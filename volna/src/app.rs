@@ -921,13 +921,13 @@ impl Workspace {
                         #[cfg(not(target_family = "wasm"))]
                         self.trace_opened(trace_uri);
                         #[cfg(target_family = "wasm")]
-                        let _ = trace_uri;
+                        drop(trace_uri);
                     }
                     Event::OpenRecent(entry) => {
                         #[cfg(not(target_family = "wasm"))]
                         self.open_recent(entry, cx);
                         #[cfg(target_family = "wasm")]
-                        let _ = entry;
+                        drop(entry);
                     }
                     Event::RecentChanged => {
                         #[cfg(not(target_family = "wasm"))]

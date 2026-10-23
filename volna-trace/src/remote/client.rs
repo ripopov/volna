@@ -10,19 +10,6 @@ use super::transport::{Body, Command, MAX_BATCH, Packet};
 use crate::session::{LoadRequest, LoadResult};
 use std::collections::VecDeque;
 
-struct Queued<Tag> {
-    job: LoadRequest<Tag>,
-    reservation: Option<super::memory::Reservation>,
-}
-impl<Tag> Queued<Tag> {
-    fn new(job: LoadRequest<Tag>) -> Self {
-        Self {
-            job,
-            reservation: None,
-        }
-    }
-}
-
 enum Active<Tag> {
     Open {
         tag: Tag,
@@ -40,14 +27,6 @@ enum Active<Tag> {
     Activity {
         transfer: ActivityTransfer<Tag>,
     },
-    Resolve {
-        job: LoadRequest<Tag>,
-        transfer: Option<SignalTransfer<Tag>>,
-        next: usize,
-        changed: Vec<crate::data::SignalRef>,
-        error: Option<String>,
-        _reservation: super::memory::Reservation,
-    },
 }
 
 pub struct RemoteClient<Tag = u64> {
@@ -56,7 +35,7 @@ pub struct RemoteClient<Tag = u64> {
     limit: u64,
     budget: MemoryBudget,
     active: Option<Active<Tag>>,
-    queued: VecDeque<Queued<Tag>>,
+    queued: VecDeque<LoadRequest<Tag>>,
     opening: Option<Packet>,
     connected: bool,
 }
@@ -117,39 +96,16 @@ impl<Tag: Copy> RemoteClient<Tag> {
                     .filter(|id| unique.insert(*id))
                     .collect();
                 for ids in signals.chunks(MAX_BATCH) {
-                    self.queued.push_back(Queued::new(LoadRequest::Signals {
+                    self.queued.push_back(LoadRequest::Signals {
                         tag,
                         generation,
                         session: session.clone(),
                         signals: ids.to_vec(),
-                    }));
+                    });
                 }
-            }
-            mut request @ LoadRequest::ResolveActivity { .. } => {
-                let LoadRequest::ResolveActivity {
-                    signals, budget, ..
-                } = &mut request
-                else {
-                    unreachable!()
-                };
-                signals.sort_unstable();
-                signals.dedup();
-                if signals.is_empty() {
-                    return Err(request.fail(anyhow::anyhow!("no undecided activity signals")));
-                }
-                let reservation = match budget.reserve(
-                    signals.len() as u64 * std::mem::size_of::<crate::data::SignalRef>() as u64,
-                ) {
-                    Ok(reservation) => reservation,
-                    Err(error) => return Err(request.fail(error)),
-                };
-                self.queued.push_back(Queued {
-                    job: request,
-                    reservation: Some(reservation),
-                });
             }
             request @ (LoadRequest::Track { .. } | LoadRequest::BuildActivity { .. }) => {
-                self.queued.push_back(Queued::new(request));
+                self.queued.push_back(request);
             }
         }
         Ok(())
@@ -162,74 +118,10 @@ impl<Tag: Copy> RemoteClient<Tag> {
         if !self.connected {
             return Ok(None);
         }
-        if self.active.is_none()
-            && matches!(
-                self.queued.front().map(|q| &q.job),
-                Some(LoadRequest::ResolveActivity { .. })
-            )
-        {
-            let queued = self.queued.pop_front().unwrap();
-            let job = queued.job;
-            let LoadRequest::ResolveActivity { signals, .. } = &job else {
-                unreachable!()
-            };
-            let reservation = queued.reservation.expect("admitted activity read");
-            let changed = Vec::with_capacity(signals.len());
-            self.active = Some(Active::Resolve {
-                job,
-                transfer: None,
-                next: 0,
-                changed,
-                error: None,
-                _reservation: reservation,
-            });
-        }
-        if let Some(Active::Resolve {
-            job,
-            transfer: transfer @ None,
-            next,
-            ..
-        }) = &mut self.active
-        {
-            let LoadRequest::ResolveActivity {
-                tag,
-                generation,
-                signals,
-                ..
-            } = job
-            else {
-                unreachable!()
-            };
-            self.request = self
-                .request
-                .checked_add(1)
-                .ok_or_else(|| anyhow::anyhow!("request identity exhausted"))?;
-            let end = (*next + MAX_BATCH).min(signals.len());
-            let ids = &signals[*next..end];
-            let session = self
-                .session
-                .ok_or_else(|| anyhow::anyhow!("recording is not open"))?;
-            *transfer = Some(SignalTransfer::new(
-                session,
-                self.request,
-                *tag,
-                *generation,
-                ids,
-                self.limit,
-                self.budget.clone(),
-            )?);
-            *next = end;
-            return Ok(Some(Packet {
-                session,
-                request: self.request,
-                sequence: 0,
-                body: Body::Command(Command::Signals(ids.iter().map(|id| id.0).collect())),
-            }));
-        }
         if self.active.is_some() {
             return Ok(None);
         }
-        let Some(job) = self.queued.front().map(|q| &q.job) else {
+        let Some(job) = self.queued.front() else {
             return Ok(None);
         };
         self.request = self
@@ -257,7 +149,7 @@ impl<Tag: Copy> RemoteClient<Tag> {
                 )?;
                 let command = Command::Signals(signals.iter().map(|id| id.0).collect());
                 self.active = Some(Active::Signals {
-                    job: self.queued.pop_front().unwrap().job,
+                    job: self.queued.pop_front().unwrap(),
                     transfer,
                 });
                 command
@@ -281,7 +173,7 @@ impl<Tag: Copy> RemoteClient<Tag> {
                 )?;
                 let command = Command::Track(track.0);
                 self.active = Some(Active::Track {
-                    job: self.queued.pop_front().unwrap().job,
+                    job: self.queued.pop_front().unwrap(),
                     transfer,
                 });
                 command
@@ -289,16 +181,13 @@ impl<Tag: Copy> RemoteClient<Tag> {
             LoadRequest::BuildActivity { .. } => {
                 let transfer = ActivityTransfer::new(
                     self.request,
-                    self.queued.pop_front().unwrap().job,
+                    self.queued.pop_front().unwrap(),
                     self.limit,
                     self.budget.clone(),
                 )?;
                 let command = transfer.command();
                 self.active = Some(Active::Activity { transfer });
                 command
-            }
-            LoadRequest::ResolveActivity { .. } => {
-                unreachable!("resolve starts before ordinary queue")
             }
         };
         let packet = Packet {
@@ -311,7 +200,7 @@ impl<Tag: Copy> RemoteClient<Tag> {
     }
 
     pub fn retain_queued(&mut self, mut wanted: impl FnMut(&mut LoadRequest<Tag>) -> bool) {
-        self.queued.retain_mut(|queued| wanted(&mut queued.job));
+        self.queued.retain_mut(|job| wanted(job));
     }
 
     pub fn accept(&mut self, packet: Packet) -> anyhow::Result<ClientStep<Tag>> {
@@ -324,10 +213,6 @@ impl<Tag: Copy> RemoteClient<Tag> {
             Active::Signals { transfer, .. } => transfer.accept(packet)?,
             Active::Track { transfer, .. } => transfer.accept(packet)?,
             Active::Activity { transfer } => transfer.accept(packet)?,
-            Active::Resolve { transfer, .. } => transfer
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("no active activity read"))?
-                .accept(packet)?,
         };
         self.accept_step(step)
     }
@@ -342,84 +227,11 @@ impl<Tag: Copy> RemoteClient<Tag> {
             Active::Signals { transfer, .. } => transfer.step()?,
             Active::Track { transfer, .. } => transfer.step()?,
             Active::Activity { transfer } => transfer.step()?,
-            Active::Resolve { transfer, .. } => transfer
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("no active activity read"))?
-                .step()?,
         };
         self.accept_step(step)
     }
 
     fn accept_step(&mut self, step: ClientStep<Tag>) -> anyhow::Result<ClientStep<Tag>> {
-        let step = if let (
-            Some(Active::Resolve {
-                job,
-                transfer,
-                next,
-                changed,
-                error,
-                ..
-            }),
-            ClientStep::Complete {
-                ack,
-                result: LoadResult::Signals { results, .. },
-            },
-        ) = (self.active.as_mut(), &step)
-        {
-            let LoadRequest::ResolveActivity {
-                tag,
-                generation,
-                signals,
-                window,
-                session,
-                ..
-            } = job
-            else {
-                unreachable!()
-            };
-            for (id, result) in results {
-                match result {
-                    Ok(history) => {
-                        if window.0 <= window.1
-                            && history.index_at(window.1).is_some_and(|i| {
-                                history.time(i) >= window.0
-                                    && history.time(i) != session.info().time_range.0
-                            })
-                        {
-                            changed.push(*id);
-                        }
-                    }
-                    Err(e) => *error = Some(format!("{e:#}")),
-                }
-            }
-            let finished = transfer
-                .as_ref()
-                .is_some_and(super::signals::SignalTransfer::is_complete);
-            if finished {
-                transfer.take().unwrap().finish()?;
-                if *next == signals.len() || error.is_some() {
-                    let result = if let Some(message) = error.take() {
-                        Err(anyhow::anyhow!(message))
-                    } else {
-                        Ok(std::mem::take(changed))
-                    };
-                    let result = LoadResult::ActivityResolved {
-                        tag: *tag,
-                        generation: *generation,
-                        window: *window,
-                        result,
-                    };
-                    self.active = None;
-                    return Ok(ClientStep::Complete {
-                        ack: ack.clone(),
-                        result,
-                    });
-                }
-            }
-            ClientStep::Ack(ack.clone())
-        } else {
-            step
-        };
         if let ClientStep::Complete { result, .. } = &step {
             match result {
                 LoadResult::Opened { result, .. } => {
@@ -437,9 +249,7 @@ impl<Tag: Copy> RemoteClient<Tag> {
                         signals.retain(|id| !results.iter().any(|(done, _)| id == done));
                     }
                 }
-                LoadResult::Track { .. }
-                | LoadResult::ActivityBuilt { .. }
-                | LoadResult::ActivityResolved { .. } => {}
+                LoadResult::Track { .. } | LoadResult::ActivityBuilt { .. } => {}
             }
         }
         let complete = match self.active.as_ref() {
@@ -447,7 +257,7 @@ impl<Tag: Copy> RemoteClient<Tag> {
             Some(Active::Signals { transfer, .. }) => transfer.is_complete(),
             Some(Active::Track { transfer, .. }) => transfer.is_complete(),
             Some(Active::Activity { transfer }) => transfer.is_complete(),
-            Some(Active::Resolve { .. }) | None => false,
+            None => false,
         };
         if complete {
             match self.active.take().unwrap() {
@@ -455,7 +265,6 @@ impl<Tag: Copy> RemoteClient<Tag> {
                 Active::Signals { transfer, .. } => transfer.finish()?,
                 Active::Track { transfer, .. } => transfer.finish()?,
                 Active::Activity { transfer } => transfer.finish()?,
-                Active::Resolve { .. } => unreachable!(),
             }
         }
         Ok(step)
@@ -474,17 +283,15 @@ impl<Tag: Copy> RemoteClient<Tag> {
                 result: Err(anyhow::anyhow!(message.to_owned())),
             }),
             Some(Active::Activity { transfer }) => results.push(transfer.fail(message)),
-            Some(
-                Active::Signals { job, .. }
-                | Active::Track { job, .. }
-                | Active::Resolve { job, .. },
-            ) => self.queued.push_front(Queued::new(job)),
+            Some(Active::Signals { job, .. } | Active::Track { job, .. }) => {
+                self.queued.push_front(job);
+            }
             None => {}
         }
         results.extend(
             self.queued
                 .drain(..)
-                .map(|queued| queued.job.fail(anyhow::anyhow!(message.to_owned()))),
+                .map(|job| job.fail(anyhow::anyhow!(message.to_owned()))),
         );
         results
     }
@@ -637,68 +444,6 @@ mod tests {
         };
         assert_eq!((tag, generation), (17, 7));
         assert!(results.is_empty());
-        assert!(client.take_command().unwrap().is_none());
-    }
-
-    #[test]
-    fn activity_resolution_deduplicates_signal_ids() {
-        let budget = MemoryBudget::new(4 * 1024 * 1024);
-        let mut client = RemoteClient::new(0, 1, 1024 * 1024, budget.clone()).unwrap();
-        let open = client.take_command().unwrap().unwrap();
-        let local = crate::testing::ProceduralTrace::session(100);
-        let LoadResult::Opened { result, .. } = opened(&mut client, open.request, local.as_ref())
-        else {
-            panic!("opened")
-        };
-        assert!(
-            client
-                .submit(LoadRequest::ResolveActivity {
-                    tag: 17,
-                    generation: 7,
-                    session: result.unwrap(),
-                    signals: vec![SignalRef(1), SignalRef(0), SignalRef(1)],
-                    window: (1, 10),
-                    budget,
-                })
-                .is_ok()
-        );
-        let command = client.take_command().unwrap().unwrap();
-        assert!(matches!(command.body, Body::Command(Command::Signals(ref ids)) if ids == &[0, 1]));
-        let source = VecHistory {
-            shape: SignalShape::Bit,
-            times: vec![0, 5],
-            values: vec![WaveValue::Bits("0".into()), WaveValue::Bits("1".into())],
-            initial: WaveValue::Unavailable,
-        };
-        let bytes = bincode::serialize(&PackedHistory::from_history(&source).unwrap()).unwrap();
-        let mut sequence = 0;
-        assert!(
-            send_object(
-                &mut client,
-                command.request,
-                &mut sequence,
-                ObjectId::Signal(0),
-                bytes.clone()
-            )
-            .is_none()
-        );
-        let LoadResult::ActivityResolved {
-            tag,
-            generation,
-            window,
-            result,
-        } = object(
-            &mut client,
-            command.request,
-            &mut sequence,
-            ObjectId::Signal(1),
-            bytes,
-        )
-        else {
-            panic!("activity resolution")
-        };
-        assert_eq!((tag, generation, window), (17, 7, (1, 10)));
-        assert_eq!(result.unwrap(), vec![SignalRef(0), SignalRef(1)]);
         assert!(client.take_command().unwrap().is_none());
     }
 

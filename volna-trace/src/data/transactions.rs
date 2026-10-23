@@ -1,7 +1,7 @@
 //! Raw transaction records and catalog.
 
 use serde::{Deserialize, Serialize};
-pub use vtr::{TxKind, TxStatus};
+pub use vtr::{SpanKind, Status};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransactionRef(pub u64);
@@ -19,23 +19,23 @@ pub enum AttributeValue {
     Text(String),
     Bytes(Vec<u8>),
     Logic {
-        width: u32,
+        width: u64,
         states: u8,
         data: Vec<u8>,
     },
     Time(u64),
     Enum {
-        value: i64,
+        value: i128,
         name: String,
     },
     Pointer(u64),
     Fixed {
         raw: i64,
-        scale: i32,
+        scale: i64,
     },
     UFixed {
         raw: u64,
-        scale: i32,
+        scale: i64,
     },
     List(Vec<AttributeValue>),
     Map(Attributes),
@@ -135,6 +135,7 @@ pub struct TransactionAttribute {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransactionEvent {
+    pub id: TransactionRef,
     pub time: u64,
     pub name: String,
     pub attributes: Attributes,
@@ -142,6 +143,7 @@ pub struct TransactionEvent {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransactionStage {
+    pub id: TransactionRef,
     pub name: String,
     pub lane: String,
     pub begin: u64,
@@ -156,9 +158,9 @@ pub struct Transaction {
     pub begin: u64,
     pub end: u64,
     #[serde(with = "status_code")]
-    pub status: TxStatus,
+    pub status: Status,
     #[serde(with = "kind_code")]
-    pub kind: TxKind,
+    pub kind: SpanKind,
     pub parent: Option<TransactionRef>,
     pub attributes: Vec<TransactionAttribute>,
     pub events: Vec<TransactionEvent>,
@@ -174,7 +176,7 @@ pub struct Relation {
 }
 
 macro_rules! wire_code {
-    ($module:ident, $ty:ident, $max:expr) => {
+    ($module:ident, $ty:ident) => {
         mod $module {
             use super::*;
             pub fn serialize<S: serde::Serializer>(
@@ -187,13 +189,10 @@ macro_rules! wire_code {
                 deserializer: D,
             ) -> Result<$ty, D::Error> {
                 let value = u8::deserialize(deserializer)?;
-                if value > $max {
-                    return Err(serde::de::Error::custom("unknown transaction code"));
-                }
-                Ok($ty::from_u8(value))
+                $ty::try_from(value).map_err(serde::de::Error::custom)
             }
         }
     };
 }
-wire_code!(status_code, TxStatus, 4);
-wire_code!(kind_code, TxKind, 5);
+wire_code!(status_code, Status);
+wire_code!(kind_code, SpanKind);

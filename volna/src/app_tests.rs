@@ -257,7 +257,7 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
         testing::a,
         transaction::{ParentTraceState, SectionKey, TransactionCommand},
     };
-    use volna_trace::data::transactions::TransactionRef;
+    use volna_trace::data::transactions::AttributeValue;
     init(cx);
     for dark in [true, false] {
         for width in [900.0, 360.0] {
@@ -273,7 +273,7 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
             };
             let mut vcx = VisualTestContext::from_window(root.into(), cx);
             vcx.simulate_resize(size(px(width), px(1000.0)));
-            let panel = window
+            let (panel, request, instruction) = window
                 .update(&mut vcx, |ws, window, cx| {
                     let session = OpenSpec::Path(
                         concat!(
@@ -290,6 +290,17 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
                         .find(|t| t.path.join(".") == "soc.l2.bus.read")
                         .unwrap()
                         .id;
+                    let instructions = session.tracks().iter()
+                        .find(|t| t.path.join(".") == "soc.cpu0.pipeline.instruction")
+                        .unwrap().id;
+                    let instruction = session.load_track(instructions).unwrap().generators.iter()
+                        .flat_map(|g| g.transactions())
+                        .find(|t| t.attributes.iter().any(|a| a.key == "vtr.label"
+                            && matches!(&a.value, AttributeValue::Text(label) if label == "80000060: lw   a1, 0(a2)")))
+                        .unwrap().id;
+                    let request = session.load_track(track).unwrap().generators.iter()
+                        .flat_map(|g| g.transactions()).find(|t| t.parent == Some(instruction))
+                        .unwrap().id;
                     ws.set_session(session, cx);
                     ws.app.sidebar_visible = false;
                     let origin = ws.app.panels.focused_id();
@@ -297,7 +308,7 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
                         Command::SelectTransaction {
                             panel: origin,
                             track: a(track),
-                            id: TransactionRef(34),
+                            id: request,
                             cursor: None,
                         },
                         Some(window),
@@ -318,7 +329,7 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
                         );
                     }
                     crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
-                    panel
+                    (panel, request, instruction)
                 })
                 .unwrap();
             vcx.run_until_parked();
@@ -342,10 +353,10 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
                 vcx.run_until_parked();
                 vcx.update(|window, cx| window.draw(cx).clear(cx));
             };
-            assert_eq!(navigation(&mut vcx), (34, false, false));
+            assert_eq!(navigation(&mut vcx), (request.0, false, false));
             click(&mut vcx, "tx-back");
             click(&mut vcx, "tx-forward");
-            assert_eq!(navigation(&mut vcx), (34, false, false));
+            assert_eq!(navigation(&mut vcx), (request.0, false, false));
             let header = vcx.debug_bounds("tx-header").unwrap();
             let back = vcx.debug_bounds("tx-back").unwrap();
             let forward = vcx.debug_bounds("tx-forward").unwrap();
@@ -378,29 +389,29 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
             window
                 .update(&mut vcx, |ws, _, _| {
                     let model = ws.app.panels.transaction(panel).unwrap();
-                    assert_eq!(model.shown().unwrap().id, TransactionRef(33));
+                    assert_eq!(model.shown().unwrap().id, instruction);
                     assert_eq!(model.parents().state(), &ParentTraceState::Idle);
                 })
                 .unwrap();
-            assert_eq!(navigation(&mut vcx), (33, true, false));
+            assert_eq!(navigation(&mut vcx), (instruction.0, true, false));
             vcx.update(|window, cx| window.draw(cx).clear(cx));
             let follows = vcx.debug_bounds("tx-follows").unwrap();
             assert!(follows.bottom() <= vcx.debug_bounds("tx-back").unwrap().top());
             click(&mut vcx, "tx-back");
-            assert_eq!(navigation(&mut vcx), (34, false, true));
+            assert_eq!(navigation(&mut vcx), (request.0, false, true));
             click(&mut vcx, "tx-back");
-            assert_eq!(navigation(&mut vcx), (34, false, true));
+            assert_eq!(navigation(&mut vcx), (request.0, false, true));
             click(&mut vcx, "tx-forward");
-            assert_eq!(navigation(&mut vcx), (33, true, false));
+            assert_eq!(navigation(&mut vcx), (instruction.0, true, false));
             click(&mut vcx, "tx-forward");
-            assert_eq!(navigation(&mut vcx), (33, true, false));
+            assert_eq!(navigation(&mut vcx), (instruction.0, true, false));
             for (back, forward) in [("alt-left", "alt-right"), ("cmd-[", "cmd-]")] {
                 vcx.simulate_keystrokes(back);
                 vcx.run_until_parked();
-                assert_eq!(navigation(&mut vcx), (34, false, true));
+                assert_eq!(navigation(&mut vcx), (request.0, false, true));
                 vcx.simulate_keystrokes(forward);
                 vcx.run_until_parked();
-                assert_eq!(navigation(&mut vcx), (33, true, false));
+                assert_eq!(navigation(&mut vcx), (instruction.0, true, false));
             }
             click(&mut vcx, "tx-back");
             window
@@ -417,10 +428,10 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
                 .unwrap();
             vcx.run_until_parked();
             click(&mut vcx, "tx-ref-0");
-            assert_eq!(navigation(&mut vcx), (33, true, false));
+            assert_eq!(navigation(&mut vcx), (instruction.0, true, false));
             vcx.simulate_keystrokes("alt-right");
             vcx.run_until_parked();
-            assert_eq!(navigation(&mut vcx), (33, true, false));
+            assert_eq!(navigation(&mut vcx), (instruction.0, true, false));
 
             window
                 .update(&mut vcx, |ws, window, cx| {
@@ -451,7 +462,7 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
             assert_eq!(vcx.debug_bounds("tx-back").unwrap(), before);
             assert!(vcx.debug_bounds("tx-record-path").unwrap().top() < record.top());
             click(&mut vcx, "tx-back");
-            assert_eq!(navigation(&mut vcx), (34, false, true));
+            assert_eq!(navigation(&mut vcx), (request.0, false, true));
         }
     }
 }
@@ -761,10 +772,7 @@ fn scope_rows_show_activity_meters_in_both_themes(cx: &mut TestAppContext) {
                 .app
                 .scope_activity(TreeNode::scope(Traced::new(TraceId::A, root)))
                 .expect("meters once classified");
-            assert!(
-                a.exact() && a.changing > 0 && a.changing <= a.total,
-                "{a:?}"
-            );
+            assert!(a.changing > 0 && a.changing <= a.total, "{a:?}");
             root
         })
         .unwrap();
@@ -853,7 +861,7 @@ fn feature_showcase_workspace_restores_with_scope_activity_meters(cx: &mut TestA
                 .app
                 .scope_activity(TreeNode::scope(Traced::new(TraceId::A, soc)))
                 .expect("restored workspace has activity counts");
-            assert!(activity.exact() && activity.changing > 0);
+            assert!(activity.changing > 0);
             soc
         })
         .unwrap();

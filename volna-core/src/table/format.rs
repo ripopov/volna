@@ -86,11 +86,16 @@ pub(super) fn attribute_shape(value: &AttributeValue) -> Option<SignalShape> {
         AttributeValue::I64(_) | AttributeValue::U64(_) | AttributeValue::Pointer(_) => {
             Some(SignalShape::Vector { width: 64 })
         }
-        AttributeValue::Logic { width, .. } => Some(if *width == 1 {
-            SignalShape::Bit
-        } else {
-            SignalShape::Vector { width: *width }
-        }),
+        AttributeValue::Logic { width, .. } => u32::try_from(*width)
+            .ok()
+            .filter(|width| *width > 0)
+            .map(|width| {
+                if width == 1 {
+                    SignalShape::Bit
+                } else {
+                    SignalShape::Vector { width }
+                }
+            }),
         AttributeValue::F64(_) => Some(SignalShape::Real),
         _ => None,
     }

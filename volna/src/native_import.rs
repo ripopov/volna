@@ -182,7 +182,7 @@ fn open(
         .with_context(|| format!("open {}", path.display()))?
         .take(8)
         .read_to_end(&mut header)?;
-    if header.starts_with(&vtr::container::FILE_MAGIC) {
+    if header.starts_with(&vtr::framing::MAGIC) {
         return OpenSpec::Path(path.into()).open();
     }
     ensure!(!cancel.load(Ordering::Relaxed), "conversion cancelled");

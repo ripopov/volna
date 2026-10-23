@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import AxeBuilder from '@axe-core/playwright';
 
+const sampleWorkspace = JSON.parse(await readFile(new URL('../../volna/examples/landing-page.volna.json', import.meta.url), 'utf8'));
+const sampleRecord = sampleWorkspace.panels.find(panel => panel.id === 37).record;
+const cppGuide = await readFile(new URL('../../vtr/vtr-cpp/README.md', import.meta.url), 'utf8');
+const cppExamples = [...cppGuide.matchAll(/```(?:cpp|c)\n([\s\S]*?)\n```/g)].map(match => match[1]);
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const results = fileURLToPath(new URL('../test-results/', import.meta.url));
 const base = `/${(process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/')}`.replace(/\/$/, '') + '/';
@@ -71,6 +75,7 @@ try {
   assert.equal(await page.locator('.volna-header, #starlight__sidebar').count(), 0);
   await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
   verifySampleWorkspace(await page.evaluate(() => window.volnaCurrentState));
+  const loadedSampleState = await page.evaluate(() => window.volnaCurrentState);
   const appCanvas = await page.locator('body > canvas').boundingBox();
   assert.ok(appCanvas && Math.abs(appCanvas.width - 1440) < 2 && Math.abs(appCanvas.height - 1000) < 2,
     'standalone canvas must fill the browser viewport');
@@ -82,8 +87,24 @@ try {
   const downloadPromise = page.waitForEvent('download');
   await page.evaluate(async base => (await import(`${base}viewer/pkg/volna.js`)).dispatch_command('saveWorkspaceAs'), base);
   assert.equal((await downloadPromise).suggestedFilename(), 'landing.vtr.volna.json');
+  let releaseSample, sampleRequested;
+  const sampleFetch = new Promise(resolve => { sampleRequested = resolve; });
+  const sampleResponse = new Promise(resolve => { releaseSample = resolve; });
+  const sampleRoute = `${origin}${base}examples/landing.vtr`;
+  await page.route(sampleRoute, async route => {
+    sampleRequested();
+    await sampleResponse;
+    await route.continue();
+  });
   await page.getByRole('button', { name: 'Load sample' }).click();
+  await sampleFetch;
+  await page.evaluate(state => window.volnaViewerState(state), loadedSampleState);
+  assert.equal(await page.locator('body').getAttribute('data-workspace-restored'), null,
+    'a ready state from the previous recording cannot complete a pending sample fetch');
+  assert.equal(await page.locator('#viewer-status').isVisible(), true);
+  releaseSample();
   await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
+  await page.unroute(sampleRoute);
   const selectedTransaction = () => page.evaluate(() => window.volnaCurrentState
     .split('\n').find(line => line.startsWith('panel=37 transaction ')));
   const islandTransaction = await selectedTransaction();
@@ -120,12 +141,17 @@ try {
   await failedViewer.close();
   report.behavior.push('viewer initialization failure keeps landing documentation links usable');
   await page.goto(`${origin}${base}vtr/`);
-  const waveform = await readFile(new URL('../../vtr/vtr/examples/waveform.rs', import.meta.url), 'utf8');
-  const example = page.locator('.expressive-code pre').filter({ hasText: 'Minimal waveform round trip.' });
-  const exampleLines = (await example.locator('.ec-line').allTextContents()).map(line => line === '\n' ? '' : line);
-  assert.equal(exampleLines.join('\n'), waveform.trimEnd(), 'quick start must embed the current waveform source');
-  assert.equal(await page.getByRole('link', { name: 'runnable waveform API example' }).getAttribute('href'),
+  const guide = await readFile(new URL('../../vtr/vtr/README.md', import.meta.url), 'utf8');
+  const commands = [...guide.matchAll(/```sh\n([\s\S]*?)\n```/g)].map(match => match[1]);
+  const renderedCommands = page.locator('.expressive-code pre');
+  assert.equal(await renderedCommands.count(), commands.length, 'guide must render all current command blocks');
+  for (const [index, command] of commands.entries()) {
+    const lines = (await renderedCommands.nth(index).locator('.ec-line').allTextContents()).map(line => line === '\n' ? '' : line);
+    assert.equal(lines.join('\n'), command, 'rendered commands must match the canonical guide');
+  }
+  assert.equal(await page.getByRole('link', { name: 'Waveforms', exact: true }).getAttribute('href'),
     'https://github.com/ripopov/vtr/blob/main/vtr/examples/waveform.rs');
+  await page.goto(`${origin}${base}authoring/`);
   await verifyDiagrams(page);
   await page.keyboard.press('Tab');
   const focus = await page.evaluate(() => ({ width: getComputedStyle(document.activeElement).outlineWidth, style: getComputedStyle(document.activeElement).outlineStyle }));
@@ -236,6 +262,7 @@ try {
   assert.equal(await staticPage.getByRole('button', { name: 'Documentation navigator', exact: true }).isVisible(), false);
   assert.equal(await staticPage.locator('#starlight__sidebar').isVisible(), true);
   assert.equal(await staticPage.locator('.right-sidebar-container').isVisible(), true);
+  await staticPage.goto(`${origin}${base}authoring/`);
   await verifyDiagrams(staticPage);
   for (const route of ['docs/', 'vtr/', 'vtr/specification/', 'authoring/', 'volna-trace/', 'volna-server/']) {
     await staticPage.goto(`${origin}${base}${route}`);
@@ -296,11 +323,13 @@ try {
         const content = await page.locator('.sl-markdown-content').textContent();
         assert.ok(content.trim().length > 20, `${route}: rendered content must not be empty`);
         if (route === 'vtr-cpp/') {
-          const code = await page.locator('pre').allTextContents();
-          assert.ok(code.some(text => text.includes('[](const vtr::Transaction& transaction)')),
-            'C++ lambdas must survive Markdown link rewriting');
-          assert.ok(code.some(text => text.includes('[](vtr::Time time')),
-            'C++ signal callbacks must remain valid source');
+          const code = await page.locator('.expressive-code pre').evaluateAll(blocks =>
+            blocks.map(block => [...block.querySelectorAll('.ec-line')]
+              .map(line => line.textContent === '\n' ? '' : line.textContent).join('\n')));
+          assert.ok(cppExamples.length > 0, 'native guide must provide C or C++ source');
+          for (const example of cppExamples) {
+            assert.ok(code.includes(example), 'C and C++ examples must survive Markdown link rewriting intact');
+          }
         }
         assert.deepEqual(errors, [], `${route}: browser errors`);
         if (width === 1440) {
@@ -332,7 +361,8 @@ function verifySampleWorkspace(state) {
   assert.match(state, /panel=39 .*items=13 loaded=13 .*cursor=Some\(69\).*viewport=\(46,95\)/);
   assert.match(state, /panel=38 pipeline track=soc.cpu0.pipeline.instruction .*ready rows=420/);
   assert.match(state, /panel=40 table .*rows=420/);
-  assert.match(state, /panel=37 transaction .*ready record=Some\(\("soc.cpu0.pipeline.instruction", 23\)\)/);
+  const transaction = state.split('\n').find(line => line.includes('panel=37 transaction '));
+  assert.ok(transaction?.includes(`ready record=Some(("${sampleRecord.track.join('.')}", ${sampleRecord.id}))`), state);
 }
 
 async function verifySampleIslandContour(page, screenshot) {

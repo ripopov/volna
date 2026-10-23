@@ -151,8 +151,8 @@ mod tests {
                 generator: TrackRef(1),
                 begin: i as u64,
                 end: i as u64 + 4,
-                status: TxStatus::Unset,
-                kind: TxKind::Unspecified,
+                status: Status::Unset,
+                kind: SpanKind::Unspecified,
                 parent: None,
                 attributes: vec![],
                 events: vec![],
@@ -160,6 +160,7 @@ mod tests {
                     .iter()
                     .enumerate()
                     .map(|(k, (name, lane))| TransactionStage {
+                        id: TransactionRef(((i as u64 + 1) << 32) | k as u64),
                         name: (*name).into(),
                         lane: (*lane).into(),
                         begin: i as u64 + k as u64,

@@ -527,7 +527,6 @@ impl Document {
             | LoadRequest::Sizes { trace: t, .. }
             | LoadRequest::ActivityCounter { trace: t, .. }
             | LoadRequest::Activity { trace: t, .. }
-            | LoadRequest::ResolveActivity { trace: t, .. }
             | LoadRequest::Signals { trace: t, .. }
             | LoadRequest::Track { trace: t, .. } => *t != trace,
             LoadRequest::Summary { signal, .. } => signal.trace != trace,
@@ -999,8 +998,7 @@ impl Document {
         match result {
             LoadResult::ActivityBuilt { .. }
             | LoadResult::ActivityCounter { .. }
-            | LoadResult::Activity { .. }
-            | LoadResult::ActivityResolved { .. } => None,
+            | LoadResult::Activity { .. } => None,
             LoadResult::Track {
                 trace,
                 generation,

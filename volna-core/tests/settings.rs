@@ -1,6 +1,8 @@
 //! Settings over the core loop: the editor tab, GUI edits and the write queue, host
 //! deliveries, and the projection into the viewer.
 
+use vtr::Recorder;
+
 use std::time::Duration;
 use volna_core::testing::a_all;
 
@@ -350,20 +352,19 @@ fn zoom_steps_write_the_setting_and_reset_removes_it() {
 fn bus_trace(changes: u64) -> tempfile::NamedTempFile {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let (_, bus) = writer
-        .add_var(
-            None,
-            "bus",
-            vtr::VarType::Wire,
-            vtr::Direction::Output,
+    let bus = writer
+        .signal(
+            vtr::SourceOptions::new("bus", None),
             vtr::SignalKind::Bits {
                 width: 32,
                 states: 2,
             },
+            vtr::VarType::Wire,
+            vtr::Direction::Output,
         )
         .unwrap();
     for time in 0..changes {
-        writer.set_time(time).unwrap();
+        writer.advance_time(time).unwrap();
         writer
             .emit_u64(bus, time.wrapping_mul(2_654_435_761))
             .unwrap();

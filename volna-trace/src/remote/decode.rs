@@ -176,7 +176,7 @@ impl Reader {
             .grow(bytes as u64 - covered)
     }
 
-    async fn read(&self, output: &mut [u8]) -> anyhow::Result<()> {
+    pub(super) async fn read(&self, output: &mut [u8]) -> anyhow::Result<()> {
         self.checkpoint().await;
         let mut written = 0;
         poll_fn(|_| {
@@ -202,6 +202,11 @@ impl Reader {
         let mut bytes = [0];
         self.read(&mut bytes).await?;
         Ok(bytes[0])
+    }
+    pub async fn i128(&self) -> anyhow::Result<i128> {
+        let mut bytes = [0; 16];
+        self.read(&mut bytes).await?;
+        Ok(i128::from_le_bytes(bytes))
     }
     pub async fn u32(&self) -> anyhow::Result<u32> {
         let mut bytes = [0; 4];

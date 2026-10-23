@@ -724,14 +724,10 @@ impl App {
         let slot = self.doc.traces().get(node.trace)?;
         let window =
             crate::sidebar::activity::trace_window(self.activity_viewport(), slot.placement());
-        let (changing, upper) =
-            self.activity
-                .get(node.trace, slot.generation(), window, node.scope?)?;
-        Some(crate::data::ScopeActivity {
-            changing,
-            upper,
-            total,
-        })
+        let changing = self
+            .activity
+            .get(node.trace, slot.generation(), window, node.scope?)?;
+        Some(crate::data::ScopeActivity { changing, total })
     }
 
     pub fn deliver(&mut self, mut result: LoadResult) {
@@ -740,7 +736,6 @@ impl App {
             LoadResult::ActivityBuilt { .. }
                 | LoadResult::ActivityCounter { .. }
                 | LoadResult::Activity { .. }
-                | LoadResult::ActivityResolved { .. }
         ) {
             let viewport = self.activity_viewport();
             match self.activity.deliver(result, self.doc.traces(), viewport) {

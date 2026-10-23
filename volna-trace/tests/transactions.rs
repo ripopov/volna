@@ -1,5 +1,6 @@
 use volna_trace::OpenSpec;
 use volna_trace::data::transactions::*;
+use vtr::{Attribute, Recorder, SourceOptions};
 #[test]
 fn empty_transaction_catalog_still_supports_transactions() {
     let file = tempfile::NamedTempFile::new().unwrap();
@@ -17,54 +18,81 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
     let scope = w
-        .add_scope(None, "top", vtr::ScopeType::Module, "top_type")
+        .scope_with(
+            SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top_type",
+        )
         .unwrap();
     let stream = w
-        .add_scope(Some(scope), "cpu", vtr::ScopeType::Generic, "")
+        .scope_with(
+            SourceOptions::new("cpu", Some(scope)),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
     let gen_a = w
-        .add_generator(Some(stream), "instructions", "pipeline")
+        .transactions::<()>(SourceOptions::new("instructions", Some(stream)), "pipeline")
         .unwrap();
     let stream_b = w
-        .add_scope(None, "bus", vtr::ScopeType::Generic, "")
+        .scope_with(SourceOptions::new("bus", None), vtr::ScopeType::Generic, "")
         .unwrap();
-    let gen_b = w.add_generator(Some(stream_b), "reads", "tlm").unwrap();
-    let key = w.intern("payload");
-    let text = w.intern("decoded");
-    let event = w.intern("issue");
-    let stage = w.intern("execute");
-    let lane = w.intern("alu");
-    let edge = w.intern("causes");
-    let parent = w.begin_tx(gen_a, 10).unwrap();
-    w.set_tx_kind(parent, TxKind::Producer).unwrap();
-    w.tx_attr(
-        parent,
+    let gen_b = w
+        .transactions::<()>(SourceOptions::new("reads", Some(stream_b)), "tlm")
+        .unwrap();
+    let key = w.intern("payload").unwrap();
+    let text = w.intern("decoded").unwrap();
+    let event = w.intern("issue").unwrap();
+    let stage = w.intern("execute").unwrap();
+    let lane = w.intern("alu").unwrap();
+    let edge = w.intern("causes").unwrap();
+    let parent = w.begin_at(gen_a, 10, &(), None).unwrap();
+    w.span_kind(parent.owner(), SpanKind::Producer).unwrap();
+    w.attribute(
+        parent.owner(),
         key,
-        &Value::Map(vec![(
+        Value::Map(vec![Attribute {
             key,
-            Value::List(vec![Value::Str(text), Value::Bytes(vec![0, 255])]),
-        )]),
+            value: Value::List(vec![Value::Str(text), Value::Bytes(vec![0, 255])]),
+        }]),
     )
     .unwrap();
-    w.tx_event(parent, 12, event, &[(key, Value::U64(42))])
-        .unwrap();
-    w.tx_stage(parent, stage, lane, 12, 18, &[(key, Value::Bool(true))])
-        .unwrap();
-    w.end_tx(parent, 20, TxStatus::Aborted).unwrap();
-    let child = w.begin_tx(gen_b, 20).unwrap();
-    w.set_tx_parent(child, parent).unwrap();
-    w.end_tx(child, 20, TxStatus::Ok).unwrap();
+    w.embedded_event(
+        parent.owner(),
+        12,
+        event,
+        vec![Attribute {
+            key,
+            value: Value::U64(42),
+        }],
+    )
+    .unwrap();
+    w.embedded_stage(
+        parent.owner(),
+        12,
+        stage,
+        lane,
+        Some(18),
+        vec![Attribute {
+            key,
+            value: Value::Bool(true),
+        }],
+    )
+    .unwrap();
+    let child = w.begin_at(gen_b, 20, &(), Some(parent.owner())).unwrap();
+    w.end_at(child, 20, Status::Ok).unwrap();
+    w.end_at(parent, 20, Status::Aborted).unwrap();
     w.relate(
         edge,
-        parent,
-        child,
-        &[(
+        parent.id(),
+        child.id(),
+        vec![Attribute {
             key,
-            Value::Enum {
+            value: Value::Enum {
                 value: 3,
                 name: text,
             },
-        )],
+        }],
     )
     .unwrap();
     w.close().unwrap();
@@ -83,15 +111,16 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
         }
     );
     let loaded_a = session.load_track(generator.id).unwrap();
-    let loaded_b = session.load_track(TrackRef(gen_b.0)).unwrap();
+    let loaded_b = session.load_track(TrackRef(gen_b.id())).unwrap();
     let a = &loaded_a.generators[0];
     let b = &loaded_b.generators[0];
-    let p = a.transaction(TransactionRef(parent)).unwrap();
+    let p = a.transaction(TransactionRef(parent.id())).unwrap();
     assert_eq!(
         (p.begin, p.end, p.status, p.kind),
-        (10, 20, TxStatus::Aborted, TxKind::Producer)
+        (10, 20, Status::Aborted, SpanKind::Producer)
     );
-    assert_eq!(p.attributes.len(), 1);
+    assert_eq!(p.attributes.len(), 2);
+    assert_eq!(p.attributes[0].key, "attributes.payload");
     assert_eq!(
         p.attributes[0].value,
         AttributeValue::Map(vec![(
@@ -107,10 +136,10 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
     assert_eq!(p.stages[0].lane, "alu");
     assert_eq!(p.stages[0].end, Some(18));
     assert_eq!(
-        b.transaction(TransactionRef(child)).unwrap().parent,
-        Some(TransactionRef(parent))
+        b.transaction(TransactionRef(child.id())).unwrap().parent,
+        Some(TransactionRef(parent.id()))
     );
-    assert!(a.transaction(TransactionRef(child)).is_none());
+    assert!(a.transaction(TransactionRef(child.id())).is_none());
     let mut ids = Vec::new();
     for records in [a, b] {
         records
@@ -127,7 +156,7 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
     );
     assert_eq!(
         a.transactions().iter().map(|tx| tx.id).collect::<Vec<_>>(),
-        [TransactionRef(parent)]
+        [TransactionRef(parent.id())]
     );
     let mut visits = 0;
     assert!(
@@ -163,50 +192,73 @@ fn complete_tracks_include_empty_generators_parents_and_parallel_relations() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
     let stream = writer
-        .add_scope(None, "stream", vtr::ScopeType::Generic, "")
+        .scope_with(
+            SourceOptions::new("stream", None),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
     let generator = writer
-        .add_generator(Some(stream), "generator", "transactions")
+        .transactions::<()>(
+            SourceOptions::new("generator", Some(stream)),
+            "transactions",
+        )
         .unwrap();
     let empty = writer
-        .add_generator(Some(stream), "empty", "transactions")
+        .transactions::<()>(SourceOptions::new("empty", Some(stream)), "transactions")
         .unwrap();
     let other_stream = writer
-        .add_scope(None, "other", vtr::ScopeType::Generic, "")
+        .scope_with(
+            SourceOptions::new("other", None),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
     let other = writer
-        .add_generator(Some(other_stream), "other-generator", "transactions")
+        .transactions::<()>(
+            SourceOptions::new("other-generator", Some(other_stream)),
+            "transactions",
+        )
         .unwrap();
-    let parent = writer.begin_tx(other, 0).unwrap();
-    writer.end_tx(parent, 100, TxStatus::Ok).unwrap();
-    let child = writer.begin_tx(generator, 50).unwrap();
-    writer.set_tx_parent(child, parent).unwrap();
-    writer.end_tx(child, 50, TxStatus::Ok).unwrap();
-    let kind = writer.intern("parallel");
+    let parent = writer.begin_at(other, 0, &(), None).unwrap();
+    let child = writer
+        .begin_at(generator, 50, &(), Some(parent.owner()))
+        .unwrap();
+    writer.end_at(child, 50, Status::Ok).unwrap();
+    writer.end_at(parent, 100, Status::Ok).unwrap();
+    let kind = writer.intern("parallel").unwrap();
     for _ in 0..2 {
-        writer.relate(kind, parent, child, &[]).unwrap();
+        writer
+            .relate(kind, parent.id(), child.id(), vec![])
+            .unwrap();
     }
     writer.close().unwrap();
 
     let reader = vtr::Reader::open(file.path()).unwrap();
-    assert_eq!(reader.transaction_generator(parent).unwrap(), Some(other));
     assert_eq!(
-        reader.transaction_generator(child).unwrap(),
-        Some(generator)
+        reader.lookup(parent.id()).unwrap().unwrap().generator(),
+        Some(other.id())
     );
-    assert_eq!(reader.transaction_generator(u64::MAX).unwrap(), None);
+    assert_eq!(
+        reader.lookup(child.id()).unwrap().unwrap().generator(),
+        Some(generator.id())
+    );
+    assert!(reader.lookup(u64::MAX).unwrap().is_none());
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
-    let loaded = session.load_track(TrackRef(generator.0)).unwrap();
+    let loaded = session.load_track(TrackRef(generator.id())).unwrap();
     assert_eq!(loaded.generators.len(), 1);
     let records = loaded
         .generators
         .iter()
-        .find(|g| g.generator() == TrackRef(generator.0))
+        .find(|g| g.generator() == TrackRef(generator.id()))
         .unwrap();
     assert_eq!(records.transactions().len(), 1);
     assert_eq!(
-        records.parent(TransactionRef(child)).unwrap().generator,
-        TrackRef(other.0)
+        records
+            .parent(TransactionRef(child.id()))
+            .unwrap()
+            .generator,
+        Some(TrackRef(other.id()))
     );
     assert_eq!(records.relations().len(), 2);
     assert_ne!(records.relations()[0].id, records.relations()[1].id);
@@ -216,16 +268,16 @@ fn complete_tracks_include_empty_generators_parents_and_parallel_relations() {
     );
     assert!(
         session
-            .load_track(TrackRef(empty.0))
+            .load_track(TrackRef(empty.id()))
             .unwrap()
             .generators
             .iter()
-            .find(|g| g.generator() == TrackRef(empty.0))
+            .find(|g| g.generator() == TrackRef(empty.id()))
             .unwrap()
             .transactions()
             .is_empty()
     );
-    let opposite = session.load_track(TrackRef(other.0)).unwrap();
+    let opposite = session.load_track(TrackRef(other.id())).unwrap();
     assert_eq!(records.relations(), opposite.generators[0].relations());
     assert!(session.load_track(TrackRef(u32::MAX)).is_err());
     drop(session);
@@ -236,5 +288,5 @@ fn complete_tracks_include_empty_generators_parents_and_parallel_relations() {
             true
         })
         .unwrap();
-    assert_eq!(hits, [TransactionRef(parent)]);
+    assert_eq!(hits, [TransactionRef(parent.id())]);
 }

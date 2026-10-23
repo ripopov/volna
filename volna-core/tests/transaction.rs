@@ -17,7 +17,7 @@ use volna_core::wave::model::{MenuAction, WaveMenuKind};
 use volna_core::wave::viewport::Viewport;
 use volna_core::workspace::Workspace;
 use volna_core::{Instant, Theme};
-use volna_trace::data::transactions::{TrackRef, TransactionRef, TxStatus};
+use volna_trace::data::transactions::{Status, TrackRef, TransactionRef};
 use volna_trace::session::{OpenSpec, Session};
 
 fn example(name: &str) -> Arc<dyn Session> {
@@ -69,6 +69,15 @@ fn labelled(session: &dyn Session, track: TrackRef, label: &str) -> TransactionR
             })
         })
         .unwrap_or_else(|| panic!("no record labelled {label:?}"))
+        .id
+}
+
+fn child(session: &dyn Session, track: TrackRef, parent: TransactionRef) -> TransactionRef {
+    session.load_track(track).unwrap().generators[0]
+        .transactions()
+        .iter()
+        .find(|tx| tx.parent == Some(parent))
+        .expect("child record")
         .id
 }
 
@@ -125,12 +134,13 @@ fn show(app: &mut App, pipeline: PanelId, track: TrackRef, id: u64) -> PanelId {
 fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
     let (mut app, session, panel) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let instruction = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let add = labelled(session.as_ref(), instruction, "80000008: add  a3, a1, a0");
     let (row, begin, label) = {
         let pipeline = app.panels.pipeline(panel).unwrap();
         let Rows::Ready(set) = pipeline.rows(&app.doc) else {
             panic!("not loaded")
         };
-        let row = set.row_of(instruction, TransactionRef(4)).unwrap();
+        let row = set.row_of(instruction, add).unwrap();
         let (_, tx) = set.get(row).unwrap();
         let layout = pipeline.last_layout();
         assert!(layout.row_range.contains(&row));
@@ -218,12 +228,13 @@ fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
 fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let add = labelled(session.as_ref(), insn, "80000008: add  a3, a1, a0");
     let (row, position, cycle) = {
         let p = app.panels.pipeline(pipeline).unwrap();
         let Rows::Ready(set) = p.rows(&app.doc) else {
             panic!("not loaded")
         };
-        let row = set.row_of(insn, TransactionRef(4)).unwrap();
+        let row = set.row_of(insn, add).unwrap();
         let layout = p.last_layout();
         assert!(layout.row_range.contains(&row));
         let vp = p.nav.viewport(&app.doc);
@@ -244,10 +255,7 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
     ));
     app.handle(Command::Pointer(pipeline, PointerEvent::Up));
     let selection = app.doc.selection().unwrap();
-    assert_eq!(
-        (selection.track, selection.id),
-        (a(insn), TransactionRef(4))
-    );
+    assert_eq!((selection.track, selection.id), (a(insn), add));
     assert_eq!(selection.origin, pipeline);
     assert_eq!(app.doc.shared.cursor, Some(cycle));
     let p = app.panels.pipeline(pipeline).unwrap();
@@ -269,7 +277,7 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
     app.handle(Command::ShowTransaction { from: pipeline });
     let panel = app.panels.focused_id();
     let v = view(&app, panel);
-    assert_eq!(v.identity.id, TransactionRef(4));
+    assert_eq!(v.identity.id, add);
     assert_eq!(
         v.identity.label.as_deref(),
         Some("80000008: add  a3, a1, a0")
@@ -289,7 +297,7 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
     app.handle(Command::Action(Action::MoveSelectionDown));
     let p = app.panels.pipeline(pipeline).unwrap();
     assert_eq!(p.selected_row(&app.doc), Some(row + 1));
-    assert_ne!(view(&app, panel).identity.id, TransactionRef(4));
+    assert_ne!(view(&app, panel).identity.id, add);
 
     app.handle(Command::Action(Action::ClearSelection));
     assert_eq!(app.doc.selection(), None);
@@ -306,7 +314,15 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
 fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-    let panel = show(&mut app, pipeline, insn, 33);
+    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
+    let request = child(
+        session.as_ref(),
+        track(session.as_ref(), "soc.l2.bus.read"),
+        load,
+    );
+    let producer = labelled(session.as_ref(), insn, "80000050: addi a2, a2, 16");
+    let dependent = labelled(session.as_ref(), insn, "80000068: add  a3, a1, a0");
+    let panel = show(&mut app, pipeline, insn, load.0);
     let v = view(&app, panel);
     assert_eq!(v.identity.scope, ["soc", "cpu0", "pipeline"]);
     assert_eq!(v.identity.generator, "instruction");
@@ -314,7 +330,7 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
         v.identity.label.as_deref(),
         Some("80000060: lw   a1, 0(a2)")
     );
-    assert_eq!(v.identity.status, TxStatus::Unset);
+    assert_eq!(v.identity.status, Status::Unset);
     assert_eq!(v.identity.status_text, "ended");
     assert_eq!((v.timing.begin, v.timing.end), (33, Some(47)));
     assert_eq!(v.timing.duration, 14);
@@ -334,18 +350,40 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     assert!((lane.cells[3].width - 10.0 / 14.0).abs() < 1e-4);
 
     let keys: Vec<_> = v.attributes.rows.iter().map(|a| a.key.as_str()).collect();
-    assert_eq!(keys, ["insn_id", "pc", "iteration"]);
-    assert_eq!(v.attributes.total, 3);
-    let pc = &v.attributes.rows[1];
+    assert_eq!(
+        keys,
+        [
+            "record.kind",
+            "payload.insn_id",
+            "payload.pc",
+            "payload.iteration"
+        ]
+    );
+    assert_eq!(v.attributes.total, 4);
+    let pc = v
+        .attributes
+        .rows
+        .iter()
+        .find(|a| a.key == "payload.pc")
+        .unwrap();
     assert_eq!(
         (pc.value.as_str(), pc.radix),
         ("2147483744", Some(Radix::Dec))
     );
     app.handle(Command::Transaction(
         panel,
-        TransactionCommand::Radix("pc".into()),
+        TransactionCommand::Radix("payload.pc".into()),
     ));
-    assert_eq!(view(&app, panel).attributes.rows[1].value, "0x80000060");
+    assert_eq!(
+        view(&app, panel)
+            .attributes
+            .rows
+            .iter()
+            .find(|a| a.key == "payload.pc")
+            .unwrap()
+            .value,
+        "0x80000060"
+    );
 
     let m = v.stages.rows.iter().find(|s| s.name == "M").unwrap();
     assert!(
@@ -364,9 +402,9 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     assert_eq!(
         related,
         [
-            ("causes · to", 34, false),
-            ("wakeup · to", 36, true),
-            ("wakeup · from", 28, true)
+            ("causes · to", request.0, false),
+            ("wakeup · to", dependent.0, true),
+            ("wakeup · from", producer.0, true)
         ]
     );
     let caused = &v.related.rows[0];
@@ -408,13 +446,19 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
 fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
+    let request = child(
+        session.as_ref(),
+        track(session.as_ref(), "soc.l2.bus.read"),
+        load,
+    );
     let read = track(session.as_ref(), "soc.l2.bus.read");
-    let panel = show(&mut app, pipeline, insn, 33);
+    let panel = show(&mut app, pipeline, insn, load.0);
     app.handle(Command::Transaction(
         panel,
         TransactionCommand::Jump {
             track: a(read),
-            id: TransactionRef(34),
+            id: request,
         },
     ));
     assert!(matches!(
@@ -424,11 +468,11 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
     pump(&mut app);
     let v = view(&app, panel);
     assert_eq!(v.identity.label.as_deref(), Some("read 0x10000020"));
-    assert_eq!(v.identity.parent, Some(TransactionRef(33)));
+    assert_eq!(v.identity.parent, Some(load));
     assert_eq!(v.related.rows[0].role, RefRole::Parent);
-    assert_eq!(v.related.rows[0].target.transaction, TransactionRef(33));
+    assert_eq!(v.related.rows[0].target.transaction, load);
     assert!(v.related.rows[0].loaded);
-    assert_eq!(app.doc.selection().unwrap().id, TransactionRef(34));
+    assert_eq!(app.doc.selection().unwrap().id, request);
     assert_eq!(
         app.panels
             .pipeline(pipeline)
@@ -441,7 +485,7 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
 
     app.handle(Command::Transaction(panel, TransactionCommand::Back));
     let v = view(&app, panel);
-    assert_eq!(v.identity.id, TransactionRef(33));
+    assert_eq!(v.identity.id, load);
     assert!(!v.related.rows.iter().any(|r| r.role == RefRole::Child));
     let focused = app.panels.focused_id();
     app.handle(Command::OpenPipeline {
@@ -452,10 +496,13 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
         focused,
     )));
     let v = view(&app, panel);
-    assert!(v.related.rows.iter().any(|r| r.role == RefRole::Child
-        && r.target.transaction == TransactionRef(34)
-        && r.loaded));
-    assert_eq!(app.doc.selection().unwrap().id, TransactionRef(33));
+    assert!(
+        v.related
+            .rows
+            .iter()
+            .any(|r| r.role == RefRole::Child && r.target.transaction == request && r.loaded)
+    );
+    assert_eq!(app.doc.selection().unwrap().id, load);
     assert!(app.panels.transaction(panel).unwrap().can_go_forward());
 
     app.handle_at(Command::RevealTransaction { panel }, Instant::now());
@@ -468,7 +515,7 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
     app.handle(Command::Panels(volna_core::panels::PanelsCommand::Close(
         pipeline,
     )));
-    assert_eq!(view(&app, panel).identity.id, TransactionRef(33));
+    assert_eq!(view(&app, panel).identity.id, load);
     app.handle(Command::RevealTransaction { panel });
     assert!(app.panels.pipeline(app.panels.focused_id()).is_some());
 }
@@ -477,9 +524,11 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
 fn a_pinned_panel_keeps_its_record_and_the_next_one_opens_in_the_right_dock() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-    let first = show(&mut app, pipeline, insn, 4);
+    let add = labelled(session.as_ref(), insn, "80000008: add  a3, a1, a0");
+    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
+    let first = show(&mut app, pipeline, insn, add.0);
     app.handle(Command::Transaction(first, TransactionCommand::Pin(true)));
-    let second = show(&mut app, pipeline, insn, 33);
+    let second = show(&mut app, pipeline, insn, load.0);
     assert_ne!(first, second);
     assert_eq!(
         app.panels.layout().right.as_ref().unwrap().layout.panels(),
@@ -489,10 +538,10 @@ fn a_pinned_panel_keeps_its_record_and_the_next_one_opens_in_the_right_dock() {
         app.panels.layout().center.as_ref().unwrap().panels(),
         vec![pipeline]
     );
-    assert_eq!(view(&app, first).identity.id, TransactionRef(4));
-    assert_eq!(view(&app, second).identity.id, TransactionRef(33));
+    assert_eq!(view(&app, first).identity.id, add);
+    assert_eq!(view(&app, second).identity.id, load);
     app.handle(Command::Transaction(first, TransactionCommand::Pin(false)));
-    assert_eq!(view(&app, first).identity.id, TransactionRef(33));
+    assert_eq!(view(&app, first).identity.id, load);
     assert!(app.debug_state().contains("transaction"));
 }
 
@@ -514,10 +563,14 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     );
     let unfinished = labelled(session.as_ref(), write, "unfinished write 0");
     let panel = show(&mut app, pipeline, read, transfer.0);
+    app.panels
+        .transaction_mut(panel)
+        .unwrap()
+        .set_detail_items(26);
     let v = view(&app, panel);
     assert_eq!(v.identity.kind, Some("consumer"));
     assert_eq!(v.identity.status_text, "ok");
-    assert_eq!(v.attributes.total, 18);
+    assert_eq!(v.attributes.total, 26);
     assert!(v.filterable());
     let kinds: Vec<_> = v.attributes.rows.iter().map(|a| a.kind).collect();
     for kind in [
@@ -526,11 +579,31 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     ] {
         assert!(kinds.contains(&kind), "{kind} missing from {kinds:?}");
     }
+    for (key, value) in [
+        ("attributes.signed_i8", "-8"),
+        ("attributes.signed_i16", "-16"),
+        ("attributes.signed_i32", "-32"),
+        ("attributes.unsigned_u8", "8"),
+        ("attributes.unsigned_u16", "16"),
+        ("attributes.unsigned_u32", "32"),
+        ("attributes.float32", "0.25"),
+    ] {
+        assert_eq!(
+            v.attributes
+                .rows
+                .iter()
+                .find(|a| a.key == key)
+                .unwrap_or_else(|| panic!("missing {key}: {:?}", v.attributes.rows))
+                .value,
+            value,
+            "{key}"
+        );
+    }
     let message = v
         .attributes
         .rows
         .iter()
-        .find(|a| a.key == "message")
+        .find(|a| a.key == "attributes.message")
         .unwrap();
     assert_eq!(message.value, "DMA → memory: café ✓");
     assert_eq!(v.events.rows.len(), 1);
@@ -556,7 +629,7 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
         .unwrap()
         .set_detail_items(5);
     let v = view(&app, panel);
-    assert_eq!((v.attributes.rows.len(), v.attributes.total), (5, 18));
+    assert_eq!((v.attributes.rows.len(), v.attributes.total), (5, 26));
     assert!(v.attributes.cut());
     app.handle(Command::Transaction(
         panel,
@@ -564,8 +637,17 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     ));
     let v = view(&app, panel);
     let keys: Vec<_> = v.attributes.rows.iter().map(|a| a.key.as_str()).collect();
-    assert_eq!(keys, ["signed", "unsigned"]);
-    assert_eq!((v.attributes.matched, v.attributes.total), (2, 18));
+    assert_eq!(
+        keys,
+        [
+            "attributes.signed_i8",
+            "attributes.signed_i16",
+            "attributes.signed_i32",
+            "attributes.unsigned_u8",
+            "attributes.unsigned_u16"
+        ]
+    );
+    assert_eq!((v.attributes.matched, v.attributes.total), (8, 26));
     app.handle(Command::Transaction(
         panel,
         TransactionCommand::Collapse(SectionKey::Attributes, true),
@@ -575,7 +657,7 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     select(&mut app, pipeline, write, unfinished.0);
     pump(&mut app);
     let v = view(&app, panel);
-    assert_eq!(v.identity.status, TxStatus::Open);
+    assert_eq!(v.identity.status, Status::Open);
     assert_eq!((v.timing.end, v.timing.end_text.as_str()), (None, "open"));
     assert!(v.timing.duration_text.starts_with('≥'));
 }
@@ -586,7 +668,8 @@ fn a_restored_panel_loads_without_another_track_consumer() {
         let (mut app, session, pipeline) =
             with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
         let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-        let panel = show(&mut app, pipeline, insn, 33);
+        let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
+        let panel = show(&mut app, pipeline, insn, load.0);
         app.handle(Command::Transaction(panel, TransactionCommand::Pin(pinned)));
         app.handle(Command::Panels(
             volna_core::panels::PanelsCommand::CloseOthers(panel),
@@ -606,7 +689,7 @@ fn a_restored_panel_loads_without_another_track_consumer() {
             .unwrap();
         assert!(plan.commit(&mut restored).unwrap().notices.is_empty());
         pump(&mut restored);
-        assert_eq!(view(&restored, panel).identity.id, TransactionRef(33));
+        assert_eq!(view(&restored, panel).identity.id, load);
         assert_eq!(restored.panels.transaction(panel).unwrap().pinned(), pinned);
 
         restored.handle(Command::Panels(volna_core::panels::PanelsCommand::Close(
@@ -615,7 +698,7 @@ fn a_restored_panel_loads_without_another_track_consumer() {
         assert!(restored.doc.resident_generator(a(insn)).is_none());
         restored.handle(Command::Undo);
         pump(&mut restored);
-        assert_eq!(view(&restored, panel).identity.id, TransactionRef(33));
+        assert_eq!(view(&restored, panel).identity.id, load);
         restored.handle(Command::Redo);
         assert!(restored.doc.resident_generator(a(insn)).is_none());
     }
@@ -625,15 +708,17 @@ fn a_restored_panel_loads_without_another_track_consumer() {
 fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-    let pinned = show(&mut app, pipeline, insn, 33);
+    let add = labelled(session.as_ref(), insn, "80000008: add  a3, a1, a0");
+    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
+    let pinned = show(&mut app, pipeline, insn, load.0);
     for command in [
         TransactionCommand::Pin(true),
-        TransactionCommand::Radix("pc".into()),
+        TransactionCommand::Radix("payload.pc".into()),
         TransactionCommand::Collapse(SectionKey::Events, true),
     ] {
         app.handle(Command::Transaction(pinned, command));
     }
-    let free = show(&mut app, pipeline, insn, 4);
+    let free = show(&mut app, pipeline, insn, add.0);
     let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
     let json = serde_json::to_value(&saved).unwrap();
     let entry = json["panels"]
@@ -643,8 +728,8 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         .find(|p| p["kind"] == "transaction" && p["pinned"] == true)
         .unwrap()
         .clone();
-    assert_eq!(entry["record"]["id"], 33);
-    assert_eq!(entry["radix"]["pc"], "hex");
+    assert_eq!(entry["record"]["id"], load.0);
+    assert_eq!(entry["radix"]["payload.pc"], "hex");
 
     let mut restored = App::new();
     restored.set_session(session.clone());
@@ -660,14 +745,22 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
     plan.commit(&mut restored).unwrap();
     pump(&mut restored);
     let v = view(&restored, pinned);
-    assert_eq!(v.identity.id, TransactionRef(33));
-    assert_eq!(v.attributes.rows[1].value, "0x80000060");
+    assert_eq!(v.identity.id, load);
+    assert_eq!(
+        v.attributes
+            .rows
+            .iter()
+            .find(|a| a.key == "payload.pc")
+            .unwrap()
+            .value,
+        "0x80000060"
+    );
     assert!(v.events.collapsed);
-    assert_eq!(view(&restored, free).identity.id, TransactionRef(4));
-    for id in [33, 4] {
-        select(&mut restored, pipeline, insn, id);
-        assert_eq!(view(&restored, free).identity.id, TransactionRef(id));
-        assert_eq!(view(&restored, pinned).identity.id, TransactionRef(33));
+    assert_eq!(view(&restored, free).identity.id, add);
+    for id in [load, add] {
+        select(&mut restored, pipeline, insn, id.0);
+        assert_eq!(view(&restored, free).identity.id, id);
+        assert_eq!(view(&restored, pinned).identity.id, load);
     }
 }
 
@@ -735,7 +828,9 @@ fn inspector_placement_preserves_record_history_and_restores_across_regions() {
     use volna_core::panels::{PanelsCommand, Placement};
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-    let panel = show(&mut app, pipeline, insn, 33);
+    let add = labelled(session.as_ref(), insn, "80000008: add  a3, a1, a0");
+    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
+    let panel = show(&mut app, pipeline, insn, load.0);
     assert_eq!(app.panels.layout().placement(panel), Some(Placement::Right));
     assert_eq!(
         app.panels.layout().center.as_ref().unwrap().panels(),
@@ -746,7 +841,7 @@ fn inspector_placement_preserves_record_history_and_restores_across_regions() {
         placement: Placement::Center,
     }));
     assert!(app.panels.layout().right.is_none());
-    assert_eq!(view(&app, panel).identity.id, TransactionRef(33));
+    assert_eq!(view(&app, panel).identity.id, load);
     app.handle(Command::Undo);
     assert_eq!(app.panels.layout().placement(panel), Some(Placement::Right));
     app.handle(Command::Redo);
@@ -755,7 +850,7 @@ fn inspector_placement_preserves_record_history_and_restores_across_regions() {
         Some(Placement::Center)
     );
     // Reusing the inspector respects the user's placement.
-    assert_eq!(show(&mut app, pipeline, insn, 4), panel);
+    assert_eq!(show(&mut app, pipeline, insn, add.0), panel);
     assert_eq!(
         app.panels.layout().placement(panel),
         Some(Placement::Center)
@@ -794,8 +889,8 @@ fn inspector_placement_preserves_record_history_and_restores_across_regions() {
     assert!(!restored.panels.layout().right.as_ref().unwrap().open);
     restored.handle(Command::Panels(PanelsCommand::Focus(panel)));
     assert!(restored.panels.layout().right.as_ref().unwrap().open);
-    assert_eq!(view(&restored, panel).identity.id, TransactionRef(4));
-    assert_eq!(show(&mut restored, pipeline, insn, 33), panel);
+    assert_eq!(view(&restored, panel).identity.id, add);
+    assert_eq!(show(&mut restored, pipeline, insn, load.0), panel);
     restored.panels.validate().unwrap();
 }
 
@@ -810,7 +905,8 @@ fn new_viewers_open_centrally_when_the_inspector_is_focused_or_the_center_is_emp
             let (mut app, session, pipeline) =
                 with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
             let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-            let detail = show(&mut app, pipeline, insn, 4);
+            let add = labelled(session.as_ref(), insn, "80000008: add  a3, a1, a0");
+            let detail = show(&mut app, pipeline, insn, add.0);
             if empty_center {
                 app.handle(Command::Panels(PanelsCommand::Close(pipeline)));
                 assert!(app.panels.layout().center.is_none());
@@ -850,7 +946,7 @@ fn new_viewers_open_centrally_when_the_inspector_is_focused_or_the_center_is_emp
                 _ => unreachable!(),
             }
             assert_eq!(app.panels.layout().right, before.right);
-            assert_eq!(view(&app, detail).identity.id, TransactionRef(4));
+            assert_eq!(view(&app, detail).identity.id, add);
             app.panels.validate().unwrap();
 
             // Settings is transient chrome; content creation is one undo step,
@@ -920,6 +1016,8 @@ fn opening_a_pipeline_reveals_a_reusable_inspector_without_stealing_focus() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let pipeline_track = a(track(session.as_ref(), "soc.cpu0.pipeline"));
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let add = labelled(session.as_ref(), insn, "80000008: add  a3, a1, a0");
+    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
     let detail = app.panels.first_free_transaction().unwrap();
     assert_eq!(app.panels.focused_id(), pipeline);
     assert_eq!(
@@ -942,8 +1040,8 @@ fn opening_a_pipeline_reveals_a_reusable_inspector_without_stealing_focus() {
     assert_eq!(app.panels.focused_id(), pipeline);
     assert_eq!(app.panels.first_free_transaction(), Some(detail));
 
-    select(&mut app, pipeline, insn, 4);
-    assert_eq!(view(&app, detail).identity.id, TransactionRef(4));
+    select(&mut app, pipeline, insn, add.0);
+    assert_eq!(view(&app, detail).identity.id, add);
     assert_eq!(app.panels.focused_id(), pipeline);
     app.handle(Command::Panels(PanelsCommand::ToggleRightDock));
     app.handle(Command::OpenPipeline {
@@ -973,9 +1071,9 @@ fn opening_a_pipeline_reveals_a_reusable_inspector_without_stealing_focus() {
     });
     let following = app.panels.first_free_transaction().unwrap();
     assert_ne!(following, detail);
-    select(&mut app, pipeline, insn, 33);
-    assert_eq!(view(&app, detail).identity.id, TransactionRef(4));
-    assert_eq!(view(&app, following).identity.id, TransactionRef(33));
+    select(&mut app, pipeline, insn, load.0);
+    assert_eq!(view(&app, detail).identity.id, add);
+    assert_eq!(view(&app, following).identity.id, load);
     assert_eq!(app.panels.focused_id(), pipeline);
 
     // Opening another track from a focused inspector still puts the pipeline

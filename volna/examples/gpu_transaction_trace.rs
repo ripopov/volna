@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 use vtr::{
-    ClockId, NodeData, NodeId, NodeKind, ReadOptions, Reader, ScopeType, StrId, Timescale,
-    Transaction, TxId, TxKind, TxQuery, TxStatus, Value, Writer, WriterOptions,
+    Attribute, ClockSource, ExecutionMode, NodeData, NodeId, ReadOptions, Reader, Record, Recorder,
+    ScopeType, Source, SourceOptions, SpanKind, Status, Transaction, TransactionQuery, Value,
+    Writer, WriterOptions,
 };
 
 const GRIDS: usize = 2;
@@ -18,18 +19,39 @@ const INSTRUCTIONS: u64 = 5_000;
 const FULL_EXEC_MASK: u32 = u32::MAX;
 const CLOCK_PATH: &str = "gpu.clock";
 
+struct InstanceLabel(String);
+impl vtr::Payload for InstanceLabel {
+    fn bind(types: &mut vtr::Types) -> vtr::Result<vtr::TypeId> {
+        let text = <String as vtr::Payload>::bind(types)?;
+        types.structure(
+            "InstanceLabel",
+            vec![vtr::schema::Field::new("vtr.label", text)],
+        )
+    }
+    fn encode(&self, out: &mut Vec<u8>) -> vtr::Result<()> {
+        self.0.encode(out)
+    }
+    fn decode(reader: &mut vtr::PayloadReader<'_>) -> vtr::Result<Self> {
+        Ok(Self(String::decode(reader)?))
+    }
+}
+
 macro_rules! vocabulary {
     ($($field:ident: $text:literal),* $(,)?) => {
-        struct Names { $( $field: StrId, )* }
+        struct Names { $( $field: u32, )* }
         impl Names {
-            fn new(w: &mut Writer) -> Self {
-                Self { $( $field: w.intern($text), )* }
+            fn new(w: &mut Writer) -> vtr::Result<Self> {
+                Ok(Self { $( $field: w.intern($text)?, )* })
+            }
+            fn text(&self, id: u32) -> &'static str {
+                $( if self.$field == id { return $text; } )*
+                unreachable!("identifier is in the static vocabulary")
             }
         }
     };
 }
 vocabulary! {
-    label: "vtr.label", grid: "gpu.grid", kernel: "gpu.kernel",
+    grid: "gpu.grid", kernel: "gpu.kernel",
     dimensions: "gpu.grid_dimensions", block: "gpu.block_coordinates",
     threads: "gpu.block_dimensions", warp: "gpu.logical_warp", epoch: "gpu.slot_epoch",
     pc: "gpu.pc", sequence: "gpu.sequence", opcode: "gpu.opcode", class: "gpu.class",
@@ -62,108 +84,120 @@ vocabulary! {
 
 #[derive(Clone, Copy)]
 struct Slot {
-    warp: NodeId,
-    instruction: NodeId,
+    warp: Source<InstanceLabel>,
+    instruction: Source<InstanceLabel>,
 }
 #[derive(Clone, Copy)]
 struct Cache {
-    packet: NodeId,
-    fill: NodeId,
-    writeback: Option<NodeId>,
-    endpoint: StrId,
+    packet: Source<InstanceLabel>,
+    fill: Source<InstanceLabel>,
+    writeback: Option<Source<InstanceLabel>>,
+    endpoint: u32,
 }
 struct Sm {
-    workgroup: NodeId,
+    workgroup: Source<InstanceLabel>,
     slots: Vec<Slot>,
-    alu: Vec<NodeId>,
-    request: NodeId,
-    tlb: NodeId,
+    alu: Vec<Source<InstanceLabel>>,
+    request: Source<InstanceLabel>,
+    tlb: Source<InstanceLabel>,
     l1: Cache,
-    banks: Vec<NodeId>,
-    matrix: [NodeId; 2],
-    dma: [NodeId; 3],
-    dma_endpoint: StrId,
-    barrier: NodeId,
+    banks: Vec<Source<InstanceLabel>>,
+    matrix: [Source<InstanceLabel>; 2],
+    dma: [Source<InstanceLabel>; 3],
+    dma_endpoint: u32,
+    barrier: Source<InstanceLabel>,
 }
 struct Hardware {
-    clock: ClockId,
-    queue: [NodeId; 4],
-    assignment: NodeId,
+    clock: ClockSource,
+    queue: [Source<InstanceLabel>; 4],
+    assignment: Source<InstanceLabel>,
     sms: Vec<Sm>,
-    fabric: NodeId,
-    walker: NodeId,
+    fabric: Source<InstanceLabel>,
+    walker: Source<InstanceLabel>,
     l2: Cache,
     l3: Cache,
-    controller: NodeId,
-    dram: NodeId,
-    dram_endpoint: StrId,
+    controller: Source<InstanceLabel>,
+    dram: Source<InstanceLabel>,
+    dram_endpoint: u32,
 }
 fn scope(w: &mut Writer, parent: NodeId, name: &str) -> vtr::Result<NodeId> {
-    w.add_scope(Some(parent), name, ScopeType::Generic, "")
+    w.scope_with(
+        SourceOptions::new(name, Some(parent)),
+        ScopeType::Generic,
+        "",
+    )
 }
 fn group<const N: usize>(
     w: &mut Writer,
+    clock: ClockSource,
     parent: NodeId,
     name: &str,
     generators: [&str; N],
-) -> vtr::Result<[NodeId; N]> {
-    let s = transaction_scope(w, parent, name)?;
-    let mut ids = [NodeId(0); N];
-    for (id, name) in ids.iter_mut().zip(generators) {
-        *id = generator(w, s, name)?;
+) -> vtr::Result<[Source<InstanceLabel>; N]> {
+    let s = scope(w, parent, name)?;
+    let mut sources = Vec::with_capacity(N);
+    for name in generators {
+        sources.push(generator(w, clock, s, name)?);
     }
-    Ok(ids)
+    Ok(sources.try_into().unwrap_or_else(|_| unreachable!()))
 }
-fn transaction_scope(w: &mut Writer, parent: NodeId, name: &str) -> vtr::Result<NodeId> {
-    let group = w.add_scope(Some(parent), name, vtr::ScopeType::Generic, "")?;
-    Ok(group)
-}
-fn generator(w: &mut Writer, scope: NodeId, name: &str) -> vtr::Result<NodeId> {
-    let node = w.add_generator(Some(scope), name, "TRANSACTION")?;
-    let path = w.intern(CLOCK_PATH);
-    w.node_attr(node, "vtr.clock", Value::Str(path))?;
-    Ok(node)
+fn generator(
+    w: &mut Writer,
+    clock: ClockSource,
+    parent: NodeId,
+    name: &str,
+) -> vtr::Result<Source<InstanceLabel>> {
+    let source =
+        w.transactions::<InstanceLabel>(SourceOptions::new(name, Some(parent)), "TRANSACTION")?;
+    w.associate_clock(source, clock)?;
+    Ok(source)
 }
 fn cache(
     w: &mut Writer,
+    clock: ClockSource,
     parent: NodeId,
     name: &str,
     endpoint: &str,
     last: bool,
 ) -> vtr::Result<Cache> {
     let c = scope(w, parent, name)?;
-    let requests = transaction_scope(w, c, "requests")?;
-    let packet = generator(w, requests, "MemoryPacket")?;
-    let fill = generator(w, requests, "CacheFill")?;
+    let requests = scope(w, c, "requests")?;
+    let packet = generator(w, clock, requests, "MemoryPacket")?;
+    let fill = generator(w, clock, requests, "CacheFill")?;
     let writeback = if last {
         None
     } else {
-        Some(generator(w, requests, "Writeback")?)
+        Some(generator(w, clock, requests, "Writeback")?)
     };
     Ok(Cache {
         packet,
         fill,
         writeback,
-        endpoint: w.intern(endpoint),
+        endpoint: w.intern(endpoint)?,
     })
 }
 fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
-    let gpu = w.add_scope(None, "gpu", ScopeType::Generic, "synthetic_simt")?;
-    let clock = w.add_clock(Some(gpu), "clock")?;
+    let gpu = w.scope_with(
+        SourceOptions::new("gpu", None),
+        ScopeType::Generic,
+        "synthetic_simt",
+    )?;
+    let clock = w.clock(SourceOptions::new("clock", Some(gpu)))?;
     w.clock_run(clock, 0, 1)?;
     let cp = scope(w, gpu, "command_processor")?;
     let queue = group(
         w,
+        clock,
         cp,
         "queue[0]",
         ["CommandStream", "Grid", "Wait", "Signal"],
     )?;
-    let [assignment] = group(w, cp, "work_distributor", ["WorkgroupAssignment"])?;
+    let [assignment] = group(w, clock, cp, "work_distributor", ["WorkgroupAssignment"])?;
     let cluster = scope(w, gpu, "compute_cluster[0]")?;
     let mut sms = Vec::new();
     for sm in 0..SMS {
         let s = scope(w, cluster, &format!("sm[{sm}]"))?;
-        let [workgroup] = group(w, s, "workgroup_slot[0]", ["Workgroup"])?;
+        let [workgroup] = group(w, clock, s, "workgroup_slot[0]", ["Workgroup"])?;
         let mut slots = Vec::new();
         let mut alu = Vec::new();
         for p in 0..PARTITIONS {
@@ -171,19 +205,29 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
             for slot in 0..SLOTS {
                 let [warp, instruction] = group(
                     w,
+                    clock,
                     partition,
                     &format!("warp_slot[{slot}]"),
                     ["Warp", "Instruction"],
                 )?;
                 slots.push(Slot { warp, instruction });
             }
-            alu.push(group(w, partition, "alu_pipeline[0]", ["InstructionExecution"])?[0]);
+            alu.push(
+                group(
+                    w,
+                    clock,
+                    partition,
+                    "alu_pipeline[0]",
+                    ["InstructionExecution"],
+                )?[0],
+            );
         }
         let lsu = scope(w, s, "load_store_unit")?;
-        let [request] = group(w, lsu, "request_port[0]", ["MemoryRequest"])?;
-        let [tlb] = group(w, lsu, "tlb", ["Translation"])?;
+        let [request] = group(w, clock, lsu, "request_port[0]", ["MemoryRequest"])?;
+        let [tlb] = group(w, clock, lsu, "tlb", ["Translation"])?;
         let l1 = cache(
             w,
+            clock,
             s,
             "l1_cache",
             &format!("gpu.compute_cluster[0].sm[{sm}].l1_cache"),
@@ -191,19 +235,20 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
         )?;
         let shared = scope(w, s, "shared_memory")?;
         let banks = (0..2)
-            .map(|b| group(w, shared, &format!("bank[{b}]"), ["BankAccess"]).map(|x| x[0]))
+            .map(|b| group(w, clock, shared, &format!("bank[{b}]"), ["BankAccess"]).map(|x| x[0]))
             .collect::<vtr::Result<Vec<_>>>()?;
-        let matrix = group(w, s, "matrix_engine[0]", ["MatrixJob", "MatrixTile"])?;
+        let matrix = group(w, clock, s, "matrix_engine[0]", ["MatrixJob", "MatrixTile"])?;
         let dma = group(
             w,
+            clock,
             s,
             "tensor_dma_engine[0]",
             ["TensorDmaJob", "TransferChunk", "MemoryRequest"],
         )?;
         let dma_endpoint = w.intern(&format!(
             "gpu.compute_cluster[0].sm[{sm}].tensor_dma_engine[0]"
-        ));
-        let [barrier] = group(w, s, "barrier_unit", ["WorkgroupBarrier"])?;
+        ))?;
+        let [barrier] = group(w, clock, s, "barrier_unit", ["WorkgroupBarrier"])?;
         sms.push(Sm {
             workgroup,
             slots,
@@ -219,11 +264,12 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
         });
     }
     let fabric_scope = scope(w, gpu, "memory_fabric")?;
-    let [fabric] = group(w, fabric_scope, "port[0]", ["MemoryPacket"])?;
+    let [fabric] = group(w, clock, fabric_scope, "port[0]", ["MemoryPacket"])?;
     let memory = scope(w, gpu, "memory_subsystem")?;
-    let [walker] = group(w, memory, "page_walker[0]", ["PageWalk"])?;
+    let [walker] = group(w, clock, memory, "page_walker[0]", ["PageWalk"])?;
     let l2 = cache(
         w,
+        clock,
         memory,
         "l2_partition[0]",
         "gpu.memory_subsystem.l2_partition[0]",
@@ -231,15 +277,16 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
     )?;
     let l3 = cache(
         w,
+        clock,
         memory,
         "illustrative_l3",
         "gpu.memory_subsystem.illustrative_l3",
         true,
     )?;
     let mc = scope(w, memory, "memory_controller[0]")?;
-    let [controller] = group(w, mc, "requests", ["MemoryTransaction"])?;
-    let [dram] = group(w, mc, "dram_channel[0]", ["DramCommand"])?;
-    let dram_endpoint = w.intern("gpu.memory_subsystem.memory_controller[0]");
+    let [controller] = group(w, clock, mc, "requests", ["MemoryTransaction"])?;
+    let [dram] = group(w, clock, mc, "dram_channel[0]", ["DramCommand"])?;
+    let dram_endpoint = w.intern("gpu.memory_subsystem.memory_controller[0]")?;
     Ok(Hardware {
         clock,
         queue,
@@ -258,50 +305,89 @@ fn hardware(w: &mut Writer) -> vtr::Result<Hardware> {
 struct Emit {
     w: Writer,
     n: Names,
+    open_stages: BTreeMap<(u64, u32), u64>,
 }
 impl Emit {
     fn begin(
         &mut self,
-        generator: NodeId,
-        parent: Option<TxId>,
+        generator: Source<InstanceLabel>,
+        parent: Option<Transaction<InstanceLabel>>,
         time: u64,
         label: &str,
-    ) -> vtr::Result<TxId> {
-        let tx = self.w.begin_tx(generator, time)?;
-        self.w.set_tx_kind(tx, TxKind::Internal)?;
-        if let Some(parent) = parent {
-            self.w.set_tx_parent(tx, parent)?;
-        }
-        self.attr(tx, self.n.label, Value::Text(label.into()))?;
+    ) -> vtr::Result<Transaction<InstanceLabel>> {
+        let tx = self.w.begin_at(
+            generator,
+            time,
+            &InstanceLabel(label.into()),
+            parent.map(Transaction::owner),
+        )?;
+        self.w.span_kind(tx.owner(), SpanKind::Internal)?;
         Ok(tx)
     }
-    fn attr(&mut self, tx: TxId, key: StrId, value: Value) -> vtr::Result<()> {
-        self.w.tx_attr(tx, key, &value)
+    fn attr(&mut self, tx: Transaction<InstanceLabel>, key: u32, value: Value) -> vtr::Result<()> {
+        self.w.attribute(tx.owner(), key, value)
     }
-    fn stage(&mut self, tx: TxId, name: StrId, begin: u64, end: u64) -> vtr::Result<()> {
+    fn stage(
+        &mut self,
+        tx: Transaction<InstanceLabel>,
+        name: u32,
+        begin: u64,
+        end: u64,
+    ) -> vtr::Result<()> {
         if end > begin {
-            self.w.tx_stage(tx, name, self.n.lane, begin, end, &[])?;
+            self.w
+                .embedded_stage(tx.owner(), begin, name, self.n.lane, Some(end), vec![])?;
         }
         Ok(())
     }
-    fn event(&mut self, tx: TxId, name: StrId, time: u64) -> vtr::Result<()> {
-        self.w.tx_event(tx, time, name, &[])
+    fn enter(
+        &mut self,
+        tx: Transaction<InstanceLabel>,
+        name: u32,
+        lane: u32,
+        time: u64,
+    ) -> vtr::Result<()> {
+        if self.open_stages.contains_key(&(tx.id(), lane)) {
+            self.leave(tx, lane, time)?;
+        }
+        let stage = self
+            .w
+            .embedded_stage(tx.owner(), time, name, lane, None, vec![])?;
+        self.open_stages.insert((tx.id(), lane), stage);
+        Ok(())
     }
-    fn end(&mut self, tx: TxId, time: u64) -> vtr::Result<()> {
+    fn leave(&mut self, tx: Transaction<InstanceLabel>, lane: u32, time: u64) -> vtr::Result<()> {
+        let stage = self
+            .open_stages
+            .remove(&(tx.id(), lane))
+            .ok_or(vtr::Error::State("scripted lane has no active stage"))?;
+        self.w.end_embedded_stage(tx.owner(), stage, time)
+    }
+    fn event(&mut self, tx: Transaction<InstanceLabel>, name: u32, time: u64) -> vtr::Result<()> {
+        self.w
+            .embedded_event(tx.owner(), time, name, vec![])
+            .map(|_| ())
+    }
+    fn end(&mut self, tx: Transaction<InstanceLabel>, time: u64) -> vtr::Result<()> {
         self.event(tx, self.n.completed, time)?;
-        self.w.end_tx(tx, time, TxStatus::Ok)
+        self.w.end_at(tx, time, Status::Ok)
     }
-    fn relate(&mut self, kind: StrId, from: TxId, to: TxId) -> vtr::Result<()> {
-        self.w.relate(kind, from, to, &[])
+    fn relate(
+        &mut self,
+        kind: u32,
+        from: Transaction<InstanceLabel>,
+        to: Transaction<InstanceLabel>,
+    ) -> vtr::Result<()> {
+        self.w.relate(kind, from.id(), to.id(), vec![])
     }
     fn service(
         &mut self,
-        generator: NodeId,
-        parent: TxId,
+        generator: Source<InstanceLabel>,
+        parent: Transaction<InstanceLabel>,
         interval: (u64, u64),
-        stage: StrId,
+        stage: u32,
         label: &str,
-    ) -> vtr::Result<TxId> {
+    ) -> vtr::Result<Transaction<InstanceLabel>> {
         let tx = self.begin(generator, Some(parent), interval.0, label)?;
         self.stage(tx, stage, interval.0, interval.1)?;
         self.end(tx, interval.1)?;
@@ -330,9 +416,9 @@ fn hop(
     e: &mut Emit,
     h: &Hardware,
     r: &mut Resources,
-    parent: TxId,
+    parent: Transaction<InstanceLabel>,
     start: u64,
-    endpoints: (StrId, StrId),
+    endpoints: (u32, u32),
     index: usize,
     response: bool,
 ) -> vtr::Result<u64> {
@@ -374,7 +460,7 @@ fn dram(
     e: &mut Emit,
     h: &Hardware,
     r: &mut Resources,
-    parent: TxId,
+    parent: Transaction<InstanceLabel>,
     arrival: u64,
 ) -> vtr::Result<u64> {
     let tx = e.begin(h.controller, Some(parent), arrival, "cold-line read")?;
@@ -403,13 +489,13 @@ fn cache_access(
     e: &mut Emit,
     h: &Hardware,
     r: &mut Resources,
-    parent: TxId,
+    parent: Transaction<InstanceLabel>,
     sm: usize,
     level: usize,
     depth: usize,
     arrival: u64,
     address: u64,
-    operation: StrId,
+    operation: u32,
 ) -> vtr::Result<u64> {
     let c = [h.sms[sm].l1, h.l2, h.l3][level];
     let resource = if level == 0 { sm } else { SMS + level - 1 };
@@ -506,13 +592,13 @@ fn cache_access(
 }
 
 struct Request {
-    generator: NodeId,
-    parent: TxId,
+    generator: Source<InstanceLabel>,
+    parent: Transaction<InstanceLabel>,
     sm: usize,
     start: u64,
     address: u64,
     depth: usize,
-    operation: StrId,
+    operation: u32,
     dma: bool,
     page_walk: bool,
     active_mask: Option<u64>,
@@ -627,11 +713,11 @@ fn memory_request(e: &mut Emit, h: &Hardware, r: &mut Resources, req: Request) -
 
 #[derive(Clone, Copy)]
 struct ResultAt {
-    tx: TxId,
+    tx: Transaction<InstanceLabel>,
     ready: u64,
 }
 struct Warp {
-    tx: TxId,
+    tx: Transaction<InstanceLabel>,
     fetch: u64,
     registers: [Option<ResultAt>; 4],
     matrix: Option<ResultAt>,
@@ -659,8 +745,8 @@ fn async_job(
     h: &Hardware,
     r: &mut Resources,
     sm: usize,
-    instruction: TxId,
-    warp: TxId,
+    instruction: Transaction<InstanceLabel>,
+    warp: Transaction<InstanceLabel>,
     launch: u64,
     dma: bool,
 ) -> vtr::Result<ResultAt> {
@@ -794,7 +880,7 @@ impl Op {
             _ => FULL_EXEC_MASK,
         }
     }
-    fn names(self, n: &Names) -> (StrId, StrId) {
+    fn names(self, n: &Names) -> (u32, u32) {
         match self {
             Self::Fma => (n.fma, n.arithmetic),
             Self::Add => (n.add, n.arithmetic),
@@ -825,13 +911,13 @@ fn issue(
     slot: usize,
     sequence: u64,
     op: Op,
-) -> vtr::Result<(TxId, u64)> {
+) -> vtr::Result<(Transaction<InstanceLabel>, u64)> {
     let (opcode, class) = op.names(&e.n);
     let tx = e.begin(
         h.sms[sm].slots[slot].instruction,
         Some(warp.tx),
         warp.fetch,
-        &format!("{} #{sequence}", e.w.string(opcode)),
+        &format!("{} #{sequence}", e.n.text(opcode)),
     )?;
     for (key, value) in [
         (e.n.pc, Value::U64(0x1000 + (sequence % 100) * 4)),
@@ -864,9 +950,9 @@ fn issue(
         e.relate(e.n.depends, tx, producer.tx)?;
     }
     let issued = ready.max(r.issue[sm][slot / SLOTS]);
-    e.w.tx_stage_begin(tx, e.n.fetch, e.n.lane, warp.fetch)?;
-    e.w.tx_stage_begin(tx, e.n.decode, e.n.lane, warp.fetch + 1)?;
-    e.w.tx_stage_end(tx, e.n.decode, e.n.lane, warp.fetch + 2)?;
+    e.enter(tx, e.n.fetch, e.n.lane, warp.fetch)?;
+    e.enter(tx, e.n.decode, e.n.lane, warp.fetch + 1)?;
+    e.leave(tx, e.n.lane, warp.fetch + 2)?;
     e.stage(tx, e.n.ready, warp.fetch + 2, ready)?;
     e.stage(tx, e.n.scheduler, ready, issued)?;
     e.stage(tx, e.n.issue, issued, issued + 1)?;
@@ -879,11 +965,14 @@ fn issue(
         Op::WaitMatrix | Op::WaitDma => h.sms[sm].slots[slot].instruction,
         _ => h.sms[sm].alu[slot / SLOTS],
     };
-    e.w.tx_event(
-        tx,
+    e.w.embedded_event(
+        tx.owner(),
         issued,
         e.n.issued,
-        &[(e.n.resource, Value::U64(u64::from(resource.0)))],
+        vec![Attribute {
+            key: e.n.resource,
+            value: Value::U64(u64::from(resource.id())),
+        }],
     )?;
     r.issue[sm][slot / SLOTS] = issued + 1;
     warp.fetch = issued;
@@ -915,7 +1004,7 @@ fn instruction(
                 tx,
                 (start, start + latency),
                 e.n.execute,
-                e.w.string(op.names(&e.n).0).to_owned().as_str(),
+                e.n.text(op.names(&e.n).0).to_owned().as_str(),
             )?;
             e.stage(tx, e.n.execute, start, start + latency)?;
             start + latency
@@ -936,13 +1025,19 @@ fn instruction(
                     + (grid * SMS * WARPS + sm * WARPS + slot) as u64 * 0x100_000
                     + sequence * 128
                     + sector * 64;
-                e.w.tx_event(
-                    tx,
+                e.w.embedded_event(
+                    tx.owner(),
                     start,
                     e.n.request_created,
-                    &[
-                        (e.n.address, Value::U64(address)),
-                        (e.n.bytes, Value::U64(64)),
+                    vec![
+                        Attribute {
+                            key: e.n.address,
+                            value: Value::U64(address),
+                        },
+                        Attribute {
+                            key: e.n.bytes,
+                            value: Value::U64(64),
+                        },
                     ],
                 )?;
                 end = end.max(memory_request(
@@ -1002,7 +1097,15 @@ fn instruction(
             } else {
                 warp.matrix = Some(job);
             }
-            e.w.tx_event(tx, start, e.n.launched, &[(e.n.job, Value::U64(job.tx))])?;
+            e.w.embedded_event(
+                tx.owner(),
+                start,
+                e.n.launched,
+                vec![Attribute {
+                    key: e.n.job,
+                    value: Value::U64(job.tx.id()),
+                }],
+            )?;
             e.stage(tx, e.n.execute, start, start + 2)?;
             start + 2
         }
@@ -1041,7 +1144,7 @@ fn barrier(
     r: &mut Resources,
     warps: &mut [Warp],
     sm: usize,
-    workgroup: TxId,
+    workgroup: Transaction<InstanceLabel>,
     sequence: u64,
 ) -> vtr::Result<()> {
     let mut arrivals = Vec::new();
@@ -1062,8 +1165,8 @@ fn barrier(
         e.relate(e.n.arrives_at, tx, barrier)?;
         e.stage(tx, e.n.barrier_wait, arrival + 1, release)?;
         e.stage(tx, e.n.writeback, release, release + 1)?;
-        e.w.tx_stage_begin(warp.tx, e.n.barrier_wait, e.n.activity, arrival + 1)?;
-        e.w.tx_stage_begin(warp.tx, e.n.running, e.n.activity, release)?;
+        e.enter(warp.tx, e.n.barrier_wait, e.n.activity, arrival + 1)?;
+        e.enter(warp.tx, e.n.running, e.n.activity, release)?;
         e.end(tx, release + 1)?;
         warp.fetch = release + 1;
         warp.completion = release + 1;
@@ -1076,13 +1179,21 @@ fn barrier(
 }
 
 fn generate(path: &Path) -> vtr::Result<()> {
-    let mut w = Writer::builder().timescale(Timescale::Nanoseconds)
-        .writer_name("Volna synthetic GPU transaction example")
-        .comment("Educational, not cycle accurate: synthetic 1 GHz clock, 1 cycle = 1 ns. Illustrative L3 is not NVIDIA architecture; matrix/DMA placement and all timing are synthetic. See gpu_transaction_trace.rs.")
-        .options(WriterOptions { background: false, ..WriterOptions::default() }).create(path)?;
+    let mut options = WriterOptions {
+        mode: ExecutionMode::Inline,
+        ..Default::default()
+    };
+    options.metadata.timescale = -9;
+    options.metadata.writer = "Volna synthetic GPU transaction example".into();
+    options.metadata.comment = "Educational, not cycle accurate: synthetic 1 GHz clock, 1 cycle = 1 ns. Illustrative L3 is not NVIDIA architecture; matrix/DMA placement and all timing are synthetic. See gpu_transaction_trace.rs.".into();
+    let mut w = Writer::create_with(path, options)?;
     let h = hardware(&mut w)?;
-    let n = Names::new(&mut w);
-    let mut e = Emit { w, n };
+    let n = Names::new(&mut w)?;
+    let mut e = Emit {
+        w,
+        n,
+        open_stages: BTreeMap::new(),
+    };
     let mut r = Resources::default();
     let command = e.begin(h.queue[0], None, 0, "tiled compute submission")?;
     let mut dispatch = 8;
@@ -1125,13 +1236,13 @@ fn generate(path: &Path) -> vtr::Result<()> {
             e.attr(
                 assignment,
                 e.n.destination,
-                Value::U64(u64::from(h.sms[sm].workgroup.0)),
+                Value::U64(u64::from(h.sms[sm].workgroup.id())),
             )?;
             e.stage(assignment, e.n.service, assigned, assigned + 4)?;
             e.end(assignment, assigned + 4)?;
             let resident = assigned + 4;
             e.stage(wg, e.n.queued, dispatch, resident)?;
-            e.w.tx_stage_begin(wg, e.n.resident, e.n.residency, resident)?;
+            e.enter(wg, e.n.resident, e.n.residency, resident)?;
             e.event(wg, e.n.allocated, resident)?;
             workgroups.push(wg);
             let mut group = Vec::new();
@@ -1142,8 +1253,8 @@ fn generate(path: &Path) -> vtr::Result<()> {
                 e.attr(tx, e.n.epoch, Value::U64(grid_index as u64))?;
                 e.event(tx, e.n.dispatched, dispatch)?;
                 e.stage(tx, e.n.queued, dispatch, resident)?;
-                e.w.tx_stage_begin(tx, e.n.resident, e.n.residency, resident)?;
-                e.w.tx_stage_begin(tx, e.n.running, e.n.activity, resident)?;
+                e.enter(tx, e.n.resident, e.n.residency, resident)?;
+                e.enter(tx, e.n.running, e.n.activity, resident)?;
                 e.event(tx, e.n.allocated, resident)?;
                 group.push(Warp {
                     tx,
@@ -1180,11 +1291,11 @@ fn generate(path: &Path) -> vtr::Result<()> {
             let group_end = group.iter().map(Warp::drained).max().unwrap() + 1;
             for warp in group {
                 let done = warp.drained() + 1;
-                e.w.tx_stage_end(warp.tx, e.n.resident, e.n.residency, done)?;
-                e.w.tx_stage_end(warp.tx, e.n.running, e.n.activity, done)?;
+                e.leave(warp.tx, e.n.residency, done)?;
+                e.leave(warp.tx, e.n.activity, done)?;
                 e.end(warp.tx, done)?;
             }
-            e.w.tx_stage_end(workgroups[sm], e.n.resident, e.n.residency, group_end)?;
+            e.leave(workgroups[sm], e.n.residency, group_end)?;
             e.end(workgroups[sm], group_end)?;
             end = end.max(group_end);
         }
@@ -1209,81 +1320,104 @@ fn generate(path: &Path) -> vtr::Result<()> {
     }
     e.end(command, dispatch)?;
     e.w.clock_stop(h.clock, dispatch)?;
-    assert_eq!(e.w.open_tx_count(), 0);
-    e.w.close()
+    assert!(e.open_stages.is_empty());
+    assert_eq!(e.w.stats()?.live_owners, 0);
+    e.w.close()?;
+    Ok(())
 }
 
-fn generator_name(rd: &Reader, tx: &Transaction) -> String {
-    rd.str(rd.hierarchy().name(tx.generator)).to_owned()
-}
-fn label(rd: &Reader, tx: &Transaction) -> String {
-    tx.attrs
-        .iter()
-        .find(|a| rd.str(a.key) == "vtr.label")
-        .map(|a| match &a.value {
-            Value::Text(s) => s.clone(),
-            Value::Str(s) => rd.str(*s).into(),
-            _ => String::new(),
-        })
-        .unwrap_or_default()
+fn generator_name<'a>(reader: &'a Reader, record: &Record) -> vtr::Result<&'a str> {
+    let source = NodeId(record.generator().expect("owner source"));
+    reader.string(reader.node(source)?.name)
 }
 
 fn readback(path: &Path) -> anyhow::Result<()> {
     let rd = Reader::open_with(
         path,
         ReadOptions {
-            verify_crc: true,
-            ..ReadOptions::default()
+            verify_checksums: true,
+            ..Default::default()
         },
     )?;
-    let clock = rd.find_clock(CLOCK_PATH).context("GPU clock is missing")?;
-    for group in rd.hierarchy().nodes_of_kind(NodeKind::Generator) {
-        if let NodeData::Generator { kind } = rd.hierarchy().node_data(group)
-            && rd.str(kind) == "TRANSACTION"
+    let validation = rd.validate()?;
+    ensure!(
+        validation.missing.is_empty(),
+        "recording has unresolved references"
+    );
+    let clock = rd
+        .find_generator(CLOCK_PATH)
+        .context("GPU clock is missing")?;
+    for (id, node) in rd.declarations().nodes.iter().enumerate() {
+        if let NodeData::Generator { kind, .. } = node.data
+            && rd.string(kind)? == "TRANSACTION"
         {
             ensure!(
-                rd.generator_clock(group) == Some(clock),
+                rd.clock_for(id as u32)? == Some(clock),
                 "{} does not use the GPU clock",
-                rd.full_path(group, ".")
+                rd.full_path(NodeId(id as u32))?
             );
         }
     }
-    let timeline = rd.clock(clock)?;
-    let stretches = timeline.stretches();
+    let mut stretches = Vec::new();
+    rd.transactions(
+        TransactionQuery {
+            generator: Some(clock),
+            ..Default::default()
+        },
+        |record| {
+            stretches.push(record);
+            true
+        },
+    )?;
     ensure!(
-        stretches.len() == 1 && stretches[0].begin == 0 && stretches[0].period == 1,
-        "GPU clock must run at 1 GHz from time zero"
+        stretches.len() == 1 && stretches[0].begin() == 0,
+        "GPU clock must run continuously from time zero"
     );
-    let mut counts = BTreeMap::<TxId, u64>::new();
+    ensure!(
+        stretches[0].attributes().iter().any(
+            |attr| rd.string(attr.key).unwrap() == "vtr.period" && attr.value == Value::Time(1)
+        ),
+        "GPU clock must have a one-nanosecond period"
+    );
+
+    let mut counts = BTreeMap::<u64, u64>::new();
     let mut warps = BTreeMap::new();
     let mut packet = None;
     let mut last_tx_end = 0;
     let mut invalid_exec_mask = None;
     let mut divergent_instructions = 0;
-    rd.visit_transactions(&TxQuery::default(), |tx| {
-        last_tx_end = last_tx_end.max(tx.end);
-        match rd.str(rd.hierarchy().name(tx.generator)) {
+    let mut owners = 0u64;
+    rd.transactions(TransactionQuery::default(), |tx| {
+        last_tx_end = last_tx_end.max(tx.end());
+        owners += 1;
+        let source = tx.generator().unwrap();
+        match generator_name(&rd, &tx).unwrap() {
             "Instruction" => {
-                *counts.entry(tx.parent.unwrap_or(0)).or_default() += 1;
+                *counts.entry(tx.parent().unwrap_or(0)).or_default() += 1;
                 match tx
-                    .attrs
+                    .attributes()
                     .iter()
-                    .find(|a| rd.str(a.key) == "exec_mask")
+                    .find(|a| rd.string(a.key).unwrap() == "exec_mask")
                     .map(|a| &a.value)
                 {
                     Some(Value::U64(mask)) if *mask > 0 && *mask <= u64::from(FULL_EXEC_MASK) => {
                         divergent_instructions += u64::from(*mask != u64::from(FULL_EXEC_MASK));
                     }
                     _ => {
-                        invalid_exec_mask.get_or_insert(tx.id);
+                        invalid_exec_mask.get_or_insert(tx.id());
                     }
                 }
             }
             "Warp" => {
-                warps.insert(tx.id, tx.generator);
+                warps.insert(tx.id(), source);
             }
-            "MemoryPacket" if rd.full_path(tx.generator, ".").contains("illustrative_l3") => {
-                packet.get_or_insert(tx.id);
+            "MemoryPacket"
+                if rd
+                    .full_path(NodeId(source))
+                    .unwrap()
+                    .contains("illustrative_l3") =>
+            {
+                packet.get_or_insert(tx.id());
             }
             _ => {}
         }
@@ -1298,8 +1432,12 @@ fn readback(path: &Path) -> anyhow::Result<()> {
         "trace contains no lane divergence"
     );
     ensure!(
-        stretches[0].end >= last_tx_end,
+        stretches[0].end() >= last_tx_end,
         "GPU clock stops before the last transaction"
+    );
+    ensure!(
+        rd.cycle_at(clock, last_tx_end)? == Some(last_tx_end),
+        "GPU cycle count differs from its one-nanosecond ticks"
     );
     ensure!(
         warps.len() == GRIDS * SMS * WARPS,
@@ -1319,35 +1457,41 @@ fn readback(path: &Path) -> anyhow::Result<()> {
 
     let (&warp_id, &warp_gen) = warps.first_key_value().context("no warp")?;
     let slot = rd
-        .hierarchy()
-        .parent(warp_gen)
+        .node(NodeId(warp_gen))?
+        .parent
         .context("warp generator has no group")?;
+    let instruction_source = rd
+        .children(Some(slot))
+        .iter()
+        .copied()
+        .find(|id| {
+            let node = rd.node(*id).unwrap();
+            matches!(node.data, NodeData::Generator { .. })
+                && rd.string(node.name).unwrap() == "Instruction"
+        })
+        .context("slot has no instruction source")?;
     let mut instruction = None;
-    rd.visit_transactions(
-        &TxQuery {
-            scope: Some(slot),
-            ..TxQuery::default()
+    rd.transactions(
+        TransactionQuery {
+            generator: Some(instruction_source.0),
+            ..Default::default()
         },
         |tx| {
-            if generator_name(&rd, tx) == "Instruction" {
-                instruction = Some(tx.clone());
-                false
-            } else {
-                true
-            }
+            instruction = Some(tx);
+            false
         },
     )?;
     let instruction = instruction.context("slot query found no instruction")?;
     ensure!(
-        instruction.parent == Some(warp_id),
+        instruction.parent() == Some(warp_id),
         "instruction must belong to its slot's warp"
     );
-    for generator in [warp_gen, instruction.generator] {
+    for generator in [warp_gen, instruction.generator().unwrap()] {
         let mut found = false;
-        rd.visit_transactions(
-            &TxQuery {
+        rd.transactions(
+            TransactionQuery {
                 generator: Some(generator),
-                ..TxQuery::default()
+                ..Default::default()
             },
             |_| {
                 found = true;
@@ -1357,33 +1501,31 @@ fn readback(path: &Path) -> anyhow::Result<()> {
         ensure!(found, "generator query was empty");
     }
     println!(
-        "{}: {} logical warps x {INSTRUCTIONS} = {total} instructions; {} transactions; {} bytes",
+        "{}: {} logical warps x {INSTRUCTIONS} = {total} instructions; {owners} owners; {} bytes",
         path.display(),
         warps.len(),
-        rd.tx_counts().0,
         std::fs::metadata(path)?.len()
     );
-    println!("Illustrative L3 packet -> command-group ancestry (actual TX parents):");
+    println!("Illustrative L3 packet -> command-group ancestry (record parents):");
     let mut id = packet.context("no illustrative L3 packet")?;
     let mut names = Vec::new();
     for _ in 0..20 {
-        let tx = rd
-            .transaction(id)?
-            .context("missing ancestry transaction")?;
-        let name = generator_name(&rd, &tx);
+        let tx = rd.lookup(id)?.context("missing ancestry transaction")?;
+        let name = generator_name(&rd, &tx)?;
         let group = rd
-            .hierarchy()
-            .parent(tx.generator)
+            .node(NodeId(tx.generator().unwrap()))?
+            .parent
             .context("generator has no group")?;
+        let label = tx.payload().field("vtr.label")?.decode::<String>()?;
         println!(
             "  TX {} | {} | {} | {}",
-            tx.id,
+            tx.id(),
             name,
-            rd.full_path(group, "."),
-            label(&rd, &tx)
+            rd.full_path(group)?,
+            label
         );
-        names.push(name);
-        match tx.parent {
+        names.push(name.to_owned());
+        match tx.parent() {
             Some(parent) => id = parent,
             None => break,
         }

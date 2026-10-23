@@ -79,7 +79,6 @@ function beginOpen() {
 
 async function openSample() {
   const request = beginOpen();
-  pendingSample = true;
   statusText.textContent = 'Loading the sample recording and workspace…';
   status.hidden = false;
   error.hidden = true;
@@ -97,6 +96,7 @@ async function openSample() {
       traceUri: sampleUrl.href,
       candidates: candidates(sampleUrl.href, new Uint8Array(workspace), sampleWorkspaceUrl.href),
     }));
+    pendingSample = true;
     statusText.textContent = 'Opening the sample workspace…';
   } catch (cause) {
     if (request !== openRequest) return;

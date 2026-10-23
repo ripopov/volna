@@ -1,5 +1,7 @@
 //! Headless analog waveform tests for translation, interaction, persistence, and painting.
 
+use vtr::Recorder;
+
 use std::sync::Arc;
 use volna_core::testing::a_all;
 
@@ -34,46 +36,44 @@ fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
 
 fn trace_until(end: u64) -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     let file = tempfile::NamedTempFile::new().unwrap();
-    let mut w = vtr::Writer::create(file.path()).unwrap();
-    w.set_timescale(vtr::Timescale::Exponent(-9)).unwrap();
-    let (_, bus) = w
-        .add_var(
-            None,
-            "bus",
-            vtr::VarType::Wire,
-            vtr::Direction::Output,
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = -9;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
+    let bus = w
+        .signal(
+            vtr::SourceOptions::new("bus", None),
             vtr::SignalKind::Bits {
                 width: 16,
                 states: 4,
             },
-        )
-        .unwrap();
-    let (_, real) = w
-        .add_var(
-            None,
-            "level",
-            vtr::VarType::Real,
-            vtr::Direction::Output,
-            vtr::SignalKind::Real,
-        )
-        .unwrap();
-    let (_, bit) = w
-        .add_var(
-            None,
-            "valid",
             vtr::VarType::Wire,
             vtr::Direction::Output,
+        )
+        .unwrap();
+    let real = w
+        .signal(
+            vtr::SourceOptions::new("level", None),
+            vtr::SignalKind::Real,
+            vtr::VarType::Real,
+            vtr::Direction::Output,
+        )
+        .unwrap();
+    let bit = w
+        .signal(
+            vtr::SourceOptions::new("valid", None),
             vtr::SignalKind::Bits {
                 width: 1,
                 states: 2,
             },
+            vtr::VarType::Wire,
+            vtr::Direction::Output,
         )
         .unwrap();
     for t in (0..end).step_by(10) {
-        w.set_time(t).unwrap();
+        w.advance_time(t).unwrap();
         let phase = t as f64 * 2.0 * std::f64::consts::PI / 4000.0;
         if t < 100 {
-            w.emit_logic_str(bus, b"xxxxxxxxxxxxxxxx").unwrap();
+            w.emit_packed(bus, 4, &[0xaa; 4]).unwrap();
         } else {
             let v: i16 = if t == GLITCH {
                 30_000
@@ -84,7 +84,7 @@ fn trace_until(end: u64) -> (tempfile::NamedTempFile, Arc<dyn Session>) {
         }
         w.emit_real(real, if t == GLITCH { 1.32 } else { 0.9 * phase.sin() })
             .unwrap();
-        w.emit_bit(bit, vtr::Logic::from((u8::from((t / 1000) % 2 == 1)) != 0))
+        w.emit_u64(bit, u64::from((u8::from((t / 1000) % 2 == 1)) != 0))
             .unwrap();
     }
     w.close().unwrap();

@@ -8,6 +8,7 @@ pub struct Descriptor {
     pub format: u8,
     pub length: u64,
     pub toc_crc: u32,
+    pub recording: [u8; 16],
     pub available: bool,
 }
 
@@ -20,6 +21,7 @@ impl Descriptor {
             },
             length: id.length,
             toc_crc: id.toc_crc,
+            recording: id.recording.0,
             available: session.activity_available(),
         })
     }
@@ -32,6 +34,7 @@ impl Descriptor {
             },
             length: self.length,
             toc_crc: self.toc_crc,
+            recording: vtr::RecordingId(self.recording),
         })
     }
 }
@@ -288,20 +291,23 @@ mod tests {
         let mut writer = vtr::Writer::create(&path).unwrap();
         let top = Some(
             writer
-                .add_scope(None, "top", vtr::ScopeType::Module, "top")
+                .scope_with(
+                    vtr::SourceOptions::new("top", None),
+                    vtr::ScopeType::Module,
+                    "top",
+                )
                 .unwrap(),
         );
         for s in 0..signals {
             writer
-                .add_var(
-                    top,
-                    &format!("s{s}"),
-                    vtr::VarType::Wire,
-                    vtr::Direction::Input,
+                .signal(
+                    vtr::SourceOptions::new(format!("s{s}"), top),
                     vtr::SignalKind::Bits {
                         width: 1,
                         states: 2,
                     },
+                    vtr::VarType::Wire,
+                    vtr::Direction::Input,
                 )
                 .unwrap();
         }
@@ -414,7 +420,7 @@ mod tests {
 
     #[test]
     fn cooperative_decode_installs_only_at_end_and_reservation_follows_last_owner() {
-        let (_dir, source, image) = fixture(20_000);
+        let (_dir, source, image) = fixture(32_000);
         let budget = MemoryBudget::new(4 << 20);
         let (session, _, mut t) = transfer(source.as_ref(), 2 << 20, budget.clone());
         let (end, yields) = feed(&mut t, &image);
@@ -481,7 +487,8 @@ mod tests {
         assert!(finish(&mut t, end).is_err());
         t.finish().unwrap();
         assert!(session.activity().is_none());
-        image[vtr::container::FILE_HEADER_LEN + vtr::container::SECTION_HEADER_LEN] ^= 1;
+        // Corrupt identity payload bytes so section checksums, rather than framing, reject it.
+        image[32 + 24] ^= 1;
         let (session, _, mut t) = transfer(source.as_ref(), 1 << 20, budget.clone());
         let (end, _) = feed(&mut t, &image);
         assert!(finish(&mut t, end).is_err());

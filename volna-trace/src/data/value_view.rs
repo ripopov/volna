@@ -26,9 +26,9 @@ impl<'a> LogicView<'a> {
         }
     }
     #[must_use]
-    pub fn packed_lsb(width: u32, states: u8, data: &'a [u8]) -> Self {
+    pub fn packed_lsb(width: u64, states: u8, data: &'a [u8]) -> Self {
         Self {
-            width: width as usize,
+            width: usize::try_from(width).expect("packed width exceeds address space"),
             storage: LogicStorage::PackedLsb { states, data },
         }
     }
@@ -218,7 +218,7 @@ mod tests {
                 for (i, c) in text.bytes().rev().enumerate() {
                     vtr::signal::set_code(&mut data, states, i, vtr::signal::code_from_ascii(c));
                 }
-                let packed = LogicView::packed_lsb(text.len() as u32, states, &data);
+                let packed = LogicView::packed_lsb(text.len() as u64, states, &data);
                 let expected = crate::data::value::kind_of_bits(text.as_bytes());
                 if states == 4 && !text.bytes().all(|c| b"01xz".contains(&c)) {
                     continue;
@@ -262,7 +262,7 @@ mod tests {
                     vtr::signal::set_code(&mut data, states, i, vtr::signal::code_from_ascii(c));
                 }
                 let mut out = Vec::new();
-                LogicView::packed_lsb(text.len() as u32, states, &data)
+                LogicView::packed_lsb(text.len() as u64, states, &data)
                     .write_nibbles_msb(&mut out)
                     .unwrap();
                 assert_eq!(out, expected, "{text} in {states} states");

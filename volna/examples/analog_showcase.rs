@@ -4,8 +4,8 @@ use std::f64::consts::TAU;
 use std::path::PathBuf;
 
 use vtr::{
-    Direction, Logic, LogicStates, NodeId, ReadOptions, Reader, ScopeType, SignalId, SignalKind,
-    Timescale, VarType, Writer, WriterOptions,
+    Direction, LogicStates, NodeId, ReadOptions, Reader, Recorder, ScopeType, SignalId, SignalKind,
+    SourceOptions, VarType, Writer, WriterOptions,
 };
 
 const INTERVALS: u64 = 1024;
@@ -19,7 +19,7 @@ fn group<const N: usize>(
     names: [&str; N],
     kind: SignalKind,
 ) -> vtr::Result<[SignalId; N]> {
-    let scope = writer.add_scope(Some(top), name, ScopeType::Generic, "")?;
+    let scope = writer.scope_with(SourceOptions::new(name, Some(top)), ScopeType::Generic, "")?;
     let var_type = if kind == SignalKind::Real {
         VarType::Real
     } else {
@@ -27,9 +27,12 @@ fn group<const N: usize>(
     };
     let mut signals = [SignalId(0); N];
     for (signal, name) in signals.iter_mut().zip(names) {
-        *signal = writer
-            .add_var(Some(scope), name, var_type, Direction::Output, kind)?
-            .1;
+        *signal = writer.signal(
+            SourceOptions::new(name, Some(scope)),
+            kind,
+            var_type,
+            Direction::Output,
+        )?;
     }
     Ok(signals)
 }
@@ -50,16 +53,16 @@ fn emit_reals<const N: usize>(
 }
 
 fn generate(path: &std::path::Path) -> vtr::Result<()> {
-    let mut writer = Writer::builder()
-        .timescale(Timescale::Nanoseconds)
-        .writer_name("Volna analog showcase")
-        .comment("Analog shapes, numeric encodings, and related contributions for stacked groups")
-        .options(WriterOptions {
-            background: false,
-            ..WriterOptions::default()
-        })
-        .create(path)?;
-    let top = writer.add_scope(None, "analog", ScopeType::Generic, "")?;
+    let mut options = WriterOptions {
+        mode: vtr::ExecutionMode::Inline,
+        ..Default::default()
+    };
+    options.metadata.timescale = -9;
+    options.metadata.writer = "Volna analog showcase".into();
+    options.metadata.comment =
+        "Analog shapes, numeric encodings, and related contributions for stacked groups".into();
+    let mut writer = Writer::create_with(path, options)?;
+    let top = writer.scope_with(SourceOptions::new("analog", None), ScopeType::Generic, "")?;
     let waves = group(
         &mut writer,
         top,
@@ -122,17 +125,18 @@ fn generate(path: &std::path::Path) -> vtr::Result<()> {
         ["dropout", "nonfinite", "spike", "late_start"],
         SignalKind::Real,
     )?;
-    let numeric = writer.add_scope(Some(top), "numeric", ScopeType::Generic, "")?;
+    let numeric = writer.scope_with(
+        SourceOptions::new("numeric", Some(top)),
+        ScopeType::Generic,
+        "",
+    )?;
     let mut numeric_signal = |name, width| {
-        writer
-            .add_var(
-                Some(numeric),
-                name,
-                VarType::Wire,
-                Direction::Output,
-                SignalKind::bits(width, LogicStates::Four),
-            )
-            .map(|(_, signal)| signal)
+        writer.signal(
+            SourceOptions::new(name, Some(numeric)),
+            SignalKind::bits(width, LogicStates::Four),
+            VarType::Wire,
+            Direction::Output,
+        )
     };
     let signed = numeric_signal("signed_adc", 16)?;
     let unsigned = numeric_signal("unsigned_adc", 12)?;
@@ -141,7 +145,7 @@ fn generate(path: &std::path::Path) -> vtr::Result<()> {
 
     let mut noise = 0x5eed_1234u32;
     for i in 0..=INTERVALS {
-        writer.set_time(i * STEP_NS)?;
+        writer.advance_time(i * STEP_NS)?;
         let u = i as f64 / INTERVALS as f64;
         let phase = TAU * 8.0 * u;
         let cycle = (8.0 * u).fract();
@@ -197,16 +201,16 @@ fn generate(path: &std::path::Path) -> vtr::Result<()> {
         if i % 8 == 0 {
             for (k, &signal) in queues.iter().enumerate() {
                 if k == 2 && (512..560).contains(&i) {
-                    writer.emit_logic_str(signal, b"xxxxxxxx")?;
+                    writer.emit_packed(signal, 4, &[0xaa; 2])?;
                 } else if k == 1 && (768..800).contains(&i) {
-                    writer.emit_logic_str(signal, b"zzzzzzzz")?;
+                    writer.emit_packed(signal, 4, &[0xff; 2])?;
                 } else {
                     writer.emit_u64(signal, (i / 8 + k as u64 * 5) % 17)?;
                 }
             }
             for (k, &signal) in activity.iter().enumerate() {
                 let period = 16 << k;
-                writer.emit_bit(signal, Logic::from(i % period < period / 2))?;
+                writer.emit_u64(signal, u64::from(i % period < period / 2))?;
             }
         }
         writer.emit_real(
@@ -231,7 +235,7 @@ fn generate(path: &std::path::Path) -> vtr::Result<()> {
         }
         if i % 4 == 0 {
             if i < 16 {
-                writer.emit_logic_str(signed, b"xxxxxxxxxxxxxxxx")?;
+                writer.emit_packed(signed, 4, &[0xaa; 4])?;
             } else {
                 let adc = (sine * 24_000.0).round() as i16;
                 writer.emit_u64(signed, u64::from(adc as u16))?;
@@ -241,7 +245,8 @@ fn generate(path: &std::path::Path) -> vtr::Result<()> {
             writer.emit_u64(float64, quantize(sine).to_bits())?;
         }
     }
-    writer.close()
+    writer.close()?;
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -255,10 +260,11 @@ fn main() -> anyhow::Result<()> {
     let reader = Reader::open_with(
         &path,
         ReadOptions {
-            verify_crc: true,
+            verify_checksums: true,
             ..ReadOptions::default()
         },
     )?;
+    reader.validate()?;
     let bytes = std::fs::metadata(&path)?.len();
     anyhow::ensure!(
         bytes <= MAX_BYTES,

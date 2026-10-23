@@ -16,54 +16,97 @@ fn fixture() -> Arc<dyn Session> {
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
     let root = w
-        .add_scope(None, "soc", vtr::ScopeType::Module, "soc_top")
-        .unwrap();
-    let (var, _) = w
-        .add_var(
-            Some(root),
-            "read_valid",
-            vtr::VarType::Wire,
-            vtr::Direction::Input,
-            vtr::SignalKind::Bits {
-                width: 1,
-                states: 4,
-            },
+        .scope_with(
+            vtr::SourceOptions::new("soc", None),
+            vtr::ScopeType::Module,
+            "soc_top",
         )
         .unwrap();
+    let entries = [("IDLE", "0"), ("BUSY", "1")]
+        .map(|(name, bits)| (w.intern(name).unwrap(), w.intern(bits).unwrap()));
     let table = w
-        .add_enum_table(Some(root), "state_t", &[("IDLE", "0"), ("BUSY", "1")])
+        .enum_table(
+            vtr::SourceOptions::new("state_t", Some(root)),
+            entries.to_vec(),
+        )
         .unwrap();
-    w.node_attr(var, "enum_table", vtr::Value::U64(u64::from(table.0)))
-        .unwrap();
+    let mut signal = vtr::SourceOptions::new("read_valid", Some(root));
+    signal.attributes.push(vtr::Attribute {
+        key: w.intern("enum_table").unwrap(),
+        value: vtr::Value::U64(u64::from(table.0)),
+    });
+    w.signal(
+        signal,
+        vtr::SignalKind::bits(1, vtr::LogicStates::Four),
+        vtr::VarType::Wire,
+        vtr::Direction::Input,
+    )
+    .unwrap();
     let cpu = w
-        .add_scope(Some(root), "cpu", vtr::ScopeType::Core, "")
+        .scope_with(
+            vtr::SourceOptions::new("cpu", Some(root)),
+            vtr::ScopeType::Core,
+            "",
+        )
         .unwrap();
     let stream = w
-        .add_scope(Some(cpu), "thread0", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("thread0", Some(cpu)),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
-    w.add_generator(Some(stream), "instructions", "PIPELINE")
-        .unwrap();
+    w.transactions::<()>(
+        vtr::SourceOptions::new("instructions", Some(stream)),
+        "PIPELINE",
+    )
+    .unwrap();
     let bus = w
-        .add_scope(Some(root), "read_bus", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("read_bus", Some(root)),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
-    w.add_generator(Some(bus), "read_request", "TRANSACTOR")
-        .unwrap();
-    w.add_generator(Some(bus), "write_request", "TRANSACTOR")
-        .unwrap();
+    w.transactions::<()>(
+        vtr::SourceOptions::new("read_request", Some(bus)),
+        "TRANSACTOR",
+    )
+    .unwrap();
+    w.transactions::<()>(
+        vtr::SourceOptions::new("write_request", Some(bus)),
+        "TRANSACTOR",
+    )
+    .unwrap();
     let log = w
-        .add_scope(Some(root), "log", vtr::ScopeType::Generic, "")
+        .scope_with(
+            vtr::SourceOptions::new("log", Some(root)),
+            vtr::ScopeType::Generic,
+            "",
+        )
         .unwrap();
-    let site = w
-        .add_generator(Some(log), "read_failed at pc=%x", vtr::LOG_GENERATOR_KIND)
-        .unwrap();
-    w.node_attr(site, "log.severity", vtr::Value::U64(4))
-        .unwrap();
-    let filename = w.intern("soc.sv");
-    w.node_attr(site, "log.file", vtr::Value::Str(filename))
-        .unwrap();
-    w.node_attr(site, "log.line", vtr::Value::U64(42)).unwrap();
-    w.add_scope(Some(root), "empty", vtr::ScopeType::Generic, "")
-        .unwrap();
+    let mut site = vtr::SourceOptions::new("read_failed at pc={:x}", Some(log));
+    site.attributes = vec![
+        vtr::Attribute {
+            key: w.intern("log.severity").unwrap(),
+            value: vtr::Value::U64(4),
+        },
+        vtr::Attribute {
+            key: w.intern("log.file").unwrap(),
+            value: vtr::Value::Str(w.intern("soc.sv").unwrap()),
+        },
+        vtr::Attribute {
+            key: w.intern("log.line").unwrap(),
+            value: vtr::Value::U64(42),
+        },
+    ];
+    w.logs::<u64>(site).unwrap();
+    w.scope_with(
+        vtr::SourceOptions::new("empty", Some(root)),
+        vtr::ScopeType::Generic,
+        "",
+    )
+    .unwrap();
     w.close().unwrap();
     if let Some(path) = std::env::var_os("VOLNA_HIERARCHY_FIXTURE") {
         std::fs::copy(file.path(), path).unwrap();

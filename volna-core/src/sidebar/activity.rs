@@ -24,7 +24,6 @@ struct TraceActivity {
     counter: Counter,
     shown: Option<Arc<ActivityCounts>>,
     classifying: Option<(u64, u64)>,
-    resolving: Option<(u64, u64)>,
     failed: Option<(u64, u64)>,
     build: Build,
 }
@@ -153,7 +152,6 @@ impl ActivityModel {
                 counter: Counter::Absent,
                 shown: None,
                 classifying: None,
-                resolving: None,
                 failed: None,
                 build: Build::Offered,
             });
@@ -224,17 +222,6 @@ impl ActivityModel {
                         budget: budget.clone(),
                     });
                 }
-                Some(counts) if !counts.exact() && a.resolving.is_none() => {
-                    a.resolving = Some(want);
-                    requests.push(LoadRequest::ResolveActivity {
-                        trace,
-                        generation: a.generation,
-                        session: Arc::clone(session),
-                        counter: Arc::clone(counter),
-                        counts: Arc::clone(counts),
-                        budget: budget.clone(),
-                    });
-                }
                 _ => {}
             }
         }
@@ -255,9 +242,6 @@ impl ActivityModel {
                 trace, generation, ..
             }
             | LoadResult::Activity {
-                trace, generation, ..
-            }
-            | LoadResult::ActivityResolved {
                 trace, generation, ..
             } => (*trace, *generation),
             _ => return Ok(false),
@@ -328,33 +312,6 @@ impl ActivityModel {
                     a.classifying = None;
                 }
                 if window != want {
-                    return Ok(false);
-                }
-                match result {
-                    Ok(counts) => {
-                        a.shown = Some(counts);
-                        Ok(true)
-                    }
-                    Err(error) => {
-                        a.failed = Some(window);
-                        a.shown = None;
-                        Err(error.context(format!("Scope activity of trace {trace}")))
-                    }
-                }
-            }
-            LoadResult::ActivityResolved {
-                trace,
-                generation,
-                window,
-                result,
-            } => {
-                let Some(a) = self.current(trace, generation) else {
-                    return Ok(false);
-                };
-                if a.resolving == Some(window) {
-                    a.resolving = None;
-                }
-                if window != want || a.shown.as_ref().is_none_or(|c| c.window != window) {
                     return Ok(false);
                 }
                 match result {
@@ -480,7 +437,7 @@ impl ActivityModel {
         generation: u64,
         window: (u64, u64),
         scope: ScopeId,
-    ) -> Option<(u32, u32)> {
+    ) -> Option<u32> {
         let a = self.traces.get(&trace)?;
         let counts = a.shown.as_ref()?;
         (a.generation == generation && counts.window == window)

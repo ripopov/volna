@@ -51,10 +51,8 @@ impl Source {
                     TransactionColumn::Id => (a.id.0.cmp(&b.id.0), false),
                     TransactionColumn::Begin => (a.begin.cmp(&b.begin), false),
                     TransactionColumn::End | TransactionColumn::Duration => {
-                        let missing = (
-                            a.status == vtr::TxStatus::Open,
-                            b.status == vtr::TxStatus::Open,
-                        );
+                        let missing =
+                            (a.status == vtr::Status::Open, b.status == vtr::Status::Open);
                         let order = if sort.column == 2 {
                             a.end
                                 .saturating_sub(a.begin)
@@ -64,7 +62,11 @@ impl Source {
                         };
                         nullable(missing, order)
                     }
-                    TransactionColumn::Status => (a.status.name().cmp(b.status.name()), false),
+                    TransactionColumn::Status => (
+                        crate::data::text::status_name(a.status)
+                            .cmp(crate::data::text::status_name(b.status)),
+                        false,
+                    ),
                     TransactionColumn::Label => {
                         let label = |attributes: &Vec<TransactionAttribute>| {
                             attributes.iter().position(|a| a.key == "vtr.label")
@@ -239,15 +241,15 @@ fn attributes(a: &AttributeValue, b: &AttributeValue) -> (Ordering, bool) {
     nullable((matches!(a, Null), matches!(b, Null)), order)
 }
 
-fn decimal(a: i128, scale_a: i32, b: i128, scale_b: i32) -> Ordering {
+fn decimal(a: i128, scale_a: i64, b: i128, scale_b: i64) -> Ordering {
     let sign = a.signum().cmp(&b.signum());
     if sign != Ordering::Equal || a == 0 {
         return sign;
     }
     let (a_abs, b_abs) = (a.unsigned_abs(), b.unsigned_abs());
     let (digits_a, digits_b) = (a_abs.ilog10() + 1, b_abs.ilog10() + 1);
-    let order = (i64::from(scale_a) + i64::from(digits_a))
-        .cmp(&(i64::from(scale_b) + i64::from(digits_b)))
+    let order = (i128::from(scale_a) + i128::from(digits_a))
+        .cmp(&(i128::from(scale_b) + i128::from(digits_b)))
         .then_with(|| {
             (a_abs * 10u128.pow(20 - digits_a)).cmp(&(b_abs * 10u128.pow(20 - digits_b)))
         });
@@ -296,7 +298,7 @@ mod tests {
         assert_eq!(decimal(3, 1, 30, 0), Ordering::Equal);
         assert_eq!(decimal(-3, 1, -29, 0), Ordering::Less);
         assert_eq!(
-            decimal(i128::from(u64::MAX), i32::MAX, 1, i32::MIN),
+            decimal(i128::from(u64::MAX), i64::MAX, 1, i64::MIN),
             Ordering::Greater
         );
         assert_eq!(decimal(0, 100, -1, 0), Ordering::Greater);

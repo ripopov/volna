@@ -13,21 +13,27 @@ Server process tests share this directory.
 
 ## Provenance
 
-The source recordings were imported from the
-[prototype repository at revision 35d8aa8](https://github.com/ripopov/vtr/tree/35d8aa8fb1e328d95a0ceecd80fd0ed0bccc237c).
-The `values` files and their generator came from `volna/volna-trace/tests/fixtures`;
-the counter, PicoRV32, landing, and showcase recordings came from
-`volna/volna/examples`. That directory's
-[guide](https://github.com/ripopov/vtr/blob/35d8aa8fb1e328d95a0ceecd80fd0ed0bccc237c/volna/volna/examples/README.md)
-describes their original generators.
+These fixtures use the current VTR 3.2 wire format. Older recordings must be
+regenerated. Record IDs include embedded stages and events; locate records by
+their source, payload, and relationships when updating viewer expectations.
 
-`values.vtr` and `landing_dram.vtr` were generated with `vtr convert` from
-inputs in [`vtr-convert`](../../../vtr/vtr-convert/tests/fixtures/README.md).
-That guide records foreign-format fixture provenance and regeneration commands.
+The `feature_showcase`, `pipeline_showcase`, and `landing` recordings are copies
+of the outputs from the checked-in [Volna example generators](../../../volna/README.md#feature-pipeline-and-landing-examples).
+Regenerate the examples, then copy their `.vtr` files into this directory.
 
-The VTR fixtures use format 2.0. Their hierarchy declarations use generator kinds
-and ordinary grouping scopes; clocks are generators. Signal histories,
-transaction IDs, timing, and log arguments are retained.
+`counter.vtr` and `picorv32.vtr` are converted from the checked-in VCDs in
+[`source`](source). From the workspace root:
+
+```sh
+cargo run --locked --manifest-path vtr/Cargo.toml -p vtr-cli -- convert volna-trace/tests/fixtures/source/counter.vcd volna-trace/tests/fixtures/counter.vtr
+cargo run --locked --manifest-path vtr/Cargo.toml -p vtr-cli -- convert volna-trace/tests/fixtures/source/picorv32.vcd volna-trace/tests/fixtures/picorv32.vtr
+```
+
+`features.vtr`, `operators.vtr`, `pipeline.vtr`, `values.vtr`, and
+`landing_dram.vtr` are converted from inputs in
+[`vtr-convert`](../../../vtr/vtr-convert/tests/fixtures/README.md), which documents
+their provenance and regeneration commands. The example directory also carries
+copies of counter, PicoRV32, and landing DRAM recordings.
 
 After replacing fixtures, run:
 

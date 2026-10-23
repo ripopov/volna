@@ -75,14 +75,6 @@ pub trait Session: Send + Sync {
     ) -> anyhow::Result<()> {
         anyhow::bail!("this session cannot build an activity index")
     }
-    fn resolve_activity(
-        &self,
-        _signals: &[SignalRef],
-        _t0: u64,
-        _t1: u64,
-    ) -> anyhow::Result<Vec<SignalRef>> {
-        anyhow::bail!("this trace cannot read activity")
-    }
     fn load_track(
         &self,
         _track: crate::data::transactions::TrackRef,
@@ -180,14 +172,6 @@ impl Session for AccountedSession {
         cache_dir: Option<&std::path::Path>,
     ) -> anyhow::Result<()> {
         self.inner.build_activity(options, budget, cache_dir)
-    }
-    fn resolve_activity(
-        &self,
-        signals: &[SignalRef],
-        t0: u64,
-        t1: u64,
-    ) -> anyhow::Result<Vec<SignalRef>> {
-        self.inner.resolve_activity(signals, t0, t1)
     }
     fn load_track(
         &self,
@@ -340,7 +324,7 @@ impl OpenSpec {
 
 fn ensure_vtr(bytes: &[u8]) -> anyhow::Result<()> {
     anyhow::ensure!(
-        bytes.starts_with(&vtr::container::FILE_MAGIC),
+        bytes.starts_with(&vtr::framing::MAGIC),
         "unsupported trace format: expected VTR; convert foreign recordings with `vtr convert INPUT OUTPUT` before opening"
     );
     Ok(())
@@ -368,14 +352,6 @@ pub enum LoadRequest<Tag = u64> {
         session: Arc<dyn Session>,
         signals: Vec<SignalRef>,
     },
-    ResolveActivity {
-        tag: Tag,
-        generation: u64,
-        session: Arc<dyn Session>,
-        signals: Vec<SignalRef>,
-        window: (u64, u64),
-        budget: crate::remote::memory::MemoryBudget,
-    },
 }
 
 impl<Tag: Copy> LoadRequest<Tag> {
@@ -383,8 +359,7 @@ impl<Tag: Copy> LoadRequest<Tag> {
         match self {
             Self::Signals { session, .. }
             | Self::Track { session, .. }
-            | Self::BuildActivity { session, .. }
-            | Self::ResolveActivity { session, .. } => session.remote_id(),
+            | Self::BuildActivity { session, .. } => session.remote_id(),
         }
     }
     pub fn fail(self, error: anyhow::Error) -> LoadResult<Tag> {
@@ -421,17 +396,6 @@ impl<Tag: Copy> LoadRequest<Tag> {
                     .into_iter()
                     .map(|id| (id, Err(anyhow::anyhow!("{error:#}"))))
                     .collect(),
-            },
-            Self::ResolveActivity {
-                tag,
-                generation,
-                window,
-                ..
-            } => LoadResult::ActivityResolved {
-                tag,
-                generation,
-                window,
-                result: Err(error),
             },
         }
     }
@@ -472,19 +436,6 @@ impl<Tag: Copy> LoadRequest<Tag> {
                 generation,
                 results: session.load_signals(&signals),
             },
-            Self::ResolveActivity {
-                tag,
-                generation,
-                session,
-                signals,
-                window,
-                ..
-            } => LoadResult::ActivityResolved {
-                tag,
-                generation,
-                window,
-                result: session.resolve_activity(&signals, window.0, window.1),
-            },
         }
     }
 }
@@ -511,11 +462,5 @@ pub enum LoadResult<Tag = u64> {
         tag: Tag,
         generation: u64,
         results: SignalLoads,
-    },
-    ActivityResolved {
-        tag: Tag,
-        generation: u64,
-        window: (u64, u64),
-        result: anyhow::Result<Vec<SignalRef>>,
     },
 }

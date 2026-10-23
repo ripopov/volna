@@ -61,6 +61,11 @@ sessions or objects borrowing their storage exist.
 
 `Session` separates resident metadata from potentially expensive loads:
 
+Opening a local recording computes its exact time range from indexed bounds and
+the time columns of pages containing embedded detail. This includes stages and
+events outside their owner's interval without loading complete tracks or their
+payloads. Owner lifetimes remain the intervals recorded by the producer.
+
 | Operation | Result |
 | --- | --- |
 | `info()` and `hierarchy()` | Recording time range, timescale, scopes, and variable declarations |
@@ -73,13 +78,32 @@ Aliases refer to the same signal identity. A batched load can share their
 history storage. An empty transaction catalog differs from an unsupported
 operation: VTR supports transactions even in a waveform-only recording.
 
-An activity sidecar helps identify signals that are quiet or changing in a
-time window. Its classification can leave signals undecided; use
-`resolve_activity()` for an exact answer. Path-backed sessions can build an
+Tracks include typed owners, clocks, located stages, events, and logs. Record
+fields use separate namespaces: `payload.<field>` for top-level structure
+members, `payload` for a scalar or collection, `attributes.<key>` for record
+attributes, and `record.kind` for the category. Nested structures remain maps;
+arrays and sequences remain lists. Logs also expose formatted `log.message`
+text, or bytes when the result is not UTF-8. Payload projection has a 64 MiB
+allocation limit, including collection storage for zero-size elements.
+
+A text payload field or record attribute named `vtr.label` supplies the
+canonical `vtr.label` instance label used by the viewer, including labels set
+by VTR’s tracker. VTR rejects attributes that duplicate payload field names.
+Other fields retain their namespaces.
+
+Enum numbers cover signed and unsigned 64-bit values without narrowing. Fixed
+scales and packed-vector widths retain their 64-bit ranges. Embedded events
+and stages keep their record IDs; lookup and relation navigation resolve those
+IDs to their owning row. Relation IDs preserve stored order and duplicate edges
+across tracks. Endpoints outside the recording or missing from an incomplete
+trace retain their IDs and have no generator location.
+
+A VTI 3.0 activity sidecar records exact signal-change times. It identifies
+signals that change in a time window without loading their waveform histories. Path-backed sessions can build an
 index with `build_activity()`, a memory budget, and VTR's `BuildOptions`.
 `BuildControl` provides progress and cancellation. Byte images and recovered
 recordings have no stable activity build source. See the
-[activity sidecar specification](../vtr/vtr/docs/SPEC.md#activity-index-sidecar-version-2).
+[activity sidecar specification](../vtr/vtr/docs/SPEC.md#9-activity-index-sidecar-vti-30).
 
 ## Remote loading
 
@@ -109,7 +133,7 @@ and generations identify completions without entering the wire protocol.
 `RemoteClient`, rather than their blocking local query methods.
 
 The [server guide](../volna-server/README.md) describes process hosting and
-protocol version 8. Local and remote objects have the same data contract;
+protocol version 9. Local and remote objects have the same data contract;
 transport carries runtime facts. Viewport state, search, value translation,
 transaction layout, VDB design semantics, and annotations belong to consumers.
 
@@ -138,5 +162,6 @@ cargo clippy --locked -p volna-trace --all-targets --all-features -- -D warnings
 Tests cover local and remote VTR agreement, aliases, transaction semantics, compact
 hierarchy transfer, corrupted and incomplete responses, cooperative decoding,
 and memory ownership. All binary fixtures are committed under
-[`tests/fixtures`](tests/fixtures/README.md); no simulator or submodule is needed.
+[`tests/fixtures`](tests/fixtures/README.md). Initialize the VTR submodule before
+building; no simulator build or fixture download is required.
 The `testing` feature exposes procedural recordings for downstream headless tests.

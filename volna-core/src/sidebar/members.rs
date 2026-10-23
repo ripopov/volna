@@ -36,7 +36,9 @@ pub fn log_site(h: &Hierarchy, member: Member) -> Option<LogSite<'_>> {
     };
     let severity = match attr("log.severity") {
         Some(AttributeValue::U64(n)) => match u8::try_from(*n) {
-            Ok(n @ 0..=5) => vtr::logblock::Severity::from_code(n).name().to_owned(),
+            Ok(n @ 0..=5) => {
+                ["trace", "debug", "info", "warn", "error", "fatal"][n as usize].to_owned()
+            }
             _ => n.to_string(),
         },
         Some(AttributeValue::Text(s)) => s.clone(),

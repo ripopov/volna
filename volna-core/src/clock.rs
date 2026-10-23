@@ -6,17 +6,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-pub use vtr::{ClockTimeline, CycleAt};
+mod timeline;
+pub use timeline::{ClockTimeline, CycleAt};
 
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::trace::{TraceId, Traced};
 use crate::wave::timeline::TimeBase;
 use crate::wave::viewport::Viewport;
-use volna_trace::data::transactions::{AttributeValue, Track, TrackKind, TrackRef, TxStatus};
+use volna_trace::data::transactions::{AttributeValue, Status, Track, TrackKind, TrackRef};
 
-pub const GENERATOR_KIND: &str = vtr::CLOCK_GENERATOR_KIND;
-pub const LINK_ATTRIBUTE: &str = vtr::clock::KEY_CLOCK;
-pub const PERIOD_ATTRIBUTE: &str = vtr::clock::KEY_PERIOD;
+pub const GENERATOR_KIND: &str = "CLOCK";
+pub const LINK_ATTRIBUTE: &str = "vtr.clock";
+pub const PERIOD_ATTRIBUTE: &str = "attributes.vtr.period";
 
 #[derive(Clone, Debug)]
 pub enum ClockState {
@@ -88,9 +89,11 @@ impl Clocks {
         let added = &self.clocks[first..];
         for t in tracks {
             if let Some(path) = t.attributes.iter().find_map(|(k, v)| match v {
-                AttributeValue::Text(p) if k == LINK_ATTRIBUTE => Some(p),
+                AttributeValue::U64(id) if k == LINK_ATTRIBUTE => {
+                    u32::try_from(*id).ok().map(TrackRef)
+                }
                 _ => None,
-            }) && let Some(clock) = added.iter().find(|c| &c.path == path)
+            }) && let Some(clock) = added.iter().find(|c| c.track == path)
             {
                 self.links.insert(Traced::new(trace, t.id), clock.track);
             }
@@ -175,13 +178,13 @@ pub fn timeline_of(generators: &[Arc<LoadedGenerator>]) -> anyhow::Result<ClockT
             .iter()
             .find(|a| a.key == PERIOD_ATTRIBUTE)
             .map_or(Ok(0), |a| match a.value {
-                AttributeValue::Time(p) | AttributeValue::U64(p) => Ok(p),
+                AttributeValue::Time(p) => Ok(p),
                 _ => Err(anyhow::anyhow!("{PERIOD_ATTRIBUTE} is not a time")),
             })?;
-        open |= tx.status == TxStatus::Open;
+        open |= tx.status == Status::Open;
         raw.push((tx.begin, tx.end, period));
     }
-    Ok(ClockTimeline::new(raw, open)?)
+    ClockTimeline::new(raw, open)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,7 +278,7 @@ impl ClockView {
 
     #[must_use]
     pub fn absolute_cycle(&self, timeline: &ClockTimeline, shown: i64) -> Option<u64> {
-        u64::try_from(shown + self.origin_cycle(timeline) as i64).ok()
+        u64::try_from(i128::from(shown) + i128::from(self.origin_cycle(timeline))).ok()
     }
 }
 
@@ -331,7 +334,7 @@ impl volna_trace::data::SignalHistory for ClockHistory {
         if i.is_multiple_of(2) {
             return edge;
         }
-        let fall = edge + (self.period(cycle) / 2).max(1);
+        let fall = edge.saturating_add((self.period(cycle) / 2).max(1));
         self.timeline
             .edge(cycle + 1)
             .map_or(fall, |next| fall.min(next))

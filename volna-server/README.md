@@ -86,8 +86,8 @@ identity-keyed user cache when its directory is read-only.
 A scan authorized by the client can finish and leave a reusable cache after a
 disconnect. Cancelling the client's transfer prevents client installation; it
 does not revoke a server scan already in progress. The server returns raw index
-bytes. Classification and exact activity queries run on the client, using
-complete signal reads for undecided identities.
+bytes. VTI 3.0 records exact signal-change times, so the client computes
+activity counts for each viewport without requesting waveform histories.
 
 ## Verification
 

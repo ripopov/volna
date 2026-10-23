@@ -92,8 +92,8 @@ fn record() -> Transaction {
         generator: TrackRef(1),
         begin: 0,
         end: 10,
-        status: TxStatus::Ok,
-        kind: TxKind::Unspecified,
+        status: Status::Ok,
+        kind: SpanKind::Unspecified,
         parent: None,
         attributes: vec![],
         events: vec![],
@@ -156,6 +156,7 @@ fn project_relations(
 fn recorded_names_are_admitted_before_projection() {
     let mut tx = record();
     tx.stages.push(TransactionStage {
+        id: TransactionRef(2),
         name: "s".repeat(140_000),
         lane: "l".repeat(140_000),
         begin: 0,
@@ -163,6 +164,7 @@ fn recorded_names_are_admitted_before_projection() {
         attributes: vec![],
     });
     tx.events.push(TransactionEvent {
+        id: TransactionRef(3),
         name: "e".repeat(140_000),
         time: 1,
         attributes: vec![],
@@ -200,6 +202,7 @@ fn item_limit_also_bounds_lifeline_and_ticks() {
     let mut tx = record();
     for i in 0..10_000 {
         tx.stages.push(TransactionStage {
+            id: TransactionRef(2 + 2 * i),
             name: "s".into(),
             lane: "0".into(),
             begin: 0,
@@ -207,6 +210,7 @@ fn item_limit_also_bounds_lifeline_and_ticks() {
             attributes: vec![],
         });
         tx.events.push(TransactionEvent {
+            id: TransactionRef(3 + 2 * i),
             name: "e".into(),
             time: i,
             attributes: vec![],
@@ -223,7 +227,8 @@ fn item_limit_also_bounds_lifeline_and_ticks() {
 fn nested_collection_storage_is_admitted() {
     let mut tx = record();
     tx.stages = (0..1000)
-        .map(|_| TransactionStage {
+        .map(|i| TransactionStage {
+            id: TransactionRef(i + 2),
             name: String::new(),
             lane: "0".into(),
             begin: 0,
@@ -248,8 +253,8 @@ fn relation_order_and_captions_use_bounded_storage() {
     let relations = (0..10_000)
         .map(|id| LoadedRelation {
             id,
-            from_generator: TrackRef(1),
-            to_generator: TrackRef(1),
+            from_generator: Some(TrackRef(1)),
+            to_generator: Some(TrackRef(1)),
             relation: Relation {
                 kind: if id == 0 {
                     "a".repeat(140_000)
