@@ -11,6 +11,9 @@ ignore = [
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser is required by GPUI and its font stack; replacement requires an upstream migration." },
     { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 is required by zbus-lockstep to parse packaged AT-SPI XML during code generation/tests, not trace input; remove when zbus_xml upgrades." },
     { id = "RUSTSEC-2026-0195", reason = "The affected quick-xml is confined to zbus-lockstep packaged XML; zbus_xml has no compatible release using the fixed parser." },
+    { id = "RUSTSEC-2026-0370", reason = "GPUI's Linux accessibility and portal dependencies require zbus 5 and zvariant; remove when those dependencies migrate to zbus 6." },
+    { id = "RUSTSEC-2026-0371", reason = "GPUI's Linux accessibility and portal dependencies require zbus_names through zbus 5; remove when those dependencies migrate to zbus 6." },
+    { id = "RUSTSEC-2026-0372", reason = "GPUI's Linux accessibility and portal dependencies require zvariant_derive through zvariant; remove when those dependencies migrate to zbus 6." },
 ]
 
 [licenses]
