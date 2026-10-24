@@ -6,7 +6,7 @@ sequence numbers, ROB entries, and physical registers through stalls, paired
 dispatch, replay, branch flushes, key reuse, retirement, and a final open
 instruction. Bus requests retain their issuing instruction as parent.
 
-Build the [pinned VTR SDK and Verilator](../../../vtr/integrations/verilator/README.md),
+Build the [pinned VTR SDK and Verilator](../../../vtr/README.md#development),
 including the release CLI, then run from the Volna workspace root:
 
 ```sh

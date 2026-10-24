@@ -9,8 +9,6 @@ import AxeBuilder from '@axe-core/playwright';
 
 const sampleWorkspace = JSON.parse(await readFile(new URL('../../volna/examples/landing-page.volna.json', import.meta.url), 'utf8'));
 const sampleRecord = sampleWorkspace.panels.find(panel => panel.id === 37).record;
-const cppGuide = await readFile(new URL('../../vtr/vtr-cpp/README.md', import.meta.url), 'utf8');
-const cppExamples = [...cppGuide.matchAll(/```(?:cpp|c)\n([\s\S]*?)\n```/g)].map(match => match[1]);
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const results = fileURLToPath(new URL('../test-results/', import.meta.url));
 const base = `/${(process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/')}`.replace(/\/$/, '') + '/';
@@ -70,7 +68,7 @@ try {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${origin}${base}docs/`);
   assert.match(await page.locator('h1').textContent(), /engineering docs/);
-  assert.equal(await page.locator('.v-guide').count(), 10);
+  assert.equal(await page.locator('.v-guide').count(), 8);
   await page.goto(`${origin}${base}app/`);
   assert.equal(await page.locator('.volna-header, #starlight__sidebar').count(), 0);
   await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
@@ -141,7 +139,7 @@ try {
   await failedViewer.close();
   report.behavior.push('viewer initialization failure keeps landing documentation links usable');
   await page.goto(`${origin}${base}vtr/`);
-  const guide = await readFile(new URL('../../vtr/vtr/README.md', import.meta.url), 'utf8');
+  const guide = await readFile(new URL('../../vtr/README.md', import.meta.url), 'utf8');
   const commands = [...guide.matchAll(/```sh\n([\s\S]*?)\n```/g)].map(match => match[1]);
   const renderedCommands = page.locator('.expressive-code pre');
   assert.equal(await renderedCommands.count(), commands.length, 'guide must render all current command blocks');
@@ -149,7 +147,7 @@ try {
     const lines = (await renderedCommands.nth(index).locator('.ec-line').allTextContents()).map(line => line === '\n' ? '' : line);
     assert.equal(lines.join('\n'), command, 'rendered commands must match the canonical guide');
   }
-  assert.equal(await page.getByRole('link', { name: 'Waveforms', exact: true }).getAttribute('href'),
+  assert.equal(await page.getByRole('link', { name: 'waveform example', exact: true }).getAttribute('href'),
     'https://github.com/ripopov/vtr/blob/main/vtr/examples/waveform.rs');
   await page.goto(`${origin}${base}authoring/`);
   await verifyDiagrams(page);
@@ -287,7 +285,7 @@ try {
   report.behavior.push('mobile menu, server navigation, and canonical crate cross-links');
   await page.close();
   await behaviorContext.close();
-  const routes = ['', 'docs/', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'vtr-cpp/', 'vtr-guard/', 'volna-trace/', 'volna-server/', 'volna-core/', 'volna/', 'authoring/', 'design/', '404.html'];
+  const routes = ['', 'docs/', 'vtr/', 'vtr/specification/', 'vtr/rationale/', 'vtr/logging/', 'volna-trace/', 'volna-server/', 'volna-core/', 'volna/', 'authoring/', 'design/', '404.html'];
   for (const theme of ['dark', 'light']) {
     for (const width of [1440, 360]) {
       const context = await browser.newContext({ viewport: { width, height: 1000 }, colorScheme: theme, reducedMotion: 'reduce' });
@@ -322,22 +320,13 @@ try {
         assert.equal(state.movement, false);
         const content = await page.locator('.sl-markdown-content').textContent();
         assert.ok(content.trim().length > 20, `${route}: rendered content must not be empty`);
-        if (route === 'vtr-cpp/') {
-          const code = await page.locator('.expressive-code pre').evaluateAll(blocks =>
-            blocks.map(block => [...block.querySelectorAll('.ec-line')]
-              .map(line => line.textContent === '\n' ? '' : line.textContent).join('\n')));
-          assert.ok(cppExamples.length > 0, 'native guide must provide C or C++ source');
-          for (const example of cppExamples) {
-            assert.ok(code.includes(example), 'C and C++ examples must survive Markdown link rewriting intact');
-          }
-        }
         assert.deepEqual(errors, [], `${route}: browser errors`);
         if (width === 1440) {
           const audit = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze();
           report.accessibility.push({ route, theme, violations: audit.violations });
           assert.deepEqual(audit.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target).join(', ')}`), [], `${route} ${theme}: accessibility`);
         }
-        if (['', 'docs/', 'vtr-cpp/', 'vtr/', 'authoring/', 'vtr/specification/', 'volna-trace/', 'volna-server/'].includes(route)) {
+        if (['', 'docs/', 'vtr/', 'authoring/', 'vtr/specification/', 'volna-trace/', 'volna-server/'].includes(route)) {
           await page.screenshot({ path: `${results}/${route.replaceAll('/', '-') || 'landing'}-${theme}-${width}.png`, fullPage: true });
         }
         report.pages.push({ route, theme, width, ...state });

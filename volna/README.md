@@ -159,7 +159,7 @@ vtr convert /tmp/landing_dram.vcd /tmp/landing_dram.vtr
 The optional VCD contains the landing simulation's DRAM controller at picosecond
 resolution. Its ACT commands and addresses align with the main recording's
 refill transactions. The delivered `landing_dram.vtr` is converted from the
-[matching FST fixture](../vtr/vtr-convert/tests/fixtures/README.md).
+[matching FST fixture](../vtr/vtr-convert/tests/fixtures/).
 After regenerating `landing.vtr`, retarget the transaction inspector in
 `landing-page.volna.json` to the instruction labelled
 `80000054: addi a4, a4, 4`; record IDs include embedded events and stages.

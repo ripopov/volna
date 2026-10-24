@@ -36,12 +36,10 @@ belong to the separate VDB and application layers.
 <a class="v-guide" href="../vtr/specification/"><span class="v-guide__label">02 / REFERENCE</span><strong>File format</strong><span>Container layout, binary encodings, recovery, and conformance.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="../vtr/rationale/"><span class="v-guide__label">03 / DECISIONS</span><strong>Design rationale</strong><span>Why sections, local compression, stable identity, and derived indexes.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 <a class="v-guide" href="../vtr/logging/"><span class="v-guide__label">04 / GUIDE</span><strong>Structured logging</strong><span>Typed call sites and timestamped records alongside transactions.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="../vtr-cpp/"><span class="v-guide__label">05 / C++ AND C</span><strong>Build with C++ or C</strong><span>Link the native library and record signals and transactions.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="../vtr-guard/"><span class="v-guide__label">06 / RECOVERY</span><strong>Crash guard</strong><span>Finish watched writers after Linux faults, stop requests, and exit.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="../volna-trace/"><span class="v-guide__label">07 / LOADING</span><strong>Local and remote traces</strong><span>Open VTR recordings, load complete objects, and manage memory.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="../volna-server/"><span class="v-guide__label">08 / HOSTING</span><strong>Headless server</strong><span>Process hosting, framed protocol, and activity sidecar transfers.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="../volna-core/"><span class="v-guide__label">09 / VIEWER CORE</span><strong>Viewer models</strong><span>Commands, panel state, display lists, persistence, and undo.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
-<a class="v-guide" href="../volna/"><span class="v-guide__label">10 / DESKTOP</span><strong>Run the viewer</strong><span>Build the GPUI frontend and open VTR recordings.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
+<a class="v-guide" href="../volna-trace/"><span class="v-guide__label">05 / LOADING</span><strong>Local and remote traces</strong><span>Open VTR recordings, load complete objects, and manage memory.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
+<a class="v-guide" href="../volna-server/"><span class="v-guide__label">06 / HOSTING</span><strong>Headless server</strong><span>Process hosting, framed protocol, and activity sidecar transfers.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
+<a class="v-guide" href="../volna-core/"><span class="v-guide__label">07 / VIEWER CORE</span><strong>Viewer models</strong><span>Commands, panel state, display lists, persistence, and undo.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
+<a class="v-guide" href="../volna/"><span class="v-guide__label">08 / DESKTOP</span><strong>Run the viewer</strong><span>Build the GPUI frontend and open VTR recordings.</span><span class="v-guide__arrow" aria-hidden="true">→</span></a>
 </div>
 
 ## Work with the libraries
@@ -50,10 +48,8 @@ Building the workspace requires the pinned nightly toolchain in `rust-toolchain.
 and a C compiler to build the Zstandard dependency. The standalone VTR crate
 supports Rust 1.97.1 or newer.
 
-The [VTR guide](../vtr/) links runnable Rust examples and documents the recording
-and reading APIs, verification commands, and standalone crate requirements.
-The [C++ and C guide](../vtr-cpp/) covers building, linking, ownership, and errors;
-the [crash guard guide](../vtr-guard/) covers Linux process recovery.
+The [VTR overview](../vtr/) introduces the trace model, links a runnable example,
+and briefly describes its libraries and tools.
 The [trace loading guide](../volna-trace/) explains the shared session API.
 The [server guide](../volna-server/) covers building and hosting the executable.
 The [viewer core guide](../volna-core/) explains the frontend contract; the

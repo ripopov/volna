@@ -6,14 +6,14 @@ Volna is a hardware debug environment under development.
 
 | Package | Responsibility |
 | --- | --- |
-| [`vtr`](vtr/vtr/README.md) | Versatile Trace Record: runtime trace format, reader, writer, and derived indexes |
-| [`vtr-cpp`](vtr/vtr-cpp/README.md) | Native C++20 VTR reader/writer, C headers, and simulator integration helpers |
-| [`vtr-guard`](vtr/vtr-guard/README.md) | Linux crash and stop guard for Rust VTR writers |
+| [`vtr`](vtr/README.md) | Versatile Trace Record: runtime trace format, reader, writer, and derived indexes |
+| [`vtr-cpp`](vtr/README.md) | Native C++20 VTR reader/writer, C headers, and simulator integration helpers |
+| [`vtr-guard`](vtr/README.md) | Linux crash and stop guard for Rust VTR writers |
 | [`volna-trace`](volna-trace/README.md) | Immutable VTR sessions, complete objects, memory admission, and remote client |
-| [`vtr-convert`](vtr/vtr-convert/README.md) | Shared FST, Kanata, and VCD importers |
-| [`vtr-convert-wasm`](vtr/vtr-convert-wasm/README.md) | Browser worker host for in-memory trace conversion |
-| [`vtr-progress`](vtr/vtr-progress/README.md) | Conversion progress counters and the CLI/native reporting protocol |
-| [`vtr-cli`](vtr/vtr-cli/README.md) | Terminal trace inspection, queries, activity indexing, and Kanata/VCD/FST conversion |
+| [`vtr-convert`](vtr/README.md) | Shared FST, Kanata, and VCD importers |
+| [`vtr-convert-wasm`](vtr/README.md) | Browser worker host for in-memory trace conversion |
+| [`vtr-progress`](vtr/README.md) | Conversion progress counters and the CLI/native reporting protocol |
+| [`vtr-cli`](vtr/README.md) | Terminal trace inspection, queries, activity indexing, and Kanata/VCD/FST conversion |
 | [`volna-server`](volna-server/README.md) | Headless process serving one recording over framed stdin/stdout |
 | [`volna-core`](volna-core/README.md) | Toolkit-independent viewer state, commands, layouts, and display lists |
 | [`volna`](volna/README.md) | GPUI desktop viewer with automatic FST and Kanata import into VTR |
@@ -28,7 +28,7 @@ VTR stores runtime signal values, transactions, logs, clocks, hierarchy, and ide
 Use the pinned nightly toolchain in `rust-toolchain.toml` and a C compiler
 for vendored Zstandard. The native VTR library additionally requires a C++20
 compiler, CMake, and LZ4, Zstandard, and zlib development packages; see its
-[build instructions](vtr/vtr-cpp/README.md).
+[build instructions](vtr/README.md).
 VTR is developed in [ripopov/vtr](https://github.com/ripopov/vtr) and pinned by
 this repository's `vtr` submodule. Initialize it before building:
 
@@ -64,8 +64,8 @@ CI runs these automated, headless checks. To select the library, use
 Volna also builds its matching `vtr` executable. The standalone VTR crate still
 requires Rust 1.97.1 or newer; CI tests its packaged source with that compiler.
 See the
-[crate guide](vtr/vtr/README.md),
-[format specification](vtr/vtr/docs/SPEC.md), and [design rationale](vtr/vtr/docs/RATIONALE.md).
+[crate guide](vtr/README.md),
+[format specification](vtr/docs/SPEC.md), and [design rationale](vtr/docs/RATIONALE.md).
 
 To run the CI Clippy check before each push, enable the tracked Git hook once
 per clone:

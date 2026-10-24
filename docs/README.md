@@ -20,6 +20,11 @@ npm test
 npm run preview
 ```
 
+Building the viewer needs a C compiler with WebAssembly support. On macOS the
+build helper uses installed Homebrew LLVM when Apple Clang lacks that target;
+explicit `CC_wasm32_unknown_unknown` and `AR_wasm32_unknown_unknown` settings
+take precedence.
+
 On macOS, installed Google Chrome is used automatically. `CHROME_PATH` overrides
 the executable; otherwise Playwright's installed Chromium is used. Linux CI
 installs Chromium and its system dependencies with
@@ -49,13 +54,13 @@ permissions only to the deployment job.
 
 ## Sources
 
-The content loader reads `../vtr/vtr/README.md` as the VTR introduction and
-`../vtr/vtr/docs/{SPEC,RATIONALE,LOGGING}.md` as the remaining VTR pages. It also
-reads `../vtr/vtr-cpp/README.md`, `../vtr/vtr-guard/README.md`,
-`../volna-trace/README.md`, `../volna-server/README.md`,
-`../volna-core/README.md`, and `../volna/README.md` as crate guides.
-Edit these canonical crate files; the development server
-watches them for updates. The loader supplies page metadata,
+The content loader reads `../vtr/README.md` as the VTR introduction and
+`../vtr/docs/{SPEC,RATIONALE,LOGGING}.md` as VTR guides.
+It also reads `../volna-trace/README.md`, `../volna-server/README.md`,
+`../volna-core/README.md`, and `../volna/README.md` as component guides.
+VTR documentation lives only in its root README and `docs/` directory.
+Edit these canonical files; the development server watches them for updates.
+The loader supplies page metadata,
 removes the top-level title, and adapts repository links and image paths to web
 routes in memory without generating Markdown copies.
 

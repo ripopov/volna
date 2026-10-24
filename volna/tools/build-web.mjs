@@ -6,6 +6,65 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 
+export function wasmBuildEnvironment(
+  env = process.env,
+  platform = process.platform,
+  execute = spawnSync,
+) {
+  const compilerKeys = [
+    "CC_wasm32-unknown-unknown",
+    "CC_wasm32_unknown_unknown",
+    "TARGET_CC",
+    "CC",
+  ];
+  if (platform !== "darwin" || compilerKeys.some((key) => env[key])) return env;
+
+  const supportsWasm = (compiler) => {
+    const result = execute(compiler, ["--print-targets"], {
+      env,
+      encoding: "utf8",
+    });
+    return result.status === 0 && /\bwasm32\b/.test(result.stdout);
+  };
+  if (supportsWasm("clang")) return env;
+
+  const brewEnv = { ...env, HOMEBREW_NO_AUTO_UPDATE: "1" };
+  const installed = execute("brew", ["list", "--formula"], {
+    env: brewEnv,
+    encoding: "utf8",
+  });
+  const formulas = (installed.stdout || "")
+    .split(/\s+/)
+    .filter((name) => /^llvm(?:@\d+)?$/.test(name))
+    .sort((a, b) => {
+      const version = (name) => Number(name.split("@")[1] || Infinity);
+      return version(b) - version(a);
+    });
+  for (const formula of formulas) {
+    const prefix = execute("brew", ["--prefix", formula], {
+      env: brewEnv,
+      encoding: "utf8",
+    });
+    if (prefix.status !== 0) continue;
+    const bin = join(prefix.stdout.trim(), "bin");
+    const compiler = join(bin, "clang");
+    if (!supportsWasm(compiler)) continue;
+    const result = { ...env, CC_wasm32_unknown_unknown: compiler };
+    const archiverKeys = [
+      "AR_wasm32-unknown-unknown",
+      "AR_wasm32_unknown_unknown",
+      "TARGET_AR",
+      "AR",
+    ];
+    if (!archiverKeys.some((key) => env[key]))
+      result.AR_wasm32_unknown_unknown = join(bin, "llvm-ar");
+    return result;
+  }
+  throw new Error(
+    "Apple Clang cannot compile WebAssembly. Install Homebrew LLVM (brew install llvm), or set CC_wasm32_unknown_unknown and AR_wasm32_unknown_unknown to a WebAssembly-capable toolchain.",
+  );
+}
+
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: root,
@@ -45,7 +104,7 @@ export async function buildWebViewer(destination) {
     ],
     {
       env: {
-        ...process.env,
+        ...wasmBuildEnvironment(),
         CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:
           "-C target-feature=+atomics,+bulk-memory,+mutable-globals -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=4294967296 -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base",
       },
@@ -97,7 +156,7 @@ export async function buildWebConverter(destination) {
     ],
     {
       env: {
-        ...process.env,
+        ...wasmBuildEnvironment(),
         CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:
           "-C link-arg=--max-memory=1073741824",
       },

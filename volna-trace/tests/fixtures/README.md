@@ -31,8 +31,7 @@ cargo run --locked --manifest-path vtr/Cargo.toml -p vtr-cli -- convert volna-tr
 
 `features.vtr`, `operators.vtr`, `pipeline.vtr`, `values.vtr`, and
 `landing_dram.vtr` are converted from inputs in
-[`vtr-convert`](../../../vtr/vtr-convert/tests/fixtures/README.md), which documents
-their provenance and regeneration commands. The example directory also carries
+[`vtr-convert`](../../../vtr/vtr-convert/tests/fixtures/). The example directory also carries
 copies of counter, PicoRV32, and landing DRAM recordings.
 
 After replacing fixtures, run:
