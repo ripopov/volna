@@ -720,7 +720,6 @@ impl Assembly {
     }
 }
 async fn validate_catalog(metadata: &Metadata, r: &Reader) -> anyhow::Result<()> {
-    use crate::data::transactions::TrackKind;
     let mut tracks = std::collections::HashMap::new();
     r.charge((metadata.tracks.len() + metadata.hierarchy.generators.len()) * 128)?;
     for t in &metadata.tracks {
@@ -735,7 +734,7 @@ async fn validate_catalog(metadata: &Metadata, r: &Reader) -> anyhow::Result<()>
         r.checkpoint().await;
         anyhow::ensure!(seen.insert(g.track), "duplicate hierarchy generator");
         anyhow::ensure!(
-            matches!(tracks.get(&g.track),Some(TrackKind::Generator {kind}) if **kind == g.kind),
+            tracks.get(&g.track).is_some_and(|kind| **kind == g.kind),
             "invalid hierarchy generator"
         );
     }

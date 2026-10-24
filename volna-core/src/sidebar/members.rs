@@ -404,16 +404,6 @@ pub fn shape_icon(shape: SignalShape) -> IconName {
     }
 }
 
-#[must_use]
-pub fn direction_label(d: Direction) -> &'static str {
-    match d {
-        Direction::None => "",
-        Direction::Input => "in",
-        Direction::Output => "out",
-        Direction::InOut => "io",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::contains_folded;

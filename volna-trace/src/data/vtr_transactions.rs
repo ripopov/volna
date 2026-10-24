@@ -2,8 +2,8 @@
 
 use super::loaded_tracks::{LoadedGenerator, LoadedRelation, LoadedTrack, TransactionLocation};
 use super::transactions::{
-    AttributeValue, Attributes, Relation, Track, TrackKind, TrackRef, Transaction,
-    TransactionAttribute, TransactionEvent, TransactionRef, TransactionStage,
+    AttributeValue, Attributes, Relation, Track, TrackRef, Transaction, TransactionAttribute,
+    TransactionEvent, TransactionRef, TransactionStage,
 };
 use super::vtr_source::LocalSession;
 use std::collections::{HashMap, HashSet};
@@ -221,9 +221,7 @@ pub(super) fn tracks(reader: &Reader) -> Vec<Track> {
             Some(Track {
                 id: TrackRef(id as u32),
                 path,
-                kind: TrackKind::Generator {
-                    kind: reader.string(kind).expect("generator kind").into(),
-                },
+                kind: reader.string(kind).expect("generator kind").into(),
                 attributes: attributes(reader, &node.attributes),
             })
         })

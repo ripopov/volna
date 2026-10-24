@@ -104,12 +104,7 @@ fn vtr_transaction_semantics_survive_the_common_contract() {
         .iter()
         .find(|t| t.path == ["top", "cpu", "instructions"])
         .unwrap();
-    assert_eq!(
-        generator.kind,
-        TrackKind::Generator {
-            kind: "pipeline".into()
-        }
-    );
+    assert_eq!(generator.kind, "pipeline");
     let loaded_a = session.load_track(generator.id).unwrap();
     let loaded_b = session.load_track(TrackRef(gen_b.id())).unwrap();
     let a = &loaded_a.generators[0];

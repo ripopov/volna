@@ -3,7 +3,7 @@
 use crate::pipeline::TrackSource;
 use crate::trace::{TraceId, Traced};
 use volna_trace::data::source::Lookup;
-use volna_trace::data::transactions::{TrackKind, TrackRef};
+use volna_trace::data::transactions::TrackRef;
 use volna_trace::data::{Hierarchy, SignalRef, VarId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,10 +78,6 @@ impl TableSource {
             .iter()
             .find(|candidate| candidate.id == track.item)
             .ok_or_else(|| anyhow::anyhow!("selected transaction source is missing"))?;
-        anyhow::ensure!(
-            matches!(declaration.kind, TrackKind::Generator { .. }),
-            "Choose one generator, or only signals."
-        );
         anyhow::ensure!(
             hierarchy.generators().iter().any(|g| g.track == track.item),
             "selected generator declaration is missing"

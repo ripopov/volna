@@ -214,15 +214,6 @@ pub fn dashes(out: &mut Vec<[Point; 2]>, xa: f32, xb: f32, y: f32, x0: f32, (on,
     }
 }
 
-pub fn dashes_v(out: &mut Vec<[Point; 2]>, x: f32, ya: f32, yb: f32, (on, off): (f32, f32)) {
-    let x = x + 0.5;
-    let mut y = ya;
-    while y < yb {
-        out.push([point(x, y), point(x, (y + on).min(yb))]);
-        y += on + off;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

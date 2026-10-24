@@ -3,7 +3,7 @@
 use crate::data::loaded_tracks::{
     LoadedGenerator, LoadedRelation, LoadedTrack, TransactionLocation,
 };
-use crate::data::transactions::{Track, TrackKind, TrackRef, Transaction, TransactionRef};
+use crate::data::transactions::{Track, TrackRef, Transaction, TransactionRef};
 use crate::data::{Hierarchy, TraceInfo};
 use crate::session::{Capabilities, Session};
 use serde::Serialize;
@@ -100,7 +100,7 @@ impl Metadata {
                     "duplicate hierarchy track"
                 );
                 anyhow::ensure!(
-                    matches!(tracks.get(&g.track), Some(TrackKind::Generator { kind }) if **kind == g.kind),
+                    tracks.get(&g.track).is_some_and(|kind| **kind == g.kind),
                     "invalid hierarchy generator"
                 );
             }

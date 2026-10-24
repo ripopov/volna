@@ -482,10 +482,6 @@ impl History {
         self.undo.iter()
     }
 
-    pub fn redo_steps(&self) -> impl DoubleEndedIterator<Item = &Step> {
-        self.redo.iter().rev()
-    }
-
     #[must_use]
     pub fn bytes(&self) -> usize {
         self.bytes

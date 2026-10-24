@@ -2137,14 +2137,6 @@ impl TableModel {
         )
     }
 
-    #[must_use]
-    pub fn prepared_row(&self, ordinal: u64) -> Option<&PreparedRow> {
-        ordinal
-            .checked_sub(self.window.start)
-            .and_then(|offset| self.window.rows.get(offset as usize))
-            .filter(|row| row.ordinal == ordinal)
-    }
-
     pub fn accessible_rows(&self) -> impl Iterator<Item = AccessibleRow> + '_ {
         self.window.rows.iter().filter_map(|row| {
             let y =

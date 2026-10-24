@@ -115,15 +115,10 @@ pub struct AttributeSummary {
 pub type Attributes = Vec<(String, AttributeValue)>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum TrackKind {
-    Generator { kind: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackRef,
     pub path: Vec<String>,
-    pub kind: TrackKind,
+    pub kind: String,
     pub attributes: Attributes,
 }
 

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Instant;
-use volna_trace::data::transactions::{TrackKind, TrackRef};
+use volna_trace::data::transactions::TrackRef;
 use volna_trace::remote::ClientStep;
 use volna_trace::remote::client::RemoteClient;
 use volna_trace::remote::limits::Limits;
@@ -204,12 +204,7 @@ fn main() -> anyhow::Result<()> {
                     vec![TrackRef(id.parse()?)]
                 } else {
                     anyhow::ensure!(selection == "tracks", "unknown selection");
-                    session
-                        .tracks()
-                        .iter()
-                        .filter(|t| matches!(t.kind, TrackKind::Generator { .. }))
-                        .map(|t| t.id)
-                        .collect()
+                    session.tracks().iter().map(|t| t.id).collect()
                 };
                 for (index, &track) in ids.iter().enumerate() {
                     anyhow::ensure!(

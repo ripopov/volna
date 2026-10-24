@@ -414,11 +414,6 @@ impl NavState {
         }
     }
 
-    #[must_use]
-    pub fn back_spot(&self) -> Option<Spot> {
-        self.back
-    }
-
     pub fn jump_cursor(&mut self, doc: &mut Document, t: u64, now: Instant) -> bool {
         if self.cursor(doc) == Some(t) {
             self.reveal(doc, t, now);

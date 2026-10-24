@@ -1213,19 +1213,15 @@ impl Panel for CanvasPanelView {
                     .pipeline()?
                     .track
                     .track()?;
-                workspace
-                    .app
-                    .doc
-                    .session(track.trace)?
-                    .tracks()
-                    .iter()
-                    .find(|declaration| declaration.id == track.item)
-                    .map(|declaration| {
-                        matches!(
-                            declaration.kind,
-                            volna_trace::data::transactions::TrackKind::Generator { .. }
-                        )
-                    })
+                Some(
+                    workspace
+                        .app
+                        .doc
+                        .session(track.trace)?
+                        .tracks()
+                        .iter()
+                        .any(|declaration| declaration.id == track.item),
+                )
             })
             .unwrap_or(false);
         if table_eligible {

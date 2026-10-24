@@ -13,7 +13,7 @@ use crate::data::loaded_tracks::LoadedGenerator;
 use crate::trace::{TraceId, Traced};
 use crate::wave::timeline::TimeBase;
 use crate::wave::viewport::Viewport;
-use volna_trace::data::transactions::{AttributeValue, Status, Track, TrackKind, TrackRef};
+use volna_trace::data::transactions::{AttributeValue, Status, Track, TrackRef};
 
 pub const GENERATOR_KIND: &str = "CLOCK";
 pub const LINK_ATTRIBUTE: &str = "vtr.clock";
@@ -75,9 +75,7 @@ impl Clocks {
         self.clocks.extend(
             tracks
                 .iter()
-                .filter(
-                    |t| matches!(&t.kind, TrackKind::Generator { kind } if kind == GENERATOR_KIND),
-                )
+                .filter(|t| t.kind == GENERATOR_KIND)
                 .map(|t| Clock {
                     trace,
                     track: t.id,

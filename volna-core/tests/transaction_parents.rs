@@ -72,9 +72,7 @@ impl Ancestry {
         let mut tracks = vec![Track {
             id: TrackRef(0),
             path: vec!["ancestry".into()],
-            kind: TrackKind::Generator {
-                kind: "test".into(),
-            },
+            kind: "test".into(),
             attributes: vec![],
         }];
         let generators = records
@@ -83,9 +81,7 @@ impl Ancestry {
                 tracks.push(Track {
                     id,
                     path: vec!["ancestry".into(), format!("generator {}", id.0)],
-                    kind: TrackKind::Generator {
-                        kind: "test".into(),
-                    },
+                    kind: "test".into(),
                     attributes: vec![],
                 });
                 (

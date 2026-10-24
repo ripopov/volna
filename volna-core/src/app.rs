@@ -2602,7 +2602,6 @@ impl App {
 
     #[must_use]
     pub fn pipeline_generators(&self) -> Vec<(String, Traced<TrackRef>)> {
-        use volna_trace::data::transactions::TrackKind;
         let traces = self.doc.traces();
         traces
             .loaded()
@@ -2610,9 +2609,7 @@ impl App {
                 session
                     .tracks()
                     .iter()
-                    .filter(
-                        |t| matches!(&t.kind, TrackKind::Generator { kind } if kind == "PIPELINE"),
-                    )
+                    .filter(|t| t.kind == "PIPELINE")
                     .map(move |t| {
                         let path = t.path.join(".");
                         let label = if traces.is_combined() {

@@ -133,7 +133,7 @@ and generations identify completions without entering the wire protocol.
 `RemoteClient`, rather than their blocking local query methods.
 
 The [server guide](../volna-server/README.md) describes process hosting and
-protocol version 9. Local and remote objects have the same data contract;
+protocol version 10. Local and remote objects have the same data contract;
 transport carries runtime facts. Viewport state, search, value translation,
 transaction layout, VDB design semantics, and annotations belong to consumers.
 

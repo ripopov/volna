@@ -1699,10 +1699,6 @@ impl WaveModel {
             .collect()
     }
 
-    pub fn stack_of(&self, i: usize) -> Option<usize> {
-        self.enclosing_group(i, GroupRow::is_stacked)
-    }
-
     pub fn set_stacked(&mut self, rows: &[usize], stacked: bool) -> bool {
         let style = if stacked {
             GroupStyle::Stack { peak: true }

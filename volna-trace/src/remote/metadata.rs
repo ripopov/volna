@@ -4,7 +4,7 @@ use super::decode::{Decoder, Reader, Step};
 use super::memory::{MemoryBudget, Reservation};
 use crate::data::TraceInfo;
 use crate::data::source::Generator;
-use crate::data::transactions::{AttributeValue, Attributes, Track, TrackKind, TrackRef};
+use crate::data::transactions::{AttributeValue, Attributes, Track, TrackRef};
 use crate::session::Capabilities;
 use std::future::Future;
 use std::pin::Pin;
@@ -121,12 +121,7 @@ async fn track(r: &Reader) -> anyhow::Result<Track> {
     Ok(Track {
         id: TrackRef(r.u32().await?),
         path: r.vector(8, || r.string()).await?,
-        kind: match r.u32().await? {
-            0 => TrackKind::Generator {
-                kind: r.string().await?,
-            },
-            _ => anyhow::bail!("invalid track kind"),
-        },
+        kind: r.string().await?,
         attributes: attributes(r, 0).await?,
     })
 }
@@ -262,7 +257,7 @@ mod tests {
         metadata.tracks = vec![Track {
             id: TrackRef(0),
             path: vec!["top".into()],
-            kind: TrackKind::Generator { kind: "raw".into() },
+            kind: "raw".into(),
             attributes: values
                 .into_iter()
                 .map(|value| ("attr".into(), value))
@@ -309,9 +304,7 @@ mod tests {
             header.tracks.push(Track {
                 id: TrackRef(0),
                 path: vec!["raw".into()],
-                kind: TrackKind::Generator {
-                    kind: "OWNER".into(),
-                },
+                kind: "OWNER".into(),
                 attributes: vec![(
                     "logic".into(),
                     AttributeValue::Logic {

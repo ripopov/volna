@@ -57,13 +57,13 @@ Files must remain unchanged throughout a session. Live recordings are unsupporte
 
 ## Framing and object limits
 
-Protocol **8** is independent of the VTR file-format version. Peers reject other
+Protocol **10** is independent of the VTR file-format version. Peers reject other
 protocol versions; there is no negotiation. Each packet has a 12-byte header:
 
 | Field | Encoding |
 | --- | --- |
 | Magic | Four bytes: `VLNA` |
-| Version | Little-endian `u32`, currently 8 |
+| Version | Little-endian `u32`, currently 10 |
 | Encoded body length | Little-endian `u32`, at most 1 MiB |
 
 The body is an independent checksummed LZ4 frame containing a fixed-width,

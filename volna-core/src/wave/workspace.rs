@@ -20,7 +20,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use std::collections::BTreeSet;
-use volna_trace::data::{source::Lookup, transactions::TrackKind};
+use volna_trace::data::source::Lookup;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Columns {
@@ -378,10 +378,11 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 tint,
             } => {
                 ensure!(!generator.is_empty(), "empty lane generator path");
-                let track =
-                    ctx.traces.tracks(trace).iter().find(|t| {
-                        t.path == generator && matches!(t.kind, TrackKind::Generator { .. })
-                    });
+                let track = ctx
+                    .traces
+                    .tracks(trace)
+                    .iter()
+                    .find(|t| t.path == generator);
                 let lane = if let Some(track) = track {
                     TxLane {
                         height,

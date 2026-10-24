@@ -119,17 +119,13 @@ fn project_relations(
         Track {
             id: TrackRef(0),
             path: vec![path.clone()],
-            kind: TrackKind::Generator {
-                kind: "test".into(),
-            },
+            kind: "test".into(),
             attributes: vec![],
         },
         Track {
             id: TrackRef(1),
             path: vec![path],
-            kind: TrackKind::Generator {
-                kind: "test".into(),
-            },
+            kind: "test".into(),
             attributes: vec![],
         },
     ];

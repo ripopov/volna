@@ -200,7 +200,7 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::transactions::{AttributeValue, Track, TrackKind};
+    use crate::data::transactions::{AttributeValue, Track};
     use crate::remote::transport::DATA_BYTES;
 
     fn sample() -> TrackPayload {
@@ -281,7 +281,7 @@ mod tests {
             .map(|id| Track {
                 id: TrackRef(id),
                 path: vec![id.to_string()],
-                kind: TrackKind::Generator { kind: "raw".into() },
+                kind: "raw".into(),
                 attributes: vec![],
             })
             .collect();
