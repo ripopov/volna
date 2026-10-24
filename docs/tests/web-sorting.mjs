@@ -37,11 +37,12 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 let browser;
+let page;
 try {
   browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || (existsSync(chrome) ? chrome : undefined) });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   await context.addInitScript(() => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 }));
-  const page = await context.newPage();
+  page = await context.newPage();
   const settings = values => page.evaluate(async ({ base, values }) => (await import(`${base}viewer/pkg/volna.js`)).set_settings(JSON.stringify(values)), { base, values });
   page.setDefaultTimeout(30000);
   const errors = [];
@@ -75,6 +76,48 @@ try {
   });
   const state = () => page.evaluate(() => window.volnaCurrentState);
   const sorting = () => page.waitForFunction(() => window.volnaCurrentState?.includes('sorting…'), {}, { timeout: 10000 });
+  const debuggerSession = await browser.newBrowserCDPSession();
+  const { targetInfos } = await debuggerSession.send('Target.getTargets');
+  const workerUrls = new Set(page.workers().map(worker => worker.url()));
+  const workerSessions = await Promise.all(targetInfos
+    .filter(target => target.type === 'worker' && workerUrls.has(target.url))
+    .map(async target => (await debuggerSession.send('Target.attachToTarget', {
+      targetId: target.targetId, flatten: false
+    })).sessionId));
+  assert.equal(workerSessions.length, 4);
+  let nextMessage = 0;
+  const responses = new Map();
+  debuggerSession.on('Target.receivedMessageFromTarget', event => {
+    const message = JSON.parse(event.message);
+    responses.get(message.id)?.(message);
+  });
+  const workerCommand = (sessionId, method) => new Promise((resolve, reject) => {
+    const id = ++nextMessage;
+    const timeout = setTimeout(() => {
+      responses.delete(id);
+      reject(new Error(`Worker command timed out: ${method}`));
+    }, 30000);
+    const finish = message => {
+      clearTimeout(timeout);
+      responses.delete(id);
+      if (message.error) reject(new Error(message.error.message));
+      else resolve(message.result);
+    };
+    responses.set(id, finish);
+    debuggerSession.send('Target.sendMessageToTarget', {
+      sessionId, message: JSON.stringify({ id, method })
+    }).catch(error => finish({ error }));
+  });
+  // Worker completion can beat a frame; hold it until pending UI assertions finish.
+  const withPausedWorkers = async action => {
+    await Promise.all(workerSessions.map(id => workerCommand(id, 'Debugger.enable')));
+    await Promise.all(workerSessions.map(id => workerCommand(id, 'Debugger.pause')));
+    try {
+      await action();
+    } finally {
+      await Promise.all(workerSessions.map(id => workerCommand(id, 'Debugger.disable')));
+    }
+  };
   const settled = async () => {
     try {
       await page.waitForFunction(() => /panel=4 table .*rows=1000000.*status=1000000 rows$/.test(window.volnaCurrentState), {}, { timeout: 30000 });
@@ -95,26 +138,32 @@ try {
     };
     requestAnimationFrame(frame);
   });
-  await page.mouse.click(350, 108);
-  await sorting();
-  await page.mouse.wheel(0, 300);
+  await withPausedWorkers(async () => {
+    await page.mouse.click(350, 108);
+    await sorting();
+    await page.mouse.wheel(0, 300);
+    await page.waitForFunction(() => window.sortFrames >= 2);
+  });
   await settled();
   assert.match(await state(), /column: 0, descending: false.*first_time=Some\(999999\)/);
   assert.equal((await state()).match(/selected=(.*?) sort=/)[1], selected);
   assert.ok(await page.evaluate(() => window.sortFrames) >= 2, 'animation frames must continue during the worker sort');
   await page.screenshot({ path: `${results}/ascending-dark.png` });
 
-  await page.mouse.click(350, 108);
-  await sorting();
-  // Capture a painted pending toolbar before clicking its canvas-rendered Cancel button.
-  await page.screenshot({ path: `${results}/sorting-pending-dark.png` });
-  await page.mouse.click(678, 84); // Cancel in the table toolbar.
+  await withPausedWorkers(async () => {
+    await page.mouse.click(350, 108);
+    await sorting();
+    await page.screenshot({ path: `${results}/sorting-pending-dark.png` });
+    await page.mouse.click(678, 84); // Cancel in the table toolbar.
+  });
   await settled();
   assert.match(await state(), /column: 0, descending: false/, 'cancel retains the applied order');
 
-  await page.mouse.click(350, 108);
-  await sorting();
-  await page.mouse.click(500, 108); // A newer Begin query replaces the pending Label query.
+  await withPausedWorkers(async () => {
+    await page.mouse.click(350, 108);
+    await sorting();
+    await page.mouse.click(500, 108); // A newer Begin query replaces the pending Label query.
+  });
   await settled();
   assert.match(await state(), /column: 1, descending: false.*first_time=Some\(0\)/);
 
@@ -148,8 +197,11 @@ try {
   await page.waitForTimeout(100);
   await page.mouse.click(535, 150); // Begin's filter input, below its header.
   await page.waitForTimeout(60);
-  await page.keyboard.type('> 500000');
-  await page.keyboard.press('Enter');
+  await withPausedWorkers(async () => {
+    await page.keyboard.type('> 500000');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.filterFrames >= 2);
+  });
   await page.waitForFunction(() => window.volnaCurrentState?.includes('status=499999 of 1000000 rows'));
   assert.match(await state(), /first_time=Some\(500001\)/);
   assert.ok(await page.evaluate(() => window.filterFrames) >= 1, 'frames must continue during the worker scan');
@@ -163,7 +215,8 @@ try {
   await page.waitForFunction(() => /column: 1, descending: false.*status=499999 of 1000000 rows$/.test(window.volnaCurrentState));
   await page.mouse.click(535, 150);
   await page.waitForTimeout(60);
-  await page.keyboard.press('ControlOrMeta+A');
+  // The web viewer's text-editing keymap uses Control on every host.
+  await page.keyboard.press('Control+A');
   await page.keyboard.type('>= 999990');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.volnaCurrentState?.includes('status=10 of 1000000 rows'));
@@ -197,6 +250,12 @@ try {
   assert.equal(unsupportedPage.workers().length, 0);
   await unsupported.close();
   console.log('Unsupported browser reports the missing capability without starting the viewer');
+} catch (error) {
+  if (page && !page.isClosed()) {
+    console.error(await page.evaluate(() => window.volnaCurrentState));
+    await page.screenshot({ path: `${results}/failure.png` });
+  }
+  throw error;
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));
