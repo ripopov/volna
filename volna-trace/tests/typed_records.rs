@@ -69,6 +69,9 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
         options.encoding.workers = workers;
         options.encoding.block_records = 2;
         let mut writer = Writer::create_with(&path, options).unwrap();
+        let logger = writer
+            .logger(SourceOptions::new("diagnostics", None))
+            .unwrap();
         let instructions = writer
             .transactions::<Packet>(SourceOptions::new("instructions", None), "PIPELINE")
             .unwrap();
@@ -82,7 +85,15 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
             .events::<String>(SourceOptions::new("issued", None))
             .unwrap();
         let logs = writer
-            .logs::<u64>(SourceOptions::new("retired {}", None))
+            .callsite::<u64>(vtr::CallsiteOptions::new("retired {}"))
+            .unwrap();
+        let retry_site = writer
+            .callsite::<String>(vtr::CallsiteOptions {
+                severity: 3,
+                file: Some("decoder.cpp".into()),
+                line: Some(17),
+                ..vtr::CallsiteOptions::new("retry {}")
+            })
             .unwrap();
         let key = writer.intern("payload.pc").unwrap();
         let name = writer.intern("fetch").unwrap();
@@ -113,7 +124,12 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
         let event = writer
             .event_at(events, owner.owner(), 22, &"issue".into())
             .unwrap();
-        let log = writer.log_at(logs, 25, &123, Some(owner.owner())).unwrap();
+        let log = writer
+            .log_at(logger, logs, 25, &123, Some(owner.owner()))
+            .unwrap();
+        let retry = writer
+            .log_at(logger, retry_site, 26, &"bank 3".into(), None)
+            .unwrap();
         let child = writer
             .begin_at(memory, 30, &(), Some(owner.owner()))
             .unwrap();
@@ -145,6 +161,27 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
         writer.end_at(unknown, 50, Status::Ok).unwrap();
         writer.close().unwrap();
         let session = OpenSpec::Path(path).open().unwrap();
+        let messages = session.load_track(TrackRef(logger.id())).unwrap();
+        let retry = messages.generators[0]
+            .transaction(TransactionRef(retry))
+            .unwrap();
+        for (key, expected) in [
+            (
+                "log.callsite",
+                AttributeValue::U64(u64::from(retry_site.id())),
+            ),
+            ("log.format", AttributeValue::Text("retry {}".into())),
+            ("log.severity", AttributeValue::U64(3)),
+            ("log.file", AttributeValue::Text("decoder.cpp".into())),
+            ("log.message", AttributeValue::Text("retry bank 3".into())),
+        ] {
+            assert!(
+                retry
+                    .attributes
+                    .iter()
+                    .any(|attribute| attribute.key == key && attribute.value == expected)
+            );
+        }
         assert_eq!(session.info().time_range, (10, 50));
         let owners = session.load_track(TrackRef(instructions.id())).unwrap();
         let owner_data = &owners.generators[0];
@@ -246,7 +283,7 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
                 AttributeValue::Text("issue".into()),
             ),
             (
-                logs.id(),
+                logger.id(),
                 log,
                 "log",
                 "log.message",

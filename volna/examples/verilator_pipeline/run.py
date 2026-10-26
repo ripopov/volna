@@ -143,7 +143,7 @@ def main():
                 name = f"{threads}-{execution}-{'bare' if bare else 'waves'}"
                 trace = simulate(binary, out / name, execution, bare, env)
                 info = command(cli, "info", trace)
-                assert "version:     3.2" in info and "timescale:   1e-12 s" in info, info
+                assert "version:     3.3" in info and "timescale:   1e-12 s" in info, info
                 assert "0 unresolved references" in info, info
                 records = transactions(cli, trace)
                 got = canonical(records)
@@ -159,7 +159,7 @@ def main():
                 for generator, kind in (("pipeline", "PIPELINE"), ("bus", "BUS")):
                     assert re.search(rf"^      {generator} \[generator {kind} type#0\]\n        @vtr\.clock = {source}$", hierarchy, re.M), hierarchy
                 logs = command(cli, "logs", trace)
-                assert [line.split("simulation_log.{}: ", 1)[1] for line in logs.splitlines() if " warn " in line] == [WARNING], logs
+                assert [line.split("simulation_log: ", 1)[1] for line in logs.splitlines() if " warn " in line] == [WARNING], logs
                 assert f"%Warning-VTRTRACE: {WARNING}" in (trace.parent / "console.txt").read_text()
                 if bare:
                     assert "0 variables (0 signals)" in info, info

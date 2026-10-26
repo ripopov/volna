@@ -4,7 +4,6 @@ use volna_core::geometry::Modifiers;
 use volna_core::icons::IconName;
 use volna_core::sidebar::TreeNode;
 use volna_core::sidebar::icons::{Tint, member_icon, scope_icon, scope_kind_icon};
-use volna_core::sidebar::members::log_site;
 use volna_core::sidebar::{Key, MemberListModel, ScopeTreeModel};
 use volna_core::testing::{a, hierarchy_document};
 use volna_trace::data::source::Lookup;
@@ -85,22 +84,15 @@ fn fixture() -> Arc<dyn Session> {
             "",
         )
         .unwrap();
-    let mut site = vtr::SourceOptions::new("read_failed at pc={:x}", Some(log));
-    site.attributes = vec![
-        vtr::Attribute {
-            key: w.intern("log.severity").unwrap(),
-            value: vtr::Value::U64(4),
-        },
-        vtr::Attribute {
-            key: w.intern("log.file").unwrap(),
-            value: vtr::Value::Str(w.intern("soc.sv").unwrap()),
-        },
-        vtr::Attribute {
-            key: w.intern("log.line").unwrap(),
-            value: vtr::Value::U64(42),
-        },
-    ];
-    w.logs::<u64>(site).unwrap();
+    w.logger(vtr::SourceOptions::new("read_failures", Some(log)))
+        .unwrap();
+    w.callsite::<u64>(vtr::CallsiteOptions {
+        severity: 4,
+        file: Some("soc.sv".into()),
+        line: Some(42),
+        ..vtr::CallsiteOptions::new("read_failed at pc={:x}")
+    })
+    .unwrap();
     w.scope_with(
         vtr::SourceOptions::new("empty", Some(root)),
         vtr::ScopeType::Generic,
@@ -122,7 +114,7 @@ fn scope(h: &Hierarchy, path: &[&str]) -> usize {
 }
 
 #[test]
-fn mixed_vtr_metadata_icons_and_log_provenance() {
+fn mixed_vtr_metadata_icons_and_logger_identity() {
     let session = fixture();
     let h = session.hierarchy();
     let pipeline = scope(h, &["soc", "cpu", "thread0"]);
@@ -165,11 +157,8 @@ fn mixed_vtr_metadata_icons_and_log_provenance() {
     let log = scope(h, &["soc", "log"]);
     list.set_scope(traces, Some(a(log)));
     assert_eq!(list.title(traces), "Members");
-    let site = log_site(h, list.rows[0].item).unwrap();
-    assert_eq!(
-        (site.severity.as_str(), site.file, site.line),
-        ("error", Some("soc.sv"), Some(42))
-    );
+    assert!(h.is_log(list.rows[0].item));
+    assert_eq!(h.member_name(list.rows[0].item), "read_failures");
     list.set_scope(traces, Some(a(scope(h, &["soc", "empty"]))));
     assert_eq!(list.placeholder(traces), Some("No members in this scope"));
     Metadata::from_session(session.as_ref()).validate().unwrap();
@@ -201,7 +190,7 @@ fn search_order_activation_keyboard_and_notices() {
     ));
     assert_eq!(app.panels.len(), 3);
     assert!(app.panels.focused().kind.pipeline().is_some());
-    assert!(app.status().sidebar_notice.unwrap().contains("Log sites"));
+    assert!(app.status().sidebar_notice.unwrap().contains("Log streams"));
     assert!(
         app.take_events()
             .iter()

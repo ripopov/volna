@@ -4,8 +4,8 @@ use std::path::Path;
 use vtr::schema::{Address, Bytes, StringId, TimeValue};
 use vtr::{
     Attribute, Direction, ExecutionMode, NodeData, NodeId, Payload, PayloadReader, Reader,
-    RecordKind, RecordQuery, Recorder, ScopeType, SignalId, SignalKind, Source, SourceOptions,
-    SpanKind, Status, TransactionQuery, Value, VarType, Writer, WriterOptions,
+    RecordKind, RecordQuery, Recorder, ScopeType, SignalId, SignalKind, SourceOptions, SpanKind,
+    Status, TransactionQuery, Value, VarType, Writer, WriterOptions,
 };
 
 struct Instruction {
@@ -596,34 +596,20 @@ fn real(w: &mut Writer, parent: NodeId, name: &str) -> vtr::Result<SignalId> {
     )
 }
 
-fn log_source<T: Payload + 'static>(
+fn log_callsite<T: Payload + 'static>(
     w: &mut Writer,
-    parent: NodeId,
     severity: u64,
     format: &str,
     line: u64,
     function: &str,
-) -> vtr::Result<Source<T, vtr::recording::source::Log>> {
-    let mut options = SourceOptions::new(format, Some(parent));
-    options.attributes = vec![
-        Attribute {
-            key: w.intern("log.severity")?,
-            value: Value::U64(severity),
-        },
-        Attribute {
-            key: w.intern("log.file")?,
-            value: Value::Str(w.intern("debug_lab.cpp")?),
-        },
-        Attribute {
-            key: w.intern("log.line")?,
-            value: Value::U64(line),
-        },
-        Attribute {
-            key: w.intern("log.func")?,
-            value: Value::Str(w.intern(function)?),
-        },
-    ];
-    w.logs(options)
+) -> vtr::Result<vtr::Callsite<T>> {
+    w.callsite::<T>(vtr::CallsiteOptions {
+        severity,
+        file: Some("debug_lab.cpp".into()),
+        line: Some(line),
+        function: Some(function.into()),
+        ..vtr::CallsiteOptions::new(format)
+    })
 }
 
 fn write(path: &Path) -> vtr::Result<()> {
@@ -753,7 +739,7 @@ fn write(path: &Path) -> vtr::Result<()> {
     let writes = w.transactions::<Label>(SourceOptions::new("write", Some(bus)), "MEMORY_BUS")?;
     let idle = w.transactions::<Label>(SourceOptions::new("idle", Some(bus)), "MEMORY_BUS")?;
     w.scope("standby_bus", Some(dma))?;
-    let logs = w.scope("log", Some(soc))?;
+    let logs = w.logger(SourceOptions::new("log", Some(soc)))?;
     let core_clk = w.clock(SourceOptions::new("clk", Some(soc)))?;
     let dma_clk = w.clock(SourceOptions::new("dma_clk", Some(dma)))?;
     w.associate_clock(instructions, core_clk)?;
@@ -780,18 +766,16 @@ fn write(path: &Path) -> vtr::Result<()> {
     .into_iter()
     .enumerate()
     {
-        sites.push(log_source::<CyclePhase>(
+        sites.push(log_callsite::<CyclePhase>(
             &mut w,
-            logs,
             severity,
             &format!("{name}: cycle={{}} phase={{}}"),
             40 + i as u64,
             "tick",
         )?);
     }
-    let typed_site = log_source::<Arguments>(
+    let typed_site = log_callsite::<Arguments>(
         &mut w,
-        logs,
         1,
         "typed args: {} {} {} {} {} {} {} {} {}",
         80,
@@ -1365,6 +1349,7 @@ fn write(path: &Path) -> vtr::Result<()> {
         });
         w.relate(request, doorbell.id(), transfer.id(), relation_attrs)?;
         w.log_at(
+            logs,
             sites[2],
             begin + 20,
             &CyclePhase {
@@ -1383,6 +1368,7 @@ fn write(path: &Path) -> vtr::Result<()> {
     }
     for (i, site) in sites.into_iter().enumerate() {
         w.log_at(
+            logs,
             site,
             768 + i as u64 * 16,
             &CyclePhase {
@@ -1395,6 +1381,7 @@ fn write(path: &Path) -> vtr::Result<()> {
     }
     let interned = w.intern("READY")?;
     w.log_at(
+        logs,
         typed_site,
         900,
         &Arguments {

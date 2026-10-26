@@ -352,6 +352,21 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
         }),
     }
     if record.kind() == vtr::RecordKind::Log {
+        let callsite = record.callsite().context("log has no callsite")?;
+        let declaration = reader.node(vtr::NodeId(callsite))?;
+        attrs.push(TransactionAttribute {
+            key: "log.callsite".into(),
+            value: AttributeValue::U64(u64::from(callsite)),
+        });
+        attrs.push(TransactionAttribute {
+            key: "log.format".into(),
+            value: AttributeValue::Text(reader.string(declaration.name)?.into()),
+        });
+        attrs.extend(
+            attributes(reader, &declaration.attributes)
+                .into_iter()
+                .map(|(key, value)| TransactionAttribute { key, value }),
+        );
         let bytes = reader.format_log_bytes(record)?;
         let message = match String::from_utf8(bytes) {
             Ok(text) => AttributeValue::Text(text),

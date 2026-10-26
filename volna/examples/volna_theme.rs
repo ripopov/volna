@@ -5,8 +5,8 @@ use std::path::Path;
 use vtr::schema::Address;
 use vtr::{
     Attribute, Direction, ExecutionMode, NodeId, Payload, PayloadReader, Reader, RecordKind,
-    RecordQuery, Recorder, ScopeType, SignalId, SignalKind, Source, SourceOptions, Status,
-    Transaction, TransactionQuery, Value, VarType, Writer, WriterOptions,
+    RecordQuery, Recorder, ScopeType, SignalId, SignalKind, SourceOptions, Status, Transaction,
+    TransactionQuery, Value, VarType, Writer, WriterOptions,
 };
 
 struct Instruction {
@@ -142,33 +142,19 @@ vtr::impl_payload!(DmaError {
     descriptor,
     address
 });
-fn log_source<T: Payload + 'static>(
+fn log_callsite<T: Payload + 'static>(
     w: &mut Writer,
-    parent: NodeId,
     severity: u64,
     format: &str,
     line: u64,
-) -> vtr::Result<Source<T, vtr::recording::source::Log>> {
-    let mut options = SourceOptions::new(format, Some(parent));
-    options.attributes = vec![
-        Attribute {
-            key: w.intern("log.severity")?,
-            value: Value::U64(severity),
-        },
-        Attribute {
-            key: w.intern("log.file")?,
-            value: Value::Str(w.intern("tb/theme_tb.sv")?),
-        },
-        Attribute {
-            key: w.intern("log.line")?,
-            value: Value::U64(line),
-        },
-        Attribute {
-            key: w.intern("log.func")?,
-            value: Value::Str(w.intern("monitor")?),
-        },
-    ];
-    w.logs::<T>(options)
+) -> vtr::Result<vtr::Callsite<T>> {
+    w.callsite::<T>(vtr::CallsiteOptions {
+        severity,
+        file: Some("tb/theme_tb.sv".into()),
+        line: Some(line),
+        function: Some("monitor".into()),
+        ..vtr::CallsiteOptions::new(format)
+    })
 }
 
 const MAX_BYTES: u64 = 500_000;
@@ -1013,32 +999,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let temperature = real(&mut w, perf, "temperature_c")?;
     let vdd = real(&mut w, perf, "vdd_core_mv")?;
 
-    let logs = w.scope("log", Some(soc))?;
-    let bist_site = log_source::<Bist>(&mut w, logs, 1, "sram bist done after {} cycles", 24)?;
-    let boot_site = log_source::<Boot>(&mut w, logs, 2, "reset released at cycle {}", 31)?;
-    let irq_site = log_source::<Interrupt>(&mut w, logs, 2, "irq {} taken", 47)?;
-    let ecc_site = log_source::<Ecc>(
+    let logs = w.logger(SourceOptions::new("log", Some(soc)))?;
+    let bist_site = log_callsite::<Bist>(&mut w, 1, "sram bist done after {} cycles", 24)?;
+    let boot_site = log_callsite::<Boot>(&mut w, 2, "reset released at cycle {}", 31)?;
+    let irq_site = log_callsite::<Interrupt>(&mut w, 2, "irq {} taken", 47)?;
+    let ecc_site =
+        log_callsite::<Ecc>(&mut w, 3, "l2 read at {:#x} has an uncorrectable byte", 62)?;
+    let dma_site = log_callsite::<DmaError>(
         &mut w,
-        logs,
-        3,
-        "l2 read at {:#x} has an uncorrectable byte",
-        62,
-    )?;
-    let dma_site = log_source::<DmaError>(
-        &mut w,
-        logs,
         4,
         "dma descriptor {} aborted: bus error at {:#x}",
         78,
     )?;
-    let wfi_site = log_source::<()>(
+    let wfi_site = log_callsite::<()>(
         &mut w,
-        logs,
         2,
         "cpu0 waits for interrupt, ddr enters self-refresh",
         90,
     )?;
-    let hang_site = log_source::<Bist>(&mut w, logs, 5, "watchdog would fire in {} cycles", 97)?;
+    let hang_site = log_callsite::<Bist>(&mut w, 5, "watchdog would fire in {} cycles", 97)?;
 
     let core_clk = w.clock(SourceOptions::new("clk", Some(soc)))?;
     let ddr_clk = w.clock(SourceOptions::new("ck", Some(ddr)))?;
@@ -1453,6 +1432,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<vtr::Result<_>>()?;
 
     w.log_at(
+        logs,
         bist_site,
         edge(BIST.1),
         &Bist {
@@ -1461,6 +1441,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None,
     )?;
     w.log_at(
+        logs,
         boot_site,
         edge(RESET_DONE),
         &Boot { cycle: RESET_DONE },
@@ -1574,6 +1555,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     name == "cpu0" && !a.write && (FAULT.0..FAULT.1).contains(&(a.end - 1));
                 if faulty && !logged_ecc {
                     w.log_at(
+                        logs,
                         ecc_site,
                         edge(a.end - 1),
                         &Ecc {
@@ -1591,6 +1573,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if name == "cpu0" && Some(insn.index) == first_after_irq {
                 w.log_at(
+                    logs,
                     irq_site,
                     edge(IRQ_CYCLE),
                     &Interrupt { line: 3 },
@@ -1649,6 +1632,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if d.error {
             w.log_at(
+                logs,
                 dma_site,
                 edge(d.done),
                 &DmaError {
@@ -1665,8 +1649,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         previous = Some(tx);
     }
-    w.log_at(wfi_site, edge(WFI.0), &(), None)?;
-    w.log_at(hang_site, edge(CYCLES - 16), &Bist { cycles: 4096 }, None)?;
+    w.log_at(logs, wfi_site, edge(WFI.0), &(), None)?;
+    w.log_at(
+        logs,
+        hang_site,
+        edge(CYCLES - 16),
+        &Bist { cycles: 4096 },
+        None,
+    )?;
     w.advance_time(last)?;
     w.close()?;
 

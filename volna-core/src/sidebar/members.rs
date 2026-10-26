@@ -12,49 +12,6 @@ use volna_trace::data::{Direction, Hierarchy, Member, ScopeId, SignalShape, VarI
 
 const MAX_SEARCH_ROWS: usize = 5000;
 
-pub struct LogSite<'a> {
-    pub severity: String,
-    pub file: Option<&'a str>,
-    pub line: Option<u64>,
-    pub function: Option<&'a str>,
-}
-
-#[must_use]
-pub fn log_site(h: &Hierarchy, member: Member) -> Option<LogSite<'_>> {
-    use volna_trace::data::transactions::AttributeValue;
-    let Member::Generator(id) = member else {
-        return None;
-    };
-    if !h.is_log(member) {
-        return None;
-    }
-    let attrs = &h.generators()[id].attributes;
-    let attr = |key| attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v);
-    let text = |key| match attr(key) {
-        Some(AttributeValue::Text(s)) => Some(s.as_str()),
-        _ => None,
-    };
-    let severity = match attr("log.severity") {
-        Some(AttributeValue::U64(n)) => match u8::try_from(*n) {
-            Ok(n @ 0..=5) => {
-                ["trace", "debug", "info", "warn", "error", "fatal"][n as usize].to_owned()
-            }
-            _ => n.to_string(),
-        },
-        Some(AttributeValue::Text(s)) => s.clone(),
-        _ => "unknown".into(),
-    };
-    Some(LogSite {
-        severity,
-        file: text("log.file"),
-        line: match attr("log.line") {
-            Some(AttributeValue::U64(n)) => Some(*n),
-            _ => None,
-        },
-        function: text("log.func"),
-    })
-}
-
 #[must_use]
 pub fn member_detail(h: &Hierarchy, member: Member) -> String {
     match member {
@@ -71,12 +28,8 @@ pub fn member_detail(h: &Hierarchy, member: Member) -> String {
             )
         }
         Member::Generator(id) => {
-            if let Some(site) = log_site(h, member) {
-                match (site.file, site.line) {
-                    (Some(file), Some(line)) => format!("{file}:{line}"),
-                    (Some(file), None) => file.into(),
-                    _ => String::new(),
-                }
+            if h.is_log(member) {
+                "logger".into()
             } else {
                 h.generators()[id].kind.clone()
             }
@@ -107,13 +60,8 @@ pub fn describe(h: &Hierarchy, member: Member) -> String {
             )
         }
         Member::Generator(_) => {
-            if let Some(site) = log_site(h, member) {
-                format!(
-                    "log site · {} · {} {}",
-                    site.severity,
-                    member_detail(h, member),
-                    site.function.unwrap_or("")
-                )
+            if h.is_log(member) {
+                "log stream".into()
             } else {
                 "generator".into()
             }

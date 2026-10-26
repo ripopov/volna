@@ -5,8 +5,8 @@ use std::path::Path;
 use vtr::schema::{Address, TimeValue};
 use vtr::{
     Attribute, Direction, ExecutionMode, NodeId, Payload, PayloadReader, Reader, RecordKind,
-    RecordQuery, Recorder, ScopeType, SignalId, SignalKind, Source, SourceOptions, Status,
-    Transaction, TransactionQuery, Value, VarType, Writer, WriterOptions,
+    RecordQuery, Recorder, ScopeType, SignalId, SignalKind, SourceOptions, Status, Transaction,
+    TransactionQuery, Value, VarType, Writer, WriterOptions,
 };
 
 struct Instruction {
@@ -577,33 +577,19 @@ fn simulate() -> Run {
     }
 }
 
-fn log_source<T: Payload + 'static>(
+fn log_callsite<T: Payload + 'static>(
     w: &mut Writer,
-    parent: NodeId,
     severity: u64,
     format: &str,
     line: u64,
-) -> vtr::Result<Source<T, vtr::recording::source::Log>> {
-    let mut options = SourceOptions::new(format, Some(parent));
-    options.attributes = vec![
-        Attribute {
-            key: w.intern("log.severity")?,
-            value: Value::U64(severity),
-        },
-        Attribute {
-            key: w.intern("log.file")?,
-            value: Value::Str(w.intern("tb/soc_tb.sv")?),
-        },
-        Attribute {
-            key: w.intern("log.line")?,
-            value: Value::U64(line),
-        },
-        Attribute {
-            key: w.intern("log.func")?,
-            value: Value::Str(w.intern("monitor")?),
-        },
-    ];
-    w.logs::<T>(options)
+) -> vtr::Result<vtr::Callsite<T>> {
+    w.callsite::<T>(vtr::CallsiteOptions {
+        severity,
+        file: Some("tb/soc_tb.sv".into()),
+        line: Some(line),
+        function: Some("monitor".into()),
+        ..vtr::CallsiteOptions::new(format)
+    })
 }
 
 fn bits(
@@ -741,18 +727,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bandwidth = real(&mut w, perf, "l2_bandwidth_gbps")?;
     let temperature = real(&mut w, perf, "temperature_c")?;
 
-    let logs = w.scope_with(SourceOptions::new("log", Some(soc)), ScopeType::Generic, "")?;
-    let boot_site = log_source::<Boot>(&mut w, logs, 2, "reset released at cycle {}", 41)?;
-    let irq_site = log_source::<Interrupt>(&mut w, logs, 2, "irq {} taken at pc {}", 58)?;
-    let miss_site = log_source::<Miss>(&mut w, logs, 3, "l2 miss at {} refilled in {} cycles", 73)?;
-    let ecc_site = log_source::<Ecc>(&mut w, logs, 4, "dram ecc error at {} corrected", 88)?;
-    let idle_site = log_source::<Idle>(
-        &mut w,
-        logs,
-        2,
-        "core idle, dram enters self-refresh at {}",
-        95,
-    )?;
+    let logs = w.logger(SourceOptions::new("log", Some(soc)))?;
+    let boot_site = log_callsite::<Boot>(&mut w, 2, "reset released at cycle {}", 41)?;
+    let irq_site = log_callsite::<Interrupt>(&mut w, 2, "irq {} taken at pc {}", 58)?;
+    let miss_site = log_callsite::<Miss>(&mut w, 3, "l2 miss at {} refilled in {} cycles", 73)?;
+    let ecc_site = log_callsite::<Ecc>(&mut w, 4, "dram ecc error at {} corrected", 88)?;
+    let idle_site =
+        log_callsite::<Idle>(&mut w, 2, "core idle, dram enters self-refresh at {}", 95)?;
 
     // Declared clocks: the dumped core clock, and a DRAM clock with no net
     // that boosts from 3 ns to 2 ns when the interrupt arrives and is gated
@@ -904,6 +885,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<vtr::Result<_>>()?;
 
     w.log_at(
+        logs,
         boot_site,
         edge(4),
         &Boot {
@@ -959,6 +941,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if insn.isr && insn.index == insns.iter().find(|i| i.isr).unwrap().index {
             w.log_at(
+                logs,
                 irq_site,
                 edge(run.irq),
                 &Interrupt {
@@ -1046,6 +1029,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let status = if refills == 9 {
                     w.attribute(burst.owner(), k_ecc, Value::Str(corrected))?;
                     w.log_at(
+                        logs,
                         ecc_site,
                         edge(e - 1),
                         &Ecc {
@@ -1061,6 +1045,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 w.end_at(burst, edge(e), status)?;
                 if dram_misses.len() < 6 {
                     w.log_at(
+                        logs,
                         miss_site,
                         edge(a.end),
                         &Miss {
@@ -1082,6 +1067,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         w.end_at(tx, edge(insn.end), insn.status)?;
     }
     w.log_at(
+        logs,
         idle_site,
         dram_gate,
         &Idle {

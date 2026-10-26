@@ -919,7 +919,7 @@ fn random_commands_undo_and_redo_to_every_earlier_cockpit() {
         .and_then(|n| n.parse().ok())
         .unwrap_or(0);
     let mut labels = std::collections::BTreeSet::new();
-    for seed in [1, 7, 42, 101, 1234, 99991]
+    for seed in [1, 7, 42, 101, 109, 1234, 99991]
         .into_iter()
         .chain(100..100 + more)
     {

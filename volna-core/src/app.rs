@@ -1519,8 +1519,8 @@ impl App {
         if !vars.is_empty() {
             self.add_vars(&vars);
         }
-        let notice =
-            log.then_some("Log sites are listed for inspection; log panels are not available yet.");
+        let notice = log
+            .then_some("Log streams are listed for inspection; log panels are not available yet.");
         self.variables.notice = notice.map(str::to_owned);
         if let Some(notice) = notice {
             self.events.push(Event::Notice(notice.into()));

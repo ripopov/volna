@@ -11,7 +11,7 @@ use gpui_kit::{
 use volna_core::app::Command;
 use volna_core::sidebar::Key;
 use volna_core::sidebar::icons::{direction_icon, member_icon};
-use volna_core::sidebar::members::{describe, log_site, member_detail};
+use volna_core::sidebar::members::{describe, member_detail};
 use volna_core::trace::Traced;
 use volna_trace::data::Member;
 
@@ -177,7 +177,6 @@ impl Workspace {
                         } else {
                             describe(h, member)
                         };
-                        let severity = log_site(h, member).map(|s| s.severity);
                         let addable = member.var().is_some()
                             || (matches!(member, volna_trace::data::Member::Generator(_))
                                 && !h.is_log(member));
@@ -262,18 +261,6 @@ impl Workspace {
                                         .bottom_0()
                                         .w(px(2.0))
                                         .bg(t.panel.icon_accent),
-                                )
-                            })
-                            .when_some(severity, |row, severity| {
-                                row.child(
-                                    div()
-                                        .flex_none()
-                                        .px_1()
-                                        .rounded_sm()
-                                        .bg(t.badge.bg)
-                                        .text_color(t.badge.text)
-                                        .text_size(px(t.ui_size_small))
-                                        .child(SharedString::from(severity)),
                                 )
                             })
                             .child(
