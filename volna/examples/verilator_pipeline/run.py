@@ -126,7 +126,7 @@ def main():
     out, verilator = args.out.resolve(), args.verilator.resolve()
     out.mkdir(parents=True, exist_ok=True)
     installed = Path(command(verilator, "--getenv", "VERILATOR_ROOT").strip())
-    for name in ("vtr_trace.sv", "vtr_trace_dpi.h", "vtr_track.h", "vtr_common.h", "vtr_writer.h"):
+    for name in ("vtr_trace.sv", "vtr_trace_dpi.h", "vtr_track.h", "vtr_common.h", "vtr_writer.h", "vtr_reader.h", "vtr_logging.h"):
         assert (installed / "include/vtr" / name).read_bytes() == (SDK / "vtr-cpp" / name).read_bytes(), f"Rebuild the pinned Verilator installation to update {name}"
     env = dict(os.environ, VTR_INCLUDE=str(SDK / "vtr-cpp"), VTR_LIBDIR=str(SDK / "build/cpp"))
     env.setdefault("CCACHE_DIR", str(out / "ccache"))
@@ -143,7 +143,7 @@ def main():
                 name = f"{threads}-{execution}-{'bare' if bare else 'waves'}"
                 trace = simulate(binary, out / name, execution, bare, env)
                 info = command(cli, "info", trace)
-                assert "version:     3.3" in info and "timescale:   1e-12 s" in info, info
+                assert "version:     3.4" in info and "timescale:   1e-12 s" in info, info
                 assert "0 unresolved references" in info, info
                 records = transactions(cli, trace)
                 got = canonical(records)

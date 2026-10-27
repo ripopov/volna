@@ -582,14 +582,17 @@ fn log_callsite<T: Payload + 'static>(
     severity: u64,
     format: &str,
     line: u64,
-) -> vtr::Result<vtr::Callsite<T>> {
-    w.callsite::<T>(vtr::CallsiteOptions {
-        severity,
-        file: Some("tb/soc_tb.sv".into()),
-        line: Some(line),
-        function: Some("monitor".into()),
-        ..vtr::CallsiteOptions::new(format)
-    })
+) -> vtr::Result<vtr::PayloadType<T>> {
+    vtr::logging::declare::<T>(
+        w,
+        vtr::logging::CallsiteOptions {
+            severity,
+            file: Some("tb/soc_tb.sv".into()),
+            line: Some(line),
+            function: Some("monitor".into()),
+            ..vtr::logging::CallsiteOptions::new(format)
+        },
+    )
 }
 
 fn bits(
@@ -1121,7 +1124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         },
         |record| {
-            r.format_log_bytes(&record).unwrap();
+            vtr::logging::format_log_bytes(&r, &record).unwrap();
             log_count += 1;
             true
         },

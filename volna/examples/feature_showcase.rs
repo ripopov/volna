@@ -602,14 +602,17 @@ fn log_callsite<T: Payload + 'static>(
     format: &str,
     line: u64,
     function: &str,
-) -> vtr::Result<vtr::Callsite<T>> {
-    w.callsite::<T>(vtr::CallsiteOptions {
-        severity,
-        file: Some("debug_lab.cpp".into()),
-        line: Some(line),
-        function: Some(function.into()),
-        ..vtr::CallsiteOptions::new(format)
-    })
+) -> vtr::Result<vtr::PayloadType<T>> {
+    vtr::logging::declare::<T>(
+        w,
+        vtr::logging::CallsiteOptions {
+            severity,
+            file: Some("debug_lab.cpp".into()),
+            line: Some(line),
+            function: Some(function.into()),
+            ..vtr::logging::CallsiteOptions::new(format)
+        },
+    )
 }
 
 fn write(path: &Path) -> vtr::Result<()> {
@@ -1531,8 +1534,8 @@ fn verify(path: &Path, core_clock: u32, dma_clock: u32) -> vtr::Result<()> {
     })?;
     let mut logs = 0;
     r.records(RecordQuery { kind: Some(RecordKind::Log), ..Default::default() }, |record| {
-        r.format_log_bytes(&record).unwrap();
-        assert!(matches!(record.payload().field("vtr.label").unwrap().scalar().unwrap(), Value::Text(text) if !text.is_empty()));
+        vtr::logging::format_log_bytes(&r, &record).unwrap();
+        assert!(matches!(record.payload().field("value").unwrap().field("vtr.label").unwrap().scalar().unwrap(), Value::Text(text) if !text.is_empty()));
         logs += 1; true
     })?;
     assert_eq!(logs, 20);

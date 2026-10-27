@@ -86,12 +86,15 @@ fn fixture() -> Arc<dyn Session> {
         .unwrap();
     w.logger(vtr::SourceOptions::new("read_failures", Some(log)))
         .unwrap();
-    w.callsite::<u64>(vtr::CallsiteOptions {
-        severity: 4,
-        file: Some("soc.sv".into()),
-        line: Some(42),
-        ..vtr::CallsiteOptions::new("read_failed at pc={:x}")
-    })
+    vtr::logging::declare::<u64>(
+        &mut w,
+        vtr::logging::CallsiteOptions {
+            severity: 4,
+            file: Some("soc.sv".into()),
+            line: Some(42),
+            ..vtr::logging::CallsiteOptions::new("read_failed at pc={:x}")
+        },
+    )
     .unwrap();
     w.scope_with(
         vtr::SourceOptions::new("empty", Some(root)),

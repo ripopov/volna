@@ -332,7 +332,16 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
             .into(),
         ),
     });
-    let payload = record.payload();
+    let log_metadata = if record.kind() == vtr::RecordKind::Log {
+        vtr::logging::metadata(reader, record.datatype())?
+    } else {
+        None
+    };
+    let payload = if log_metadata.is_some() {
+        record.payload().field("value")?
+    } else {
+        record.payload()
+    };
     let mut budget = vtr::schema::DEFAULT_PAYLOAD_LIMIT;
     match payload_value(reader, &payload, &mut budget)? {
         AttributeValue::Map(fields) => {
@@ -351,23 +360,19 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
             value,
         }),
     }
-    if record.kind() == vtr::RecordKind::Log {
-        let callsite = record.callsite().context("log has no callsite")?;
-        let declaration = reader.node(vtr::NodeId(callsite))?;
+    if log_metadata.is_some() {
+        let datatype = record.datatype();
+        let declaration = reader.declarations().types.get(datatype)?;
         attrs.push(TransactionAttribute {
-            key: "log.callsite".into(),
-            value: AttributeValue::U64(u64::from(callsite)),
-        });
-        attrs.push(TransactionAttribute {
-            key: "log.format".into(),
-            value: AttributeValue::Text(reader.string(declaration.name)?.into()),
+            key: "log.datatype".into(),
+            value: AttributeValue::U64(u64::from(datatype)),
         });
         attrs.extend(
             attributes(reader, &declaration.attributes)
                 .into_iter()
                 .map(|(key, value)| TransactionAttribute { key, value }),
         );
-        let bytes = reader.format_log_bytes(record)?;
+        let bytes = vtr::logging::format_log_bytes(reader, record)?;
         let message = match String::from_utf8(bytes) {
             Ok(text) => AttributeValue::Text(text),
             Err(error) => AttributeValue::Bytes(error.into_bytes()),

@@ -84,17 +84,21 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
         let events = writer
             .events::<String>(SourceOptions::new("issued", None))
             .unwrap();
-        let logs = writer
-            .callsite::<u64>(vtr::CallsiteOptions::new("retired {}"))
-            .unwrap();
-        let retry_site = writer
-            .callsite::<String>(vtr::CallsiteOptions {
+        let logs = vtr::logging::declare::<u64>(
+            &mut writer,
+            vtr::logging::CallsiteOptions::new("retired {}"),
+        )
+        .unwrap();
+        let retry_site = vtr::logging::declare::<String>(
+            &mut writer,
+            vtr::logging::CallsiteOptions {
                 severity: 3,
                 file: Some("decoder.cpp".into()),
                 line: Some(17),
-                ..vtr::CallsiteOptions::new("retry {}")
-            })
-            .unwrap();
+                ..vtr::logging::CallsiteOptions::new("retry {}")
+            },
+        )
+        .unwrap();
         let key = writer.intern("payload.pc").unwrap();
         let name = writer.intern("fetch").unwrap();
         let lane = writer.intern("0").unwrap();
@@ -167,7 +171,7 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
             .unwrap();
         for (key, expected) in [
             (
-                "log.callsite",
+                "log.datatype",
                 AttributeValue::U64(u64::from(retry_site.id())),
             ),
             ("log.format", AttributeValue::Text("retry {}".into())),

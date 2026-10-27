@@ -347,7 +347,7 @@ fn build_hierarchy(reader: Arc<LocalReader>) -> Hierarchy {
             NodeData::Scope { .. } => &mut scopes,
             NodeData::Signal { .. } => &mut vars,
             NodeData::Generator { .. } => &mut generator_nodes,
-            NodeData::EnumTable { .. } | NodeData::Callsite { .. } => continue,
+            NodeData::EnumTable { .. } => continue,
         };
         target.push(vtr::NodeId(id as u32));
     }

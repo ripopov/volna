@@ -13,7 +13,7 @@ Server process tests share this directory.
 
 ## Provenance
 
-These fixtures use the current VTR 3.3 wire format. Older recordings must be
+These fixtures use the current VTR 3.4 wire format. Older recordings must be
 regenerated. Record IDs include embedded stages and events; locate records by
 their source, payload, and relationships when updating viewer expectations.
 
