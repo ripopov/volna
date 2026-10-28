@@ -114,8 +114,8 @@ cargo test -p volna --lib native_import::tests::real_converter
 
 ## Islands appearance
 
-**Volna Islands Dark** is the default theme. It uses rounded tab-group islands on
-continuous surrounding chrome. Choose another theme in Settings → Appearance.
+**Volna Dark** is the default theme. Select **Volna Islands Dark** in Settings →
+Appearance to use rounded tab-group islands on continuous surrounding chrome.
 **Volna Islands Light** pairs the same layout with Volna Light's data palette,
 white islands, and a soft blue-to-sea-glass backdrop.
 See [geometry and implementation](ISLANDS.md).
