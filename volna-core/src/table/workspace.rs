@@ -141,12 +141,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             TableSource::Signals(restored)
         }
     };
-    let mut table = TableModel::new(
-        source,
-        saved.link,
-        ctx.budget.clone(),
-        ctx.doc.translators.clone(),
-    );
+    let mut table = TableModel::for_document(source, saved.link, ctx.budget.clone(), ctx.doc);
     ensure!(
         saved.widths.len() == saved.columns.len(),
         "invalid table column widths"

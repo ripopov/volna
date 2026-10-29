@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use web_time::Instant;
 
-use super::columns::{ColumnSet, TransactionColumn};
+use super::columns::{ColumnSet, TransactionColumn, TransactionColumns};
 use super::format::{self, FormatChoice, TableFormats};
 use super::layout::{
     CELL_PADDING, ColumnHeader, HEADER_HEIGHT, MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, ROW_HEIGHT,
@@ -161,6 +161,7 @@ pub struct TableModel {
     pub widths: crate::history::Journaled<Vec<Option<f32>>>,
     pub formats: crate::history::Journaled<TableFormats>,
     translators: Translators,
+    log: bool,
     pub filters_visible: bool,
     pub filters: Vec<Option<super::filter::ColumnFilter>>,
     filter_unit: crate::trace::Unit,
@@ -187,6 +188,33 @@ pub struct TableModel {
 }
 
 impl TableModel {
+    pub(crate) fn for_document(
+        source: TableSource,
+        link: Link,
+        budget: MemoryBudget,
+        doc: &Document,
+    ) -> Self {
+        let log = source.generator_track().is_some_and(|track| {
+            doc.session(track.trace).is_some_and(|session| {
+                session
+                    .tracks()
+                    .iter()
+                    .any(|t| t.id == track.item && t.kind == "LOG")
+            })
+        });
+        let mut table = Self::new(source, link, budget, doc.translators.clone());
+        table.log = log;
+        if log {
+            let columns = ColumnSet::Transactions(TransactionColumns::logs());
+            let count = columns.len();
+            table.columns.restore(columns);
+            table.widths.restore(vec![None; count]);
+            table.formats.restore(TableFormats::new(count));
+            table.filters.resize(count, None);
+        }
+        table
+    }
+
     #[must_use]
     pub fn new(
         source: TableSource,
@@ -211,6 +239,7 @@ impl TableModel {
             widths: crate::history::Journaled::new(vec![None; count]),
             formats: crate::history::Journaled::new(TableFormats::new(count)),
             translators,
+            log: false,
             filters_visible: false,
             filters: vec![None; count],
             filter_unit: crate::trace::Unit {
@@ -249,6 +278,7 @@ impl TableModel {
             self.translators.clone(),
         );
         clone.columns = self.columns.clone();
+        clone.log = self.log;
         clone.widths = self.widths.clone();
         clone.formats = self.formats.clone();
         clone.sort_requested = self.sort_requested;
@@ -1194,8 +1224,13 @@ impl TableModel {
                 width,
             } => self.resize_column(source_index, width),
             TableCommand::ResetColumns => {
+                let log = self.log;
                 let columns = self.edit_columns(|columns| {
-                    columns.reset();
+                    if log {
+                        *columns = ColumnSet::Transactions(TransactionColumns::logs());
+                    } else {
+                        columns.reset();
+                    }
                     true
                 });
                 let widths = self.widths.update(|widths| widths.fill(None));
@@ -1791,11 +1826,21 @@ impl TableModel {
             ));
         }
         let fixed_width = widths.iter().map(|(_, width)| width * zoom).sum::<f32>();
-        if let Some((_, width)) = widths.iter_mut().find(|(index, _)| {
-            matches!(self.source, TableSource::Generator(_))
-                && self.transaction_column(*index) == Some(&TransactionColumn::Attributes)
-                && self.widths[*index].is_none()
-        }) {
+        let fill_column = widths
+            .iter()
+            .position(|(index, _)| {
+                self.log
+                    && matches!(self.transaction_column(*index), Some(TransactionColumn::Attribute(key)) if key == "log.message")
+                    && self.widths[*index].is_none()
+            })
+            .or_else(|| {
+                widths.iter().position(|(index, _)| {
+                    self.transaction_column(*index) == Some(&TransactionColumn::Attributes)
+                        && self.widths[*index].is_none()
+                })
+            });
+        if let Some(column) = fill_column {
+            let (_, width) = &mut widths[column];
             let other_width = fixed_width - *width * zoom;
             *width = width
                 .max((body.width() - other_width) / zoom)
@@ -1928,7 +1973,15 @@ impl TableModel {
             ColumnSet::Transactions(columns) => columns
                 .iter()
                 .filter(|(_, _, visible)| *visible)
-                .map(|(i, c, _)| (i, self.widths[i].unwrap_or_else(|| c.width())))
+                .map(|(i, c, _)| {
+                    let width = self.widths[i].unwrap_or_else(|| match c {
+                        TransactionColumn::Attribute(key) if self.log && key == "log.message" => {
+                            480.0
+                        }
+                        _ => c.width(),
+                    });
+                    (i, width)
+                })
                 .collect(),
             ColumnSet::Signals { time, visible } => {
                 std::iter::once((0, self.widths[0].unwrap_or(130.0)))
@@ -1948,9 +2001,19 @@ impl TableModel {
     #[must_use]
     pub fn column_title(&self, source_index: usize) -> &str {
         match &self.source {
-            TableSource::Generator(_) => self
-                .transaction_column(source_index)
-                .map_or("", |c| c.title()),
+            TableSource::Generator(_) => {
+                self.transaction_column(source_index)
+                    .map_or("", |c| match c {
+                        TransactionColumn::Begin if self.log => "Time",
+                        TransactionColumn::Attribute(key) if self.log && key == "log.severity" => {
+                            "Severity"
+                        }
+                        TransactionColumn::Attribute(key) if self.log && key == "log.message" => {
+                            "Message"
+                        }
+                        _ => c.title(),
+                    })
+            }
             TableSource::Signals(signals) => {
                 if source_index == 0 {
                     "Time"

@@ -269,6 +269,12 @@ grows with the column. Table panel schema version 4 stores column keys, visibili
 order, and widths, including hidden columns. **Columns → Reset to defaults** restores column
 visibility, order, and automatic widths.
 
+Double-clicking a log generator opens a table with **Time** (Begin),
+**Severity** (`log.severity`), and **Message** (`log.message`). Message fills the
+remaining width by default. Logs use the same column editing, filtering, sorting,
+and workspace persistence as other tables; resetting columns restores the log
+preset. Activating an already open log generator focuses its table.
+
 **Columns → Add attribute columns…** opens a searchable checklist of transaction
 attributes. Keys and observed types are collected during track loading; searching
 uses that catalogue without scanning transactions. Checkboxes update the table

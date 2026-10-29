@@ -42,6 +42,295 @@ fn frame(app: &mut App, panel: volna_core::panels::PanelId) {
     app.render_panel(panel, &Theme::one_dark(), &mut MonoMeasure);
 }
 
+fn log_fixture() -> std::sync::Arc<dyn Session> {
+    use vtr::Recorder;
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let logger = writer
+        .logger(vtr::SourceOptions::new("logs", None))
+        .unwrap();
+    for (time, severity, value) in [(10, 3, "zebra"), (20, 2, "alpha"), (30, 4, "omega")] {
+        let callsite = vtr::logging::declare::<String>(
+            &mut writer,
+            vtr::logging::CallsiteOptions {
+                severity,
+                ..vtr::logging::CallsiteOptions::new("message: {}")
+            },
+        )
+        .unwrap();
+        writer.advance_time(time).unwrap();
+        writer
+            .log(logger, callsite, &value.to_owned(), None)
+            .unwrap();
+    }
+    writer.close().unwrap();
+    OpenSpec::Path(file.path().into()).open().unwrap()
+}
+
+fn finish_query(app: &mut App, panel: volna_core::panels::PanelId) {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        app.tick(Instant::now());
+        let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+        assert!(table.query_error.is_none(), "{:?}", table.query_error);
+        if !table.querying() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "table query did not finish");
+        std::thread::yield_now();
+    }
+    frame(app, panel);
+}
+
+#[test]
+fn log_activation_opens_a_generic_table_with_formatted_filterable_sortable_columns() {
+    let mut app = App::new();
+    app.set_session(log_fixture());
+    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(0)])));
+    let panel = app.panels.focused_id();
+    pump(&mut app);
+    frame(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.len(), 3);
+    assert_eq!(
+        table
+            .layout
+            .columns
+            .iter()
+            .map(|c| table.column_title(c.source_index))
+            .collect::<Vec<_>>(),
+        ["Time", "Severity", "Message"]
+    );
+    assert_eq!(
+        table.window.rows[0]
+            .cells
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>(),
+        ["10", "warn (3)", "message: zebra"]
+    );
+    let message = table.layout.columns[2].source_index;
+    let severity = table.layout.columns[1].source_index;
+    assert!(table.layout.columns[2].rect.width() > table.layout.body.width() / 2.0);
+    assert!((table.layout.content_width - table.layout.body.width()).abs() < 0.01);
+
+    app.handle(Command::Table(panel, TableCommand::SortColumn(severity)));
+    finish_query(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(
+        (0..3).map(|row| table.row_time(row)).collect::<Vec<_>>(),
+        [Some(20), Some(10), Some(30)]
+    );
+    app.handle(Command::Table(panel, TableCommand::SortColumn(message)));
+    app.handle(Command::Table(
+        panel,
+        TableCommand::SetFilter {
+            source_index: message,
+            filter: Some(volna_core::table::filter::ColumnFilter {
+                query: "message:".into(),
+                ..Default::default()
+            }),
+        },
+    ));
+    finish_query(&mut app, panel);
+    assert_eq!(
+        app.panels.get(panel).unwrap().kind.table().unwrap().len(),
+        3
+    );
+    app.handle(Command::Table(
+        panel,
+        TableCommand::SetFilter {
+            source_index: severity,
+            filter: Some(volna_core::table::filter::ColumnFilter {
+                query: ">= 3".into(),
+                mode: volna_core::table::filter::FilterMode::Expression,
+                ..Default::default()
+            }),
+        },
+    ));
+    finish_query(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.len(), 2);
+    assert_eq!(
+        table
+            .window
+            .rows
+            .iter()
+            .map(|r| r.cells[2].text.as_str())
+            .collect::<Vec<_>>(),
+        ["message: omega", "message: zebra"]
+    );
+    app.handle(Command::Table(panel, TableCommand::ClearFilters));
+    finish_query(&mut app, panel);
+    assert_eq!(
+        app.panels.get(panel).unwrap().kind.table().unwrap().len(),
+        3
+    );
+}
+
+#[test]
+fn log_table_customization_survives_activation_restore_and_reset_undo() {
+    let mut app = App::new();
+    app.set_session(log_fixture());
+    app.handle(Command::OpenTable {
+        selected: a_all(vec![Member::Generator(0)]),
+        clicked: None,
+    });
+    let panel = app.panels.focused_id();
+    pump(&mut app);
+    frame(&mut app, panel);
+    let message = app
+        .panels
+        .get(panel)
+        .unwrap()
+        .kind
+        .table()
+        .unwrap()
+        .layout
+        .columns[2]
+        .source_index;
+    for command in [
+        TableCommand::ResizeColumn {
+            source_index: message,
+            width: 250.0,
+        },
+        TableCommand::MoveColumn {
+            source_index: message,
+            before: Some(1),
+        },
+        TableCommand::ToggleTransactionColumn(TransactionColumn::Id),
+    ] {
+        app.handle(Command::Table(panel, command));
+    }
+    let columns = app
+        .panels
+        .get(panel)
+        .unwrap()
+        .kind
+        .table()
+        .unwrap()
+        .columns
+        .get()
+        .clone();
+    let count = app.panels.len();
+    app.handle(Command::ActivateMembers(a_all(vec![
+        Member::Generator(0),
+        Member::Generator(0),
+    ])));
+    assert_eq!(app.panels.len(), count);
+    assert_eq!(app.panels.focused_id(), panel);
+    let saved = Workspace::capture(
+        &app,
+        volna_core::testing::paths("file:///tmp/logs.vtr"),
+        None,
+    )
+    .unwrap();
+    Workspace::parse(&saved.to_bytes().unwrap())
+        .unwrap()
+        .prepare(
+            &app,
+            "file:///tmp/logs.vtr",
+            "file:///tmp/logs.vtr.volna.json",
+        )
+        .unwrap()
+        .commit(&mut app)
+        .unwrap();
+    pump(&mut app);
+    frame(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.columns.get(), &columns);
+    assert_eq!(table.column_title(message), "Message");
+    assert_eq!(table.layout.columns[0].rect.width(), 250.0);
+    app.handle(Command::Table(panel, TableCommand::ResetColumns));
+    frame(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(
+        table
+            .layout
+            .columns
+            .iter()
+            .map(|c| table.column_title(c.source_index))
+            .collect::<Vec<_>>(),
+        ["Time", "Severity", "Message"]
+    );
+    assert!(table.layout.columns[2].rect.width() > table.layout.body.width() / 2.0);
+    app.handle(Command::Undo);
+    frame(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.columns.get(), &columns);
+    assert_eq!(table.widths[message], Some(250.0));
+}
+
+#[test]
+fn log_table_keeps_generic_attribute_sizing_when_message_is_hidden_or_resized() {
+    for hide_message in [false, true] {
+        let mut app = App::new();
+        app.set_session(log_fixture());
+        app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(0)])));
+        let panel = app.panels.focused_id();
+        pump(&mut app);
+        frame(&mut app, panel);
+        let message = app
+            .panels
+            .get(panel)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .layout
+            .columns[2]
+            .source_index;
+        let command = if hide_message {
+            TableCommand::ToggleTransactionColumn(TransactionColumn::Attribute(
+                "log.message".into(),
+            ))
+        } else {
+            TableCommand::ResizeColumn {
+                source_index: message,
+                width: 200.0,
+            }
+        };
+        app.handle(Command::Table(panel, command));
+        app.handle(Command::Table(
+            panel,
+            TableCommand::ShowTransactionColumn(TransactionColumn::Attributes),
+        ));
+        frame(&mut app, panel);
+        let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+        assert!((table.layout.content_width - table.layout.body.width()).abs() < 0.01);
+        if !hide_message {
+            assert_eq!(
+                table
+                    .layout
+                    .columns
+                    .iter()
+                    .find(|c| c.source_index == message)
+                    .unwrap()
+                    .rect
+                    .width(),
+                200.0
+            );
+        }
+        let attributes = table
+            .layout
+            .columns
+            .iter()
+            .find(|c| table.column_title(c.source_index) == "Attributes · preview")
+            .unwrap()
+            .source_index;
+        app.handle(Command::Table(
+            panel,
+            TableCommand::ResizeColumn {
+                source_index: attributes,
+                width: 200.0,
+            },
+        ));
+        frame(&mut app, panel);
+        let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+        assert!(table.layout.content_width < table.layout.body.width());
+    }
+}
+
 #[test]
 fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     let session = fixture();

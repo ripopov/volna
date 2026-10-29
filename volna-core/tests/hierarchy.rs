@@ -168,7 +168,7 @@ fn mixed_vtr_metadata_icons_and_logger_identity() {
 }
 
 #[test]
-fn search_order_activation_keyboard_and_notices() {
+fn search_order_activation_and_keyboard() {
     let session = fixture();
     let mut app = App::new();
     app.set_session(session.clone());
@@ -189,13 +189,21 @@ fn search_order_activation_keyboard_and_notices() {
     let requests = app.take_requests();
     assert!(matches!(
         requests.as_slice(),
-        [volna_core::session::LoadRequest::Track { .. }]
+        [
+            volna_core::session::LoadRequest::Track { .. },
+            volna_core::session::LoadRequest::Track { .. }
+        ]
     ));
-    assert_eq!(app.panels.len(), 3);
-    assert!(app.panels.focused().kind.pipeline().is_some());
-    assert!(app.status().sidebar_notice.unwrap().contains("Log streams"));
+    assert_eq!(app.panels.len(), 4);
+    assert!(app.panels.focused().kind.table().is_some());
     assert!(
-        app.take_events()
+        app.panels
+            .iter()
+            .any(|panel| panel.kind.pipeline().is_some())
+    );
+    assert!(app.status().sidebar_notice.is_none());
+    assert!(
+        !app.take_events()
             .iter()
             .any(|e| matches!(e, Event::Notice(_)))
     );
@@ -204,10 +212,10 @@ fn search_order_activation_keyboard_and_notices() {
     assert!(!app.variables.search_everywhere);
     app.handle(Command::SetFilter(String::new()));
     app.handle(Command::ScopesKey(Key::Enter));
-    assert_eq!(app.panels.len(), 3);
+    assert_eq!(app.panels.len(), 4);
     app.handle(Command::ActivateMembers(vec![a(Member::Generator(0))]));
     assert!(app.status().sidebar_notice.is_none());
-    assert_eq!(app.panels.len(), 4);
+    assert_eq!(app.panels.len(), 5);
     assert_eq!(
         app.panels.focused().kind.pipeline().unwrap().track.path(),
         ["soc", "cpu", "thread0", "instructions"]

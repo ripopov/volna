@@ -1564,7 +1564,7 @@ impl App {
     fn activate_members(&mut self, members: &[Traced<Member>]) {
         let mut vars = Vec::new();
         let mut tracks = Vec::new();
-        let mut log = false;
+        let mut logs = Vec::new();
         for &member in members {
             let Some(h) = self.doc.hierarchy(member.trace) else {
                 continue;
@@ -1576,7 +1576,9 @@ impl App {
             } else if let Some(track) = h.member_track(member.item) {
                 let track = member.with(track);
                 if h.is_log(member.item) {
-                    log = true;
+                    if !logs.contains(&member) {
+                        logs.push(member);
+                    }
                 } else if !tracks.contains(&track) {
                     tracks.push(track);
                 }
@@ -1585,14 +1587,29 @@ impl App {
         if !vars.is_empty() {
             self.add_vars(&vars);
         }
-        let notice = log
-            .then_some("Log streams are listed for inspection; log panels are not available yet.");
-        self.variables.notice = notice.map(str::to_owned);
-        if let Some(notice) = notice {
-            self.events.push(Event::Notice(notice.into()));
-        }
+        self.variables.notice = None;
         for track in tracks {
             self.open_pipeline(track);
+        }
+        for member in logs {
+            let track = self
+                .doc
+                .hierarchy(member.trace)
+                .and_then(|h| h.member_track(member.item));
+            let existing = self
+                .panels
+                .iter()
+                .find(|panel| {
+                    panel.kind.table().is_some_and(|table| {
+                        table.source.generator_track() == track.map(|track| member.with(track))
+                    })
+                })
+                .map(|panel| panel.id);
+            if let Some(panel) = existing {
+                self.panel_command(PanelsCommand::Focus(panel));
+            } else {
+                self.open_table(&[member], None);
+            }
         }
         self.changed();
     }
@@ -1806,11 +1823,11 @@ impl App {
     }
 
     fn open_table_source(&mut self, source: crate::table::TableSource, beside: PanelId) {
-        let mut table = crate::table::TableModel::new(
+        let mut table = crate::table::TableModel::for_document(
             source,
             self.settings.resolved().link_by_default(),
             self.table_memory_budget(),
-            self.doc.translators.clone(),
+            &self.doc,
         );
         table.nav.reset(Some(self.doc.limits()));
         let kind = PanelKind::Table(Box::new(table));

@@ -87,6 +87,17 @@ impl Default for TransactionColumns {
 }
 
 impl TransactionColumns {
+    pub(super) fn logs() -> Self {
+        let mut columns = Self::default();
+        for (_, visible) in &mut columns.entries {
+            *visible = false;
+        }
+        columns.toggle(TransactionColumn::Begin);
+        columns.toggle(TransactionColumn::Attribute("log.severity".into()));
+        columns.toggle(TransactionColumn::Attribute("log.message".into()));
+        columns
+    }
+
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
