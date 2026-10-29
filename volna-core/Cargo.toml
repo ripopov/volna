@@ -12,7 +12,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 volna-trace = { version = "0.1.0", path = "../volna-trace" }
-vtr = { version = "0.1.0", path = "../vtr/vtr" }
+vtr = { version = "0.1.0", path = "../vtr/vtr-rs" }
 anyhow = "1"
 futures-channel = "0.3"
 log = "0.4"

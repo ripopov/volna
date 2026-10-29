@@ -12,7 +12,7 @@ license = "MIT"
 repository = "https://github.com/ripopov/volna"
 
 [workspace.dependencies]
-vtr = { version = "0.1.0", path = "vtr/vtr" }
+vtr = { version = "0.1.0", path = "vtr/vtr-rs" }
 lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 tempfile = "3"
 

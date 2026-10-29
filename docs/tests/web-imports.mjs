@@ -133,7 +133,7 @@ try {
     workspace.sidebar.expanded = [];
     workspace.sidebar.selected_scope = null;
     if (kind === 'pipeline') panel.track = path;
-    else panel.rows = [{ type: 'signal', signal: path, format: 'bit' }];
+    else panel.rows = [{ type: 'signal', shape: 'Bit', signal: path, format: 'bit' }];
     await command('openWorkspace');
     await page.getByLabel('Open a Volna workspace').setInputFiles({
       name: `${name}.volna.json`,

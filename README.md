@@ -36,7 +36,7 @@ this repository's `vtr` submodule. Initialize it before building:
 git submodule update --init vtr
 ```
 
-The VTR workspace contains `vtr/vtr`, `vtr/vtr-cpp`, the converter crates,
+The VTR workspace contains `vtr/vtr-rs`, `vtr/vtr-cpp`, the converter crates,
 and `vtr/ext/verilator`. Its Rust libraries need no simulator or GUI SDK.
 Initialize its nested Verilator submodules only for simulator development:
 

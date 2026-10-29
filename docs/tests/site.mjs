@@ -148,7 +148,7 @@ try {
     assert.equal(lines.join('\n'), command, 'rendered commands must match the canonical guide');
   }
   assert.equal(await page.getByRole('link', { name: 'waveform example', exact: true }).getAttribute('href'),
-    'https://github.com/ripopov/vtr/blob/main/vtr/examples/waveform.rs');
+    'https://github.com/ripopov/vtr/blob/main/vtr-rs/examples/waveform.rs');
   await page.goto(`${origin}${base}authoring/`);
   await verifyDiagrams(page);
   await page.keyboard.press('Tab');
