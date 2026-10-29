@@ -34,7 +34,7 @@ use crate::wave::model::{
 use crate::wave::timeline::format_time;
 use volna_trace::data::Member;
 use volna_trace::data::transactions::{TrackRef, TransactionRef};
-use volna_trace::data::{ScopeId, VarId};
+use volna_trace::data::{ScopeId, SignalRef, VarId};
 use volna_trace::session::{OpenSpec, Session};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -728,6 +728,15 @@ impl App {
             .activity
             .get(node.trace, slot.generation(), window, node.scope?)?;
         Some(crate::data::ScopeActivity { changing, total })
+    }
+
+    #[must_use]
+    pub fn signal_activity(&self, signal: Traced<SignalRef>) -> Option<bool> {
+        let slot = self.doc.traces().get(signal.trace)?;
+        let window =
+            crate::sidebar::activity::trace_window(self.activity_viewport(), slot.placement());
+        self.activity
+            .signal_active(signal.trace, slot.generation(), window, signal.item)
     }
 
     pub fn deliver(&mut self, mut result: LoadResult) {

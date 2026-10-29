@@ -1,4 +1,4 @@
-//! Scope activity meter tests covering exact counts, sidecar builds, and stale results.
+//! Signal and scope activity tests covering exact counts, sidecar builds, and stale results.
 
 use vtr::Recorder;
 
@@ -163,7 +163,12 @@ fn open_with_settings(path: &Path, settings: &str) -> (App, Arc<dyn Session>) {
     (app, session)
 }
 
-fn brute(session: &Arc<dyn Session>, t_min: u64, t0: u64, t1: u64) -> Vec<u32> {
+fn brute(
+    session: &Arc<dyn Session>,
+    t_min: u64,
+    t0: u64,
+    t1: u64,
+) -> (Vec<u32>, HashSet<SignalRef>) {
     let h = session.hierarchy();
     let signals: HashSet<SignalRef> = (0..h.var_count()).map(|v| h.var(v).signal).collect();
     let signals: Vec<SignalRef> = signals.into_iter().collect();
@@ -178,7 +183,7 @@ fn brute(session: &Arc<dyn Session>, t_min: u64, t0: u64, t1: u64) -> Vec<u32> {
         })
         .map(|(s, _)| s)
         .collect();
-    (0..h.scope_count())
+    let scopes = (0..h.scope_count())
         .map(|scope| {
             let (mut below, mut stack) = (HashSet::new(), vec![scope]);
             while let Some(s) = stack.pop() {
@@ -193,7 +198,8 @@ fn brute(session: &Arc<dyn Session>, t_min: u64, t0: u64, t1: u64) -> Vec<u32> {
             }
             below.len() as u32
         })
-        .collect()
+        .collect();
+    (scopes, changing)
 }
 
 fn node(scope: usize) -> TreeNode {
@@ -209,10 +215,18 @@ fn view(app: &mut App, t0: u64, t1: u64) {
 
 fn check_exact(app: &App, session: &Arc<dyn Session>, t0: u64, t1: u64) {
     let t_min = session.activity().unwrap().t_min();
-    let want = brute(session, t_min, t0, t1);
+    let (want, signals) = brute(session, t_min, t0, t1);
     for (scope, &n) in want.iter().enumerate() {
         let a = app.scope_activity(node(scope)).unwrap();
         assert_eq!(a.changing, n, "[{t0}, {t1}] scope {scope}");
+    }
+    for var in session.hierarchy().vars() {
+        assert_eq!(
+            app.signal_activity(Traced::new(TraceId::A, var.signal)),
+            Some(signals.contains(&var.signal)),
+            "[{t0}, {t1}] signal {:?}",
+            var.signal
+        );
     }
 }
 
@@ -289,6 +303,10 @@ fn fast_pans_coalesce_and_drop_old_classifications() {
     }
     app.deliver(classification);
     assert_eq!(
+        app.signal_activity(Traced::new(TraceId::A, SignalRef(0))),
+        None
+    );
+    assert_eq!(
         app.scope_activity(top),
         None,
         "stale classifications stay hidden"
@@ -320,8 +338,16 @@ fn replacing_a_trace_rejects_results_before_the_next_frame() {
     let classification = app.take_requests().pop().unwrap().perform();
     app.set_session(Arc::clone(&session));
     assert_eq!(app.scope_activity(top), None);
+    assert_eq!(
+        app.signal_activity(Traced::new(TraceId::A, SignalRef(0))),
+        None
+    );
     app.deliver(classification);
     assert_eq!(app.scope_activity(top), None);
+    assert_eq!(
+        app.signal_activity(Traced::new(TraceId::A, SignalRef(0))),
+        None
+    );
     settle(&mut app);
     let viewport = app.activity_viewport();
     check_exact(&app, &session, viewport.start as u64, viewport.end as u64);
@@ -467,6 +493,10 @@ fn failed_classifications_report_errors_and_hide_meters() {
     };
     *budget = volna_trace::remote::memory::MemoryBudget::new(0);
     app.deliver(read.perform());
+    assert_eq!(
+        app.signal_activity(Traced::new(TraceId::A, SignalRef(0))),
+        None
+    );
     assert!(app.take_events().iter().any(|e| matches!(e, volna_core::app::Event::Notice(message) if message.contains("memory budget exceeded"))));
     assert_eq!(
         app.scope_activity(top),
@@ -488,6 +518,10 @@ fn an_index_of_another_trace_is_ignored() {
     write_trace(&path, 5);
     let (app, session) = open_asking(&path);
     assert!(session.activity().is_none());
+    assert_eq!(
+        app.signal_activity(Traced::new(TraceId::A, SignalRef(0))),
+        None
+    );
     let top = node(session.hierarchy().roots().first().unwrap());
     assert_eq!(
         app.scope_activity(top),

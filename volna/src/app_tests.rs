@@ -743,6 +743,161 @@ fn scope_rows_without_activity_hide_counts_in_both_themes(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn inactive_signal_names_follow_the_viewport_and_preserve_selection(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use volna_core::sidebar::{Key, TreeNode};
+    use volna_core::trace::Traced;
+    use volna_core::wave::Viewport;
+    use volna_trace::data::Member;
+    use vtr::Recorder;
+    init(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("activity.vtr");
+    let mut writer = vtr::Writer::create(&path).unwrap();
+    let top = writer
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top",
+        )
+        .unwrap();
+    let mut signals = Vec::new();
+    for name in ["changing", "constant"] {
+        signals.push(
+            writer
+                .signal(
+                    vtr::SourceOptions::new(name, Some(top)),
+                    vtr::SignalKind::Bits {
+                        width: 1,
+                        states: 2,
+                    },
+                    vtr::VarType::Wire,
+                    vtr::Direction::Input,
+                )
+                .unwrap(),
+        );
+    }
+    writer
+        .transactions::<()>(vtr::SourceOptions::new("transactions", Some(top)), "raw")
+        .unwrap();
+    writer.advance_time(0).unwrap();
+    for &signal in &signals {
+        writer.emit_u64(signal, 0).unwrap();
+    }
+    writer.advance_time(10).unwrap();
+    writer.emit_u64(signals[0], 1).unwrap();
+    writer.advance_time(100).unwrap();
+    writer.close().unwrap();
+    let window = cx.add_window(Workspace::new);
+    window
+        .update(cx, |ws, _, cx| ws.open_path(path.clone(), cx))
+        .unwrap();
+    let mut view = VisualTestContext::from_window(window.into(), cx);
+    view.run_until_parked();
+    let (changing, constant, generator) = window
+        .update(&mut view, |ws, _, cx| {
+            let scope = ws
+                .app
+                .doc
+                .hierarchy(TraceId::A)
+                .unwrap()
+                .roots()
+                .first()
+                .unwrap();
+            ws.app
+                .handle(Command::SelectScope(TreeNode::scope(Traced::new(
+                    TraceId::A,
+                    scope,
+                ))));
+            ws.after(None, cx);
+            let find = |name: &str| {
+                ws.app
+                    .variables
+                    .rows
+                    .iter()
+                    .position(|m| {
+                        ws.app.doc.hierarchy(m.trace).unwrap().member_name(m.item) == name
+                    })
+                    .unwrap()
+            };
+            (find("changing"), find("constant"), find("transactions"))
+        })
+        .unwrap();
+    for dark in [true, false] {
+        view.update(|_, cx| crate::theme::set(crate::theme::CoreTheme::volna(dark), cx));
+        for (window_range, selected, muted) in [
+            ((0.0, 100.0), None, vec![constant]),
+            ((0.0, 100.0), Some(constant), vec![]),
+            ((20.0, 30.0), None, vec![changing, constant]),
+        ] {
+            window
+                .update(&mut view, |ws, _, cx| {
+                    ws.app.doc.shared.viewport.set(Viewport {
+                        start: window_range.0,
+                        end: window_range.1,
+                    });
+                    ws.app
+                        .handle(Command::VariablesKey(Key::Escape, Default::default()));
+                    if let Some(ix) = selected {
+                        ws.app.handle(Command::SelectVar {
+                            ix,
+                            modifiers: Default::default(),
+                        });
+                    }
+                    ws.after(None, cx);
+                })
+                .unwrap();
+            view.run_until_parked();
+            view.update(|window, cx| window.draw(cx).clear(cx));
+            for ix in [changing, constant, generator] {
+                let selector = Box::leak(format!("inactive-member-A-{ix}").into_boxed_str());
+                assert_eq!(
+                    view.debug_bounds(selector).is_some(),
+                    muted.contains(&ix),
+                    "dark={dark}, row={ix}, window={window_range:?}, selected={selected:?}"
+                );
+            }
+        }
+    }
+    let bytes = std::fs::read(path).unwrap();
+    window
+        .update(&mut view, |ws, _, cx| {
+            ws.set_session(
+                OpenSpec::Bytes {
+                    name: "unindexed.vtr".into(),
+                    bytes,
+                }
+                .open()
+                .unwrap(),
+                cx,
+            );
+            ws.app
+                .handle(Command::SelectScope(TreeNode::scope(Traced::new(
+                    TraceId::A,
+                    0,
+                ))));
+            ws.after(None, cx);
+            assert!(
+                ws.app
+                    .variables
+                    .rows
+                    .iter()
+                    .any(|m| matches!(m.item, Member::Var(_)))
+            );
+        })
+        .unwrap();
+    view.run_until_parked();
+    view.update(|window, cx| window.draw(cx).clear(cx));
+    for ix in [changing, constant] {
+        let selector = Box::leak(format!("inactive-member-A-{ix}").into_boxed_str());
+        assert!(
+            view.debug_bounds(selector).is_none(),
+            "no index means unknown activity"
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn scope_rows_show_activity_meters_in_both_themes(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     use volna_core::sidebar::TreeNode;

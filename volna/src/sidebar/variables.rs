@@ -172,11 +172,22 @@ impl Workspace {
                             .var()
                             .and_then(|id| direction_icon(h.var(id).direction));
                         let shown = on_waves.contains(&traced);
-                        let tooltip = if shown {
+                        let activity = member.var().and_then(|id| {
+                            this.app
+                                .signal_activity(Traced::new(traced.trace, h.signal(id)))
+                        });
+                        let mut tooltip = if shown {
                             format!("{} · on the waves", describe(h, member))
                         } else {
                             describe(h, member)
                         };
+                        if let Some(active) = activity {
+                            tooltip.push_str(if active {
+                                "\nChanges in the view"
+                            } else {
+                                "\nNo changes in the view"
+                            });
+                        }
                         let addable = member.var().is_some()
                             || (matches!(member, volna_trace::data::Member::Generator(_))
                                 && !h.is_log(member));
@@ -249,6 +260,13 @@ impl Workspace {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_ellipsis()
+                                    .when(activity == Some(false) && !selected, |name| {
+                                        name.text_color(colors.text_placeholder).debug_selector(
+                                            move || {
+                                                format!("inactive-member-{}-{ix}", traced.trace)
+                                            },
+                                        )
+                                    })
                                     .child(name),
                             )
                             .when(shown, |row| {

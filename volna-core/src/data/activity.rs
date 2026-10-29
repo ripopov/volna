@@ -1,6 +1,6 @@
-//! Exact scope change counts from the recording’s activity index.
+//! Exact signal activity and scope change counts from the recording’s activity index.
 
-use volna_trace::data::source::{Hierarchy, ScopeId};
+use volna_trace::data::source::{Hierarchy, ScopeId, SignalRef};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
 #[derive(Debug)]
@@ -69,6 +69,7 @@ impl ActivityCounter {
 pub struct ActivityCounts {
     pub window: (u64, u64),
     changing: Vec<u32>,
+    signals: Vec<vtr::SignalId>,
     _reservation: Reservation,
 }
 
@@ -85,25 +86,35 @@ impl ActivityCounts {
             64,
         ])?;
         let reservation = budget.reserve_object("the scope activity", upper)?;
-        let c = index.classify(window.0, window.1);
-        let changing = counter.count(c.iter().map(|s| s.0));
-        drop(c);
-        let resident = (changing.capacity() * std::mem::size_of::<u32>()) as u64;
+        let signals = index.classify(window.0, window.1);
+        let changing = counter.count(signals.iter().map(|s| s.0));
+        let resident = (changing.capacity() * std::mem::size_of::<u32>()
+            + signals.capacity() * std::mem::size_of::<vtr::SignalId>())
+            as u64;
         Ok(Self {
             window,
             changing,
+            signals,
             _reservation: super::admission::finish(reservation, resident)?,
         })
     }
 
     #[must_use]
     pub fn resident_bytes(&self) -> u64 {
-        (self.changing.capacity() * std::mem::size_of::<u32>()) as u64
+        (self.changing.capacity() * std::mem::size_of::<u32>()
+            + self.signals.capacity() * std::mem::size_of::<vtr::SignalId>()) as u64
     }
 
     #[must_use]
     pub fn get(&self, scope: ScopeId) -> Option<u32> {
         self.changing.get(scope).copied()
+    }
+
+    #[must_use]
+    pub fn signal_active(&self, signal: SignalRef) -> bool {
+        self.signals
+            .binary_search_by_key(&signal.0, |s| s.0)
+            .is_ok()
     }
 }
 

@@ -1,11 +1,10 @@
-//! Scope activity meters : how many of each scope's signals change in the wave viewport,
-//! for every trace with an activity index.
+//! Signal activity and scope meters for the focused viewport.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::data::{ActivityCounter, ActivityCounts};
-use volna_trace::data::ScopeId;
+use volna_trace::data::{ScopeId, SignalRef};
 use volna_trace::remote::memory::MemoryBudget;
 
 use crate::session::{LoadRequest, LoadResult};
@@ -438,10 +437,31 @@ impl ActivityModel {
         window: (u64, u64),
         scope: ScopeId,
     ) -> Option<u32> {
+        self.matching_counts(trace, generation, window)?.get(scope)
+    }
+
+    #[must_use]
+    pub fn signal_active(
+        &self,
+        trace: TraceId,
+        generation: u64,
+        window: (u64, u64),
+        signal: SignalRef,
+    ) -> Option<bool> {
+        Some(
+            self.matching_counts(trace, generation, window)?
+                .signal_active(signal),
+        )
+    }
+
+    fn matching_counts(
+        &self,
+        trace: TraceId,
+        generation: u64,
+        window: (u64, u64),
+    ) -> Option<&ActivityCounts> {
         let a = self.traces.get(&trace)?;
         let counts = a.shown.as_ref()?;
-        (a.generation == generation && counts.window == window)
-            .then(|| counts.get(scope))
-            .flatten()
+        (a.generation == generation && counts.window == window).then_some(counts)
     }
 }
