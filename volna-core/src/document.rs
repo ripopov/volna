@@ -98,7 +98,7 @@ pub struct Document {
     next_track_request: u64,
     selection: Option<TxSelection>,
     pub copied_rows: Vec<crate::wave::Entry>,
-    summaries: HashMap<(Traced<SignalRef>, NumericKind), SummaryLoad>,
+    summaries: HashMap<(Traced<SignalRef>, NumericKind, usize), SummaryLoad>,
     group_summaries: HashMap<Vec<usize>, crate::wave::group::SummaryLoad>,
     stack_totals: HashMap<crate::wave::stack::Key, crate::wave::stack::TotalLoad>,
     integrals: HashMap<(usize, crate::wave::stack::Reading), Integral>,
@@ -530,11 +530,12 @@ impl Document {
             | LoadRequest::Signals { trace: t, .. }
             | LoadRequest::Track { trace: t, .. } => *t != trace,
             LoadRequest::Summary { signal, .. } => signal.trace != trace,
-            LoadRequest::GroupSummary { .. }
+            LoadRequest::Projection { .. }
+            | LoadRequest::GroupSummary { .. }
             | LoadRequest::Integral { .. }
             | LoadRequest::StackTotal { .. } => true,
         });
-        self.summaries.retain(|(s, _), _| s.trace != trace);
+        self.summaries.retain(|(s, _, _), _| s.trace != trace);
         if self.selection.is_some_and(|s| s.track.trace == trace) {
             self.selection = None;
         }
@@ -600,14 +601,16 @@ impl Document {
         &self,
         signal: Traced<SignalRef>,
         kind: NumericKind,
+        history: &Arc<dyn volna_trace::data::SignalHistory>,
     ) -> Option<&SummaryLoad> {
-        self.summaries.get(&(signal, kind))
+        self.summaries
+            .get(&(signal, kind, crate::wave::analog::history_identity(history)))
     }
 
     pub(crate) fn sync_summaries(
         &mut self,
         wanted: HashMap<
-            (Traced<SignalRef>, NumericKind),
+            (Traced<SignalRef>, NumericKind, usize),
             Arc<dyn volna_trace::data::SignalHistory>,
         >,
         budget: &volna_trace::remote::memory::MemoryBudget,
@@ -617,15 +620,15 @@ impl Document {
                 .get(key)
                 .is_some_and(|h| crate::wave::analog::history_identity(h) == load.history())
         });
-        for ((signal, kind), history) in wanted {
-            if self.summaries.contains_key(&(signal, kind)) {
+        for ((signal, kind, identity), history) in wanted {
+            if self.summaries.contains_key(&(signal, kind, identity)) {
                 continue;
             }
             let Some(generation) = self.traces.get(signal.trace).map(|s| s.generation) else {
                 continue;
             };
             self.summaries.insert(
-                (signal, kind),
+                (signal, kind, identity),
                 SummaryLoad::Building {
                     history: crate::wave::analog::history_identity(&history),
                 },
@@ -996,7 +999,8 @@ impl Document {
 
     pub fn deliver(&mut self, result: LoadResult) -> Option<Delivered> {
         match result {
-            LoadResult::ActivityBuilt { .. }
+            LoadResult::Projection { .. }
+            | LoadResult::ActivityBuilt { .. }
             | LoadResult::ActivityCounter { .. }
             | LoadResult::Activity { .. } => None,
             LoadResult::Track {
@@ -1086,7 +1090,7 @@ impl Document {
                 if !self.current(signal.trace, generation) {
                     return None;
                 }
-                let load = self.summaries.get_mut(&(signal, kind))?;
+                let load = self.summaries.get_mut(&(signal, kind, history))?;
                 if !matches!(load, SummaryLoad::Building { history: h } if *h == history) {
                     return None;
                 }

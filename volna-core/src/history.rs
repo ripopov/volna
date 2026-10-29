@@ -201,7 +201,7 @@ impl Edit {
     pub(crate) fn bytes(&self) -> usize {
         let rows = |rows: &[Entry]| {
             rows.iter()
-                .map(|e| ROW_BYTES + e.name().len() + text_bytes(&e.row))
+                .map(|e| ROW_BYTES + e.name().len() + row_heap_bytes(&e.row))
                 .sum::<usize>()
         };
         std::mem::size_of::<Self>()
@@ -257,10 +257,14 @@ impl Edit {
     }
 }
 
-fn text_bytes(row: &crate::wave::WaveRow) -> usize {
+fn row_heap_bytes(row: &crate::wave::WaveRow) -> usize {
     use crate::wave::WaveRow;
     match row {
-        WaveRow::Signal(s) => s.scope.len() + s.requested_format.as_ref().map_or(0, String::len),
+        WaveRow::Signal(s) => {
+            std::mem::size_of::<crate::wave::DisplayedSignal>()
+                + s.scope.len()
+                + s.requested_format.as_ref().map_or(0, String::len)
+        }
         WaveRow::Lane(l) => l.scope.len() + l.source.path().iter().map(String::len).sum::<usize>(),
         WaveRow::Clock(c) => c.key.item.len(),
         WaveRow::Group(_) => 0,

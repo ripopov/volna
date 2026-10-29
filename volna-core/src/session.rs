@@ -6,6 +6,12 @@ use volna_trace::data::SignalRef;
 use volna_trace::session::{OpenSpec, Session, SignalLoads};
 
 pub enum LoadRequest {
+    Projection {
+        request: u64,
+        source: Arc<dyn volna_trace::data::SignalHistory>,
+        slice: crate::data::projection::BitSlice,
+        budget: volna_trace::remote::memory::MemoryBudget,
+    },
     BuildActivity {
         trace: TraceId,
         generation: u64,
@@ -85,7 +91,8 @@ impl LoadRequest {
             Self::Signals { session, .. }
             | Self::Track { session, .. }
             | Self::BuildActivity { session, .. } => session.remote_id(),
-            Self::Open { .. }
+            Self::Projection { .. }
+            | Self::Open { .. }
             | Self::Sizes { .. }
             | Self::ActivityCounter { .. }
             | Self::Activity { .. }
@@ -99,6 +106,10 @@ impl LoadRequest {
     #[must_use]
     pub fn fail(self, error: anyhow::Error) -> LoadResult {
         match self {
+            Self::Projection { request, .. } => LoadResult::Projection {
+                request,
+                result: Err(error),
+            },
             Self::BuildActivity {
                 trace, generation, ..
             } => LoadResult::ActivityBuilt {
@@ -209,6 +220,16 @@ impl LoadRequest {
 
     pub fn perform(self) -> LoadResult {
         match self {
+            Self::Projection {
+                request,
+                source,
+                slice,
+                budget,
+            } => LoadResult::Projection {
+                request,
+                result: crate::data::projection::ProjectedHistory::build(source, slice, &budget)
+                    .map(|h| Arc::new(h) as Arc<dyn volna_trace::data::SignalHistory>),
+            },
             Self::BuildActivity {
                 trace,
                 generation,
@@ -353,6 +374,10 @@ impl LoadRequest {
 }
 
 pub enum LoadResult {
+    Projection {
+        request: u64,
+        result: anyhow::Result<Arc<dyn volna_trace::data::SignalHistory>>,
+    },
     ActivityBuilt {
         trace: TraceId,
         generation: u64,

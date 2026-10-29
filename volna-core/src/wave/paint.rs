@@ -115,6 +115,22 @@ fn fit_width(
     (lo > 0).then(|| cut(lo))
 }
 
+fn fit_signal_name(p: &mut TextPainter<'_>, item: &DisplayedSignal, max_w: f32) -> Option<String> {
+    let size = p.theme.ui_size;
+    if item.projection.is_some()
+        && let Some((base, index)) = item.name.rsplit_once('[')
+    {
+        let suffix = format!("[{index}");
+        let suffix_w = p.width(&suffix, FontRole::Ui, size);
+        if suffix_w > max_w {
+            return None;
+        }
+        let base = fit_width(p, base, FontRole::Ui, size, max_w - suffix_w).unwrap_or_default();
+        return Some(format!("{base}{suffix}"));
+    }
+    fit_width(p, &item.name, FontRole::Ui, size, max_w)
+}
+
 fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     match (a, b) {
         (None | Some(_), None) => 0,
@@ -291,7 +307,7 @@ pub fn paint(
                     row: g,
                     count: tree::leaves(model.items(), ix).count(),
                     members: &members,
-                    renaming: model.rename == Some(ix),
+                    renaming: model.row_edit == Some(super::model::RowEdit::Group(ix)),
                     reading: (model.hover_row == Some(ix)
                         && matches!(model.drag, None | Some(Drag::Cursor)))
                     .then_some(model.pointer)
@@ -324,6 +340,15 @@ pub fn paint(
             }
         };
 
+        let name_x = if let Some(bus) = item.bus.filter(|_| entry.depth + 1 < tree::MAX_DEPTH) {
+            paint_chevron(bus.collapsed, name_x, y, colors.text_muted, &layout, &mut p);
+            name_x + z(CHEVRON_W)
+        } else if item.projection.is_some() {
+            name_x + z(CHEVRON_W)
+        } else {
+            name_x
+        };
+
         let name_x = match plots.members.get(&ix) {
             Some(member) => {
                 let color = if member.hidden {
@@ -340,9 +365,15 @@ pub fn paint(
         };
 
         {
-            let pad = z(12.0);
+            let pad = z(if item.projection.is_some() { 4.0 } else { 12.0 });
             let avail = layout.names.right() - name_x - pad;
-            let dims = item.shape.dims();
+            let dims = if item.projection.is_some()
+                || super::bus::BusIndices::new(&item.name, item.shape.width()).name != item.name
+            {
+                String::new()
+            } else {
+                item.shape.dims()
+            };
             let dims_w = if dims.is_empty() {
                 0.0
             } else {
@@ -356,7 +387,7 @@ pub fn paint(
             let full_w = p.width(&item.name, FontRole::Ui, t.ui_size);
             let names_rect = layout.names;
             let show_dims = !dims.is_empty() && full_w + dims_w <= avail;
-            if let Some(name) = fit_width(&mut p, &item.name, FontRole::Ui, t.ui_size, avail) {
+            if let Some(name) = fit_signal_name(&mut p, item, avail) {
                 let name_w = p.width(&name, FontRole::Ui, t.ui_size);
                 p.scene.clipped(names_rect, |scene| {
                     scene.text(
@@ -864,6 +895,42 @@ pub fn paint(
             t.scrollbar_thumb
         };
         p.scene.quad(thumb, color, z(3.0), 0.0, Color::TRANSPARENT);
+    }
+    if let Some((hint, pointer)) = model.disclosure_hint()
+        && let Some(label) = fit_width(
+            &mut p,
+            hint,
+            FontRole::Ui,
+            t.ui_size_small,
+            layout.names.width() - z(14.0),
+        )
+    {
+        let w = p.width(&label, FontRole::Ui, t.ui_size_small) + z(14.0);
+        let h = z(22.0);
+        let x = (pointer.x + z(12.0))
+            .min(layout.names.right() - w)
+            .max(layout.names.left());
+        let y = (pointer.y + z(16.0))
+            .min(layout.names.bottom() - h)
+            .max(layout.names.top());
+        p.scene.clipped(layout.names, |scene| {
+            scene.quad(
+                Rect::from_xywh(x, y, w, h),
+                t.tooltip.bg,
+                z(4.0),
+                1.0,
+                t.border,
+            );
+            scene.text(
+                point(x + z(7.0), y),
+                h,
+                label,
+                FontRole::Ui,
+                t.ui_size_small,
+                t.tooltip.text,
+            );
+        });
+        p.scene.window_cursor = Some(CursorIcon::PointingHand);
     }
 }
 
@@ -2042,6 +2109,36 @@ struct GroupCells<'a> {
     reading: Option<Point>,
 }
 
+fn paint_chevron(
+    collapsed: bool,
+    name_x: f32,
+    y: f32,
+    color: Color,
+    layout: &WaveLayout,
+    p: &mut TextPainter<'_>,
+) {
+    let t = p.theme;
+    let z = |v: f32| v * t.zoom;
+    let row_h = layout.row_h;
+    let cx = name_x + z(CHEVRON_W / 2.0);
+    let cy = y + row_h / 2.0;
+    let a = z(3.5);
+    let chevron = if collapsed {
+        vec![
+            [point(cx - a / 2.0, cy - a), point(cx + a / 2.0, cy)],
+            [point(cx + a / 2.0, cy), point(cx - a / 2.0, cy + a)],
+        ]
+    } else {
+        vec![
+            [point(cx - a, cy - a / 2.0), point(cx, cy + a / 2.0)],
+            [point(cx, cy + a / 2.0), point(cx + a, cy - a / 2.0)],
+        ]
+    };
+    p.scene.clipped(layout.names, |scene| {
+        scene.lines(chevron, color, z(1.4).max(1.0));
+    });
+}
+
 fn paint_group_row(
     group: &GroupCells<'_>,
     model: &WaveModel,
@@ -2059,23 +2156,7 @@ fn paint_group_row(
     let full_h = layout.row_height(cells.pos);
     let g = group.row;
 
-    let cx = cells.name_x + z(CHEVRON_W / 2.0);
-    let cy = y + row_h / 2.0;
-    let a = z(3.5);
-    let chevron = if g.collapsed {
-        vec![
-            [point(cx - a / 2.0, cy - a), point(cx + a / 2.0, cy)],
-            [point(cx + a / 2.0, cy), point(cx - a / 2.0, cy + a)],
-        ]
-    } else {
-        vec![
-            [point(cx - a, cy - a / 2.0), point(cx, cy + a / 2.0)],
-            [point(cx, cy + a / 2.0), point(cx + a, cy - a / 2.0)],
-        ]
-    };
-    p.scene.clipped(names, |scene| {
-        scene.lines(chevron, cells.muted, z(1.4).max(1.0));
-    });
+    paint_chevron(g.collapsed, cells.name_x, y, cells.muted, layout, p);
     if !group.renaming {
         let x = cells.name_x + z(CHEVRON_W);
         let name = g.name.clone();

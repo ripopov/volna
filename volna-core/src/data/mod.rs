@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub(crate) mod admission;
+pub mod projection;
 pub mod sizes;
 pub mod translator;
 pub use activity::{ActivityCounter, ActivityCounts, ScopeActivity};

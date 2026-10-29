@@ -1427,7 +1427,7 @@ fn row_names(app: &App, panel: volna_core::panels::PanelId) -> Vec<String> {
 fn name_point(app: &App, row: usize, frac: f32) -> volna_core::geometry::Point {
     let layout = app.panels.focused_waves().unwrap().last_layout();
     point(
-        layout.names.left() + 20.0,
+        layout.names.left() + 60.0,
         layout.row_y(row) + layout.row_height(row) * frac,
     )
 }

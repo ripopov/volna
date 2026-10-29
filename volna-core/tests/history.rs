@@ -138,6 +138,9 @@ fn strip_folds(rows: &mut Value) {
     for row in rows.as_array_mut().unwrap() {
         let o = row.as_object_mut().unwrap();
         o.remove("collapsed");
+        if let Some(bus) = o.get_mut("bus").and_then(Value::as_object_mut) {
+            bus.remove("collapsed");
+        }
         if let Some(rows) = o.get_mut("rows") {
             strip_folds(rows);
         }
@@ -534,7 +537,7 @@ impl Driver {
                     .app
                     .panels
                     .waves(id)
-                    .is_some_and(|w| w.rename.is_some())
+                    .is_some_and(|w| w.row_edit.is_some())
                 {
                     let name = self
                         .rng
@@ -553,7 +556,7 @@ impl Driver {
             }
             52 => action(Action::Ungroup),
             53 => (Kind::Look, Command::Action(Action::FoldGroupDeep)),
-            54 => (Kind::Look, Command::Action(Action::UnfoldGroupDeep)),
+            54 => (Kind::Edit, Command::Action(Action::UnfoldGroupDeep)),
             55..=56 => {
                 let on_marker = self.rng.below(self.app.doc.markers().len() * 2);
                 let t = match self.app.doc.markers().get(on_marker) {
@@ -1600,7 +1603,12 @@ fn undoing_a_group_edit_keeps_its_fold() {
             .unwrap()
             .collapsed
     };
-    assert!(app.panels.waves_mut(id).unwrap().set_folded(1, true, false));
+    assert!(
+        app.panels
+            .waves_mut(id)
+            .unwrap()
+            .set_folded(&app.doc, 1, true, false)
+    );
     app.handle(Command::Undo);
     assert!(app.panels.waves(id).unwrap().items()[1].tint().is_none());
     assert!(folded(&app), "undo restores the colour, not the fold");

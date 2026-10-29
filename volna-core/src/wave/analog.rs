@@ -459,7 +459,7 @@ impl<'a> Series<'a> {
         kind: NumericKind,
     ) -> Self {
         use crate::document::SummaryLoad;
-        let load = signal.and_then(|s| doc.analog_summary(s, kind));
+        let load = signal.and_then(|s| doc.analog_summary(s, kind, history));
         let summary = match load {
             Some(SummaryLoad::Ready(s)) => Some(s.as_ref()),
             _ => None,

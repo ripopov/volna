@@ -645,14 +645,24 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
     let signal = app.panels.waves(id).unwrap().items()[1]
         .signal_ref()
         .unwrap();
+    let history = app
+        .panels
+        .waves(id)
+        .unwrap()
+        .signal(1)
+        .unwrap()
+        .history
+        .clone()
+        .unwrap();
     assert!(
         app.doc
-            .analog_summary(signal, NumericKind::Unsigned)
+            .analog_summary(signal, NumericKind::Unsigned, &history)
             .is_none()
     );
     app.handle(Command::Action(Action::ToggleOverlaid));
     assert!(matches!(
-        app.doc.analog_summary(signal, NumericKind::Unsigned),
+        app.doc
+            .analog_summary(signal, NumericKind::Unsigned, &history),
         Some(SummaryLoad::Building { .. })
     ));
     assert!(
@@ -662,7 +672,8 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
     );
     pump(&mut app);
     assert!(matches!(
-        app.doc.analog_summary(signal, NumericKind::Unsigned),
+        app.doc
+            .analog_summary(signal, NumericKind::Unsigned, &history),
         Some(SummaryLoad::Ready(_))
     ));
     assert!(
@@ -673,19 +684,20 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
     app.handle(Command::Action(Action::ToggleOverlaid));
     assert!(
         app.doc
-            .analog_summary(signal, NumericKind::Unsigned)
+            .analog_summary(signal, NumericKind::Unsigned, &history)
             .is_none()
     );
     app.handle(Command::Undo);
     pump(&mut app);
     assert!(matches!(
-        app.doc.analog_summary(signal, NumericKind::Unsigned),
+        app.doc
+            .analog_summary(signal, NumericKind::Unsigned, &history),
         Some(SummaryLoad::Ready(_))
     ));
 }
 
 #[test]
-fn overlay_workspace_round_trips_settings_and_visibility_at_version_seven() {
+fn overlay_workspace_round_trips_settings_and_visibility_at_version_eight() {
     let (_f, mut app, id) = fixture(101);
     app.handle(Command::Action(Action::ToggleOverlaid));
     choose(
@@ -706,7 +718,7 @@ fn overlay_workspace_round_trips_settings_and_visibility_at_version_seven() {
         Workspace::capture(&app, volna_core::testing::paths(TRACE), None).unwrap(),
     )
     .unwrap();
-    assert_eq!(saved["panels"][0]["version"], 7);
+    assert_eq!(saved["panels"][0]["version"], 8);
     assert_eq!(saved["panels"][0]["rows"][0]["style"], "overlaid");
     assert_eq!(saved["panels"][0]["rows"][0]["overlaid"]["draw"], "linear");
     let (_f2, mut restored, _) = fixture(101);

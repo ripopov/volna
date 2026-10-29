@@ -32,6 +32,11 @@ struct Columns {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Row {
     Signal {
+        shape: volna_trace::data::SignalShape,
+        projection: Option<crate::data::projection::BitSlice>,
+        bus: Option<super::bus::BusExpansion>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rows: Vec<Row>,
         #[serde(default, skip_serializing_if = "TraceId::is_a")]
         trace: TraceId,
         signal: Vec<String>,
@@ -173,7 +178,13 @@ fn nest(items: &[Entry], row: &dyn Fn(&WaveRow) -> Row) -> Vec<Row> {
                 },
                 rows: nest(&items[i + 1..end], row),
             },
-            other => row(other),
+            other => {
+                let mut saved = row(other);
+                if let Row::Signal { rows, .. } = &mut saved {
+                    *rows = nest(&items[i + 1..end], row);
+                }
+                saved
+            }
         });
         i = end;
     }
@@ -214,7 +225,20 @@ fn flatten(rows: Vec<Row>, depth: u8, out: &mut Vec<(u8, Row)>) -> Result<()> {
                 ));
                 flatten(rows, depth + 1, out)?;
             }
-            row => out.push((depth, row)),
+            mut row => {
+                let children = match &mut row {
+                    Row::Signal { rows, bus, .. } => {
+                        ensure!(
+                            rows.is_empty() || bus.is_some_and(|b| b.initialized),
+                            "bits below an unexpanded signal"
+                        );
+                        std::mem::take(rows)
+                    }
+                    _ => Vec::new(),
+                };
+                out.push((depth, row));
+                flatten(children, depth + 1, out)?;
+            }
         }
     }
     Ok(())
@@ -226,7 +250,7 @@ struct SavedAnalog {
     range: AnalogRange,
 }
 
-pub(crate) const VERSION: u32 = 7;
+pub(crate) const VERSION: u32 = 8;
 
 #[derive(Serialize, Deserialize)]
 struct WavePanel {
@@ -261,6 +285,10 @@ pub(crate) fn save(
         WaveRow::Signal(item) => {
             let (signal, nth) = item.source.locator(doc);
             Row::Signal {
+                shape: item.source_shape,
+                projection: item.projection,
+                bus: item.bus,
+                rows: Vec::new(),
                 trace: item.source.trace(),
                 signal,
                 nth,
@@ -351,8 +379,24 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     w.values_width = saved.columns.values;
     let mut items = Vec::with_capacity(flat.len());
     for (depth, row) in flat {
-        let (trace, signal, nth, format, height, analog, overlay_hidden, tint) = match row {
+        let (
+            trace,
+            signal,
+            nth,
+            format,
+            height,
+            analog,
+            overlay_hidden,
+            tint,
+            saved_shape,
+            projection,
+            bus,
+        ) = match row {
             Row::Signal {
+                shape,
+                projection,
+                bus,
+                rows: _,
                 trace,
                 signal,
                 nth,
@@ -370,6 +414,9 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 analog,
                 overlay_hidden,
                 tint,
+                shape,
+                projection,
+                bus,
             ),
             Row::Lane {
                 trace,
@@ -448,7 +495,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         ensure!(!row_signal.is_empty(), "empty signal path");
         let h = ctx.traces.hierarchy(trace);
         let found = h.map_or(Lookup::Missing, |h| h.find_var(&row_signal, nth));
-        let (source, name, scope, shape) = match (found, h) {
+        let (source, mut name, scope, shape) = match (found, h) {
             (Lookup::Found(var), Some(h)) => {
                 let v = h.var(var);
                 (
@@ -484,6 +531,31 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 )
             }
         };
+        ensure!(
+            !matches!(
+                saved_shape,
+                volna_trace::data::SignalShape::Vector { width: 0 | 1 }
+            ),
+            "invalid source shape"
+        );
+        let resolved = source.signal().is_some();
+        let source_shape = if resolved { shape } else { saved_shape };
+        ensure!(source_shape == saved_shape, "signal shape changed");
+        let shape = if let Some(slice) = projection {
+            slice.validate(source_shape)?;
+            name = super::bus::BusIndices::new(&name, source_shape.width()).label(slice);
+            slice.shape()
+        } else {
+            source_shape
+        };
+        ensure!(
+            bus.is_some() == matches!(shape, volna_trace::data::SignalShape::Vector { width: 2.. }),
+            "invalid bus expansion"
+        );
+        ensure!(
+            bus.is_none_or(|b| b.initialized || b.collapsed),
+            "uninitialized bus must be collapsed"
+        );
         let requested = ctx.doc.translators.get(&format);
         let translator = requested
             .clone()
@@ -493,7 +565,11 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         }
         items.push(Entry::new(
             depth,
-            WaveRow::Signal(DisplayedSignal {
+            WaveRow::from(DisplayedSignal {
+                source_shape,
+                projection,
+                bus,
+                projection_source: None,
                 source,
                 requested_format: requested.is_none().then_some(format),
                 name,
@@ -509,6 +585,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             }),
         ));
     }
+    tree::validate(&items).map_err(anyhow::Error::msg)?;
     w.restore_rows(items);
     w.selected = saved.selected;
     w.anchor = w.selected.first().copied();

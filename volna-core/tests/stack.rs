@@ -934,7 +934,7 @@ fn the_group_menu_draws_it_as_activity_or_a_stacked_area() {
 }
 
 #[test]
-fn stacked_groups_round_trip_through_workspaces_at_version_7() {
+fn stacked_groups_round_trip_through_workspaces_at_version_8() {
     let (_f, mut app, _) = app();
     app.handle(Command::Action(Action::ToggleStack));
     let saved = serde_json::to_value(
@@ -942,7 +942,7 @@ fn stacked_groups_round_trip_through_workspaces_at_version_7() {
     )
     .unwrap();
     let panel = &saved["panels"][0];
-    assert_eq!(panel["version"], 7);
+    assert_eq!(panel["version"], 8);
     assert_eq!(panel["rows"][0]["style"], "stack");
     assert_eq!(panel["rows"][0]["height"], 3);
     let (_f2, session) = trace();
@@ -1233,7 +1233,7 @@ fn the_showcase_scopes_stack_bits_counts_and_signed_currents() {
     cursor(&mut app, id, 800);
     let shown = texts(frame(&mut app, id));
     assert!(shown.iter().any(|s| s.starts_with("not sta")), "{shown:?}");
-    app.panels.waves_mut(id).unwrap().fold_all(true);
+    app.panels.waves_mut(id).unwrap().fold_all(&app.doc, true);
     let shown = texts(frame(&mut app, id));
     let sums: Vec<&String> = shown.iter().filter(|s| s.starts_with('Σ')).collect();
     assert_eq!(sums.len(), 4, "{shown:?}");
@@ -1302,7 +1302,7 @@ fn the_analog_showcase_stacks_related_contributions_and_preserves_gaps() {
     assert_eq!(range, (0.0, 4.0));
 
     let id = app.panels.focused_id();
-    app.panels.waves_mut(id).unwrap().fold_all(true);
+    app.panels.waves_mut(id).unwrap().fold_all(&app.doc, true);
     cursor(&mut app, id, 51_200);
     let shown = texts(frame(&mut app, id));
     let sums: Vec<_> = shown.iter().filter(|s| s.starts_with('Σ')).collect();

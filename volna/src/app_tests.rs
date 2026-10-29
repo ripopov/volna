@@ -2797,6 +2797,97 @@ fn shift_a_and_the_group_menu_stack_and_unstack_a_group(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
+fn bus_keys_and_the_hosted_slice_editor(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use volna_core::wave::model::MenuAction;
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let window = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all(vec![4])), Some(window), cx);
+        })
+        .unwrap();
+    let mut vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes("right");
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            let w = ws.app.panels.focused_waves().unwrap();
+            assert_eq!(w.items().len(), 9);
+            assert_eq!(w.items()[1].name(), "counter[7]");
+            assert!(
+                w.items()
+                    .iter()
+                    .filter_map(|e| e.signal())
+                    .all(|s| s.history.is_some())
+            );
+        })
+        .unwrap();
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            let panel = ws.app.panels.focused_id();
+            ws.app.handle(Command::OpenSignalMenu(panel));
+            ws.dispatch(
+                Command::MenuSelect(panel, MenuAction::AddSlice),
+                Some(window),
+                cx,
+            );
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            let hosted = ws.rename.as_ref().expect("the slice editor is hosted");
+            assert!(hosted.input.read(cx).focus_handle(cx).is_focused(window));
+            assert!(matches!(
+                hosted.target,
+                volna_core::app::EditTarget::Slice { .. }
+            ));
+        })
+        .unwrap();
+    vcx.simulate_input("3:0");
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert!(ws.rename.is_none());
+            let w = ws.app.panels.focused_waves().unwrap();
+            assert_eq!(w.items().last().unwrap().name(), "counter[3:0]");
+            assert!(
+                w.items()
+                    .last()
+                    .unwrap()
+                    .signal()
+                    .unwrap()
+                    .history
+                    .is_some()
+            );
+        })
+        .unwrap();
+    vcx.simulate_keystrokes("left");
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
+            let w = ws.app.panels.focused_waves().unwrap();
+            assert_eq!(w.items().last().unwrap().name(), "counter[3:0]");
+            assert!(w.items().last().unwrap().collapsed().unwrap());
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
 fn group_keys_and_the_hosted_name_editor(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);

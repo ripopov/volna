@@ -113,10 +113,39 @@ A member's context menu can hide or isolate it in the overlay. Show all
 overlay lines restores the members. These choices keep the individual rows
 available and exclude hidden lines from the shared range and group edge
 navigation. Rendering, range, and visibility edits are undoable and saved in
-wave panel workspace version 7.
+wave panel workspace version 8.
 
 For a three-line specimen, open `volna/examples/analog_showcase.vtr`, add the
 `analog.phases` scope as a group, choose Overlaid lines and Linear, then
 expand the group. The three phase signals share a scale and retain separate
 values at the cursor. The `analog.queues` scope provides a Step specimen;
 zooming out preserves each queue's short peaks independently.
+
+## Bus expansion
+
+The chevron beside a logic vector reveals bit rows while retaining the parent
+waveform and value. Right expands a selected bus or enters its children; Left
+returns to the parent or collapses it. Collapsing retains bit formats, colors,
+heights and order. Recursive group folding leaves unopened buses collapsed.
+
+The bus menu provides **Add bit or slice…** (for example `7`, `15:8` or `0:7`)
+and **Reverse bit order**. A bit or slice can be added as an independent trace
+that stays visible when its parent collapses. Numeric ranges in source names
+are preserved when their width matches the recorded vector; otherwise vectors
+use `[width-1:0]`, with the most significant bit first.
+
+[`wave/bus.rs`](src/wave/bus.rs) owns these interactions and index labels.
+[`data/projection.rs`](src/data/projection.rs) composes slices over shared raw
+histories and builds transition indexes on the load worker, within the memory
+budget. Only visible or selected projections request preparation; prepared
+indexes are shared by equivalent views. Changes to other bits do not create
+edges or dense activity in a bit row. Signal groups treat an expanded bus as
+one member, preserving their aggregate values and edge navigation.
+
+Expansion materializes child rows as an undoable edit. Subsequent folding is
+presentation state. Workspace version 8 saves the source shape, projection,
+expansion state and nested bit rows. The tree validates bus ownership during
+edits and restore; an unrelated signal cannot be dropped into a bus.
+
+For a specimen, open `volna/examples/landing.vtr`, add `soc.l2.mshr_used`, and
+expand its three bits. The parent retains its numeric value above the wires.

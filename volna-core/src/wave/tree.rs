@@ -1,4 +1,4 @@
-//! Signal groups: the rows of a wave panel as a tree stored in pre-order.
+//! Wave rows in pre-order, with group membership and bus ownership validated on edits.
 
 use std::collections::BTreeSet;
 use std::ops::{Deref, DerefMut, Range, RangeInclusive};
@@ -54,40 +54,62 @@ impl DerefMut for Entry {
 }
 
 pub fn validate(items: &[Entry]) -> Result<(), String> {
-    validate_shape(items.iter().map(|e| (e.depth, e.is_group())))
+    validate_entries(items.iter().collect())
 }
 
-fn validate_shape(shape: impl Iterator<Item = (u8, bool)>) -> Result<(), String> {
-    let mut limit = 0u8;
-    for (i, (depth, group)) in shape.enumerate() {
-        if depth >= MAX_DEPTH {
+fn validate_entries(entries: Vec<&Entry>) -> Result<(), String> {
+    let mut parents: Vec<&Entry> = Vec::new();
+    for (i, e) in entries.into_iter().enumerate() {
+        let depth = usize::from(e.depth);
+        if e.depth >= MAX_DEPTH {
             return Err(format!("row {i}: groups nested deeper than {MAX_DEPTH}"));
         }
-        if depth > limit {
-            return Err(format!("row {i}: depth {depth} below a non-group"));
+        if depth > parents.len() {
+            return Err(format!("row {i}: depth {depth} below a non-container"));
         }
-        limit = depth + u8::from(group);
+        parents.truncate(depth);
+        if let Some(parent) = parents.last()
+            && let Some(bus) = parent.signal()
+        {
+            let valid = bus.bus.is_some_and(|b| b.initialized)
+                && e.signal().is_some_and(|s| {
+                    s.source == bus.source
+                        && s.source_shape == bus.source_shape
+                        && s.projection.is_some_and(|p| {
+                            p.first == p.last
+                                && p.validate(bus.source_shape).is_ok()
+                                && bus.projection.is_none_or(|slice| slice.contains(p.first))
+                        })
+                });
+            if !valid {
+                return Err(format!("row {i}: a bus can contain only its own bits"));
+            }
+        }
+        if e.collapsed().is_some() {
+            parents.push(e);
+        }
     }
     Ok(())
 }
 
-pub fn apply(items: &mut Vec<Entry>, splices: Vec<Splice>) -> Result<Vec<Splice>, String> {
-    let mut shape: Vec<(u8, bool)> = items.iter().map(|e| (e.depth, e.is_group())).collect();
-    for s in &splices {
-        if s.at + s.remove > shape.len() {
+pub(crate) fn validate_splices(items: &[Entry], splices: &[Splice]) -> Result<(), String> {
+    let mut entries: Vec<&Entry> = items.iter().collect();
+    for s in splices {
+        if s.at > entries.len() || s.remove > entries.len() - s.at {
             return Err(format!(
                 "splice {}+{} outside {} rows",
                 s.at,
                 s.remove,
-                shape.len()
+                entries.len()
             ));
         }
-        shape.splice(
-            s.at..s.at + s.remove,
-            s.insert.iter().map(|e| (e.depth, e.is_group())),
-        );
+        entries.splice(s.at..s.at + s.remove, s.insert.iter());
     }
-    validate_shape(shape.into_iter())?;
+    validate_entries(entries)
+}
+
+pub fn apply(items: &mut Vec<Entry>, splices: Vec<Splice>) -> Result<Vec<Splice>, String> {
+    validate_splices(items, &splices)?;
     let mut inverse = Vec::with_capacity(splices.len());
     for s in splices {
         let inserted = s.insert.len();
@@ -141,9 +163,7 @@ pub fn visible(items: &[Entry]) -> Arc<[u32]> {
         }
         hide_below = None;
         out.push(i as u32);
-        if let WaveRow::Group(g) = &e.row
-            && g.collapsed
-        {
+        if e.collapsed() == Some(true) {
             hide_below = Some(e.depth);
         }
     }
@@ -173,15 +193,23 @@ pub fn blocks(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<Range<usize>> {
 }
 
 pub fn leaves(items: &[Entry], i: usize) -> impl Iterator<Item = usize> + '_ {
-    subtree(items, i).filter(|&j| !items[j].is_group())
+    let mut skip = i;
+    subtree(items, i).filter(move |&j| {
+        if j < skip {
+            return false;
+        }
+        if items[j].signal().is_some_and(|s| s.bus.is_some()) {
+            skip = subtree_end(items, j);
+        }
+        !items[j].is_group()
+    })
 }
 
 #[must_use]
 pub fn selected_leaves(items: &[Entry], sel: &BTreeSet<usize>) -> Vec<usize> {
-    blocks(items, sel)
+    roots(items, sel)
         .into_iter()
-        .flatten()
-        .filter(|&j| !items[j].is_group())
+        .flat_map(|i| leaves(items, i))
         .collect()
 }
 
@@ -276,7 +304,7 @@ pub fn plan_move(items: &[Entry], sel: &BTreeSet<usize>, to: Place) -> Option<Mo
         if d > limit {
             return None;
         }
-        limit = d + u8::from(items[i].is_group());
+        limit = d + u8::from(items[i].collapsed().is_some());
     }
     let mut roots = BTreeSet::new();
     let mut k = first;
@@ -296,6 +324,7 @@ pub fn plan_move(items: &[Entry], sel: &BTreeSet<usize>, to: Place) -> Option<Mo
             })
             .collect(),
     });
+    validate_splices(items, &splices).ok()?;
     Some(Moved {
         splices,
         roots,
@@ -352,6 +381,7 @@ pub fn group(
         remove: 0,
         insert: inserted,
     });
+    validate_splices(items, &splices).ok()?;
     Some((splices, first))
 }
 
@@ -476,12 +506,7 @@ pub fn set_collapsed(items: &mut [Entry], i: usize, collapsed: bool, deep: bool)
     let end = if deep { subtree_end(items, i) } else { i + 1 };
     let mut changed = false;
     for e in &mut items[i..end] {
-        if let WaveRow::Group(g) = &mut e.row
-            && g.collapsed != collapsed
-        {
-            g.collapsed = collapsed;
-            changed = true;
-        }
+        changed |= e.row.set_collapsed(collapsed);
     }
     changed
 }

@@ -659,7 +659,7 @@ fn analog_rows_round_trip_through_workspaces() {
     )
     .unwrap();
     let panel = &saved["panels"][0];
-    assert_eq!(panel["version"], 7);
+    assert_eq!(panel["version"], 8);
     assert_eq!(
         panel["rows"][0]["analog"],
         serde_json::json!({"draw": "step", "range": "window"})
@@ -728,9 +728,18 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     let signal = app.panels.waves(id).unwrap().items()[BUS]
         .signal_ref()
         .unwrap();
+    let history = app
+        .panels
+        .waves(id)
+        .unwrap()
+        .signal(BUS)
+        .unwrap()
+        .history
+        .clone()
+        .unwrap();
     let kind = volna_core::data::NumericKind::Unsigned;
     assert!(matches!(
-        app.doc.analog_summary(signal, kind),
+        app.doc.analog_summary(signal, kind, &history),
         Some(SummaryLoad::Building { .. })
     ));
 
@@ -743,7 +752,7 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
         app.deliver(request.perform());
     }
     assert!(matches!(
-        app.doc.analog_summary(signal, kind),
+        app.doc.analog_summary(signal, kind, &history),
         Some(SummaryLoad::Ready(_))
     ));
     assert!(used(&app) > digital, "the summary is charged to the budget");
@@ -757,15 +766,15 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     set_format(&mut app, id, BUS, "sdec");
     app.handle(Command::Action(Action::ClearSelection));
     let signed = volna_core::data::NumericKind::Signed;
-    assert!(app.doc.analog_summary(signal, kind).is_none());
+    assert!(app.doc.analog_summary(signal, kind, &history).is_none());
     assert!(matches!(
-        app.doc.analog_summary(signal, signed),
+        app.doc.analog_summary(signal, signed, &history),
         Some(SummaryLoad::Building { .. })
     ));
     pump(&mut app);
     select(&mut app, id, &[BUS]);
     app.handle(Command::Action(Action::ToggleAnalog));
-    assert!(app.doc.analog_summary(signal, signed).is_none());
+    assert!(app.doc.analog_summary(signal, signed, &history).is_none());
     assert_eq!(used(&app), digital);
 }
 

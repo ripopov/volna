@@ -286,7 +286,7 @@ fn workspaces_keep_colours_and_load_unknown_names_as_default() {
     )
     .unwrap();
     let panel = &saved["panels"][0];
-    assert_eq!(panel["version"], 7);
+    assert_eq!(panel["version"], 8);
     assert_eq!(panel["rows"][CLK]["tint"], "violet");
     assert!(panel["rows"][VALID].get("tint").is_none());
     assert_eq!(panel["rows"][ERR]["tint"], "grey");

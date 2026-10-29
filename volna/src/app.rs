@@ -1249,7 +1249,8 @@ impl Workspace {
                     .background
                     .with_alpha(1.0),
             )),
-            volna_core::app::EditTarget::Group { .. } => None,
+            volna_core::app::EditTarget::Group { .. }
+            | volna_core::app::EditTarget::Slice { .. } => None,
         };
         let input = cx.new(|cx| {
             let input = TextInput::new(edit.label.clone(), cx).plain();
@@ -2496,6 +2497,7 @@ impl Workspace {
             .rect?;
         let id = match hosted.target {
             volna_core::app::EditTarget::Group { .. } => "group-rename",
+            volna_core::app::EditTarget::Slice { .. } => "signal-slice",
             volna_core::app::EditTarget::Marker { .. } => "marker-name",
         };
         Some(

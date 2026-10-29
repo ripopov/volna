@@ -157,6 +157,10 @@ pub enum EditTarget {
         panel: PanelId,
         entry: usize,
     },
+    Slice {
+        panel: PanelId,
+        entry: usize,
+    },
     Marker {
         panel: PanelId,
         id: crate::marker::MarkerId,
@@ -167,7 +171,9 @@ impl EditTarget {
     #[must_use]
     pub fn panel(self) -> PanelId {
         match self {
-            Self::Group { panel, .. } | Self::Marker { panel, .. } => panel,
+            Self::Group { panel, .. } | Self::Slice { panel, .. } | Self::Marker { panel, .. } => {
+                panel
+            }
         }
     }
 }
@@ -536,6 +542,7 @@ pub struct App {
     pub(crate) events: Vec<Event>,
     text: TextCache,
     scene: Scene,
+    projections: crate::data::projection::Projections,
     table_budget: volna_trace::remote::memory::MemoryBudget,
     lane_tracks: (u64, std::collections::HashSet<Traced<TrackRef>>),
 }
@@ -571,6 +578,7 @@ impl App {
             events: Vec::new(),
             text: TextCache::default(),
             scene: Scene::default(),
+            projections: crate::data::projection::Projections::default(),
             table_budget: {
                 let (limit, object_limit) = settings::Settings::default()
                     .limits()
@@ -622,6 +630,7 @@ impl App {
     }
 
     fn on_session_changed(&mut self) {
+        self.projections.clear();
         self.activity = ActivityModel::default();
         self.reset_recent_view();
         self.history.clear();
@@ -653,7 +662,37 @@ impl App {
     }
 
     pub fn take_requests(&mut self) -> Vec<LoadRequest> {
-        let mut requests = self.doc.take_requests();
+        let budget = self.table_memory_budget();
+        let wanted = self
+            .panels
+            .iter()
+            .filter_map(|p| p.kind.waves())
+            .flat_map(crate::wave::WaveModel::projection_demand)
+            .filter_map(|s| {
+                Some((
+                    crate::data::projection::Projections::key(s.raw_history()?, s.projection?),
+                    s.raw_history()?.clone(),
+                ))
+            })
+            .collect();
+        let retained = self
+            .panels
+            .iter()
+            .filter_map(|p| p.kind.waves())
+            .flat_map(crate::wave::WaveModel::items)
+            .filter_map(|e| e.signal())
+            .filter_map(|s| {
+                Some((
+                    crate::data::projection::Projections::key(s.raw_history()?, s.projection?),
+                    s.raw_history()?.clone(),
+                ))
+            })
+            .collect();
+        let mut requests = self.projections.sync(retained, wanted, &budget);
+        for w in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
+            w.sync_projections(&self.projections);
+        }
+        requests.extend(self.doc.take_requests());
         {
             let budget = self.table_memory_budget();
             requests.extend(self.activity.sync(
@@ -740,6 +779,16 @@ impl App {
     }
 
     pub fn deliver(&mut self, mut result: LoadResult) {
+        if let LoadResult::Projection { request, result } = result {
+            if self.projections.deliver(request, result) {
+                for w in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
+                    w.sync_projections(&self.projections);
+                }
+                self.sync_analog_summaries();
+                self.changed();
+            }
+            return;
+        }
         if matches!(
             result,
             LoadResult::ActivityBuilt { .. }
@@ -1059,6 +1108,11 @@ impl App {
             self.changed();
         }
         self.dispatch(command, now);
+        for waves in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
+            if let Some(notice) = waves.bus_notice.take() {
+                self.events.push(Event::Notice(notice));
+            }
+        }
         self.panels.sync_timeline_dividers();
         self.activity.prune(self.doc.traces());
         if !pointer {
@@ -1362,6 +1416,9 @@ impl App {
                     }
                     return;
                 }
+                if action == MenuAction::RetryLoad {
+                    self.projections.retry_failed();
+                }
                 let retry = self
                     .panels
                     .waves_mut(panel)
@@ -1546,7 +1603,7 @@ impl App {
             .filter_map(|panel| panel.kind.waves())
             .flat_map(|waves| waves.items().iter().map(|e| &e.row))
             .filter_map(WaveRow::signal)
-            .filter_map(|row| Some((row.source.signal()?, row.history.clone()?)))
+            .filter_map(|row| Some((row.source.signal()?, row.raw_history()?.clone())))
             .chain(
                 self.panels
                     .iter()
@@ -1967,7 +2024,10 @@ impl App {
                     continue;
                 };
                 if history.len() >= crate::wave::analog::SUMMARY_MIN_CHANGES {
-                    wanted.insert((signal, kind), history.clone());
+                    wanted.insert(
+                        (signal, kind, crate::wave::analog::history_identity(history)),
+                        history.clone(),
+                    );
                 }
             }
         }
@@ -2372,17 +2432,17 @@ impl App {
                 Action::GoToEnd => w.go_to_end(doc, now),
                 Action::GoToCursor => w.go_to_cursor(doc, now),
                 Action::PanLeft => {
-                    if !w.fold_key(false, false) {
+                    if !w.fold_key(doc, false, false) {
                         w.pan_fraction(doc, -0.25, now);
                     }
                 }
                 Action::PanRight => {
-                    if !w.fold_key(true, false) {
+                    if !w.fold_key(doc, true, false) {
                         w.pan_fraction(doc, 0.25, now);
                     }
                 }
-                Action::FoldGroupDeep => _ = w.fold_key(false, true),
-                Action::UnfoldGroupDeep => _ = w.fold_key(true, true),
+                Action::FoldGroupDeep => _ = w.fold_key(doc, false, true),
+                Action::UnfoldGroupDeep => _ = w.fold_key(doc, true, true),
                 Action::GroupSelection => _ = w.group_selected(),
                 Action::Ungroup => _ = w.ungroup_selected(),
                 Action::RenameGroup => _ = w.start_rename(),
@@ -2676,13 +2736,26 @@ impl App {
             });
         }
         let waves = self.panels.focused_waves()?;
-        let entry = waves.rename?;
+        let editing = waves.row_edit?;
+        let entry = editing.row();
+        let (target, text, label) = match editing {
+            crate::wave::model::RowEdit::Group(_) => (
+                EditTarget::Group { panel, entry },
+                waves.items().get(entry)?.name().to_owned(),
+                "Group name",
+            ),
+            crate::wave::model::RowEdit::Slice(_) => (
+                EditTarget::Slice { panel, entry },
+                String::new(),
+                "Bit index or slice (for example 7:0)",
+            ),
+        };
         Some(TextEdit {
-            target: EditTarget::Group { panel, entry },
-            rect: waves.rename_rect(),
-            text: waves.items().get(entry)?.name().to_owned(),
+            target,
+            rect: waves.text_edit_rect(),
+            text,
             select_all: true,
-            label: "Group name".into(),
+            label: label.into(),
         })
     }
 
@@ -2956,9 +3029,23 @@ impl App {
 
     fn commit_text(&mut self, target: EditTarget, text: Option<String>) {
         match target {
+            EditTarget::Slice { panel, entry } => {
+                if let Some(waves) = self.panels.waves_mut(panel)
+                    && waves.row_edit == Some(crate::wave::model::RowEdit::Slice(entry))
+                {
+                    if let Some(text) = text {
+                        if let Err(error) = waves.add_slice(&self.doc, entry, &text) {
+                            self.events.push(Event::Notice(error.to_string()));
+                        }
+                    } else {
+                        waves.row_edit = None;
+                    }
+                    self.changed();
+                }
+            }
             EditTarget::Group { panel, entry } => {
                 if let Some(waves) = self.panels.waves_mut(panel)
-                    && waves.rename == Some(entry)
+                    && waves.row_edit == Some(crate::wave::model::RowEdit::Group(entry))
                 {
                     waves.finish_rename(text.as_deref());
                     self.changed();

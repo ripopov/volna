@@ -294,10 +294,10 @@ fn g_groups_the_selection_in_place_and_starts_renaming_it() {
     );
     let w = waves(&app, id);
     assert_eq!(selected(&app, id), [3]);
-    assert_eq!(w.rename, Some(3));
+    assert_eq!(w.row_edit, Some(volna_core::wave::model::RowEdit::Group(3)));
     frame(&mut app, id);
     let rect = waves(&app, id)
-        .rename_rect()
+        .text_edit_rect()
         .expect("the editor has a place");
     let l = waves(&app, id).last_layout();
     assert_eq!(rect.left(), indent_x(l.names.left(), 0, 1.0) + CHEVRON_W);
@@ -306,13 +306,13 @@ fn g_groups_the_selection_in_place_and_starts_renaming_it() {
 
     commit_name(&mut app, "  Write  ");
     assert_eq!(waves(&app, id).items()[3].name(), "Write");
-    assert_eq!(waves(&app, id).rename, None);
+    assert_eq!(waves(&app, id).row_edit, None);
     app.handle(Command::Action(Action::RenameGroup));
     commit_name(&mut app, "   ");
     assert_eq!(waves(&app, id).items()[3].name(), "Write");
     app.handle(Command::Action(Action::RenameGroup));
     app.handle(Command::Action(Action::ClearSelection));
-    assert_eq!(waves(&app, id).rename, None, "Escape cancels the rename");
+    assert_eq!(waves(&app, id).row_edit, None, "Escape cancels the rename");
     assert_eq!(selected(&app, id), [3], "and keeps the selection");
 
     select(&mut app, id, &[0]);
@@ -774,13 +774,13 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
     select(&mut app, id, &[7]);
     app.handle(Command::Action(Action::IncreaseRowHeight));
     let panel = app.panels.waves_mut(id).unwrap();
-    panel.set_folded(6, true, false);
+    panel.set_folded(&app.doc, 6, true, false);
     let saved = serde_json::to_value(
         Workspace::capture(&app, volna_core::testing::paths(TRACE), None).unwrap(),
     )
     .unwrap();
     let panel = &saved["panels"][0];
-    assert_eq!(panel["version"], 7);
+    assert_eq!(panel["version"], 8);
     let rows = &panel["rows"];
     assert_eq!(rows.as_array().unwrap().len(), 4);
     assert_eq!(rows[2]["type"], "group");
@@ -832,8 +832,7 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
     assert_eq!(outline(&app, id)[3], "  gone");
 
     let nest = |levels: usize| {
-        let mut row =
-            serde_json::json!({"type": "signal", "signal": ["top", "clk"], "format": "bin"});
+        let mut row = serde_json::json!({"type": "signal", "shape": "Bit", "signal": ["top", "clk"], "format": "bin"});
         for k in 0..levels {
             row = serde_json::json!({"type": "group", "name": format!("g{k}"), "rows": [row]});
         }
@@ -1030,10 +1029,10 @@ fn rows_are_a_tree_for_assistive_technology_and_group_names_take_a_double_click(
             ("rst_n".into(), 1, None, false),
             ("AXI, 5 rows".into(), 1, Some(true), false),
             ("awvalid".into(), 2, None, false),
-            ("wdata".into(), 2, None, false),
+            ("wdata".into(), 2, Some(false), false),
             ("bvalid".into(), 2, None, false),
             ("Read, 2 rows".into(), 2, Some(false), true),
-            ("pc".into(), 1, None, false),
+            ("pc".into(), 1, Some(false), false),
         ]
     );
     let w = waves(&app, id);

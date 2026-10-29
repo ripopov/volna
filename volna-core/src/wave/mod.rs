@@ -2,6 +2,7 @@
 //! layout, and the painter that turns it into a display list.
 
 pub mod analog;
+pub mod bus;
 pub mod group;
 pub mod lane;
 pub mod layout;

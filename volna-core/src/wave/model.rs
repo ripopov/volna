@@ -147,6 +147,10 @@ impl From<RowHeight> for u8 {
 
 #[derive(Clone)]
 pub struct DisplayedSignal {
+    pub source_shape: SignalShape,
+    pub projection: Option<crate::data::projection::BitSlice>,
+    pub bus: Option<super::bus::BusExpansion>,
+    pub(crate) projection_source: Option<Arc<dyn SignalHistory>>,
     pub source: RowSource,
     pub requested_format: Option<String>,
     pub name: String,
@@ -162,6 +166,46 @@ pub struct DisplayedSignal {
 }
 
 impl DisplayedSignal {
+    pub(crate) fn attach(&mut self, raw: Option<Arc<dyn SignalHistory>>) {
+        if self.projection.is_some() {
+            self.history = None;
+            self.projection_source = raw;
+        } else {
+            self.history = raw;
+            self.projection_source = None;
+        }
+    }
+
+    #[must_use]
+    pub fn raw_history(&self) -> Option<&Arc<dyn SignalHistory>> {
+        self.projection_source.as_ref().or(self.history.as_ref())
+    }
+
+    pub(crate) fn projected(
+        &self,
+        slice: crate::data::projection::BitSlice,
+        translators: &crate::data::Translators,
+    ) -> Self {
+        let mut row = self.clone();
+        row.name = super::bus::BusIndices::new(&self.name, self.shape.width()).label(slice);
+        row.projection_source = self.raw_history().cloned();
+        row.projection = Some(
+            self.projection
+                .map_or(slice, |parent| parent.compose(slice)),
+        );
+        row.bus = matches!(slice.shape(), SignalShape::Vector { .. })
+            .then(super::bus::BusExpansion::default);
+        row.shape = slice.shape();
+        row.translator = translators.default_for(row.shape);
+        row.requested_format = None;
+        row.height = RowHeight::DEFAULT;
+        row.analog = None;
+        row.history = None;
+        row.overlay_hidden = false;
+        row.tint = None;
+        row
+    }
+
     #[must_use]
     pub fn numeric_kind(&self) -> Option<crate::data::NumericKind> {
         analog::numeric_kind(self.shape, self.translator.as_ref())
@@ -259,10 +303,16 @@ impl GroupRow {
 
 #[derive(Clone)]
 pub enum WaveRow {
-    Signal(DisplayedSignal),
+    Signal(Box<DisplayedSignal>),
     Lane(TxLane),
     Clock(ClockRow),
     Group(GroupRow),
+}
+
+impl From<DisplayedSignal> for WaveRow {
+    fn from(signal: DisplayedSignal) -> Self {
+        Self::Signal(Box::new(signal))
+    }
 }
 
 impl WaveRow {
@@ -357,6 +407,28 @@ impl WaveRow {
     }
 
     #[must_use]
+    pub fn collapsed(&self) -> Option<bool> {
+        match self {
+            Self::Group(g) => Some(g.collapsed),
+            Self::Signal(s) => s.bus.map(|b| b.collapsed),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_collapsed(&mut self, collapsed: bool) -> bool {
+        let state = match self {
+            Self::Group(g) => Some(&mut g.collapsed),
+            Self::Signal(s) => s.bus.as_mut().map(|b| &mut b.collapsed),
+            _ => None,
+        };
+        state.is_some_and(|state| {
+            let changed = *state != collapsed;
+            *state = collapsed;
+            changed
+        })
+    }
+
+    #[must_use]
     pub fn group(&self) -> Option<&GroupRow> {
         match self {
             Self::Group(g) => Some(g),
@@ -389,6 +461,7 @@ impl WaveRow {
         let mut row = self.clone();
         if let Self::Signal(item) = &mut row {
             item.history = None;
+            item.projection_source = None;
             if item.source.signal().is_some() {
                 item.error = None;
             }
@@ -410,6 +483,8 @@ impl WaveRow {
                         .unwrap_or_else(|| s.translator.id())
                 }
                 a.source == b.source
+                    && a.projection == b.projection
+                    && a.bus.map(|b| b.initialized) == b.bus.map(|b| b.initialized)
                     && format(a) == format(b)
                     && a.height == b.height
                     && analog(&a.analog) == analog(&b.analog)
@@ -434,11 +509,11 @@ pub(crate) fn attach_rows<'a>(
         let Some(signal) = row.source.signal() else {
             continue;
         };
-        if row.history.is_some() || row.error.is_some() {
+        if row.raw_history().is_some() || row.error.is_some() {
             continue;
         }
-        row.history = resident.get(&signal).cloned();
-        if row.history.is_none() {
+        row.attach(resident.get(&signal).cloned());
+        if row.raw_history().is_none() {
             doc.request_signal(signal);
         }
     }
@@ -505,6 +580,9 @@ pub enum MenuAction {
     Rename,
     Fold(bool),
     FoldAll(bool),
+    ReverseBits,
+    AddSlice,
+    AddIndependent,
     Lane(crate::marker::LaneVerb),
     PipelineStart(usize),
     Tint(Option<Tint>),
@@ -621,8 +699,23 @@ impl RowJournal {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowEdit {
+    Group(usize),
+    Slice(usize),
+}
+
+impl RowEdit {
+    #[must_use]
+    pub fn row(self) -> usize {
+        match self {
+            Self::Group(row) | Self::Slice(row) => row,
+        }
+    }
+}
+
 pub struct WaveModel {
-    items: Vec<Entry>,
+    pub(super) items: Vec<Entry>,
     journal: RowJournal,
     pub selected: BTreeSet<usize>,
     pub anchor: Option<usize>,
@@ -641,7 +734,8 @@ pub struct WaveModel {
     pub menu: Option<WaveMenu>,
     pub pointer: Option<Point>,
     pub pressed_record: bool,
-    pub rename: Option<usize>,
+    pub row_edit: Option<RowEdit>,
+    pub(crate) bus_notice: Option<String>,
     analog_eased_at: Option<Instant>,
     pub(crate) overlaid_ranges: std::collections::HashMap<usize, super::overlaid::Ranges>,
     layout: WaveLayout,
@@ -713,7 +807,8 @@ impl WaveModel {
             menu: None,
             pointer: None,
             pressed_record: false,
-            rename: None,
+            row_edit: None,
+            bus_notice: None,
             analog_eased_at: None,
             overlaid_ranges: HashMap::default(),
             layout: WaveLayout::default(),
@@ -730,7 +825,7 @@ impl WaveModel {
         self.scroll_y = 0.0;
         self.menu = None;
         self.drag = None;
-        self.rename = None;
+        self.row_edit = None;
         self.hover_row = None;
         self.badge_hover = None;
     }
@@ -759,7 +854,7 @@ impl WaveModel {
             .filter_map(|row| row.signal()?.analog.as_ref())
     }
 
-    fn signals_mut(&mut self) -> impl Iterator<Item = &mut DisplayedSignal> {
+    pub(super) fn signals_mut(&mut self) -> impl Iterator<Item = &mut DisplayedSignal> {
         self.items.iter_mut().filter_map(|e| e.row.signal_mut())
     }
 
@@ -857,10 +952,12 @@ impl WaveModel {
     pub(crate) fn splice(&mut self, mut splices: Vec<Splice>) -> Result<Vec<Splice>, String> {
         for s in splices.iter_mut().filter(|s| s.in_place()) {
             for (k, entry) in s.insert.iter_mut().enumerate() {
-                if let (WaveRow::Group(new), Some(WaveRow::Group(old))) =
-                    (&mut entry.row, self.items.get(s.at + k).map(|e| &e.row))
-                {
-                    new.collapsed = old.collapsed;
+                if let Some(old) = self.items.get(s.at + k) {
+                    let same_children = entry.signal().and_then(|s| s.bus).map(|b| b.initialized)
+                        == old.signal().and_then(|s| s.bus).map(|b| b.initialized);
+                    if same_children && let Some(collapsed) = old.collapsed() {
+                        entry.row.set_collapsed(collapsed);
+                    }
                 }
             }
         }
@@ -869,7 +966,12 @@ impl WaveModel {
         Ok(inverse)
     }
 
-    fn edit_rows(&mut self, label: String, splices: Vec<Splice>, selection: RowSelection) {
+    pub(super) fn edit_rows(
+        &mut self,
+        label: String,
+        splices: Vec<Splice>,
+        selection: RowSelection,
+    ) {
         if splices.is_empty() {
             return;
         }
@@ -917,9 +1019,9 @@ impl WaveModel {
             self.journal.merge = merge;
         }
         let selection = self.row_selection();
-        let (rename, menu) = (self.rename, self.menu.take());
+        let (row_edit, menu) = (self.row_edit, self.menu.take());
         self.edit_rows(label, splices, selection);
-        self.rename = rename;
+        self.row_edit = row_edit;
         self.menu = menu;
         true
     }
@@ -973,7 +1075,7 @@ impl WaveModel {
         }
         self.drag = None;
         self.menu = None;
-        self.rename = None;
+        self.row_edit = None;
         self.clear_hover();
     }
 
@@ -984,7 +1086,7 @@ impl WaveModel {
     pub(crate) fn needs_attach(&self) -> bool {
         self.items.iter().any(|e| {
             e.signal().is_some_and(|s| {
-                s.source.signal().is_some() && s.history.is_none() && s.error.is_none()
+                s.source.signal().is_some() && s.raw_history().is_none() && s.error.is_none()
             })
         })
     }
@@ -1127,13 +1229,13 @@ impl WaveModel {
             .signals_mut()
             .filter(|i| i.source.signal() == Some(signal))
         {
-            item.history = result.as_ref().ok().cloned();
+            item.attach(result.as_ref().ok().cloned());
             item.error = result.as_ref().err().cloned();
         }
     }
 
     fn edited(&mut self) {
-        self.rename = None;
+        self.row_edit = None;
         self.menu = None;
         self.revision += 1;
     }
@@ -1178,6 +1280,7 @@ impl WaveModel {
         for row in self.signals_mut() {
             if row.source.signal().is_some() {
                 row.history = None;
+                row.projection_source = None;
                 row.error = None;
             }
         }
@@ -1252,8 +1355,8 @@ impl WaveModel {
         let mut rows = doc.copied_rows.clone();
         for row in rows.iter_mut().filter_map(|e| e.row.signal_mut()) {
             if let Some(signal) = row.source.signal() {
-                row.history = loaded.get(&signal).cloned();
-                if row.history.is_none() {
+                row.attach(loaded.get(&signal).cloned());
+                if row.raw_history().is_none() {
                     doc.request_signal(signal);
                 }
             }
@@ -1269,6 +1372,9 @@ impl WaveModel {
         let Some((splice, roots)) = tree::insertion(to, rows) else {
             return;
         };
+        if tree::validate_splices(&self.items, std::slice::from_ref(&splice)).is_err() {
+            return;
+        }
         let label = format!("Paste {}", count(roots.len(), "row", "rows"));
         let anchor = roots.first().copied();
         self.edit_rows(
@@ -1288,8 +1394,8 @@ impl WaveModel {
     pub fn clear_selection(&mut self, doc: &mut Document) {
         if self.drag.is_some() {
             self.drag = None;
-        } else if self.rename.is_some() {
-            self.rename = None;
+        } else if self.row_edit.is_some() {
+            self.row_edit = None;
         } else if self.menu.is_some() {
             self.menu = None;
         } else if !self.selected.is_empty() {
@@ -1360,7 +1466,7 @@ impl WaveModel {
             },
         );
         self.journal.continues = Some(MergeKey::of("rename", &g));
-        self.rename = Some(g);
+        self.row_edit = Some(RowEdit::Group(g));
         true
     }
 
@@ -1401,12 +1507,12 @@ impl WaveModel {
             return false;
         };
         self.menu = None;
-        self.rename = Some(g);
+        self.row_edit = Some(RowEdit::Group(g));
         true
     }
 
     pub fn finish_rename(&mut self, name: Option<&str>) -> bool {
-        let Some(g) = self.rename.take() else {
+        let Some(RowEdit::Group(g)) = self.row_edit.take() else {
             return false;
         };
         let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else {
@@ -1426,40 +1532,82 @@ impl WaveModel {
         )
     }
 
-    pub fn set_folded(&mut self, i: usize, collapsed: bool, deep: bool) -> bool {
-        if !self.items.get(i).is_some_and(Entry::is_group) {
-            return false;
-        }
-        let changed = tree::set_collapsed(&mut self.items, i, collapsed, deep);
-        self.fix_hidden_selection();
-        if changed {
-            self.edited();
-        }
-        changed
-    }
-
-    pub fn fold_all(&mut self, collapsed: bool) -> bool {
-        let mut changed = false;
-        for i in 0..self.items.len() {
-            changed |= tree::set_collapsed(&mut self.items, i, collapsed, false);
-        }
-        self.fix_hidden_selection();
-        if changed {
-            self.edited();
-        }
-        changed
-    }
-
-    pub fn fold_key(&mut self, open: bool, deep: bool) -> bool {
-        let Some(g) = self
-            .anchor
-            .filter(|a| self.selected.contains(a))
-            .filter(|&a| self.items.get(a).is_some_and(Entry::is_group))
-        else {
+    pub fn set_folded(&mut self, doc: &Document, i: usize, collapsed: bool, deep: bool) -> bool {
+        let Some(entry) = self.items.get(i) else {
             return false;
         };
-        self.set_folded(g, !open, deep);
-        true
+        if entry.collapsed().is_none() {
+            return false;
+        }
+        let materialized = !collapsed
+            && entry
+                .signal()
+                .and_then(|s| s.bus)
+                .is_some_and(|b| !b.initialized);
+        if materialized && !self.expand_bits(doc, i) {
+            return false;
+        }
+        let end = if deep {
+            tree::subtree_end(&self.items, i)
+        } else {
+            i + 1
+        };
+        // Recursive group folding leaves buses unopened to avoid flooding the signal list with bits.
+        let nested: Vec<_> = (i + 1..end)
+            .rev()
+            .filter(|&j| self.items[j].is_group())
+            .collect();
+        let mut changed = tree::set_collapsed(&mut self.items, i, collapsed, false);
+        if deep {
+            for j in nested {
+                changed |= self.set_folded(doc, j, collapsed, false);
+            }
+        }
+        self.fix_hidden_selection();
+        if changed {
+            self.edited();
+        }
+        materialized || changed
+    }
+
+    pub fn fold_all(&mut self, doc: &Document, collapsed: bool) -> bool {
+        let rows: Vec<_> = (0..self.items.len())
+            .rev()
+            .filter(|&i| self.items[i].collapsed().is_some())
+            .collect();
+        let mut changed = false;
+        for i in rows {
+            changed |= self.set_folded(doc, i, collapsed, false);
+        }
+        changed
+    }
+
+    pub fn fold_key(&mut self, doc: &Document, open: bool, deep: bool) -> bool {
+        let Some(i) = self.anchor.filter(|a| self.selected.contains(a)) else {
+            return false;
+        };
+        let Some(entry) = self.items.get(i) else {
+            return false;
+        };
+        if let Some(collapsed) = entry.collapsed() {
+            if collapsed == open || deep {
+                self.set_folded(doc, i, !open, deep);
+                return true;
+            }
+            if open && i + 1 < tree::subtree_end(&self.items, i) {
+                self.selected = BTreeSet::from([i + 1]);
+                self.anchor = Some(i + 1);
+                self.reveal_entry(i + 1);
+                return true;
+            }
+        }
+        if !open && let Some(parent) = tree::parent(&self.items, i) {
+            self.selected = BTreeSet::from([parent]);
+            self.anchor = Some(parent);
+            self.reveal_entry(parent);
+            return true;
+        }
+        entry.collapsed().is_some()
     }
 
     pub(crate) fn fix_hidden_selection(&mut self) {
@@ -2019,7 +2167,14 @@ impl WaveModel {
             row,
             position,
             entries: vec![
-                MenuEntry::Item(MenuItem::plain(MenuAction::OpenTable, "Open in table")),
+                MenuEntry::Item(MenuItem::plain(
+                    MenuAction::OpenTable,
+                    if self.signal(row).is_some_and(|s| s.projection.is_some()) {
+                        "Open source signal in table"
+                    } else {
+                        "Open in table"
+                    },
+                )),
                 MenuEntry::Separator,
                 MenuEntry::Item(MenuItem::plain(MenuAction::CutSignals, "Cut")),
                 MenuEntry::Item(MenuItem::plain(MenuAction::CopySignals, "Copy")),
@@ -2160,6 +2315,34 @@ impl WaveModel {
                 badge: Some("⇧G".into()),
                 ..MenuItem::plain(MenuAction::Ungroup, "Ungroup")
             }));
+        }
+        if let Some(signal) = self.items[row].signal() {
+            if let Some(bus) = signal.bus {
+                menu.entries.push(MenuEntry::Item(MenuItem::plain(
+                    MenuAction::Fold(!bus.collapsed),
+                    if bus.collapsed {
+                        "Expand bits"
+                    } else {
+                        "Collapse bits"
+                    },
+                )));
+                menu.entries.push(MenuEntry::Item(MenuItem::plain(
+                    MenuAction::AddSlice,
+                    "Add bit or slice…",
+                )));
+                if bus.initialized {
+                    menu.entries.push(MenuEntry::Item(MenuItem::plain(
+                        MenuAction::ReverseBits,
+                        "Reverse bit order",
+                    )));
+                }
+            }
+            if signal.projection.is_some() {
+                menu.entries.push(MenuEntry::Item(MenuItem::plain(
+                    MenuAction::AddIndependent,
+                    "Add as independent trace",
+                )));
+            }
         }
         if let Some(g) = group {
             menu.entries.extend([
@@ -2302,7 +2485,7 @@ impl WaveModel {
                 self.anchor = Some(menu.row);
                 self.start_rename();
             }
-            MenuAction::Fold(collapsed) => _ = self.set_folded(menu.row, *collapsed, false),
+            MenuAction::Fold(collapsed) => _ = self.set_folded(doc, menu.row, *collapsed, false),
             MenuAction::Stack(stacked) => _ = self.set_stacked(&rows, *stacked),
             MenuAction::Peak(peak) => _ = self.set_peak(&rows, *peak),
             MenuAction::Overlaid => _ = self.set_overlaid(&rows),
@@ -2324,7 +2507,12 @@ impl WaveModel {
                 }
                 self.set_overlay_hidden(&members, false);
             }
-            MenuAction::FoldAll(collapsed) => _ = self.fold_all(*collapsed),
+            MenuAction::ReverseBits => _ = self.reverse_bits(menu.row),
+            MenuAction::AddSlice => {
+                self.row_edit = Some(RowEdit::Slice(menu.row));
+            }
+            MenuAction::AddIndependent => _ = self.add_independent(menu.row),
+            MenuAction::FoldAll(collapsed) => _ = self.fold_all(doc, *collapsed),
             _ => {
                 let row = self.signal(menu.row)?;
                 return row.error.as_ref().and_then(|_| row.source.signal());
@@ -2660,8 +2848,8 @@ impl WaveModel {
     }
 
     #[must_use]
-    pub fn rename_rect(&self) -> Option<crate::geometry::Rect> {
-        let g = self.rename?;
+    pub fn text_edit_rect(&self) -> Option<crate::geometry::Rect> {
+        let g = self.row_edit?.row();
         let (y, _) = self.layout.entry_span(g)?;
         let layout = &self.layout;
         let x = super::layout::indent_x(layout.name_left, self.items.get(g)?.depth, layout.zoom)
@@ -2747,7 +2935,7 @@ impl WaveModel {
                         Some(!g.collapsed),
                     )
                 }
-                row => (row.name().to_owned(), None),
+                row => (row.name().to_owned(), row.collapsed().map(|c| !c)),
             };
             let gutter = layout.name_left > layout.names.left();
             let label = match gutter.then(|| self.row_trace(entry)).flatten() {
@@ -2770,13 +2958,16 @@ impl WaveModel {
         })
     }
 
-    fn chevron_at(&self, p: Point) -> Option<usize> {
+    pub(super) fn chevron_at(&self, p: Point) -> Option<usize> {
         let layout = &self.layout;
         if !layout.names.contains(p) {
             return None;
         }
         let i = self.entry_under(layout, p.y)?;
-        let e = self.items.get(i).filter(|e| e.is_group())?;
+        let e = self
+            .items
+            .get(i)
+            .filter(|e| e.collapsed().is_some() && e.depth + 1 < tree::MAX_DEPTH)?;
         let (y, _) = layout.entry_span(i)?;
         let x = super::layout::indent_x(layout.name_left, e.depth, layout.zoom);
         let w = super::layout::CHEVRON_W * layout.zoom;
@@ -3178,8 +3369,8 @@ impl WaveModel {
             return;
         }
         if let Some(g) = self.chevron_at(p) {
-            let collapsed = self.items[g].group().is_some_and(|g| g.collapsed);
-            self.set_folded(g, !collapsed, modifiers.alt);
+            let collapsed = self.items[g].collapsed().unwrap();
+            self.set_folded(doc, g, !collapsed, modifiers.alt);
             return;
         }
         if let Some((ix, b)) = layout.badge_at(p) {
@@ -3396,7 +3587,12 @@ fn var_rows(doc: &mut Document, vars: &[Traced<VarId>], loaded: &Resident) -> Ve
             a.restore_height = Some(RowHeight::DEFAULT);
             a
         });
-        rows.push(WaveRow::Signal(DisplayedSignal {
+        rows.push(WaveRow::from(DisplayedSignal {
+            source_shape: v.shape,
+            projection: None,
+            bus: matches!(v.shape, SignalShape::Vector { .. })
+                .then(super::bus::BusExpansion::default),
+            projection_source: None,
             source: RowSource::Resolved {
                 trace: var.trace,
                 var: var.item,
