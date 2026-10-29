@@ -363,18 +363,18 @@
           "type": "number"
         },
         "volna.hierarchy.activityIndex": {
-          "default": "ask",
+          "default": "always",
           "enum": [
-            "ask",
             "always",
+            "ask",
             "never"
           ],
           "enumDescriptions": [
-            "Ask",
-            "Always",
-            "Never"
+            "Build automatically",
+            "Ask before building",
+            "Disabled"
           ],
-          "markdownDescription": "Build an activity index for a trace that has none: choose ask to offer Build and Not now, always to start a background build, or never to hide the offer. The trace remains usable while building. Indexes enable exact scope activity meters and are cached beside the trace or in the user cache.",
+          "markdownDescription": "Automatically build missing activity indexes in the background. Choose Ask before building to show Build and Not now, or Disabled to prevent automatic builds and hide the offer. The trace remains usable while building. Existing indexes are still loaded when automatic builds are disabled. Indexes enable exact scope activity meters and are cached beside the trace or in the user cache.",
           "type": "string"
         },
         "volna.memory.budgetMiB": {

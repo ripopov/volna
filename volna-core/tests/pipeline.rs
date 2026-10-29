@@ -2517,6 +2517,7 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
     assert_eq!(app.panels.len(), 1);
     assert!(app.doc.track(generator).is_none());
     let mut failing = App::new();
+    failing.settings_loaded(r#"{"hierarchy.activityIndex":"never"}"#);
     failing.set_session(session.clone());
     failing.handle(Command::OpenPipeline { track: a(track) });
     let request = failing.take_requests().pop().unwrap();

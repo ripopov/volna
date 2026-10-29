@@ -679,7 +679,11 @@ fn scope_rows_without_activity_hide_counts_in_both_themes(cx: &mut TestAppContex
     let specimen = directory.path().join("picorv32.vtr");
     std::fs::copy(trace, &specimen).unwrap();
     window
-        .update(cx, |ws, _, cx| ws.open_path(specimen.clone(), cx))
+        .update(cx, |ws, _, cx| {
+            ws.app
+                .settings_loaded(r#"{"hierarchy.activityIndex":"never"}"#);
+            ws.open_path(specimen.clone(), cx);
+        })
         .unwrap();
     let mut vcx = VisualTestContext::from_window(window.into(), cx);
     vcx.run_until_parked();
@@ -1169,6 +1173,67 @@ fn settings_tab_results_json_view_and_palette_render(cx: &mut TestAppContext) {
             assert_eq!(ws.app.panels.len(), 1);
         })
         .unwrap();
+}
+
+#[gpui_kit::test]
+fn activity_index_settings_menu_disables_and_reenables_automatic_builds(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use gpui_kit::test::TestWindowExt as _;
+    use volna_core::settings::ActivityIndexPolicy;
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let window = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    window
+        .update(cx, |ws, window, cx| {
+            ws.dispatch(
+                Command::Settings(SettingsCommand::Reveal {
+                    id: "hierarchy.activityIndex".into(),
+                }),
+                Some(window),
+                cx,
+            );
+        })
+        .unwrap();
+    let mut view = VisualTestContext::from_window(root.into(), cx);
+    for (label, policy) in [
+        ("Disabled", ActivityIndexPolicy::Never),
+        ("Build automatically", ActivityIndexPolicy::Always),
+    ] {
+        view.run_until_parked();
+        view.update(|window, cx| {
+            window.render_frame(cx);
+            window.click("setting-enum-hierarchy.activityIndex", cx);
+        });
+        view.run_until_parked();
+        view.update(|window, cx| {
+            window.render_frame(cx);
+            let mut menu = window.within("popup-menu");
+            let item = (0..3usize)
+                .find(|ix| menu.find(*ix).label() == Some(label))
+                .expect("activity index policy choice");
+            menu.click(item, cx);
+        });
+        view.run_until_parked();
+        window
+            .update(&mut view, |ws, _, _| {
+                assert_eq!(ws.app.settings.resolved().hierarchy.activity_index, policy);
+                let mut restored = volna_core::App::new();
+                restored.settings_loaded(ws.app.settings.text());
+                assert_eq!(
+                    restored.settings.resolved().hierarchy.activity_index,
+                    policy
+                );
+            })
+            .unwrap();
+    }
 }
 
 #[gpui_kit::test]
@@ -4227,7 +4292,11 @@ fn activity_build_banner_drives_build_dismiss_and_cancel(cx: &mut TestAppContext
     .unwrap();
     let window = cx.add_window(Workspace::new);
     window
-        .update(cx, |ws, _, cx| ws.open_path(trace.clone(), cx))
+        .update(cx, |ws, _, cx| {
+            ws.app
+                .settings_loaded(r#"{"hierarchy.activityIndex":"ask"}"#);
+            ws.open_path(trace.clone(), cx);
+        })
         .unwrap();
     let mut vcx = VisualTestContext::from_window(window.into(), cx);
     vcx.run_until_parked();
@@ -4331,6 +4400,8 @@ fn remote_activity_banner_names_the_reader_and_dismisses(cx: &mut TestAppContext
     let mut vcx = VisualTestContext::from_window(window.into(), cx);
     window
         .update(&mut vcx, |ws, _, cx| {
+            ws.app
+                .settings_loaded(r#"{"hierarchy.activityIndex":"ask"}"#);
             ws.app.set_session(remote);
             ws.after(None, cx);
             let views = ws.app.activity.builds(

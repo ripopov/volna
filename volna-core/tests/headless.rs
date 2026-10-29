@@ -1749,6 +1749,7 @@ fn status_reports_memory_budget_use_as_signals_load_and_unload() {
     let mut app = App::new();
     assert_eq!(app.status().memory, None, "no trace, no budget");
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
+    pump(&mut app);
     let opened = app.status().memory.expect("an open trace has a budget");
     assert_eq!(opened.limit, 512 * 1024 * 1024);
     assert!(opened.used > 0, "the resident trace is accounted");

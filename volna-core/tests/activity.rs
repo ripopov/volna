@@ -147,8 +147,17 @@ fn settle(app: &mut App) {
 }
 
 fn open(path: &Path) -> (App, Arc<dyn Session>) {
+    open_with_settings(path, "{}")
+}
+
+fn open_asking(path: &Path) -> (App, Arc<dyn Session>) {
+    open_with_settings(path, r#"{"hierarchy.activityIndex":"ask"}"#)
+}
+
+fn open_with_settings(path: &Path, settings: &str) -> (App, Arc<dyn Session>) {
     let session = OpenSpec::Path(path.to_path_buf()).open().unwrap();
     let mut app = App::new();
+    app.settings_loaded(settings);
     app.set_session(session.clone());
     settle(&mut app);
     (app, session)
@@ -477,7 +486,7 @@ fn an_index_of_another_trace_is_ignored() {
     write_trace(&path, 4);
     index_beside(&path);
     write_trace(&path, 5);
-    let (app, session) = open(&path);
+    let (app, session) = open_asking(&path);
     assert!(session.activity().is_none());
     let top = node(session.hierarchy().roots().first().unwrap());
     assert_eq!(
@@ -527,7 +536,7 @@ fn build_offer_obeys_policy_and_not_now() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.vtr");
     write_trace(&path, 6);
-    let (mut app, session) = open(&path);
+    let (mut app, session) = open_asking(&path);
     assert!(matches!(
         build_views(&app)[0].state,
         ActivityBuildState::Offer {
@@ -562,17 +571,61 @@ fn build_offer_obeys_policy_and_not_now() {
 }
 
 #[test]
-fn never_hides_the_offer_and_always_builds_with_the_sidebar_hidden() {
+fn missing_indexes_build_automatically_once_and_install_exact_meters() {
+    use volna_core::sidebar::activity::ActivityBuildState;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("automatic.vtr");
+    write_trace(&path, 17);
+    let session = OpenSpec::Path(path.clone()).open().unwrap();
+    let mut app = App::new();
+    app.set_session(session.clone());
+    let requests = app.take_requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| matches!(r, LoadRequest::BuildActivity { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        build_views(&app)[0].state,
+        ActivityBuildState::Building { .. }
+    ));
+    assert!(app.take_requests().is_empty(), "one build per trace");
+    for request in requests {
+        app.deliver(request.perform());
+    }
+    settle(&mut app);
+    assert!(session.activity().is_some());
+    assert!(build_views(&app).is_empty());
+    view(&mut app, 100, 1_000);
+    settle(&mut app);
+    check_exact(&app, &session, 100, 1_000);
+    assert!(OpenSpec::Path(path).open().unwrap().activity().is_some());
+}
+
+#[test]
+fn disabling_builds_persists_and_reset_builds_with_the_sidebar_hidden() {
+    use volna_core::app::{Command, SettingsCommand};
+    use volna_core::settings::{Host, Value};
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.vtr");
     write_trace(&path, 6);
-    let (mut app, session) = open(&path);
-    app.settings_loaded(r#"{"hierarchy.activityIndex": "never"}"#);
+    let mut settings = App::new();
+    settings.configure_settings(Host::Native, None);
+    settings.handle(Command::Settings(SettingsCommand::Set {
+        id: "hierarchy.activityIndex".into(),
+        value: Value::Text("never".into()),
+    }));
+    let (mut app, session) = open_with_settings(&path, settings.settings.text());
     settle(&mut app);
     assert!(build_views(&app).is_empty());
     assert!(session.activity().is_none());
+    assert!(!path.with_extension("vtr.index").exists());
     app.sidebar_visible = false;
-    app.settings_loaded(r#"{"hierarchy.activityIndex": "always"}"#);
+    app.handle(Command::Settings(SettingsCommand::Reset {
+        id: "hierarchy.activityIndex".into(),
+    }));
     settle(&mut app);
     assert!(session.activity().is_some());
     assert!(build_views(&app).is_empty());
@@ -584,7 +637,7 @@ fn explicit_build_installs_meters_and_reports_block_progress() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.vtr");
     write_trace(&path, 6);
-    let (mut app, session) = open(&path);
+    let (mut app, session) = open_asking(&path);
     app.handle(Command::AddVars(vec![Traced::new(TraceId::A, 0)]));
     settle(&mut app);
     let undo = app.undo_label().map(str::to_owned);
@@ -631,7 +684,7 @@ fn cancelled_and_closed_builds_leave_no_sidecar_or_temporary_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.vtr");
     write_trace(&path, 6);
-    let (mut app, session) = open(&path);
+    let (mut app, session) = open_asking(&path);
     app.handle(Command::BuildActivity(TraceId::A));
     app.handle(Command::CancelActivity(TraceId::A));
     assert!(app.take_requests().is_empty());
@@ -662,7 +715,7 @@ fn a_failed_build_can_be_retried_explicitly() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("run.vtr");
     write_trace(&path, 6);
-    let (mut app, session) = open(&path);
+    let (mut app, session) = open_asking(&path);
     app.handle(Command::BuildActivity(TraceId::A));
     let mut r = app.take_requests().pop().unwrap();
     let LoadRequest::BuildActivity { options, .. } = &mut r else {
@@ -699,7 +752,7 @@ fn viewer_builds_use_the_cache_for_a_read_only_directory() {
     std::fs::create_dir(&traces).unwrap();
     let path = traces.join("run.vtr");
     write_trace(&path, 6);
-    let (mut app, session) = open(&path);
+    let (mut app, session) = open_asking(&path);
     app.handle(volna_core::app::Command::BuildActivity(TraceId::A));
     let mut r = app.take_requests().pop().unwrap();
     let LoadRequest::BuildActivity { cache_dir, .. } = &mut r else {
@@ -1032,12 +1085,7 @@ fn remote_build_and_scope_counts_match_local_without_pan_index_requests() {
     assert_eq!(remote.activity_identity(), local.activity_identity());
     let mut app = App::default();
     app.set_session(remote.clone());
-    rig.settle(&mut app);
-    let views = build_views(&app);
-    assert_eq!(views.len(), 1);
-    assert!(views[0].message().contains(remote.activity_host().unwrap()));
     let undo = app.undo_label().map(str::to_owned);
-    app.handle(volna_core::app::Command::BuildActivity(TraceId::A));
     rig.settle(&mut app);
     assert!(remote.activity().is_some());
     assert!(build_views(&app).is_empty());

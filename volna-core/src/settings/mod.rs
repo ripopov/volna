@@ -202,8 +202,8 @@ pub struct RemoteSettings {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ActivityIndexPolicy {
-    #[default]
     Ask,
+    #[default]
     Always,
     Never,
 }
@@ -238,9 +238,9 @@ impl Settings {
         Settings {
             hierarchy: HierarchySettings {
                 activity_index: match text("hierarchy.activityIndex").as_str() {
-                    "always" => ActivityIndexPolicy::Always,
+                    "ask" => ActivityIndexPolicy::Ask,
                     "never" => ActivityIndexPolicy::Never,
-                    _ => ActivityIndexPolicy::Ask,
+                    _ => ActivityIndexPolicy::Always,
                 },
             },
             appearance: AppearanceSettings {

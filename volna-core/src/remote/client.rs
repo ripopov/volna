@@ -505,6 +505,7 @@ mod tests {
             panic!("opened")
         };
         let mut app = App::new();
+        app.settings_loaded(r#"{"hierarchy.activityIndex":"never"}"#);
         app.set_session(result.unwrap());
         let enqueue = |app: &mut App, client: &mut RemoteClient| {
             let request = app.take_requests().pop().unwrap();
