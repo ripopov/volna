@@ -175,7 +175,13 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
                 AttributeValue::U64(u64::from(retry_site.id())),
             ),
             ("log.format", AttributeValue::Text("retry {}".into())),
-            ("log.severity", AttributeValue::U64(3)),
+            (
+                "log.severity",
+                AttributeValue::Enum {
+                    value: 3,
+                    name: "warn".into(),
+                },
+            ),
             ("log.file", AttributeValue::Text("decoder.cpp".into())),
             ("log.message", AttributeValue::Text("retry bank 3".into())),
         ] {
@@ -551,5 +557,55 @@ fn metadata_text_and_interned_strings_preserve_design_identity_and_cycle_units()
         let session = OpenSpec::Path(path).open().unwrap();
         assert_eq!(session.info().design_id.as_deref(), Some("设计 λ"));
         assert_eq!(session.info().time_unit.as_deref(), Some("cycle"));
+    }
+}
+
+#[test]
+fn checked_in_log_recordings_load_with_named_severity_and_formatted_messages() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for relative in [
+        "tests/fixtures/landing.vtr",
+        "tests/fixtures/feature_showcase.vtr",
+        "../volna/examples/landing.vtr",
+        "../volna/examples/feature_showcase.vtr",
+        "../volna/examples/volna-theme.vtr",
+        "../volna/examples/pipeline_demo.vtr",
+    ] {
+        let session = OpenSpec::Path(root.join(relative)).open().unwrap();
+        let mut logs = 0;
+        for track in session.tracks().iter().filter(|track| track.kind == "LOG") {
+            let loaded = session.load_track(track.id).unwrap();
+            for generator in &loaded.generators {
+                for record in generator.transactions() {
+                    let severity = record
+                        .attributes
+                        .iter()
+                        .find(|attribute| attribute.key == "log.severity")
+                        .unwrap();
+                    let AttributeValue::Enum { value, name } = &severity.value else {
+                        panic!("{relative}: severity is not an enum");
+                    };
+                    let names = ["trace", "debug", "info", "warn", "error", "fatal"];
+                    let expected = names
+                        .get(usize::try_from(*value).unwrap())
+                        .copied()
+                        .unwrap_or("other");
+                    assert_eq!(name, expected, "{relative}");
+                    assert!(
+                        record
+                            .attributes
+                            .iter()
+                            .any(|attribute| attribute.key == "log.message"
+                                && matches!(
+                                    attribute.value,
+                                    AttributeValue::Text(_) | AttributeValue::Bytes(_)
+                                )),
+                        "{relative}: formatted log message is missing"
+                    );
+                    logs += 1;
+                }
+            }
+        }
+        assert!(logs > 0, "{relative}: expected recorded log messages");
     }
 }
