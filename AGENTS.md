@@ -37,6 +37,8 @@ Stage completed changes. Commit only when explicitly requested by the user.
 Include only task-related changes; preserve unrelated work and its staging state.
 
 When committing changes to VTR, also update and commit Volna's `vtr` submodule pin.
+Keep VTR on `main` and make changes on that branch. Stay current with
+`origin/main`; when the remote advances, rebase local changes onto it.
 
 # Temporary plans
 
