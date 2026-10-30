@@ -7735,6 +7735,7 @@ dependencies = [
 name = "vtr"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "crc32fast",
  "getrandom 0.2.17",
  "libc",

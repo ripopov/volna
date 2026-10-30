@@ -727,3 +727,110 @@ fn checked_in_log_recordings_load_with_named_severity_and_formatted_messages() {
         assert!(logs > 0, "{relative}: expected recorded log messages");
     }
 }
+
+#[test]
+fn printf_logs_retain_arguments_metadata_and_rendered_bytes() {
+    for mode in [ExecutionMode::Inline, ExecutionMode::Threaded] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("printf.vtr");
+        let mut writer = Writer::create_with(
+            &path,
+            WriterOptions {
+                mode,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let logger = writer.logger(SourceOptions::new("printf", None)).unwrap();
+        let cases = [
+            ("pc=%#018x", "pc=0xffffffffffffffff"),
+            ("%1$llu/%1$X", "18446744073709551615/FFFFFFFFFFFFFFFF"),
+            ("missing=%2$d", "missing={?}"),
+        ];
+        let mut ids = Vec::new();
+        for (format, _) in cases {
+            let site = vtr::logging::declare::<u64>(
+                &mut writer,
+                vtr::logging::CallsiteOptions {
+                    style: vtr::logging::FormatStyle::Printf,
+                    ..vtr::logging::CallsiteOptions::new(format)
+                },
+            )
+            .unwrap();
+            ids.push(writer.log_at(logger, site, 1, &u64::MAX, None).unwrap());
+        }
+        let binary = vtr::logging::declare::<u32>(
+            &mut writer,
+            vtr::logging::CallsiteOptions {
+                style: vtr::logging::FormatStyle::Printf,
+                ..vtr::logging::CallsiteOptions::new("%c")
+            },
+        )
+        .unwrap();
+        let binary_id = writer.log_at(logger, binary, 2, &255, None).unwrap();
+        writer.close().unwrap();
+        let session = OpenSpec::Path(path).open().unwrap();
+        let messages = session.load_track(TrackRef(logger.id())).unwrap();
+        for (id, (format, expected)) in ids.into_iter().zip(cases) {
+            let row = messages.generators[0]
+                .transaction(TransactionRef(id))
+                .unwrap();
+            for (key, value) in [
+                ("log.format", AttributeValue::Text(format.into())),
+                ("log.format_style", AttributeValue::Text("printf".into())),
+                ("log.message", AttributeValue::Text(expected.into())),
+            ] {
+                assert!(
+                    row.attributes
+                        .iter()
+                        .any(|a| a.key == key && a.value == value),
+                    "missing {key}"
+                );
+            }
+            assert!(
+                row.attributes
+                    .iter()
+                    .any(|a| a.value == AttributeValue::U64(u64::MAX))
+            );
+        }
+        let row = messages.generators[0]
+            .transaction(TransactionRef(binary_id))
+            .unwrap();
+        assert!(
+            row.attributes
+                .iter()
+                .any(|a| a.key == "log.message" && a.value == AttributeValue::Bytes(vec![255]))
+        );
+    }
+}
+
+#[test]
+fn cpp_printf_fixtures_render_through_volna() {
+    // vtr_printf_test generates these compact sample traces in both execution modes.
+
+    for mode in ["inline", "threaded"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/printf/{mode}.vtr"));
+        let reader = vtr::Reader::open(&path).unwrap();
+        let logger = reader.find_generator("printf").unwrap();
+        let session = OpenSpec::Path(path).open().unwrap();
+        let track = session.load_track(TrackRef(logger)).unwrap();
+        let rows = track.generators[0].transactions();
+        assert_eq!(rows.len(), 3);
+        for (row, expected) in rows.iter().zip([
+            AttributeValue::Text("pc=0xffffffffffffffff value=-1.25 label=abc".into()),
+            AttributeValue::Text("[    1.250]".into()),
+            AttributeValue::Bytes(vec![255]),
+        ]) {
+            assert!(
+                row.attributes
+                    .iter()
+                    .any(|a| a.key == "log.message" && a.value == expected)
+            );
+            assert!(
+                row.attributes.iter().any(|a| a.key == "log.format_style"
+                    && a.value == AttributeValue::Text("printf".into()))
+            );
+        }
+    }
+}
