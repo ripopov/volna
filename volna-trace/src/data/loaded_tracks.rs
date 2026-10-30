@@ -29,7 +29,7 @@ pub struct LoadedGenerator {
     generator: TrackRef,
     transactions: Vec<Transaction>,
     attributes: Vec<AttributeSummary>,
-    by_id: HashMap<TransactionRef, usize>,
+    by_id: HashMap<TransactionRef, (usize, TrackRef)>,
     parents: HashMap<TransactionRef, TransactionLocation>,
     children: HashMap<TransactionLocation, Vec<TransactionRef>>,
     relations: Vec<LoadedRelation>,
@@ -54,7 +54,8 @@ impl LoadedGenerator {
                     .saturating_mul(std::mem::size_of::<Transaction>() as u64),
             )
             .saturating_add((self.by_id.capacity() as u64).saturating_mul(
-                (std::mem::size_of::<TransactionRef>() + std::mem::size_of::<usize>()) as u64,
+                (std::mem::size_of::<TransactionRef>() + std::mem::size_of::<(usize, TrackRef)>())
+                    as u64,
             ))
             .saturating_add(
                 (self.max_end.capacity() as u64).saturating_mul(std::mem::size_of::<u64>() as u64),
@@ -165,18 +166,23 @@ impl LoadedGenerator {
             );
             anyhow::ensure!(tx.begin <= tx.end, "reversed transaction interval");
             anyhow::ensure!(
-                by_id.insert(tx.id, index).is_none(),
+                by_id.insert(tx.id, (index, generator)).is_none(),
                 "duplicate transaction identity"
             );
-            for id in tx
+            for (id, source) in tx
                 .events
                 .iter()
-                .map(|event| event.id)
-                .chain(tx.stages.iter().map(|stage| stage.id))
+                .map(|event| (event.id, event.generator.unwrap_or(generator)))
+                .chain(
+                    tx.stages
+                        .iter()
+                        .map(|stage| (stage.id, stage.generator.unwrap_or(generator))),
+                )
             {
+                checkpoint().await;
                 anyhow::ensure!(
-                    by_id.insert(id, index).is_none(),
-                    "duplicate embedded record identity"
+                    by_id.insert(id, (index, source)).is_none(),
+                    "duplicate activity record identity"
                 );
             }
             anyhow::ensure!(
@@ -189,7 +195,7 @@ impl LoadedGenerator {
             anyhow::ensure!(
                 by_id
                     .get(id)
-                    .is_some_and(|&index| transactions[index].id == *id),
+                    .is_some_and(|&(index, _)| transactions[index].id == *id),
                 "unknown child in parent locations"
             );
         }
@@ -206,17 +212,21 @@ impl LoadedGenerator {
         for edge in &relations {
             checkpoint().await;
             anyhow::ensure!(relation_ids.insert(edge.id), "duplicate relation identity");
-            let from_here = edge.from_generator == Some(generator);
-            let to_here = edge.to_generator == Some(generator);
+            let from_here = by_id.contains_key(&edge.relation.from);
+            let to_here = by_id.contains_key(&edge.relation.to);
             anyhow::ensure!(from_here || to_here, "relation does not touch generator");
-            anyhow::ensure!(
-                !from_here || by_id.contains_key(&edge.relation.from),
-                "missing relation source"
-            );
-            anyhow::ensure!(
-                !to_here || by_id.contains_key(&edge.relation.to),
-                "missing relation target"
-            );
+            for (id, source) in [
+                (edge.relation.from, edge.from_generator),
+                (edge.relation.to, edge.to_generator),
+            ] {
+                anyhow::ensure!(
+                    match by_id.get(&id) {
+                        Some(&(_, expected)) => source == Some(expected),
+                        None => source != Some(generator),
+                    },
+                    "missing or misplaced relation endpoint"
+                );
+            }
         }
         let mut children: HashMap<TransactionLocation, Vec<TransactionRef>> = HashMap::new();
         for tx in &transactions {
@@ -229,13 +239,17 @@ impl LoadedGenerator {
         for (index, edge) in relations.iter().enumerate() {
             checkpoint().await;
             let index = u32::try_from(index).map_err(|_| anyhow::anyhow!("too many relations"))?;
-            let from = (edge.from_generator == Some(generator)).then_some(edge.relation.from);
-            let to = (edge.to_generator == Some(generator)).then_some(edge.relation.to);
+            let from = by_id
+                .contains_key(&edge.relation.from)
+                .then_some(edge.relation.from);
+            let to = by_id
+                .contains_key(&edge.relation.to)
+                .then_some(edge.relation.to);
             let keys = [
                 from,
                 to,
-                from.map(|id| transactions[by_id[&id]].id),
-                to.map(|id| transactions[by_id[&id]].id),
+                from.map(|id| transactions[by_id[&id].0].id),
+                to.map(|id| transactions[by_id[&id].0].id),
             ];
             for (position, key) in keys.iter().enumerate() {
                 if let Some(key) = key
@@ -331,15 +345,22 @@ impl LoadedGenerator {
             .iter()
             .map(|&index| &self.relations[index as usize])
     }
-    /// Embedded IDs resolve to their owning row.
+    /// Activity IDs resolve to their owning row, including projected located records.
     #[must_use]
     pub fn transaction(&self, id: TransactionRef) -> Option<&Transaction> {
-        self.by_id.get(&id).map(|&index| &self.transactions[index])
+        self.by_id
+            .get(&id)
+            .map(|&(index, _)| &self.transactions[index])
     }
 
     #[must_use]
     pub fn transaction_ordinal(&self, id: TransactionRef) -> Option<usize> {
-        self.by_id.get(&id).copied()
+        self.by_id.get(&id).map(|&(index, _)| index)
+    }
+
+    #[must_use]
+    pub fn record_generator(&self, id: TransactionRef) -> Option<TrackRef> {
+        self.by_id.get(&id).map(|&(_, source)| source)
     }
 
     #[must_use]

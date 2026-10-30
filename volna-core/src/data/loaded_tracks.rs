@@ -461,6 +461,7 @@ mod tests {
     fn stage_census_counts_lanes_names_and_positions_in_any_order() {
         let stage = |id, name: &str, lane: &str| TransactionStage {
             id: TransactionRef(id),
+            generator: None,
             name: name.into(),
             lane: lane.into(),
             begin: 0,
@@ -510,6 +511,7 @@ mod tests {
         let mut record = tx(1, 1, 3);
         record.stages.push(TransactionStage {
             id: TransactionRef(2),
+            generator: None,
             name: "outlier".into(),
             lane: "0".into(),
             begin: u64::MAX,

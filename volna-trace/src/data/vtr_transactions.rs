@@ -2,8 +2,8 @@
 
 use super::loaded_tracks::{LoadedGenerator, LoadedRelation, LoadedTrack, TransactionLocation};
 use super::transactions::{
-    AttributeValue, Attributes, Relation, Track, TrackRef, Transaction, TransactionAttribute,
-    TransactionEvent, TransactionRef, TransactionStage,
+    AttributeValue, Attributes, DEFAULT_LANE, Relation, Track, TrackRef, Transaction,
+    TransactionAttribute, TransactionEvent, TransactionRef, TransactionStage,
 };
 use super::vtr_source::LocalSession;
 use std::collections::{HashMap, HashSet};
@@ -53,10 +53,19 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
     let mut owners: HashMap<_, _> = records
         .iter()
         .flat_map(|record| {
-            std::iter::once(record.id)
-                .chain(record.events.iter().map(|event| event.id))
-                .chain(record.stages.iter().map(|stage| stage.id))
-                .map(|id| (id, Some(track)))
+            std::iter::once((record.id, Some(track)))
+                .chain(
+                    record
+                        .events
+                        .iter()
+                        .map(|event| (event.id, Some(event.generator.unwrap_or(track)))),
+                )
+                .chain(
+                    record
+                        .stages
+                        .iter()
+                        .map(|stage| (stage.id, Some(stage.generator.unwrap_or(track)))),
+                )
         })
         .collect();
     let mut external = HashSet::new();
@@ -382,7 +391,7 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
             value: message,
         });
     }
-    Ok(Transaction {
+    let mut transaction = Transaction {
         id: TransactionRef(record.id()),
         generator: TrackRef(record.generator().context("record has no source")?),
         begin: record.begin(),
@@ -396,6 +405,7 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
             .iter()
             .map(|event| TransactionEvent {
                 id: TransactionRef(event.id),
+                generator: None,
                 time: event.time,
                 name: reader.string(event.name).expect("event name").into(),
                 attributes: attributes(reader, &event.attributes),
@@ -406,14 +416,70 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
             .iter()
             .map(|stage| TransactionStage {
                 id: TransactionRef(stage.id),
+                generator: None,
                 name: reader.string(stage.name).expect("stage name").into(),
-                lane: reader.string(stage.lane).expect("stage lane").into(),
+                lane: match reader.string(stage.lane).expect("stage lane") {
+                    "" => DEFAULT_LANE,
+                    lane => lane,
+                }
+                .into(),
                 begin: stage.begin,
                 end: stage.end,
                 attributes: attributes(reader, &stage.attributes),
             })
             .collect(),
-    })
+    };
+    if !record.child_blocks().is_empty() {
+        let activity = reader.expand(record.id())?;
+        if !activity.missing_blocks.is_empty() {
+            transaction.attributes.push(TransactionAttribute {
+                key: "record.missing_child_blocks".into(),
+                value: AttributeValue::List(
+                    activity
+                        .missing_blocks
+                        .into_iter()
+                        .map(AttributeValue::U64)
+                        .collect(),
+                ),
+            });
+        }
+        for located in activity.located {
+            let child = self::transaction(reader, &located)?;
+            let node = reader.node(vtr::NodeId(child.generator.0))?;
+            let name = reader.string(node.name)?.to_owned();
+            let attributes = child
+                .attributes
+                .into_iter()
+                .map(|attr| (attr.key, attr.value))
+                .collect();
+            match located.kind() {
+                vtr::RecordKind::Event => transaction.events.push(TransactionEvent {
+                    id: child.id,
+                    generator: Some(child.generator),
+                    time: child.begin,
+                    name,
+                    attributes,
+                }),
+                vtr::RecordKind::Stage => transaction.stages.push(TransactionStage {
+                    id: child.id,
+                    generator: Some(child.generator),
+                    name,
+                    lane: DEFAULT_LANE.into(),
+                    begin: child.begin,
+                    end: Some(child.end),
+                    attributes,
+                }),
+                _ => anyhow::bail!("unexpected located child kind"),
+            }
+        }
+    }
+    transaction
+        .events
+        .sort_unstable_by_key(|event| (event.time, event.id.0));
+    transaction
+        .stages
+        .sort_unstable_by_key(|stage| (stage.begin, stage.id.0));
+    Ok(transaction)
 }
 
 fn relation(reader: &Reader, edge: vtr::Relation) -> Relation {

@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 pub use vtr::{SpanKind, Status};
 
+pub const DEFAULT_LANE: &str = "0";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TransactionRef(pub u64);
 
@@ -131,6 +133,8 @@ pub struct TransactionAttribute {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransactionEvent {
     pub id: TransactionRef,
+    /// Located source; embedded activity has no generator.
+    pub generator: Option<TrackRef>,
     pub time: u64,
     pub name: String,
     pub attributes: Attributes,
@@ -139,6 +143,8 @@ pub struct TransactionEvent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransactionStage {
     pub id: TransactionRef,
+    /// Located source; embedded activity has no generator.
+    pub generator: Option<TrackRef>,
     pub name: String,
     pub lane: String,
     pub begin: u64,

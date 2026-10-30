@@ -101,7 +101,7 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
         .unwrap();
         let key = writer.intern("payload.pc").unwrap();
         let name = writer.intern("fetch").unwrap();
-        let lane = writer.intern("0").unwrap();
+        let lane = writer.intern("").unwrap();
         let edge = writer.intern("depends").unwrap();
         let scale = i64::from(i32::MAX) + 1;
         let packet = Packet {
@@ -141,6 +141,8 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
             (owner.id(), child.id()),
             (owner.id(), child.id()),
             (embedded, child.id()),
+            (stage.id(), child.id()),
+            (event, child.id()),
             (0, owner.id()),
             (owner.id(), 0),
         ] {
@@ -226,11 +228,36 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
         );
         assert_eq!(row.events[0].id, TransactionRef(embedded));
         assert_eq!(row.stages[0].id, TransactionRef(embedded_stage));
+        assert_eq!(row.stages[0].lane, "0");
+        assert_eq!((row.events.len(), row.stages.len()), (2, 2));
+        assert_eq!(row.events[1].id, TransactionRef(event));
+        assert_eq!(row.events[1].generator, Some(TrackRef(events.id())));
+        assert_eq!(row.events[1].time, 22);
+        assert_eq!(row.stages[1].id, TransactionRef(stage.id()));
+        assert_eq!(row.stages[1].generator, Some(TrackRef(stages.id())));
+        assert_eq!(row.stages[1].lane, "0");
+        assert_eq!((row.stages[1].begin, row.stages[1].end), (11, Some(18)));
+        assert!(
+            row.stages[1]
+                .attributes
+                .contains(&("payload".into(), AttributeValue::U64(42)))
+        );
+        assert!(
+            row.events[1]
+                .attributes
+                .contains(&("payload".into(), AttributeValue::Text("issue".into())))
+        );
+        for id in [stage.id(), event] {
+            assert_eq!(
+                owner_data.transaction(TransactionRef(id)).unwrap().id,
+                row.id
+            );
+        }
         assert_eq!(
             owner_data.transaction(TransactionRef(embedded)).unwrap().id,
             row.id
         );
-        assert_eq!(owner_data.relations_of(row.id).count(), 5);
+        assert_eq!(owner_data.relations_of(row.id).count(), 7);
         let unknown = owner_data
             .transaction(TransactionRef(unknown.id()))
             .unwrap();
@@ -314,6 +341,99 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
                     .any(|attr| attr.key == field && attr.value == expected)
             );
         }
+    }
+}
+
+#[test]
+fn mixed_activity_keeps_occurrences_and_filters_shared_blocks_by_owner() {
+    for mode in [ExecutionMode::Inline, ExecutionMode::Threaded] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mixed.vtr");
+        let mut writer = Writer::create_with(
+            &path,
+            WriterOptions {
+                mode,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let core = writer.scope("core0", None).unwrap();
+        let owners = writer
+            .transactions::<()>(
+                SourceOptions::new("instructions", Some(core)),
+                "INSTRUCTION",
+            )
+            .unwrap();
+        let stages = writer
+            .stages::<()>(SourceOptions::new("execute", Some(core)))
+            .unwrap();
+        let events = writer
+            .events::<()>(SourceOptions::new("retired", Some(core)))
+            .unwrap();
+        let name = writer.intern("decode").unwrap();
+        let lane = writer.intern("pipeline").unwrap();
+        let owner = writer.begin_at(owners, 10, &(), None).unwrap();
+        let other = writer.begin_at(owners, 10, &(), None).unwrap();
+        let embedded_stage = writer
+            .embedded_stage(owner.owner(), 12, name, lane, None, vec![])
+            .unwrap();
+        let embedded_event = writer
+            .embedded_event(owner.owner(), 14, name, vec![])
+            .unwrap();
+        let visit = writer
+            .begin_stage_at(stages, owner.owner(), 5, &())
+            .unwrap();
+        writer.end_stage_at(visit, 25).unwrap();
+        let unrelated = writer.event_at(events, other.owner(), 14, &()).unwrap();
+        let first = writer.event_at(events, owner.owner(), 14, &()).unwrap();
+        let repeated = writer.event_at(events, owner.owner(), 14, &()).unwrap();
+        writer.end_at(owner, 15, Status::Ok).unwrap();
+        writer.end_at(other, 15, Status::Ok).unwrap();
+        writer.seal().unwrap();
+
+        let reader = vtr::Reader::open(&path).unwrap();
+        let raw = reader.lookup(owner.id()).unwrap().unwrap();
+        let other_raw = reader.lookup(other.id()).unwrap().unwrap();
+        assert_eq!(raw.child_blocks(), other_raw.child_blocks());
+        assert_eq!(raw.child_blocks().len(), 1);
+        let session = OpenSpec::Path(path).open().unwrap();
+        let loaded = session.load_track(TrackRef(owners.id())).unwrap();
+        let row = loaded.generators[0]
+            .transaction(TransactionRef(owner.id()))
+            .unwrap();
+        assert_eq!((row.begin, row.end), (10, 15));
+        assert_eq!(
+            row.stages
+                .iter()
+                .map(|stage| stage.id.0)
+                .collect::<Vec<_>>(),
+            [visit.id(), embedded_stage]
+        );
+        assert_eq!(row.stages[0].lane, "0");
+        assert_eq!((row.stages[0].begin, row.stages[0].end), (5, Some(25)));
+        assert_eq!(row.stages[1].lane, "pipeline");
+        assert_eq!(row.stages[1].end, None);
+        assert_eq!(
+            row.events
+                .iter()
+                .map(|event| event.id.0)
+                .collect::<Vec<_>>(),
+            [embedded_event, first, repeated]
+        );
+        assert_eq!(
+            loaded.generators[0]
+                .transaction(TransactionRef(other.id()))
+                .unwrap()
+                .events[0]
+                .id
+                .0,
+            unrelated
+        );
+        assert!(
+            loaded.generators[0]
+                .transaction(TransactionRef(unrelated))
+                .is_some_and(|tx| tx.id.0 == other.id())
+        );
     }
 }
 

@@ -22,6 +22,7 @@ fn prepare(distinct_lanes: bool) {
         stages: (0..COUNT)
             .map(|i| TransactionStage {
                 id: TransactionRef(i as u64 + 2),
+                generator: None,
                 name: if distinct_lanes {
                     "stage".into()
                 } else {

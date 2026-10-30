@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::color::Color;
 use crate::data::loaded_tracks::{LoadedGenerator, StageCensus};
 use crate::theme::Theme;
+use volna_trace::data::transactions::DEFAULT_LANE;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StageStyle {
@@ -19,8 +20,6 @@ pub enum StageSwatch {
     Step { rank: usize, of: usize },
     Fallback,
 }
-
-pub const DEFAULT_LANE: &str = "0";
 
 #[derive(Clone, Debug)]
 pub struct StagePalette {
@@ -161,6 +160,7 @@ mod tests {
                     .enumerate()
                     .map(|(k, (name, lane))| TransactionStage {
                         id: TransactionRef(((i as u64 + 1) << 32) | k as u64),
+                        generator: None,
                         name: (*name).into(),
                         lane: (*lane).into(),
                         begin: i as u64 + k as u64,

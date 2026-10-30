@@ -2807,7 +2807,7 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
         .pipeline(id)
         .expect("a PIPELINE stream opens a pipeline panel");
     assert_eq!(p.clock(&app.doc).unwrap().path, "TOP.tb.clk");
-    assert_eq!(p.palette().primary_lane(), "");
+    assert_eq!(p.palette().primary_lane(), "0");
     assert_eq!(p.palette().names(), ["F", "D", "Q", "X", "C", "R"]);
     let Rows::Ready(set) = p.rows(&app.doc) else {
         panic!("loaded")

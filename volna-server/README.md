@@ -57,7 +57,7 @@ Files must remain unchanged throughout a session. Live recordings are unsupporte
 
 ## Framing and object limits
 
-Protocol **10** is independent of the VTR file-format version. Peers reject other
+Protocol **11** is independent of the VTR file-format version. Peers reject other
 protocol versions; there is no negotiation. Each packet has a 12-byte header:
 
 | Field | Encoding |

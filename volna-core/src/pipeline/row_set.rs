@@ -196,6 +196,7 @@ mod tests {
                             events: vec![],
                             stages: vec![TransactionStage {
                                 id: TransactionRef(((g as u64 + 1) << 48) | ((row + 1) << 16)),
+                                generator: None,
                                 name: "stage".into(),
                                 lane: "0".into(),
                                 begin: row * 3 + 10,

@@ -92,9 +92,16 @@ by VTR’s tracker. VTR rejects attributes that duplicate payload field names.
 Other fields retain their namespaces.
 
 Enum numbers cover signed and unsigned 64-bit values without narrowing. Fixed
-scales and packed-vector widths retain their 64-bit ranges. Embedded events
-and stages keep their record IDs; lookup and relation navigation resolve those
-IDs to their owning row. Relation IDs preserve stored order and duplicate edges
+scales and packed-vector widths retain their 64-bit ranges. Owner tracks combine
+embedded detail with located EVENT/STAGE records reached through `child_blocks`.
+Events and stages retain their IDs and are ordered by time, then ID. Located
+activity retains its source generator, typed payload and attributes. Located
+stages and embedded stages with empty lane names use the default lane `"0"`;
+explicit embedded lane names are preserved. Located records also remain available
+on their source tracks. Within an owner track, activity IDs resolve to the owning
+row; relation endpoints retain their source-track locations. Missing child block
+numbers are exposed as `record.missing_child_blocks` on incomplete recordings.
+Relation IDs preserve stored order and duplicate edges
 across tracks. Endpoints outside the recording or missing from an incomplete
 trace retain their IDs and have no generator location.
 
@@ -133,7 +140,7 @@ and generations identify completions without entering the wire protocol.
 `RemoteClient`, rather than their blocking local query methods.
 
 The [server guide](../volna-server/README.md) describes process hosting and
-protocol version 10. Local and remote objects have the same data contract;
+protocol version 11. Local and remote objects have the same data contract;
 transport carries runtime facts. Viewport state, search, value translation,
 transaction layout, VDB design semantics, and annotations belong to consumers.
 

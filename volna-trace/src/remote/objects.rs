@@ -227,12 +227,22 @@ impl TrackPayload {
                     .chain(tx.events.iter().map(|event| event.id))
                     .chain(tx.stages.iter().map(|stage| stage.id))
                 {
+                    checkpoint().await;
                     anyhow::ensure!(
-                        transactions.insert(id, generator.generator()).is_none(),
+                        transactions
+                            .insert(id, generator.record_generator(id).unwrap())
+                            .is_none(),
                         "duplicate record across generators"
                     );
                 }
             }
+        }
+        for source in transactions.values() {
+            checkpoint().await;
+            anyhow::ensure!(
+                catalog_generators.contains(source),
+                "unknown activity generator"
+            );
         }
         let endpoint = |id: TransactionRef, owner: Option<TrackRef>| -> anyhow::Result<()> {
             let Some(owner) = owner else {
@@ -246,7 +256,7 @@ impl TrackPayload {
                 catalog_generators.contains(&owner),
                 "unknown endpoint generator"
             );
-            if expected.contains(&owner) {
+            if expected.contains(&owner) || transactions.contains_key(&id) {
                 anyhow::ensure!(
                     transactions.get(&id) == Some(&owner),
                     "missing or misplaced endpoint in complete track"

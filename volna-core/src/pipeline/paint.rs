@@ -326,8 +326,7 @@ pub fn paint(
                     let mut outgoing = Vec::new();
                     for edge in generator.relations_of(selection.id) {
                         let forward = generator.transaction_ordinal(edge.relation.from)
-                            == generator.transaction_ordinal(selection.id)
-                            && edge.from_generator == Some(selection.track.item);
+                            == generator.transaction_ordinal(selection.id);
                         let (other, other_generator) = if forward {
                             (edge.relation.to, edge.to_generator)
                         } else {

@@ -153,6 +153,7 @@ fn recorded_names_are_admitted_before_projection() {
     let mut tx = record();
     tx.stages.push(TransactionStage {
         id: TransactionRef(2),
+        generator: None,
         name: "s".repeat(140_000),
         lane: "l".repeat(140_000),
         begin: 0,
@@ -161,6 +162,7 @@ fn recorded_names_are_admitted_before_projection() {
     });
     tx.events.push(TransactionEvent {
         id: TransactionRef(3),
+        generator: None,
         name: "e".repeat(140_000),
         time: 1,
         attributes: vec![],
@@ -199,6 +201,7 @@ fn item_limit_also_bounds_lifeline_and_ticks() {
     for i in 0..10_000 {
         tx.stages.push(TransactionStage {
             id: TransactionRef(2 + 2 * i),
+            generator: None,
             name: "s".into(),
             lane: "0".into(),
             begin: 0,
@@ -207,6 +210,7 @@ fn item_limit_also_bounds_lifeline_and_ticks() {
         });
         tx.events.push(TransactionEvent {
             id: TransactionRef(3 + 2 * i),
+            generator: None,
             name: "e".into(),
             time: i,
             attributes: vec![],
@@ -225,6 +229,7 @@ fn nested_collection_storage_is_admitted() {
     tx.stages = (0..1000)
         .map(|i| TransactionStage {
             id: TransactionRef(i + 2),
+            generator: None,
             name: String::new(),
             lane: "0".into(),
             begin: 0,

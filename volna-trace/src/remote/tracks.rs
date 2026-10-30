@@ -169,9 +169,12 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
             })
             .await?,
         events: r
-            .vector(24, || async {
+            .vector(25, || async {
+                // Detail IDs also occupy row indexes and endpoint-validation workspace.
+                r.charge(256)?;
                 Ok(TransactionEvent {
                     id: TransactionRef(r.u64().await?),
+                    generator: optional_track(r).await?,
                     time: r.u64().await?,
                     name: r.string().await?,
                     attributes: attributes(r, 0).await?,
@@ -179,9 +182,11 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
             })
             .await?,
         stages: r
-            .vector(33, || async {
+            .vector(34, || async {
+                r.charge(256)?;
                 Ok(TransactionStage {
                     id: TransactionRef(r.u64().await?),
+                    generator: optional_track(r).await?,
                     name: r.string().await?,
                     lane: r.string().await?,
                     begin: r.u64().await?,
@@ -221,12 +226,14 @@ mod tests {
                     .collect(),
                 events: vec![TransactionEvent {
                     id: TransactionRef(1000 + id * 2),
+                    generator: (id % 2 == 0).then_some(TrackRef(2)),
                     time: id,
                     name: "event".into(),
                     attributes: vec![("bytes".into(), AttributeValue::Bytes(vec![0, 255]))],
                 }],
                 stages: vec![TransactionStage {
                     id: TransactionRef(1001 + id * 2),
+                    generator: (id % 2 == 0).then_some(TrackRef(2)),
                     name: "stage".into(),
                     lane: "raw lane".into(),
                     begin: id,
@@ -262,11 +269,11 @@ mod tests {
                 relations: (0..2)
                     .map(|id| LoadedRelation {
                         id,
-                        from_generator: Some(TrackRef(1)),
+                        from_generator: Some(TrackRef(2)),
                         to_generator: Some(TrackRef(3)),
                         relation: Relation {
                             kind: "parallel".into(),
-                            from: TransactionRef(0),
+                            from: TransactionRef(1001),
                             to: TransactionRef(100),
                             attributes: vec![("real".into(), AttributeValue::F64(f64::NAN))],
                         },
@@ -370,6 +377,34 @@ mod tests {
                         .unwrap(),
                     Ok(TrackStep::Yield) => {}
                     Ok(TrackStep::Decoded(_)) => panic!("accepted invalid track"),
+                }
+            }
+            drop(decoder);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+
+    #[test]
+    fn activity_sources_and_relation_locations_are_validated() {
+        let mut unknown = sample();
+        unknown.generators[0].transactions[0].events[0].generator = Some(TrackRef(99));
+        let mut misplaced = sample();
+        misplaced.generators[0].relations[0].from_generator = Some(TrackRef(1));
+        for payload in [unknown, misplaced] {
+            let bytes = bincode::serialize(&payload).unwrap();
+            let budget = MemoryBudget::new(8 * 1024 * 1024);
+            let mut decoder =
+                TrackDecoder::new(bytes.len() as u64, bytes.len() as u64, &budget, session())
+                    .unwrap();
+            let mut chunks = bytes.chunks(DATA_BYTES);
+            loop {
+                match decoder.step() {
+                    Err(_) => break,
+                    Ok(TrackStep::NeedInput) => {
+                        decoder.feed(chunks.next().unwrap().to_vec()).unwrap();
+                    }
+                    Ok(TrackStep::Yield) => {}
+                    Ok(TrackStep::Decoded(_)) => panic!("accepted misplaced activity"),
                 }
             }
             drop(decoder);

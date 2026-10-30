@@ -562,6 +562,7 @@ mod tests {
                 .enumerate()
                 .map(|(i, &(begin, end))| TransactionStage {
                     id: TransactionRef(((id + 1) << 32) | i as u64),
+                    generator: None,
                     name: "stage".into(),
                     lane: (i % 2).to_string(),
                     begin,

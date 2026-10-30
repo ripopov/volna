@@ -835,9 +835,7 @@ fn related(
         })
     };
     let outgoing = |e: &volna_trace::data::loaded_tracks::LoadedRelation| {
-        e.from_generator == Some(track.item)
-            && generator.transaction_ordinal(e.relation.from)
-                == generator.transaction_ordinal(tx.id)
+        generator.transaction_ordinal(e.relation.from) == generator.transaction_ordinal(tx.id)
     };
     let edge_count = generator.relations_of(tx.id).count();
     let edges = budget.ordered(

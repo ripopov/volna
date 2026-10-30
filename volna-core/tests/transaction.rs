@@ -137,6 +137,125 @@ fn show(app: &mut App, pipeline: PanelId, track: TrackRef, id: u64) -> PanelId {
 }
 
 #[test]
+fn located_and_embedded_activity_share_the_instruction_view_and_relation_navigation() {
+    use vtr::{Recorder, SourceOptions};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("mixed-activity.vtr");
+    let mut writer = vtr::Writer::create(&path).unwrap();
+    let instructions = writer
+        .transactions::<()>(SourceOptions::new("instructions", None), "INSTRUCTION")
+        .unwrap();
+    let fetch = writer
+        .stages::<()>(SourceOptions::new("fetch", None))
+        .unwrap();
+    let stages = writer
+        .stages::<u32>(SourceOptions::new("execute", None))
+        .unwrap();
+    let events = writer
+        .events::<()>(SourceOptions::new("retired", None))
+        .unwrap();
+    let name = writer.intern("decode").unwrap();
+    let edge = writer.intern("causes").unwrap();
+    let owner = writer.begin_at(instructions, 10, &(), None).unwrap();
+    let fetched = writer
+        .begin_stage_at(fetch, owner.owner(), 10, &())
+        .unwrap();
+    writer.end_stage_at(fetched, 11).unwrap();
+    writer
+        .embedded_stage(owner.owner(), 11, name, 0, Some(12), vec![])
+        .unwrap();
+    writer
+        .embedded_event(owner.owner(), 12, name, vec![])
+        .unwrap();
+    let visit = writer
+        .begin_stage_at(stages, owner.owner(), 12, &42)
+        .unwrap();
+    writer.end_stage_at(visit, 14).unwrap();
+    writer.event_at(events, owner.owner(), 14, &()).unwrap();
+    let child = writer.begin_at(instructions, 20, &(), None).unwrap();
+    writer.end_at(child, 25, Status::Ok).unwrap();
+    writer.relate(edge, visit.id(), child.id(), vec![]).unwrap();
+    writer.end_at(owner, 15, Status::Ok).unwrap();
+    writer.close().unwrap();
+
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(path).open().unwrap());
+    let track = TrackRef(instructions.id());
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let pipeline = app.panels.focused_id();
+    pump(&mut app);
+    frame(&mut app, pipeline);
+    let panel = show(&mut app, pipeline, track, owner.id());
+    pump(&mut app);
+    let projection = view(&app, panel);
+    assert_eq!(projection.stages.total, 3);
+    assert_eq!(projection.events.total, 2);
+    assert_eq!(
+        projection
+            .stages
+            .rows
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+        ["fetch", "decode", "execute"]
+    );
+    assert_eq!(
+        projection
+            .events
+            .rows
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+        ["decode", "retired"]
+    );
+    assert_eq!(projection.lifeline.len(), 1);
+    assert!(projection.lifeline[0].primary);
+    assert_eq!(projection.lifeline[0].lane, "0");
+    assert_eq!(projection.lifeline[0].cells.len(), 3);
+    for stage in &projection.stages.rows {
+        assert!(stage.primary);
+        assert!(matches!(
+            stage.swatch,
+            volna_core::pipeline::palette::StageSwatch::Step { of: 3, .. }
+        ));
+    }
+    assert!(
+        projection
+            .stages
+            .rows
+            .windows(2)
+            .all(|stages| stages[0].swatch != stages[1].swatch)
+    );
+    assert_eq!(
+        projection
+            .event_ticks
+            .iter()
+            .map(|tick| tick.time)
+            .collect::<Vec<_>>(),
+        [12, 14]
+    );
+    let outgoing = projection
+        .related
+        .rows
+        .iter()
+        .find(|row| row.role == RefRole::Relation { outgoing: true })
+        .unwrap();
+    assert_eq!(outgoing.target.transaction, TransactionRef(child.id()));
+    frame(&mut app, pipeline);
+
+    let child_panel = show(&mut app, pipeline, track, child.id());
+    let child_view = view(&app, child_panel);
+    let incoming = child_view
+        .related
+        .rows
+        .iter()
+        .find(|row| row.role == RefRole::Relation { outgoing: false })
+        .unwrap();
+    assert_eq!(incoming.target.transaction, TransactionRef(visit.id()));
+    assert_eq!(incoming.target.generator, Some(TrackRef(stages.id())));
+}
+
+#[test]
 fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
     let (mut app, session, panel) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let instruction = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
