@@ -3,7 +3,10 @@
 pub(in crate::table) mod index;
 mod number;
 
-use super::{columns::TransactionColumn, sort::Source};
+use super::{
+    columns::{CellValue, TransactionColumn, attributes},
+    sort::Source,
+};
 use anyhow::{Context, Result, ensure};
 use number::{Expression, Number};
 use regex::{Regex, RegexBuilder};
@@ -158,42 +161,15 @@ impl Program {
             match (source, &rule.column) {
                 (Source::Generator(g, _), Column::Transaction(column)) => {
                     let tx = &g.transactions()[row as usize];
-                    match column {
-                        TransactionColumn::Id => predicate.integer(i128::from(tx.id.0)),
-                        TransactionColumn::Begin => predicate.integer(i128::from(tx.begin)),
-                        TransactionColumn::End | TransactionColumn::Duration => {
-                            if tx.status == vtr::Status::Open {
-                                predicate.missing()
-                            } else {
-                                predicate.integer(i128::from(
-                                    if *column == TransactionColumn::End {
-                                        tx.end
-                                    } else {
-                                        tx.end.saturating_sub(tx.begin)
-                                    },
-                                ))
-                            }
+                    match column.value(tx) {
+                        CellValue::Missing => predicate.missing(),
+                        CellValue::Number(value) | CellValue::Time(value) => {
+                            predicate.integer(i128::from(value))
                         }
-                        TransactionColumn::Status => {
-                            predicate.text(crate::data::text::status_name(tx.status))
-                        }
-                        TransactionColumn::Label | TransactionColumn::Attribute(_) => {
-                            let key = if let TransactionColumn::Attribute(key) = column {
-                                key
-                            } else {
-                                "vtr.label"
-                            };
-                            tx.attributes.iter().find(|a| a.key == key).map_or_else(
-                                || predicate.missing(),
-                                |a| predicate.attribute(&a.value, scratch),
-                            )
-                        }
-                        TransactionColumn::Attributes => {
-                            let mut attributes = tx
-                                .attributes
-                                .iter()
-                                .filter(|a| a.key != "vtr.label")
-                                .peekable();
+                        CellValue::Text(value) => predicate.text(value),
+                        CellValue::Attribute(value) => predicate.attribute(value, scratch),
+                        CellValue::Attributes(items) => {
+                            let mut attributes = attributes(items).peekable();
                             if attributes.peek().is_none() {
                                 predicate.missing()
                             } else if predicate.missing == Missing::Only {

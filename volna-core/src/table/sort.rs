@@ -1,10 +1,10 @@
 //! Typed row ordering over in-memory source ordinals, never formatted cells.
 
-use super::columns::TransactionColumn;
+use super::columns::{CellValue, TransactionColumn, attributes as column_attributes};
 use crate::data::loaded_tracks::LoadedGenerator;
 use std::cmp::Ordering;
 use std::sync::Arc;
-use volna_trace::data::transactions::{AttributeValue, TransactionAttribute};
+use volna_trace::data::transactions::AttributeValue;
 use volna_trace::data::{SignalHistory, value_view::ValueView};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,58 +39,7 @@ impl Source {
         let (order, missing) = match self {
             Self::Generator(g, column) => {
                 let (a, b) = (&g.transactions()[a as usize], &g.transactions()[b as usize]);
-                match column {
-                    TransactionColumn::Attribute(key) => {
-                        let a = a.attributes.iter().find(|a| &a.key == key);
-                        let b = b.attributes.iter().find(|a| &a.key == key);
-                        match (a, b) {
-                            (Some(a), Some(b)) => attributes(&a.value, &b.value),
-                            (a, b) => nullable((a.is_none(), b.is_none()), Ordering::Equal),
-                        }
-                    }
-                    TransactionColumn::Id => (a.id.0.cmp(&b.id.0), false),
-                    TransactionColumn::Begin => (a.begin.cmp(&b.begin), false),
-                    TransactionColumn::End | TransactionColumn::Duration => {
-                        let missing =
-                            (a.status == vtr::Status::Open, b.status == vtr::Status::Open);
-                        let order = if sort.column == 2 {
-                            a.end
-                                .saturating_sub(a.begin)
-                                .cmp(&b.end.saturating_sub(b.begin))
-                        } else {
-                            a.end.cmp(&b.end)
-                        };
-                        nullable(missing, order)
-                    }
-                    TransactionColumn::Status => (
-                        crate::data::text::status_name(a.status)
-                            .cmp(crate::data::text::status_name(b.status)),
-                        false,
-                    ),
-                    TransactionColumn::Label => {
-                        let label = |attributes: &Vec<TransactionAttribute>| {
-                            attributes.iter().position(|a| a.key == "vtr.label")
-                        };
-                        match (label(&a.attributes), label(&b.attributes)) {
-                            (Some(i), Some(j)) => {
-                                attributes(&a.attributes[i].value, &b.attributes[j].value)
-                            }
-                            (x, y) => nullable((x.is_none(), y.is_none()), Ordering::Equal),
-                        }
-                    }
-                    TransactionColumn::Attributes => (
-                        sequence(
-                            a.attributes.iter().filter(|a| a.key != "vtr.label"),
-                            b.attributes.iter().filter(|a| a.key != "vtr.label"),
-                            |a, b| {
-                                a.key
-                                    .cmp(&b.key)
-                                    .then_with(|| attributes(&a.value, &b.value).0)
-                            },
-                        ),
-                        false,
-                    ),
-                }
+                cells(column.value(a), column.value(b))
             }
             Self::Signals { histories, .. } => {
                 let (a, b) = (self.time(a), self.time(b));
@@ -115,6 +64,32 @@ impl Source {
             order
         })
         .then(a.cmp(&b))
+    }
+}
+
+fn cells(a: CellValue<'_>, b: CellValue<'_>) -> (Ordering, bool) {
+    match (a, b) {
+        (CellValue::Number(a), CellValue::Number(b)) | (CellValue::Time(a), CellValue::Time(b)) => {
+            (a.cmp(&b), false)
+        }
+        (CellValue::Text(a), CellValue::Text(b)) => (a.cmp(b), false),
+        (CellValue::Attribute(a), CellValue::Attribute(b)) => attributes(a, b),
+        (CellValue::Attributes(a), CellValue::Attributes(b)) => (
+            sequence(column_attributes(a), column_attributes(b), |a, b| {
+                a.key
+                    .cmp(&b.key)
+                    .then_with(|| attributes(&a.value, &b.value).0)
+            }),
+            false,
+        ),
+        (a @ CellValue::Missing, b) | (a, b @ CellValue::Missing) => nullable(
+            (
+                matches!(a, CellValue::Missing),
+                matches!(b, CellValue::Missing),
+            ),
+            Ordering::Equal,
+        ),
+        _ => unreachable!("values from the same transaction column"),
     }
 }
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use web_time::Instant;
 
-use super::columns::{ColumnSet, TransactionColumn, TransactionColumns};
+use super::columns::{CellValue, ColumnSet, TransactionColumn, TransactionColumns, attributes};
 use super::format::{self, FormatChoice, TableFormats};
 use super::layout::{
     CELL_PADDING, ColumnHeader, HEADER_HEIGHT, MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, ROW_HEIGHT,
@@ -2074,23 +2074,21 @@ impl TableModel {
                     .layout
                     .columns
                     .iter()
-                    .map(|column| PreparedCell {
-                        text: self.transaction_cell(
-                            tx,
-                            column.source_index,
-                            column.preview_bytes,
-                            None,
-                        ),
-                        changed: false,
-                        missing: match self.transaction_column(column.source_index) {
-                            Some(TransactionColumn::Attribute(key)) => {
-                                !tx.attributes.iter().any(|a| &a.key == key)
-                            }
-                            Some(TransactionColumn::Label) => {
-                                !tx.attributes.iter().any(|a| a.key == "vtr.label")
-                            }
-                            _ => false,
-                        },
+                    .map(|column| {
+                        let value = self
+                            .transaction_column(column.source_index)
+                            .expect("transaction column")
+                            .value(tx);
+                        PreparedCell {
+                            text: self.cell_value_text(
+                                value,
+                                column.source_index,
+                                column.preview_bytes,
+                                None,
+                            ),
+                            changed: false,
+                            missing: matches!(value, CellValue::Missing),
+                        }
                     })
                     .collect();
                 Some(PreparedRow {
@@ -2250,18 +2248,19 @@ impl TableModel {
                     }
                     append_exact(&mut text, part, COPY_BYTES)?;
                 }
-                append_exact(
-                    &mut text,
-                    &format!(
-                        "\t{}\t{}\t{}\t{}\t{}",
-                        self.attribute_text(&AttributeValue::U64(tx.id.0), 4, None, COPY_BYTES),
-                        tx.begin,
-                        tx.end,
-                        tx.end.saturating_sub(tx.begin),
-                        crate::data::text::status_name(tx.status)
-                    ),
-                    COPY_BYTES,
-                )?;
+                use TransactionColumn::{Begin, Duration, End, Id, Status};
+                for column in [Id, Begin, End, Duration, Status] {
+                    let index = TransactionColumn::ALL
+                        .iter()
+                        .position(|c| *c == column)
+                        .expect("built-in column");
+                    append_exact(&mut text, "\t", COPY_BYTES)?;
+                    append_exact(
+                        &mut text,
+                        &self.cell_value_text(column.value(tx), index, COPY_BYTES, None),
+                        COPY_BYTES,
+                    )?;
+                }
             }
             (Rows::Signals { histories, .. }, TableSource::Signals(signals)) => {
                 let time = self.row_time(ordinal).unwrap();
@@ -2313,38 +2312,29 @@ impl TableModel {
         let column = self
             .transaction_column(source_index)
             .expect("transaction column");
-        match column {
-            TransactionColumn::Attribute(key) => {
-                tx.attributes.iter().find(|a| &a.key == key).map_or_else(
-                    || "—".into(),
-                    |a| self.attribute_text(&a.value, source_index, requested, limit),
-                )
+        self.cell_value_text(column.value(tx), source_index, limit, requested)
+    }
+
+    fn cell_value_text(
+        &self,
+        value: CellValue<'_>,
+        source_index: usize,
+        limit: usize,
+        requested: Option<&dyn Translator>,
+    ) -> String {
+        match value {
+            CellValue::Missing => "—".into(),
+            CellValue::Time(value) => value.to_string(),
+            CellValue::Number(value) => {
+                self.attribute_text(&AttributeValue::U64(value), source_index, requested, limit)
             }
-            TransactionColumn::Label => tx
-                .attributes
-                .iter()
-                .find(|a| a.key == "vtr.label")
-                .map_or_else(
-                    || "—".into(),
-                    |a| self.attribute_text(&a.value, source_index, requested, limit),
-                ),
-            TransactionColumn::Begin => tx.begin.to_string(),
-            TransactionColumn::Duration => tx.end.saturating_sub(tx.begin).to_string(),
-            TransactionColumn::End => tx.end.to_string(),
-            TransactionColumn::Id => self.attribute_text(
-                &AttributeValue::U64(tx.id.0),
-                source_index,
-                requested,
-                limit,
-            ),
-            TransactionColumn::Status => crate::data::text::status_name(tx.status).into(),
-            TransactionColumn::Attributes => {
+            CellValue::Text(value) => value.into(),
+            CellValue::Attribute(value) => {
+                self.attribute_text(value, source_index, requested, limit)
+            }
+            CellValue::Attributes(items) => {
                 let mut text = String::new();
-                let mut attributes = tx
-                    .attributes
-                    .iter()
-                    .filter(|a| a.key != "vtr.label")
-                    .peekable();
+                let mut attributes = attributes(items).peekable();
                 if attributes.peek().is_none() {
                     return "—".into();
                 }
@@ -3392,6 +3382,78 @@ mod tests {
         assert_eq!(model.applied_sort(), None);
         assert_eq!(model.selected_ordinal(), Some(1));
         assert_eq!(model.row_time(0), Some(big + 1));
+    }
+
+    #[test]
+    fn open_transaction_times_agree_across_display_copy_sort_and_filter() {
+        use super::super::filter::{ColumnFilter, FilterMode, Missing};
+        let mut open = transaction(1, 10, "open");
+        open.status = Status::Open;
+        open.end = u64::MAX;
+        let mut model = generator_model(vec![open, transaction(2, 20, "done")]);
+        model.edit_columns(|c| c.toggle_transaction(TransactionColumn::End));
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 1600.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
+        for column in [2, 3] {
+            let cell = model
+                .layout
+                .columns
+                .iter()
+                .position(|c| c.source_index == column)
+                .unwrap();
+            assert_eq!(model.window.rows[0].cells[cell].text, "—");
+            assert!(model.window.rows[0].cells[cell].missing);
+            assert!(!model.window.rows[1].cells[cell].missing);
+            assert_eq!(
+                model.cell_text(1, column, 64).unwrap(),
+                if column == 2 { "8" } else { "28" }
+            );
+        }
+        model.selected = Some(RowIdentity::Transaction(TransactionRef(1)));
+        assert_eq!(
+            model
+                .copy_tsv()
+                .unwrap()
+                .lines()
+                .nth(1)
+                .unwrap()
+                .split('\t')
+                .collect::<Vec<_>>(),
+            ["request", "0x1", "10", "—", "—", "open"]
+        );
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        for column in [2, 3] {
+            for _ in 0..2 {
+                assert!(model.cycle_sort(column));
+                finish_sort(&mut model);
+                assert_eq!(model.row_time(1), Some(10));
+            }
+            set_filter(&mut model, column, FilterMode::Expression, "> 0");
+            finish_sort(&mut model);
+            assert_eq!(model.len(), 1);
+            assert_eq!(model.row_time(0), Some(20));
+            model.command(
+                &mut doc,
+                panel,
+                TableCommand::SetFilter {
+                    source_index: column,
+                    filter: Some(ColumnFilter {
+                        missing: Missing::Only,
+                        ..Default::default()
+                    }),
+                },
+                Instant::now(),
+            );
+            finish_sort(&mut model);
+            assert_eq!(model.len(), 1);
+            assert_eq!(model.row_time(0), Some(10));
+            model.command(&mut doc, panel, TableCommand::ClearFilters, Instant::now());
+            finish_sort(&mut model);
+        }
     }
 
     #[test]

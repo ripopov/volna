@@ -1,5 +1,23 @@
 //! Column identity, visibility and order for transaction and signal tables.
 
+use volna_trace::data::transactions::{AttributeValue, Transaction, TransactionAttribute};
+
+#[derive(Clone, Copy)]
+pub(super) enum CellValue<'a> {
+    Missing,
+    Number(u64),
+    Time(u64),
+    Text(&'a str),
+    Attribute(&'a AttributeValue),
+    Attributes(&'a [TransactionAttribute]),
+}
+
+pub(super) fn attributes(
+    items: &[TransactionAttribute],
+) -> impl Iterator<Item = &TransactionAttribute> + Clone {
+    items.iter().filter(|a| a.key != "vtr.label")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransactionColumn {
@@ -30,6 +48,29 @@ impl TransactionColumn {
         Self::Status,
         Self::Attributes,
     ];
+
+    pub(super) fn value<'a>(&self, tx: &'a Transaction) -> CellValue<'a> {
+        match self {
+            Self::Label | Self::Attribute(_) => {
+                let key = if let Self::Attribute(key) = self {
+                    key
+                } else {
+                    "vtr.label"
+                };
+                tx.attributes
+                    .iter()
+                    .find(|a| a.key == key)
+                    .map_or(CellValue::Missing, |a| CellValue::Attribute(&a.value))
+            }
+            Self::Begin => CellValue::Time(tx.begin),
+            Self::End | Self::Duration if tx.status == vtr::Status::Open => CellValue::Missing,
+            Self::End => CellValue::Time(tx.end),
+            Self::Duration => CellValue::Time(tx.end.saturating_sub(tx.begin)),
+            Self::Id => CellValue::Number(tx.id.0),
+            Self::Status => CellValue::Text(crate::data::text::status_name(tx.status)),
+            Self::Attributes => CellValue::Attributes(&tx.attributes),
+        }
+    }
 
     pub(super) fn canonical(self) -> Self {
         match self {
