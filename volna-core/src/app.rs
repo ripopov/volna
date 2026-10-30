@@ -36,7 +36,7 @@ use crate::wave::timeline::format_time;
 use volna_trace::data::Member;
 use volna_trace::data::transactions::{TrackRef, TransactionRef};
 use volna_trace::data::{ScopeId, SignalRef, VarId};
-use volna_trace::session::{OpenSpec, Session};
+use volna_trace::session::{LoadRequest as TraceRequest, OpenSpec, Session};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -707,16 +707,16 @@ impl App {
         }
         if requests
             .iter()
-            .any(|r| matches!(r, LoadRequest::Signals { .. }))
+            .any(|r| matches!(r, LoadRequest::Trace(TraceRequest::Signals { .. })))
         {
             let wanted = self.signal_demand();
             requests.retain_mut(|request| {
-                if let LoadRequest::Signals {
-                    trace,
+                if let LoadRequest::Trace(TraceRequest::Signals {
+                    tag: trace,
                     generation,
                     signals,
                     ..
-                } = request
+                }) = request
                 {
                     self.doc
                         .retain_queued_signals(*trace, *generation, signals, &wanted)

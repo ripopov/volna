@@ -1,5 +1,6 @@
 //! Headless viewer tests: feed commands, assert on model state and on the display list.
 
+use volna_trace::session::LoadRequest as TraceRequest;
 use vtr::Recorder;
 
 use std::sync::Arc;
@@ -163,7 +164,7 @@ fn batch_loads_coalesce_and_stale_batches_preserve_new_pending() {
     let mut requests = app.take_requests();
     assert_eq!(requests.len(), 1);
     let request = requests.pop().unwrap();
-    let LoadRequest::Signals { signals, .. } = &request else {
+    let LoadRequest::Trace(TraceRequest::Signals { signals, .. }) = &request else {
         panic!("expected batch")
     };
     assert_eq!(signals.len(), 2);
@@ -372,7 +373,7 @@ fn retry_menu_reloads_aliases_without_adding_rows_or_changing_ready_data() {
     let mut requests = app.take_requests();
     assert_eq!(requests.len(), 1);
     let request = requests.pop().unwrap();
-    let LoadRequest::Signals { signals, .. } = &request else {
+    let LoadRequest::Trace(TraceRequest::Signals { signals, .. }) = &request else {
         panic!("signal request")
     };
     assert_eq!(signals, &[source.hierarchy.var(0).signal]);

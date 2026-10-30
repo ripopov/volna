@@ -3,40 +3,23 @@
 use crate::trace::{TraceId, Traced};
 use std::sync::Arc;
 use volna_trace::data::SignalRef;
-use volna_trace::session::{OpenSpec, Session, SignalLoads};
+use volna_trace::remote::memory::MemoryBudget;
+use volna_trace::session::{
+    LoadRequest as TraceRequest, LoadResult as TraceResult, OpenSpec, Session, SignalLoads,
+};
 
 pub enum LoadRequest {
+    Trace(TraceRequest<TraceId>),
     Projection {
         request: u64,
         source: Arc<dyn volna_trace::data::SignalHistory>,
         slice: crate::data::projection::BitSlice,
         budget: volna_trace::remote::memory::MemoryBudget,
     },
-    BuildActivity {
-        trace: TraceId,
-        generation: u64,
-        session: Arc<dyn Session>,
-        options: vtr::activity::BuildOptions,
-        cache_dir: Option<std::path::PathBuf>,
-        budget: volna_trace::remote::memory::MemoryBudget,
-    },
-    Track {
-        trace: TraceId,
-        generation: u64,
-        request_id: u64,
-        session: Arc<dyn Session>,
-        track: volna_trace::data::transactions::TrackRef,
-    },
     Open {
         trace: TraceId,
         generation: u64,
         spec: OpenSpec,
-    },
-    Signals {
-        trace: TraceId,
-        generation: u64,
-        session: Arc<dyn Session>,
-        signals: Vec<SignalRef>,
     },
     Sizes {
         trace: TraceId,
@@ -88,9 +71,7 @@ impl LoadRequest {
     #[must_use]
     pub fn remote_id(&self) -> Option<u64> {
         match self {
-            Self::Signals { session, .. }
-            | Self::Track { session, .. }
-            | Self::BuildActivity { session, .. } => session.remote_id(),
+            Self::Trace(request) => request.remote_id(),
             Self::Projection { .. }
             | Self::Open { .. }
             | Self::Sizes { .. }
@@ -106,15 +87,9 @@ impl LoadRequest {
     #[must_use]
     pub fn fail(self, error: anyhow::Error) -> LoadResult {
         match self {
+            Self::Trace(request) => LoadResult::from_trace(request.fail(error), None),
             Self::Projection { request, .. } => LoadResult::Projection {
                 request,
-                result: Err(error),
-            },
-            Self::BuildActivity {
-                trace, generation, ..
-            } => LoadResult::ActivityBuilt {
-                trace,
-                generation,
                 result: Err(error),
             },
             Self::Open {
@@ -122,32 +97,6 @@ impl LoadRequest {
             } => LoadResult::Opened {
                 trace,
                 generation,
-                result: Err(error),
-            },
-            Self::Signals {
-                trace,
-                generation,
-                signals,
-                ..
-            } => LoadResult::Signals {
-                trace,
-                generation,
-                results: signals
-                    .into_iter()
-                    .map(|id| (id, Err(anyhow::anyhow!("{error:#}"))))
-                    .collect(),
-            },
-            Self::Track {
-                trace,
-                generation,
-                request_id,
-                track,
-                ..
-            } => LoadResult::Track {
-                trace,
-                generation,
-                request_id,
-                track,
                 result: Err(error),
             },
             Self::Sizes {
@@ -220,6 +169,13 @@ impl LoadRequest {
 
     pub fn perform(self) -> LoadResult {
         match self {
+            Self::Trace(request) => {
+                let budget = match &request {
+                    TraceRequest::Track { session, .. } => session.memory_budget(),
+                    _ => None,
+                };
+                LoadResult::from_trace(request.perform(), budget.as_ref())
+            }
             Self::Projection {
                 request,
                 source,
@@ -230,36 +186,6 @@ impl LoadRequest {
                 result: crate::data::projection::ProjectedHistory::build(source, slice, &budget)
                     .map(|h| Arc::new(h) as Arc<dyn volna_trace::data::SignalHistory>),
             },
-            Self::BuildActivity {
-                trace,
-                generation,
-                session,
-                options,
-                cache_dir,
-                budget,
-            } => LoadResult::ActivityBuilt {
-                trace,
-                generation,
-                result: session.build_activity(&options, &budget, cache_dir.as_deref()),
-            },
-            LoadRequest::Track {
-                trace,
-                generation,
-                request_id,
-                session,
-                track,
-            } => LoadResult::Track {
-                trace,
-                generation,
-                request_id,
-                track,
-                result: session.load_track(track).and_then(|raw| {
-                    crate::data::loaded_tracks::LoadedTrack::prepare(
-                        raw,
-                        session.memory_budget().as_ref(),
-                    )
-                }),
-            },
             LoadRequest::Open {
                 trace,
                 generation,
@@ -268,16 +194,6 @@ impl LoadRequest {
                 trace,
                 generation,
                 result: spec.open(),
-            },
-            LoadRequest::Signals {
-                trace,
-                generation,
-                session,
-                signals,
-            } => LoadResult::Signals {
-                trace,
-                generation,
-                results: session.load_signals(&signals),
             },
             LoadRequest::Sizes {
                 trace,
@@ -439,4 +355,52 @@ pub enum LoadResult {
         key: crate::wave::stack::Key,
         result: anyhow::Result<Arc<crate::wave::stack::TotalSummary>>,
     },
+}
+
+impl LoadResult {
+    pub(crate) fn from_trace(raw: TraceResult<TraceId>, budget: Option<&MemoryBudget>) -> Self {
+        match raw {
+            TraceResult::Opened {
+                tag,
+                generation,
+                result,
+            } => LoadResult::Opened {
+                trace: tag,
+                generation,
+                result,
+            },
+            TraceResult::Signals {
+                tag,
+                generation,
+                results,
+            } => LoadResult::Signals {
+                trace: tag,
+                generation,
+                results,
+            },
+            TraceResult::Track {
+                tag,
+                generation,
+                request_id,
+                track,
+                result,
+            } => LoadResult::Track {
+                trace: tag,
+                generation,
+                request_id,
+                track,
+                result: result
+                    .and_then(|raw| crate::data::loaded_tracks::LoadedTrack::prepare(raw, budget)),
+            },
+            TraceResult::ActivityBuilt {
+                tag,
+                generation,
+                result,
+            } => LoadResult::ActivityBuilt {
+                trace: tag,
+                generation,
+                result,
+            },
+        }
+    }
 }

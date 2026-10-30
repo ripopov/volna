@@ -39,55 +39,14 @@ impl RemoteClient {
         self.inner.session()
     }
     pub fn submit(&mut self, job: LoadRequest) -> Result<(), LoadResult> {
-        let raw = match job {
-            LoadRequest::Signals {
-                trace,
-                generation,
-                session,
-                signals,
-            } => RawRequest::Signals {
-                tag: trace,
-                generation,
-                session,
-                signals,
-            },
-            LoadRequest::Track {
-                trace,
-                generation,
-                request_id,
-                session,
-                track,
-            } => RawRequest::Track {
-                tag: trace,
-                generation,
-                request_id,
-                session,
-                track,
-            },
-            LoadRequest::BuildActivity {
-                trace,
-                generation,
-                session,
-                options,
-                cache_dir,
-                budget,
-            } => RawRequest::BuildActivity {
-                tag: trace,
-                generation,
-                session,
-                options,
-                cache_dir,
-                budget,
-            },
-            job => {
-                return Err(job.fail(anyhow::anyhow!(
-                    "viewer analysis is not remote loading work"
-                )));
-            }
+        let LoadRequest::Trace(raw) = job else {
+            return Err(job.fail(anyhow::anyhow!(
+                "viewer analysis is not remote loading work"
+            )));
         };
         match self.inner.submit(raw) {
             Ok(()) => Ok(()),
-            Err(result) => Err(Self::result(result)),
+            Err(result) => Err(LoadResult::from_trace(result, None)),
         }
     }
     pub fn take_command(&mut self) -> anyhow::Result<Option<Packet>> {
@@ -193,7 +152,7 @@ impl RemoteClient {
                 RawStep::Yield => ClientStep::Yield,
                 RawStep::Complete { ack, result } => ClientStep::Complete {
                     ack,
-                    result: Self::result(result),
+                    result: LoadResult::from_trace(result, None),
                 },
             }
         }
@@ -213,57 +172,12 @@ impl RemoteClient {
             }
         }
     }
-    fn result(raw: RawResult<TraceId>) -> LoadResult {
-        match raw {
-            RawResult::Opened {
-                tag,
-                generation,
-                result,
-            } => LoadResult::Opened {
-                trace: tag,
-                generation,
-                result,
-            },
-            RawResult::Signals {
-                tag,
-                generation,
-                results,
-            } => LoadResult::Signals {
-                trace: tag,
-                generation,
-                results,
-            },
-            RawResult::Track {
-                tag,
-                generation,
-                request_id,
-                track,
-                result,
-            } => LoadResult::Track {
-                trace: tag,
-                generation,
-                request_id,
-                track,
-                result: result
-                    .and_then(|raw| crate::data::loaded_tracks::LoadedTrack::prepare(raw, None)),
-            },
-            RawResult::ActivityBuilt {
-                tag,
-                generation,
-                result,
-            } => LoadResult::ActivityBuilt {
-                trace: tag,
-                generation,
-                result,
-            },
-        }
-    }
     pub fn disconnect(&mut self, message: &str) -> Vec<LoadResult> {
         let mut results: Vec<_> = self
             .inner
             .disconnect(message)
             .into_iter()
-            .map(Self::result)
+            .map(|result| LoadResult::from_trace(result, None))
             .collect();
         if let Some(p) = self.preparing.take() {
             results.push(LoadResult::Track {
@@ -509,7 +423,7 @@ mod tests {
         app.set_session(result.unwrap());
         let enqueue = |app: &mut App, client: &mut RemoteClient| {
             let request = app.take_requests().pop().unwrap();
-            let LoadRequest::Track { request_id, .. } = &request else {
+            let LoadRequest::Trace(RawRequest::Track { request_id, .. }) = &request else {
                 panic!("track")
             };
             let request_id = *request_id;

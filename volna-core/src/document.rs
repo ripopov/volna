@@ -16,7 +16,7 @@ use crate::wave::timeline::TimeBase;
 use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{TrackRef, TransactionRef};
 use volna_trace::data::{Hierarchy, SignalRef};
-use volna_trace::session::{OpenSpec, Session};
+use volna_trace::session::{LoadRequest as TraceRequest, OpenSpec, Session};
 
 #[derive(Clone)]
 pub enum TraceState {
@@ -462,7 +462,7 @@ impl Document {
         let stale: HashSet<TraceId> = self.traces.ids().collect();
         self.pending.retain(|s| !stale.contains(&s.trace));
         self.requests
-            .retain(|r| !matches!(r, LoadRequest::Signals { .. }));
+            .retain(|r| !matches!(r, LoadRequest::Trace(TraceRequest::Signals { .. })));
         self.summaries.clear();
         self.group_summaries.clear();
         self.stack_totals.clear();
@@ -502,13 +502,13 @@ impl Document {
             let load = self.tracks.get_mut(&track).expect("listed above");
             load.request_id = request_id;
             load.state = TrackLoadState::Loading;
-            self.requests.push(LoadRequest::Track {
-                trace,
+            self.requests.push(LoadRequest::Trace(TraceRequest::Track {
+                tag: trace,
                 generation,
                 request_id,
                 session: Arc::clone(&session),
                 track: track.item,
-            });
+            }));
         }
     }
 
@@ -523,12 +523,14 @@ impl Document {
         self.pending.retain(|s| s.trace != trace);
         self.requests.retain(|r| match r {
             LoadRequest::Open { trace: t, .. }
-            | LoadRequest::BuildActivity { trace: t, .. }
             | LoadRequest::Sizes { trace: t, .. }
             | LoadRequest::ActivityCounter { trace: t, .. }
             | LoadRequest::Activity { trace: t, .. }
-            | LoadRequest::Signals { trace: t, .. }
-            | LoadRequest::Track { trace: t, .. } => *t != trace,
+            | LoadRequest::Trace(
+                TraceRequest::BuildActivity { tag: t, .. }
+                | TraceRequest::Signals { tag: t, .. }
+                | TraceRequest::Track { tag: t, .. },
+            ) => *t != trace,
             LoadRequest::Summary { signal, .. } => signal.trace != trace,
             LoadRequest::Projection { .. }
             | LoadRequest::GroupSummary { .. }
@@ -802,13 +804,13 @@ impl Document {
                 generators,
             })
         } else {
-            self.requests.push(LoadRequest::Track {
-                trace: track.trace,
+            self.requests.push(LoadRequest::Trace(TraceRequest::Track {
+                tag: track.trace,
                 generation,
                 request_id,
                 session,
                 track: track.item,
-            });
+            }));
             TrackLoadState::Loading
         };
         self.tracks.insert(
@@ -872,7 +874,7 @@ impl Document {
         if load.consumers == 0 {
             self.tracks.remove(&track);
             self.requests.retain(|r| {
-                !matches!(r, LoadRequest::Track { trace, track: id, .. }
+                !matches!(r, LoadRequest::Trace(TraceRequest::Track { tag: trace, track: id, .. })
                     if *trace == track.trace && *id == track.item)
             });
         }
@@ -898,13 +900,13 @@ impl Document {
         let load = self.tracks.get_mut(&track).expect("checked above");
         load.request_id = request_id;
         load.state = TrackLoadState::Loading;
-        self.requests.push(LoadRequest::Track {
-            trace: track.trace,
+        self.requests.push(LoadRequest::Trace(TraceRequest::Track {
+            tag: track.trace,
             generation,
             request_id,
             session,
             track: track.item,
-        });
+        }));
         true
     }
 
@@ -919,22 +921,23 @@ impl Document {
         if !self.pending.insert(signal) {
             return false;
         }
-        if let Some(LoadRequest::Signals {
-            trace,
+        if let Some(LoadRequest::Trace(TraceRequest::Signals {
+            tag: trace,
             signals,
             generation: g,
             ..
-        }) = self.requests.last_mut()
+        })) = self.requests.last_mut()
             && (*trace, *g) == (signal.trace, generation)
         {
             signals.push(signal.item);
         } else {
-            self.requests.push(LoadRequest::Signals {
-                trace: signal.trace,
-                generation,
-                session,
-                signals: vec![signal.item],
-            });
+            self.requests
+                .push(LoadRequest::Trace(TraceRequest::Signals {
+                    tag: signal.trace,
+                    generation,
+                    session,
+                    signals: vec![signal.item],
+                }));
         }
         true
     }

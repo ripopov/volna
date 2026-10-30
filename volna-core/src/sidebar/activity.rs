@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::data::{ActivityCounter, ActivityCounts};
 use volna_trace::data::{ScopeId, SignalRef};
 use volna_trace::remote::memory::MemoryBudget;
+use volna_trace::session::LoadRequest as TraceRequest;
 
 use crate::session::{LoadRequest, LoadResult};
 use crate::settings::ActivityIndexPolicy;
@@ -168,8 +169,8 @@ impl ActivityModel {
                             control: Arc::clone(&control),
                             cancelling: false,
                         };
-                        requests.push(LoadRequest::BuildActivity {
-                            trace,
+                        requests.push(LoadRequest::Trace(TraceRequest::BuildActivity {
+                            tag: trace,
                             generation: a.generation,
                             session: Arc::clone(session),
                             options: vtr::activity::BuildOptions {
@@ -184,7 +185,7 @@ impl ActivityModel {
                             },
                             cache_dir: vtr::activity::default_cache_dir(),
                             budget: budget.clone(),
-                        });
+                        }));
                     }
                 }
                 continue;

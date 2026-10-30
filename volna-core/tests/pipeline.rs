@@ -1,6 +1,7 @@
 //! Headless pipeline panel tests: open a track from the sidebar, load it, paint it,
 //! navigate it, save and restore it.
 
+use volna_trace::session::LoadRequest as TraceRequest;
 use vtr::Recorder;
 
 use std::fmt::Write as _;
@@ -433,7 +434,8 @@ fn initial_pipeline_zoom_waits_for_its_declared_clock() {
         .track;
     let mut clock_request = None;
     for request in app.take_requests() {
-        if matches!(&request, LoadRequest::Track { track, .. } if *track == clock) {
+        if matches!(&request, LoadRequest::Trace(TraceRequest::Track { track, .. }) if *track == clock)
+        {
             clock_request = Some(request);
         } else {
             app.deliver(request.perform());
@@ -798,7 +800,7 @@ fn enter_on_a_generator_opens_a_panel_loads_the_track_once_and_paints_cells() {
     let tracks: Vec<_> = requests
         .iter()
         .filter_map(|r| match r {
-            LoadRequest::Track { track, .. } => Some(*track),
+            LoadRequest::Trace(TraceRequest::Track { track, .. }) => Some(*track),
             _ => None,
         })
         .collect();
@@ -2660,7 +2662,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     assert!(
         requests
             .iter()
-            .any(|r| matches!(r, LoadRequest::Track { .. }))
+            .any(|r| matches!(r, LoadRequest::Trace(TraceRequest::Track { .. })))
     );
     for r in requests {
         restored.deliver(r.perform());
@@ -2705,7 +2707,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
         !other
             .take_requests()
             .iter()
-            .any(|r| matches!(r, LoadRequest::Track { .. })),
+            .any(|r| matches!(r, LoadRequest::Trace(TraceRequest::Track { .. }))),
         "an unresolved track loads nothing"
     );
     frame(&mut other, pipeline, &theme);
@@ -2746,7 +2748,7 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
     let request = app
         .take_requests()
         .into_iter()
-        .find(|r| matches!(r, LoadRequest::Track { .. }))
+        .find(|r| matches!(r, LoadRequest::Trace(TraceRequest::Track { .. })))
         .unwrap();
     app.handle(Command::Action(Action::SplitRight));
     let split = app.panels.focused_id();
@@ -2785,12 +2787,12 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
     failing.set_session(session.clone());
     failing.handle(Command::OpenPipeline { track: a(track) });
     let request = failing.take_requests().pop().unwrap();
-    let LoadRequest::Track {
+    let LoadRequest::Trace(TraceRequest::Track {
         generation,
         request_id,
         track,
         ..
-    } = request
+    }) = request
     else {
         panic!()
     };
@@ -2825,7 +2827,7 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
     ));
     assert!(matches!(
         failing.take_requests().as_slice(),
-        [LoadRequest::Track { .. }]
+        [LoadRequest::Trace(TraceRequest::Track { .. })]
     ));
 }
 

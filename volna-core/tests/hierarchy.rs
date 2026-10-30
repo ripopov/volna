@@ -9,6 +9,7 @@ use volna_core::testing::{a, hierarchy_document};
 use volna_trace::data::source::Lookup;
 use volna_trace::data::{Hierarchy, Member};
 use volna_trace::remote::objects::Metadata;
+use volna_trace::session::LoadRequest as TraceRequest;
 use volna_trace::session::{OpenSpec, Session};
 
 fn fixture() -> Arc<dyn Session> {
@@ -190,8 +191,8 @@ fn search_order_activation_and_keyboard() {
     assert!(matches!(
         requests.as_slice(),
         [
-            volna_core::session::LoadRequest::Track { .. },
-            volna_core::session::LoadRequest::Track { .. }
+            volna_core::session::LoadRequest::Trace(TraceRequest::Track { .. }),
+            volna_core::session::LoadRequest::Trace(TraceRequest::Track { .. })
         ]
     ));
     assert_eq!(app.panels.len(), 4);

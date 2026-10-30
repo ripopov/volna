@@ -1,6 +1,7 @@
 use volna_core::testing::a as in_a;
 use volna_core::trace::TraceId;
 use volna_trace::data::transactions::*;
+use volna_trace::session::LoadRequest as TraceRequest;
 use volna_trace::session::OpenSpec;
 use vtr::Recorder;
 
@@ -48,13 +49,13 @@ fn remote_metadata_queues_complete_tracks() {
     document.retain_track(in_a(track)).unwrap();
     let mut requests = document.take_requests();
     assert_eq!(requests.len(), 1);
-    let LoadRequest::Track {
+    let LoadRequest::Trace(TraceRequest::Track {
         generation,
         request_id,
         session,
         track,
         ..
-    } = requests.pop().unwrap()
+    }) = requests.pop().unwrap()
     else {
         panic!("expected track load");
     };
@@ -149,11 +150,11 @@ fn document_track_loads_coalesce_share_release_retry_and_reject_stale_results() 
     doc.retain_track(in_a(track)).unwrap();
     let current = doc.take_requests().pop().unwrap();
     assert!(doc.deliver(old.perform()).is_none());
-    let LoadRequest::Track {
+    let LoadRequest::Trace(TraceRequest::Track {
         generation,
         request_id,
         ..
-    } = &current
+    }) = &current
     else {
         panic!("track");
     };
@@ -191,4 +192,82 @@ fn document_track_loads_coalesce_share_release_retry_and_reject_stale_results() 
     doc.set_session(session);
     assert!(doc.deliver(stale.perform()).is_none());
     assert!(doc.track(in_a(track)).is_none());
+}
+
+#[test]
+fn composed_local_track_load_prepares_with_the_session_budget_and_releases_on_refusal() {
+    use std::sync::Arc;
+    use volna_core::session::{LoadRequest, LoadResult};
+    use volna_trace::remote::memory::MemoryBudget;
+    use volna_trace::session::account_local_session;
+
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let generator = writer
+        .transactions::<()>(vtr::SourceOptions::new("requests", None), "tlm")
+        .unwrap();
+    for end in [10, 20, 30] {
+        let tx = writer.begin_at(generator, 0, &(), None).unwrap();
+        writer.end_at(tx, end, Status::Ok).unwrap();
+    }
+    writer.close().unwrap();
+    let budget = MemoryBudget::new(16 << 20);
+    let session = account_local_session(
+        OpenSpec::Path(file.path().into()).open().unwrap(),
+        budget.clone(),
+    )
+    .unwrap();
+    let track = TrackRef(generator.id());
+    let baseline = budget.used();
+    let raw = session.load_track(track).unwrap();
+    let raw_bytes = budget.used() - baseline;
+    assert!(raw_bytes > 0);
+    drop(raw);
+    assert_eq!(budget.used(), baseline);
+
+    for admitted in [false, true] {
+        budget.set_limit(if admitted {
+            16 << 20
+        } else {
+            baseline + raw_bytes
+        });
+        let request = LoadRequest::Trace(TraceRequest::Track {
+            tag: TraceId::A,
+            generation: 3,
+            request_id: 7,
+            session: session.clone(),
+            track,
+        });
+        assert_eq!(request.remote_id(), None);
+        let LoadResult::Track {
+            trace: TraceId::A,
+            generation: 3,
+            request_id: 7,
+            track: actual,
+            result,
+        } = request.perform()
+        else {
+            panic!("track completion");
+        };
+        assert_eq!(actual, track);
+        if admitted {
+            let loaded = result.unwrap();
+            assert_eq!(loaded.generators[0].transactions().len(), 3);
+            assert_eq!(loaded.generators[0].depth(), 3);
+            assert_eq!(loaded.generators[0].median_lifetime(), 20);
+            assert!(budget.used() > baseline + raw_bytes);
+            let owner = Arc::downgrade(&loaded.generators[0]);
+            drop(loaded);
+            assert!(owner.upgrade().is_none());
+        } else {
+            assert!(
+                result
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("memory budget exceeded")
+            );
+        }
+        assert_eq!(budget.used(), baseline);
+    }
 }

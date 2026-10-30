@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use volna_core::testing::a_all;
 use volna_core::trace::TraceId;
+use volna_trace::session::LoadRequest as TraceRequest;
 
 use volna_core::app::{App, Command, PanelLayout};
 use volna_core::geometry::Rect;
@@ -352,7 +353,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     let panel = app.panels.focused_id();
     assert!(matches!(
         app.take_requests().as_slice(),
-        [LoadRequest::Track { .. }]
+        [LoadRequest::Trace(TraceRequest::Track { .. })]
     ));
     app.handle(Command::Table(panel, TableCommand::Cancel));
     app.handle(Command::Table(panel, TableCommand::Retry));

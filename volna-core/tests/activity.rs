@@ -1,5 +1,6 @@
 //! Signal and scope activity tests covering exact counts, sidecar builds, and stale results.
 
+use volna_trace::session::LoadRequest as TraceRequest;
 use vtr::Recorder;
 
 #[cfg(unix)]
@@ -588,7 +589,7 @@ fn build_offer_obeys_policy_and_not_now() {
     let requests = app.take_requests();
     assert!(matches!(
         requests.as_slice(),
-        [LoadRequest::BuildActivity { .. }]
+        [LoadRequest::Trace(TraceRequest::BuildActivity { .. })]
     ));
     for r in requests {
         app.deliver(r.perform());
@@ -620,7 +621,7 @@ fn missing_indexes_build_automatically_once_and_install_exact_meters() {
     assert_eq!(
         requests
             .iter()
-            .filter(|r| matches!(r, LoadRequest::BuildActivity { .. }))
+            .filter(|r| matches!(r, LoadRequest::Trace(TraceRequest::BuildActivity { .. })))
             .count(),
         1
     );
@@ -681,7 +682,7 @@ fn explicit_build_installs_meters_and_reports_block_progress() {
     let resident = session.resident_bytes();
     app.handle(Command::BuildActivity(TraceId::A));
     let r = app.take_requests().pop().unwrap();
-    let LoadRequest::BuildActivity { options, .. } = &r else {
+    let LoadRequest::Trace(TraceRequest::BuildActivity { options, .. }) = &r else {
         panic!("expected build")
     };
     let control = Arc::clone(options.control.as_ref().unwrap());
@@ -755,7 +756,7 @@ fn a_failed_build_can_be_retried_explicitly() {
     let (mut app, session) = open_asking(&path);
     app.handle(Command::BuildActivity(TraceId::A));
     let mut r = app.take_requests().pop().unwrap();
-    let LoadRequest::BuildActivity { options, .. } = &mut r else {
+    let LoadRequest::Trace(TraceRequest::BuildActivity { options, .. }) = &mut r else {
         panic!("expected build")
     };
     options.memory = 1;
@@ -792,7 +793,7 @@ fn viewer_builds_use_the_cache_for_a_read_only_directory() {
     let (mut app, session) = open_asking(&path);
     app.handle(volna_core::app::Command::BuildActivity(TraceId::A));
     let mut r = app.take_requests().pop().unwrap();
-    let LoadRequest::BuildActivity { cache_dir, .. } = &mut r else {
+    let LoadRequest::Trace(TraceRequest::BuildActivity { cache_dir, .. }) = &mut r else {
         panic!("expected build")
     };
     *cache_dir = Some(cache.clone());
@@ -1305,8 +1306,8 @@ fn a_client_disconnect_during_an_authorized_server_build_keeps_the_cache() {
         release: std::sync::Mutex::new(gate),
     }));
     rig.client
-        .submit(LoadRequest::BuildActivity {
-            trace: TraceId::A,
+        .submit(LoadRequest::Trace(TraceRequest::BuildActivity {
+            tag: TraceId::A,
             generation: 1,
             session: remote.clone(),
             options: vtr::activity::BuildOptions {
@@ -1315,7 +1316,7 @@ fn a_client_disconnect_during_an_authorized_server_build_keeps_the_cache() {
             },
             budget: rig.budget.clone(),
             cache_dir: None,
-        })
+        }))
         .unwrap_or_else(|_| panic!("build rejected"));
     let command = rig.client.take_command().unwrap().unwrap();
     write_packet(&mut rig.wire, &command).unwrap();
