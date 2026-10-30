@@ -450,6 +450,7 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
             let attributes = child
                 .attributes
                 .into_iter()
+                .filter(|attr| attr.key != "record.kind")
                 .map(|attr| (attr.key, attr.value))
                 .collect();
             match located.kind() {

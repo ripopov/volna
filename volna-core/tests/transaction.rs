@@ -208,6 +208,18 @@ fn located_and_embedded_activity_share_the_instruction_view_and_relation_navigat
             .collect::<Vec<_>>(),
         ["decode", "retired"]
     );
+    assert!(projection.stages.rows[0].attributes.is_empty());
+    assert_eq!(projection.stages.rows[0].attributes_total, 0);
+    assert_eq!(projection.stages.rows[2].attributes_total, 1);
+    assert_eq!(projection.stages.rows[2].attributes[0].key, "payload");
+    assert_eq!(projection.stages.rows[2].attributes[0].value, "42");
+    assert!(
+        projection
+            .events
+            .rows
+            .iter()
+            .all(|event| event.attributes.is_empty() && event.attributes_total == 0)
+    );
     assert_eq!(projection.lifeline.len(), 1);
     assert!(projection.lifeline[0].primary);
     assert_eq!(projection.lifeline[0].lane, "0");

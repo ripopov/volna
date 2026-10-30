@@ -237,15 +237,13 @@ fn typed_payloads_located_records_embedded_edges_and_outside_endpoints_survive_l
         assert_eq!(row.stages[1].generator, Some(TrackRef(stages.id())));
         assert_eq!(row.stages[1].lane, "0");
         assert_eq!((row.stages[1].begin, row.stages[1].end), (11, Some(18)));
-        assert!(
-            row.stages[1]
-                .attributes
-                .contains(&("payload".into(), AttributeValue::U64(42)))
+        assert_eq!(
+            row.stages[1].attributes,
+            vec![("payload".into(), AttributeValue::U64(42))]
         );
-        assert!(
-            row.events[1]
-                .attributes
-                .contains(&("payload".into(), AttributeValue::Text("issue".into())))
+        assert_eq!(
+            row.events[1].attributes,
+            vec![("payload".into(), AttributeValue::Text("issue".into()))]
         );
         for id in [stage.id(), event] {
             assert_eq!(
