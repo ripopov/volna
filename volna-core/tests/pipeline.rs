@@ -170,6 +170,11 @@ const BOUNDS: Rect = Rect::from_xywh(0.0, 0.0, 1200.0, 600.0);
 fn frame(app: &mut App, id: PanelId, theme: &Theme) {
     app.layout_panel(id, BOUNDS, theme, 1.0, &mut MonoMeasure)
         .unwrap();
+    if let Some(command) = app.panel_measurement(id) {
+        app.handle(command);
+        app.layout_panel(id, BOUNDS, theme, 1.0, &mut MonoMeasure)
+            .unwrap();
+    }
     app.render_panel(id, theme, &mut MonoMeasure);
 }
 
@@ -192,11 +197,263 @@ fn opened(n: u64) -> (App, Arc<dyn Session>, PanelId, PanelId) {
     app.handle(Command::VariablesKey(Key::Enter, Modifiers::default()));
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, waves);
+    app.handle(Command::Action(Action::GoToStart));
     app.handle(Command::PipelineActivity(
         pipeline,
         volna_core::pipeline::ActivityCommand::Toggle,
     ));
     (app, session, waves, pipeline)
+}
+
+fn delayed_pipeline_fixture(duration: u64, stages: bool) -> Arc<dyn Session> {
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut options = vtr::WriterOptions::default();
+    options.metadata.timescale = -9;
+    let mut writer = vtr::Writer::create_with(file.path(), options).unwrap();
+    let track = writer
+        .transactions::<()>(vtr::SourceOptions::new("pipeline", None), "PIPELINE")
+        .unwrap();
+    let late = writer.begin_at(track, 1_000_000, &(), None).unwrap();
+    writer.end_at(late, 1_000_010, vtr::Status::Ok).unwrap();
+    let first = writer.begin_at(track, 1000, &(), None).unwrap();
+    if stages {
+        let lane = writer.intern("0").unwrap();
+        for (name, begin, end) in [("F", 1000, 1010), ("D", 1010, 1020), ("X", 1020, 1040)] {
+            let name = writer.intern(name).unwrap();
+            writer
+                .embedded_stage(first.owner(), begin, name, lane, Some(end), vec![])
+                .unwrap();
+        }
+    }
+    writer
+        .end_at(first, 1000 + duration, vtr::Status::Ok)
+        .unwrap();
+    writer.advance_time(1_000_010).unwrap();
+    writer.close().unwrap();
+    OpenSpec::Path(file.path().into()).open().unwrap()
+}
+
+#[test]
+fn new_pipelines_start_at_the_first_record_with_readable_cells_once() {
+    use volna_core::app::SettingsCommand;
+    use volna_core::wave::viewport::Viewport;
+    for linked in [false, true] {
+        for zoom in [1.0, 2.0] {
+            for (duration, stages, unit) in [(40, true, 10.0), (40, false, 40.0), (0, false, 1.0)] {
+                let session = delayed_pipeline_fixture(duration, stages);
+                let track = session.tracks()[0].id;
+                let mut app = App::new();
+                app.set_session(session);
+                app.handle(Command::Settings(SettingsCommand::Set {
+                    id: "panels.linkByDefault".into(),
+                    value: linked.into(),
+                }));
+                app.doc.shared.cursor = Some(500_000);
+                let shared = app.doc.shared.viewport.value;
+                app.handle(Command::OpenPipeline { track: a(track) });
+                let panel = app.panels.focused_id();
+                let theme = Theme::one_dark().zoomed(zoom);
+                frame(&mut app, panel, &theme);
+                assert_eq!(app.doc.shared.viewport.value, shared);
+                pump(&mut app);
+                frame(&mut app, panel, &theme);
+                let p = app.panels.pipeline(panel).unwrap();
+                let view = p.nav.viewport(&app.doc);
+                let width = f64::from(p.last_layout().cells.width());
+                assert!((view.px_per_unit(width) * unit - 18.0 * f64::from(zoom)).abs() < 1e-6);
+                assert!((view.x_of_tick(1000, width) - 32.0 * f64::from(zoom)).abs() < 1e-6);
+                assert_eq!(p.rows.value.top, 0.0);
+                assert!(p.last_layout().row_range.contains(&0));
+                assert_eq!(app.doc.shared.cursor, Some(500_000));
+                if !linked {
+                    assert_eq!(app.doc.shared.viewport.value, shared);
+                }
+                let later = Viewport {
+                    start: 5000.0,
+                    end: 7000.0,
+                };
+                app.panels
+                    .pipeline_mut(panel)
+                    .unwrap()
+                    .nav
+                    .viewport_state_mut(&mut app.doc)
+                    .set(later);
+                frame(&mut app, panel, &theme);
+                app.handle(Command::OpenPipeline { track: a(track) });
+                frame(&mut app, panel, &theme);
+                assert_eq!(
+                    app.panels.pipeline(panel).unwrap().nav.viewport(&app.doc),
+                    later
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn navigating_while_a_pipeline_loads_preserves_the_chosen_view() {
+    use volna_core::wave::viewport::Viewport;
+    let session = delayed_pipeline_fixture(40, true);
+    let track = session.tracks()[0].id;
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let panel = app.panels.focused_id();
+    let chosen = Viewport {
+        start: 100_000.0,
+        end: 200_000.0,
+    };
+    app.handle(Command::Action(Action::PanRight));
+    app.doc.shared.viewport.set(chosen);
+    frame(&mut app, panel, &Theme::one_dark());
+    pump(&mut app);
+    frame(&mut app, panel, &Theme::one_dark());
+    assert_eq!(app.doc.shared.viewport.value, chosen);
+}
+
+#[test]
+fn pipeline_layout_only_measures_and_commands_apply_the_opening_view() {
+    let session = delayed_pipeline_fixture(40, true);
+    let track = session.tracks()[0].id;
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let panel = app.panels.focused_id();
+    pump(&mut app);
+    let before = app.doc.shared.viewport.value;
+    app.layout_panel(panel, BOUNDS, &Theme::one_dark(), 1.0, &mut MonoMeasure)
+        .unwrap();
+    assert_eq!(app.doc.shared.viewport.value, before);
+    let command = app.panel_measurement(panel).expect("unreported geometry");
+    app.handle(command);
+    assert_ne!(app.doc.shared.viewport.value, before);
+    assert!(app.panel_measurement(panel).is_none());
+}
+
+#[test]
+fn explicit_navigation_cancels_opening_even_when_the_view_does_not_change() {
+    let session = delayed_pipeline_fixture(40, true);
+    let track = session.tracks()[0].id;
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let panel = app.panels.focused_id();
+    let before = app.doc.shared.viewport.value;
+    app.handle(Command::Action(Action::GoToStart));
+    assert_eq!(app.doc.shared.viewport.target(), before);
+    pump(&mut app);
+    frame(&mut app, panel, &Theme::one_dark());
+    assert_eq!(app.doc.shared.viewport.target(), before);
+    assert!(app.panel_measurement(panel).is_none());
+}
+
+#[test]
+fn navigation_in_a_linked_panel_cancels_pending_shared_opening() {
+    use volna_core::app::SettingsCommand;
+    for linked in [false, true] {
+        let session = delayed_pipeline_fixture(40, true);
+        let track = session.tracks()[0].id;
+        let mut app = App::new();
+        app.set_session(session);
+        app.handle(Command::Settings(SettingsCommand::Set {
+            id: "panels.linkByDefault".into(),
+            value: linked.into(),
+        }));
+        app.handle(Command::OpenPipeline { track: a(track) });
+        let pipeline = app.panels.focused_id();
+        app.handle(Command::Action(Action::NewPanel));
+        assert!(app.panels.focused().kind.waves().is_some());
+        app.handle(Command::Action(Action::ZoomIn));
+        app.tick(Instant::now() + Duration::from_secs(1));
+        let chosen = app.doc.shared.viewport.value;
+        pump(&mut app);
+        frame(&mut app, pipeline, &Theme::one_dark());
+        let view = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .nav
+            .viewport(&app.doc);
+        if linked {
+            assert_eq!(view, chosen);
+        } else {
+            assert_ne!(view, chosen);
+            assert_eq!(app.doc.shared.viewport.value, chosen);
+        }
+    }
+}
+
+#[test]
+fn pending_opening_uses_current_time_units_after_trace_refinement() {
+    for measured in [false, true] {
+        let session = delayed_pipeline_fixture(40, true);
+        let track = session.tracks()[0].id;
+        let mut app = App::new();
+        app.set_session(session);
+        app.handle(Command::OpenPipeline { track: a(track) });
+        let panel = app.panels.focused_id();
+        let theme = Theme::one_dark();
+        if measured {
+            frame(&mut app, panel, &theme);
+        }
+        let fine = OpenSpec::Path(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../volna-trace/tests/fixtures/values.vtr"),
+        )
+        .open()
+        .unwrap();
+        app.add_session(fine).unwrap();
+        assert_eq!(app.doc.time_base().timescale, -12);
+        pump(&mut app);
+        frame(&mut app, panel, &theme);
+        let p = app.panels.pipeline(panel).unwrap();
+        let width = f64::from(p.last_layout().cells.width());
+        let view = p.nav.viewport(&app.doc);
+        assert!((view.x_of_tick(1_000_000, width) - 32.0).abs() < 1e-6);
+        assert!((view.px_per_unit(width) * 10_000.0 - 18.0).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn initial_pipeline_zoom_waits_for_its_declared_clock() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../volna/examples/pipeline_demo.vtr");
+    let session = OpenSpec::Path(path).open().unwrap();
+    let track = generator_track(session.as_ref(), &["TOP", "tb", "core"]);
+    let mut app = App::new();
+    app.set_session(session.clone());
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let panel = app.panels.focused_id();
+    let clock = app
+        .panels
+        .pipeline(panel)
+        .unwrap()
+        .clock(&app.doc)
+        .unwrap()
+        .track;
+    let mut clock_request = None;
+    for request in app.take_requests() {
+        if matches!(&request, LoadRequest::Track { track, .. } if *track == clock) {
+            clock_request = Some(request);
+        } else {
+            app.deliver(request.perform());
+        }
+    }
+    let before = app.doc.shared.viewport.value;
+    let theme = Theme::one_dark();
+    frame(&mut app, panel, &theme);
+    assert_eq!(app.doc.shared.viewport.value, before);
+    app.deliver(clock_request.expect("clock load").perform());
+    frame(&mut app, panel, &theme);
+    let p = app.panels.pipeline(panel).unwrap();
+    let period = 10.0 * 10f64.powi(-9 - i32::from(session.info().timescale));
+    let cycle_px = p
+        .nav
+        .viewport(&app.doc)
+        .px_per_unit(f64::from(p.last_layout().cells.width()))
+        * period;
+    assert!((cycle_px - 18.0).abs() < 1e-6);
+    assert_eq!(p.rows.value.top, 0.0);
 }
 
 #[test]
@@ -406,6 +663,7 @@ fn activity_keeps_long_overlaps_and_points_in_one_generator() {
     app.set_session(session);
     app.handle(Command::OpenPipeline { track: a(track) });
     let panel = app.panels.focused_id();
+    app.handle(Command::Action(Action::GoToStart));
     app.doc.shared.viewport.set(Viewport {
         start: 500.0,
         end: 500.5,
@@ -628,6 +886,7 @@ fn enter_on_a_generator_opens_a_panel_loads_the_track_once_and_paints_cells() {
     );
 
     let generator = Member::Generator(0);
+    pump(&mut app);
     app.handle(Command::ActivateMembers(a_all(vec![generator])));
     assert_eq!(app.panels.len(), 3);
     assert!(app.take_requests().is_empty());
@@ -1891,6 +2150,11 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
     let (mut app, _, waves, pipeline) = opened(60);
     pump(&mut app);
     let theme = Theme::one_dark();
+    frame(&mut app, pipeline, &theme);
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport::fit(app.doc.limits()));
     let (lo, hi) = app.doc.limits();
     let near = lo + (hi - lo) / 4;
     let far = lo + (hi - lo) * 3 / 4;

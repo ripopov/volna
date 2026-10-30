@@ -1,5 +1,6 @@
 //! `App`: the whole viewer with no toolkit attached.
 
+mod opening;
 mod traces;
 mod undo;
 
@@ -256,6 +257,7 @@ pub enum Command {
         panel: PanelId,
     },
     PipelineActivity(PanelId, crate::pipeline::ActivityCommand),
+    PipelineMeasured(PanelId, crate::pipeline::ViewportSize),
     SetSearchEverywhere(bool),
     SelectScope(TreeNode),
     ToggleScope(TreeNode),
@@ -817,6 +819,7 @@ impl App {
         match self.doc.deliver(result) {
             Some(Delivered::Summary | Delivered::Sizes) => self.changed(),
             Some(Delivered::Track) => {
+                self.initialize_pipelines();
                 for pipeline in self.panels.pipelines_mut() {
                     pipeline.refresh(&self.doc);
                 }
@@ -1107,6 +1110,7 @@ impl App {
         if matches!(command, Command::Action(_)) && self.marker_edit.take().is_some() {
             self.changed();
         }
+        self.cancel_pipeline_opening(&command);
         self.dispatch(command, now);
         for waves in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
             if let Some(notice) = waves.bus_notice.take() {
@@ -1204,6 +1208,12 @@ impl App {
             Command::OpenPipeline { track } => self.open_pipeline(track),
             Command::OpenTable { selected, clicked } => self.open_table(&selected, clicked),
             Command::OpenTableFromPanel { panel, row } => self.open_table_from_panel(panel, row),
+            Command::PipelineMeasured(panel, size) => {
+                if let Some(pipeline) = self.panels.pipeline_mut(panel) {
+                    pipeline.measure_viewport(size);
+                }
+                self.initialize_pipelines();
+            }
             Command::PipelineActivity(panel, command) => {
                 if let Some(pipeline) = self.panels.pipeline_mut(panel) {
                     pipeline.activity_command(&self.doc, command);
@@ -1860,12 +1870,13 @@ impl App {
             return;
         };
         let existing = self.panels.pipeline_for_track(track);
-        let model = PipelineModel::new(
+        let model = PipelineModel::open(
             TrackSource::Resolved {
                 track,
                 path: declaration.path.clone(),
             },
             self.settings.resolved().link_by_default(),
+            &self.doc,
         );
         let inspector = TransactionModel::new(
             self.table_memory_budget(),

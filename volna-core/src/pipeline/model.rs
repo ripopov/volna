@@ -26,7 +26,7 @@ use volna_trace::data::transactions::{
 pub const LABEL_ATTRIBUTE: &str = "vtr.label";
 const DRAG_THRESHOLD_PX: f32 = 3.0;
 const BOX_ZOOM_MIN_PX: f32 = 4.0;
-const START_MARGIN_PX: f64 = 32.0;
+pub(super) const START_MARGIN_PX: f64 = 32.0;
 pub const SCROLL_ROWS: f64 = 3.0;
 const ROW_HEIGHT_STEP: f64 = std::f64::consts::SQRT_2;
 
@@ -124,6 +124,7 @@ pub struct PipelineModel {
     pub pointer: Option<Point>,
     pub frames_painted: u64,
     attached: bool,
+    opening: Option<super::opening::OpeningView>,
     palette: StagePalette,
     layout: PipelineLayout,
 }
@@ -145,9 +146,70 @@ impl PipelineModel {
             pointer: None,
             frames_painted: 0,
             attached: false,
+            opening: None,
             palette: StagePalette::default(),
             layout: PipelineLayout::default(),
         }
+    }
+
+    pub(crate) fn open(track: TrackSource, link: Link, doc: &Document) -> Self {
+        let mut model = Self::new(track, link);
+        model.nav.reset(Some(doc.limits()));
+        model.opening = Some(super::opening::OpeningView::default());
+        model
+    }
+
+    pub(crate) fn opening_measurement(&self) -> Option<super::ViewportSize> {
+        let opening = self.opening.as_ref()?;
+        let size = super::ViewportSize {
+            width: f64::from(self.layout.cells.width()),
+            zoom: self.layout.zoom,
+        };
+        (size.is_valid() && opening.size != Some(size)).then_some(size)
+    }
+
+    pub(crate) fn measure_viewport(&mut self, size: super::ViewportSize) {
+        if size.is_valid()
+            && let Some(opening) = &mut self.opening
+        {
+            opening.size = Some(size);
+        }
+    }
+
+    pub(crate) fn cancel_opening(&mut self) {
+        self.opening = None;
+    }
+
+    pub(crate) fn initialize_view(&mut self, doc: &mut Document) -> bool {
+        let Some(size) = self.opening.as_ref().and_then(|opening| opening.size) else {
+            return false;
+        };
+        if self
+            .clock(doc)
+            .is_some_and(|clock| matches!(clock.state, crate::clock::ClockState::Loading))
+        {
+            return false;
+        }
+        let Rows::Ready(set) = self.rows(doc) else {
+            return false;
+        };
+        self.opening = None;
+        let Some((_, first)) = set.get(0) else {
+            return false;
+        };
+        let unit = self
+            .clock(doc)
+            .and_then(|clock| clock.timeline())
+            .map_or_else(
+                || super::opening::fallback_time_unit(first),
+                |_| self.cycle_units(doc, first.begin as f64),
+            );
+        let viewport = super::opening::viewport(first.begin, unit, size, doc.limits());
+        self.nav.viewport_state_mut(doc).set(viewport);
+        self.rows.set(RowView::default());
+        // Following the viewport center would immediately scroll past the first record.
+        self.suspend_follow();
+        true
     }
 
     #[must_use]
@@ -495,7 +557,8 @@ impl PipelineModel {
         {
             self.drag = None;
         }
-        let followed = if matches!(self.drag, Some(Drag::BoxZoom { .. })) {
+        let followed = if self.opening.is_some() || matches!(self.drag, Some(Drag::BoxZoom { .. }))
+        {
             None
         } else {
             self.follow_activity(doc)

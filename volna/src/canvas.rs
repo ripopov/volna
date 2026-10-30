@@ -600,6 +600,15 @@ impl Element for PanelCanvas {
                 Some(PanelLayout::Table(_)) | None => Vec::new(),
             }
         });
+        if let Some(command) = self.ws.read(cx).app.panel_measurement(self.panel) {
+            let owner = self.ws.downgrade();
+            let generation = self.generation;
+            cx.defer(move |cx| {
+                drop(owner.update(cx, |ws, cx| {
+                    ws.dispatch_if_current(generation, command, None, cx);
+                }));
+            });
+        }
         let regions = rects
             .into_iter()
             .map(|r| (r, window.insert_hitbox(gbounds(r), HitboxBehavior::Normal)))

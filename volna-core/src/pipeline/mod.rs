@@ -6,6 +6,8 @@ pub use activity::{Activity, ActivityCommand, FollowActivity};
 pub mod layout;
 pub mod model;
 pub(crate) mod occupancy;
+mod opening;
+pub use opening::ViewportSize;
 pub mod paint;
 pub mod palette;
 mod raster;

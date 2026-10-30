@@ -223,7 +223,12 @@ Explicit split and new-tab actions stay in the chosen panel's region.
 
 Opening a pipeline automatically reveals an unpinned transaction inspector,
 creating one in the right sidebar when needed. Keyboard focus stays in the
-pipeline. With no selected record the inspector shows its empty state; selecting
+pipeline. New pipeline panels start at the first transaction with a small leading
+margin and a readable cycle width matching the default row height. Tracks without
+a usable clock estimate the scale from the first transaction's stage durations
+or lifetime. Reusing a panel or restoring a workspace preserves its view;
+navigation during loading takes precedence over the automatic opening view.
+With no selected record the inspector shows its empty state; selecting
 a record fills it immediately. An existing inspector retains its placement,
 including in the center. If all inspectors are pinned, a separate unpinned
 inspector is opened.

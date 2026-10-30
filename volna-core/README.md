@@ -33,6 +33,14 @@ prepare layouts and toolkit-neutral `Scene` drawing commands; the frontend
 paints the scene and hosts native window controls and dialogs. Local and remote
 sessions use the same data contract.
 
+After laying out a panel, hosts query `App::panel_measurement` and dispatch any
+returned command after the current layout/paint pass. New pipelines use this
+geometry report together with track and clock delivery to choose their opening
+view. Layout does not move the shared time axis. Pending opening state contains
+only pixel geometry; recording times are read from the current placed data when
+the view resolves. User navigation cancels pending opening for the affected panel
+and panels sharing its viewport.
+
 Hosts pass the window's physical pixels per logical pixel to each
 `App::layout_panel` call. This factor is independent of interface zoom. A
 `Prim::Presence` carries a bit mask with one texel per physical pixel in its
