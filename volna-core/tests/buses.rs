@@ -360,8 +360,8 @@ fn expanded_buses_remain_one_member_of_signal_groups() {
 
 #[test]
 fn analog_summaries_distinguish_a_slice_from_its_parent() {
+    use volna_core::analysis::AnalysisLoad;
     use volna_core::data::NumericKind;
-    use volna_core::document::SummaryLoad;
     let file = tempfile::NamedTempFile::new().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();
     let scope = writer
@@ -406,15 +406,15 @@ fn analog_summaries_distinguish_a_slice_from_its_parent() {
     let parent = history(&app, id, 0);
     let slice = history(&app, id, 1);
     let signal = waves(&app, id).items()[0].signal_ref().unwrap();
-    let Some(SummaryLoad::Ready(a)) =
+    let Some(AnalysisLoad::Ready(a)) =
         app.doc
             .analog_summary(signal, NumericKind::Unsigned, &parent)
     else {
         panic!("parent summary missing");
     };
-    let Some(SummaryLoad::Ready(b)) = app
-        .doc
-        .analog_summary(signal, NumericKind::Unsigned, &slice)
+    let Some(AnalysisLoad::Ready(b)) =
+        app.doc
+            .analog_summary(signal, NumericKind::Unsigned, &slice)
     else {
         panic!("slice summary missing");
     };

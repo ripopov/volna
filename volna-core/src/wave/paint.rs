@@ -3,6 +3,7 @@
 
 mod overlaid;
 
+use crate::analysis::AnalysisLoad;
 use crate::color::Color;
 use crate::data::Translator;
 use crate::document::Document;
@@ -2324,7 +2325,7 @@ fn paint_group_row(
 
 fn paint_group_summary(
     members: &[std::sync::Arc<dyn SignalHistory>],
-    summary: Option<&group::SummaryLoad>,
+    summary: Option<&AnalysisLoad<group::GroupSummary>>,
     vp: &Viewport,
     area: Rect,
     clip: Rect,
@@ -2339,10 +2340,10 @@ fn paint_group_summary(
         group::walk(members, vp, w_px)
     } else {
         match summary {
-            Some(group::SummaryLoad::Ready(s)) => s
+            Some(AnalysisLoad::Ready(s)) => s
                 .columns(vp, w_px)
                 .unwrap_or_else(|| group::walk(members, vp, w_px)),
-            Some(group::SummaryLoad::Building) => {
+            Some(AnalysisLoad::Building(_)) => {
                 p.scene.clipped(intersect(area, clip), |scene| {
                     scene.text(
                         point(area.left() + 8.0 * t.zoom, area.top()),
@@ -2658,7 +2659,7 @@ fn paint_stack_row(
         return None;
     }
     let total = match doc.stack_total(&stack::key(layers)) {
-        Some(stack::TotalLoad::Ready(s)) => Some(s.as_ref()),
+        Some(AnalysisLoad::Ready(s)) => Some(s.as_ref()),
         _ => None,
     };
     let (lo, hi) =

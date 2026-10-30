@@ -710,7 +710,7 @@ fn analog_rows_round_trip_through_workspaces() {
 
 #[test]
 fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
-    use volna_core::document::SummaryLoad;
+    use volna_core::analysis::AnalysisLoad;
     use volna_core::session::LoadRequest;
     let (_file, session) = trace_until(400_000);
     let mut app = App::new();
@@ -722,7 +722,7 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     let digital = used(&app);
     select(&mut app, id, &[BUS]);
     app.handle(Command::Action(Action::ToggleAnalog));
-    let requests = app.take_requests();
+    let mut requests = app.take_requests();
     assert_eq!(requests.len(), 1);
     assert!(matches!(requests[0], LoadRequest::Summary { .. }));
     let signal = app.panels.waves(id).unwrap().items()[BUS]
@@ -740,7 +740,18 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     let kind = volna_core::data::NumericKind::Unsigned;
     assert!(matches!(
         app.doc.analog_summary(signal, kind, &history),
-        Some(SummaryLoad::Building { .. })
+        Some(AnalysisLoad::Building(_))
+    ));
+
+    let stale = requests.pop().unwrap();
+    app.handle(Command::Action(Action::ToggleAnalog));
+    app.handle(Command::Action(Action::ToggleAnalog));
+    let requests = app.take_requests();
+    assert_eq!(requests.len(), 1);
+    app.deliver(stale.fail(anyhow::anyhow!("old worker failed")));
+    assert!(matches!(
+        app.doc.analog_summary(signal, kind, &history),
+        Some(AnalysisLoad::Building(_))
     ));
 
     view(&mut app, id, 0.0, 400_000.0);
@@ -753,7 +764,7 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     }
     assert!(matches!(
         app.doc.analog_summary(signal, kind, &history),
-        Some(SummaryLoad::Ready(_))
+        Some(AnalysisLoad::Ready(_))
     ));
     assert!(used(&app) > digital, "the summary is charged to the budget");
     view(&mut app, id, 0.0, 400_000.0);
@@ -769,7 +780,7 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     assert!(app.doc.analog_summary(signal, kind, &history).is_none());
     assert!(matches!(
         app.doc.analog_summary(signal, signed, &history),
-        Some(SummaryLoad::Building { .. })
+        Some(AnalysisLoad::Building(_))
     ));
     pump(&mut app);
     select(&mut app, id, &[BUS]);

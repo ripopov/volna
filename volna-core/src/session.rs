@@ -42,6 +42,7 @@ pub enum LoadRequest {
     },
     Summary {
         generation: u64,
+        request: u64,
         signal: Traced<SignalRef>,
         history: Arc<dyn volna_trace::data::SignalHistory>,
         kind: crate::data::NumericKind,
@@ -49,18 +50,21 @@ pub enum LoadRequest {
     },
     GroupSummary {
         generation: u64,
+        request: u64,
         members: Vec<Arc<dyn volna_trace::data::SignalHistory>>,
         range: (u64, u64),
         budget: volna_trace::remote::memory::MemoryBudget,
     },
     Integral {
         generation: u64,
+        request: u64,
         history: Arc<dyn volna_trace::data::SignalHistory>,
         reading: crate::wave::stack::Reading,
         budget: volna_trace::remote::memory::MemoryBudget,
     },
     StackTotal {
         generation: u64,
+        request: u64,
         layers: Vec<crate::wave::stack::Layer>,
         range: (u64, u64),
         budget: volna_trace::remote::memory::MemoryBudget,
@@ -126,12 +130,14 @@ impl LoadRequest {
             },
             Self::Summary {
                 generation,
+                request,
                 signal,
                 history,
                 kind,
                 ..
             } => LoadResult::Summary {
                 generation,
+                request,
                 signal,
                 kind,
                 history: crate::wave::analog::history_identity(&history),
@@ -139,28 +145,36 @@ impl LoadRequest {
             },
             Self::GroupSummary {
                 generation,
+                request,
                 members,
                 ..
             } => LoadResult::GroupSummary {
                 generation,
+                request,
                 key: crate::wave::group::key(&members),
                 result: Err(error),
             },
             Self::Integral {
                 generation,
+                request,
                 history,
                 reading,
                 ..
             } => LoadResult::Integral {
                 generation,
+                request,
                 history: crate::wave::analog::history_identity(&history),
                 reading,
                 result: Err(error),
             },
             Self::StackTotal {
-                generation, layers, ..
+                generation,
+                request,
+                layers,
+                ..
             } => LoadResult::StackTotal {
                 generation,
+                request,
                 key: crate::wave::stack::key(&layers),
                 result: Err(error),
             },
@@ -233,12 +247,14 @@ impl LoadRequest {
             },
             LoadRequest::Summary {
                 generation,
+                request,
                 signal,
                 history,
                 kind,
                 budget,
             } => LoadResult::Summary {
                 generation,
+                request,
                 signal,
                 kind,
                 history: crate::wave::analog::history_identity(&history),
@@ -247,6 +263,7 @@ impl LoadRequest {
             },
             LoadRequest::GroupSummary {
                 generation,
+                request,
                 members,
                 range,
                 budget,
@@ -255,17 +272,20 @@ impl LoadRequest {
                 let summary = crate::wave::group::GroupSummary::build(&members, range, &budget);
                 LoadResult::GroupSummary {
                     generation,
+                    request,
                     key,
                     result: summary.map(Arc::new),
                 }
             }
             LoadRequest::Integral {
                 generation,
+                request,
                 history,
                 reading,
                 budget,
             } => LoadResult::Integral {
                 generation,
+                request,
                 history: crate::wave::analog::history_identity(&history),
                 reading,
                 result: crate::wave::stack::IntegralSummary::build(&history, reading, &budget)
@@ -273,6 +293,7 @@ impl LoadRequest {
             },
             LoadRequest::StackTotal {
                 generation,
+                request,
                 layers,
                 range,
                 budget,
@@ -281,6 +302,7 @@ impl LoadRequest {
                 let summary = crate::wave::stack::TotalSummary::build(&layers, range, &budget);
                 LoadResult::StackTotal {
                     generation,
+                    request,
                     key,
                     result: summary.map(Arc::new),
                 }
@@ -334,6 +356,7 @@ pub enum LoadResult {
     },
     Summary {
         generation: u64,
+        request: u64,
         signal: Traced<SignalRef>,
         kind: crate::data::NumericKind,
         history: usize,
@@ -341,17 +364,20 @@ pub enum LoadResult {
     },
     GroupSummary {
         generation: u64,
+        request: u64,
         key: Vec<usize>,
         result: anyhow::Result<Arc<crate::wave::group::GroupSummary>>,
     },
     Integral {
         generation: u64,
+        request: u64,
         history: usize,
         reading: crate::wave::stack::Reading,
         result: anyhow::Result<Arc<crate::wave::stack::IntegralSummary>>,
     },
     StackTotal {
         generation: u64,
+        request: u64,
         key: crate::wave::stack::Key,
         result: anyhow::Result<Arc<crate::wave::stack::TotalSummary>>,
     },

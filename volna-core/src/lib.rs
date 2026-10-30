@@ -1,5 +1,6 @@
 //! Volna core: everything the viewer decides, with no GUI toolkit attached.
 
+pub mod analysis;
 pub mod app;
 pub mod clock;
 pub mod color;

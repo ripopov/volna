@@ -54,6 +54,7 @@ fn request(kind: usize, h: Arc<dyn SignalHistory>, budget: MemoryBudget) -> Load
     match kind {
         0 => LoadRequest::Summary {
             generation: 1,
+            request: 1,
             signal: a(SignalRef(0)),
             history: h,
             kind: NumericKind::Real,
@@ -61,18 +62,21 @@ fn request(kind: usize, h: Arc<dyn SignalHistory>, budget: MemoryBudget) -> Load
         },
         1 => LoadRequest::GroupSummary {
             generation: 1,
+            request: 1,
             members: vec![h],
             range: (0, 16_384),
             budget,
         },
         2 => LoadRequest::Integral {
             generation: 1,
+            request: 1,
             history: h,
             reading,
             budget,
         },
         _ => LoadRequest::StackTotal {
             generation: 1,
+            request: 1,
             layers: vec![Layer::new(0, h, reading)],
             range: (0, 16_384),
             budget,

@@ -375,11 +375,6 @@ impl AnalogSummary {
         self.kind
     }
 
-    #[must_use]
-    pub fn identity(&self) -> usize {
-        self.history
-    }
-
     pub fn matches(&self, h: &Arc<dyn SignalHistory>, kind: NumericKind) -> bool {
         self.kind == kind && self.history == history_identity(h) && self.len == h.len()
     }
@@ -458,14 +453,14 @@ impl<'a> Series<'a> {
         history: &'a Arc<dyn SignalHistory>,
         kind: NumericKind,
     ) -> Self {
-        use crate::document::SummaryLoad;
+        use crate::analysis::AnalysisLoad;
         let load = signal.and_then(|s| doc.analog_summary(s, kind, history));
         let summary = match load {
-            Some(SummaryLoad::Ready(s)) => Some(s.as_ref()),
+            Some(AnalysisLoad::Ready(s)) => Some(s.as_ref()),
             _ => None,
         };
         let mut series = Self::new(history, kind, summary);
-        series.building = matches!(load, Some(SummaryLoad::Building { .. }));
+        series.building = matches!(load, Some(AnalysisLoad::Building(_)));
         series
     }
 

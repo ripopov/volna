@@ -1,6 +1,7 @@
 //! The open traces and everything every view over them must agree on: the trace set, shared
 //! navigation, markers, translators and load bookkeeping.
 
+use crate::analysis::{AnalysisCache, AnalysisLoad};
 use crate::history::Journaled;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -98,31 +99,15 @@ pub struct Document {
     next_track_request: u64,
     selection: Option<TxSelection>,
     pub copied_rows: Vec<crate::wave::Entry>,
-    summaries: HashMap<(Traced<SignalRef>, NumericKind, usize), SummaryLoad>,
-    group_summaries: HashMap<Vec<usize>, crate::wave::group::SummaryLoad>,
-    stack_totals: HashMap<crate::wave::stack::Key, crate::wave::stack::TotalLoad>,
-    integrals: HashMap<(usize, crate::wave::stack::Reading), Integral>,
+    summaries: AnalysisCache<(Traced<SignalRef>, NumericKind, usize), AnalogSummary>,
+    group_summaries: AnalysisCache<Vec<usize>, crate::wave::group::GroupSummary>,
+    stack_totals: AnalysisCache<crate::wave::stack::Key, crate::wave::stack::TotalSummary>,
+    integrals: AnalysisCache<
+        (usize, crate::wave::stack::Reading),
+        crate::wave::stack::IntegralSummary,
+        std::sync::Weak<dyn volna_trace::data::SignalHistory>,
+    >,
     pub clocks: crate::clock::Clocks,
-}
-
-struct Integral {
-    history: std::sync::Weak<dyn volna_trace::data::SignalHistory>,
-    load: crate::wave::stack::IntegralLoad,
-}
-
-pub enum SummaryLoad {
-    Building { history: usize },
-    Ready(Arc<AnalogSummary>),
-    Failed { history: usize },
-}
-
-impl SummaryLoad {
-    fn history(&self) -> usize {
-        match self {
-            Self::Building { history } | Self::Failed { history } => *history,
-            Self::Ready(s) => s.identity(),
-        }
-    }
 }
 
 pub struct TrackLoad {
@@ -163,10 +148,10 @@ impl Document {
             next_track_request: 1,
             selection: None,
             copied_rows: Vec::new(),
-            summaries: HashMap::new(),
-            group_summaries: HashMap::new(),
-            stack_totals: HashMap::new(),
-            integrals: HashMap::new(),
+            summaries: AnalysisCache::default(),
+            group_summaries: AnalysisCache::default(),
+            stack_totals: AnalysisCache::default(),
+            integrals: AnalysisCache::default(),
             clocks: crate::clock::Clocks::default(),
         }
     }
@@ -537,7 +522,7 @@ impl Document {
             | LoadRequest::Integral { .. }
             | LoadRequest::StackTotal { .. } => true,
         });
-        self.summaries.retain(|(s, _, _), _| s.trace != trace);
+        self.summaries.retain(|(s, _, _)| s.trace != trace);
         if self.selection.is_some_and(|s| s.track.trace == trace) {
             self.selection = None;
         }
@@ -604,49 +589,40 @@ impl Document {
         signal: Traced<SignalRef>,
         kind: NumericKind,
         history: &Arc<dyn volna_trace::data::SignalHistory>,
-    ) -> Option<&SummaryLoad> {
+    ) -> Option<&AnalysisLoad<AnalogSummary>> {
         self.summaries
             .get(&(signal, kind, crate::wave::analog::history_identity(history)))
     }
 
     pub(crate) fn sync_summaries(
         &mut self,
-        wanted: HashMap<
+        mut wanted: HashMap<
             (Traced<SignalRef>, NumericKind, usize),
             Arc<dyn volna_trace::data::SignalHistory>,
         >,
         budget: &volna_trace::remote::memory::MemoryBudget,
     ) {
-        self.summaries.retain(|key, load| {
-            wanted
-                .get(key)
-                .is_some_and(|h| crate::wave::analog::history_identity(h) == load.history())
-        });
-        for ((signal, kind, identity), history) in wanted {
-            if self.summaries.contains_key(&(signal, kind, identity)) {
-                continue;
-            }
-            let Some(generation) = self.traces.get(signal.trace).map(|s| s.generation) else {
-                continue;
-            };
-            self.summaries.insert(
-                (signal, kind, identity),
-                SummaryLoad::Building {
-                    history: crate::wave::analog::history_identity(&history),
-                },
-            );
-            self.requests.push(LoadRequest::Summary {
-                generation,
-                signal,
-                history,
-                kind,
-                budget: budget.clone(),
+        wanted.retain(|(signal, _, _), _| self.traces.get(signal.trace).is_some());
+        self.summaries
+            .sync(wanted, |&(signal, kind, _), history, request| {
+                let slot = self.traces.get(signal.trace).expect("wanted trace");
+                self.requests.push(LoadRequest::Summary {
+                    generation: slot.generation,
+                    request,
+                    signal,
+                    history,
+                    kind,
+                    budget: budget.clone(),
+                });
+                ((), AnalysisLoad::Building(request))
             });
-        }
     }
 
     #[must_use]
-    pub fn group_summary(&self, key: &[usize]) -> Option<&crate::wave::group::SummaryLoad> {
+    pub fn group_summary(
+        &self,
+        key: &[usize],
+    ) -> Option<&AnalysisLoad<crate::wave::group::GroupSummary>> {
         self.group_summaries.get(key)
     }
 
@@ -655,28 +631,24 @@ impl Document {
         wanted: HashMap<Vec<usize>, Vec<Arc<dyn volna_trace::data::SignalHistory>>>,
         budget: &volna_trace::remote::memory::MemoryBudget,
     ) {
-        self.group_summaries
-            .retain(|key, _| wanted.contains_key(key));
-        for (key, members) in wanted {
-            if self.group_summaries.contains_key(&key) {
-                continue;
-            }
-            self.group_summaries
-                .insert(key, crate::wave::group::SummaryLoad::Building);
+        let range = self.limits();
+        self.group_summaries.sync(wanted, |_, members, request| {
             self.requests.push(LoadRequest::GroupSummary {
                 generation: self.epoch,
+                request,
                 members,
-                range: self.limits(),
+                range,
                 budget: budget.clone(),
             });
-        }
+            ((), AnalysisLoad::Building(request))
+        });
     }
 
     #[must_use]
     pub fn stack_total(
         &self,
         key: &crate::wave::stack::Key,
-    ) -> Option<&crate::wave::stack::TotalLoad> {
+    ) -> Option<&AnalysisLoad<crate::wave::stack::TotalSummary>> {
         self.stack_totals.get(key)
     }
 
@@ -685,48 +657,45 @@ impl Document {
         wanted: HashMap<crate::wave::stack::Key, Vec<crate::wave::stack::Layer>>,
         budget: &volna_trace::remote::memory::MemoryBudget,
     ) {
-        use crate::wave::stack::{self, TotalLoad, TotalSummary};
-        self.stack_totals.retain(|key, _| wanted.contains_key(key));
-        for (key, layers) in wanted {
-            if self.stack_totals.contains_key(&key) {
-                continue;
-            }
+        use crate::wave::stack::{self, TotalSummary};
+        let range = self.limits();
+        self.stack_totals.sync(wanted, |_, layers, request| {
             if stack::changes(&layers) <= stack::WALK_MAX {
-                let load = match TotalSummary::build(&layers, self.limits(), budget) {
-                    Ok(summary) => TotalLoad::Ready(Arc::new(summary)),
-                    Err(_) => TotalLoad::Failed,
-                };
-                self.stack_totals.insert(key, load);
-                continue;
+                return (
+                    (),
+                    TotalSummary::build(&layers, range, budget)
+                        .map(Arc::new)
+                        .map_or(AnalysisLoad::Failed, AnalysisLoad::Ready),
+                );
             }
-            self.stack_totals.insert(key, TotalLoad::Building);
             self.requests.push(LoadRequest::StackTotal {
                 generation: self.epoch,
+                request,
                 layers,
-                range: self.limits(),
+                range,
                 budget: budget.clone(),
             });
-        }
+            ((), AnalysisLoad::Building(request))
+        });
     }
 
     pub fn integral(
         &self,
         history: &Arc<dyn volna_trace::data::SignalHistory>,
         reading: crate::wave::stack::Reading,
-    ) -> Option<&crate::wave::stack::IntegralLoad> {
+    ) -> Option<&AnalysisLoad<crate::wave::stack::IntegralSummary>> {
         let key = (crate::wave::analog::history_identity(history), reading);
-        self.integrals.get(&key).map(|i| &i.load)
+        self.integrals.get(&key)
     }
 
     pub fn summarize_layers(&self, layers: &mut [crate::wave::stack::Layer]) {
-        use crate::wave::stack::IntegralLoad;
         for layer in layers {
             match self.integral(&layer.history, layer.reading) {
-                Some(IntegralLoad::Ready(s)) => {
+                Some(AnalysisLoad::Ready(s)) => {
                     layer.summary =
                         Some(s.clone()).filter(|s| s.matches(&layer.history, layer.reading));
                 }
-                Some(IntegralLoad::Building { .. }) => layer.building = true,
+                Some(AnalysisLoad::Building(_)) => layer.building = true,
                 _ => {}
             }
         }
@@ -740,27 +709,19 @@ impl Document {
         >,
         budget: &volna_trace::remote::memory::MemoryBudget,
     ) {
-        use crate::wave::stack::IntegralLoad;
         self.integrals
-            .retain(|key, i| wanted.contains_key(key) && i.history.strong_count() > 0);
-        for ((identity, reading), history) in wanted {
-            if self.integrals.contains_key(&(identity, reading)) {
-                continue;
-            }
-            self.integrals.insert(
-                (identity, reading),
-                Integral {
-                    history: Arc::downgrade(&history),
-                    load: IntegralLoad::Building { history: identity },
-                },
-            );
-            self.requests.push(LoadRequest::Integral {
-                generation: self.epoch,
-                history,
-                reading,
-                budget: budget.clone(),
+            .sync(wanted, |&(_, reading), history, request| {
+                // Keep the address in the cache key unavailable for reuse until eviction.
+                let owner = Arc::downgrade(&history);
+                self.requests.push(LoadRequest::Integral {
+                    generation: self.epoch,
+                    request,
+                    history,
+                    reading,
+                    budget: budget.clone(),
+                });
+                (owner, AnalysisLoad::Building(request))
             });
-        }
     }
 
     pub fn retain_track(&mut self, track: Traced<TrackRef>) -> anyhow::Result<()> {
@@ -1085,75 +1046,39 @@ impl Document {
             }
             LoadResult::Summary {
                 generation,
+                request,
                 signal,
                 kind,
                 history,
                 result,
-            } => {
-                if !self.current(signal.trace, generation) {
-                    return None;
-                }
-                let load = self.summaries.get_mut(&(signal, kind, history))?;
-                if !matches!(load, SummaryLoad::Building { history: h } if *h == history) {
-                    return None;
-                }
-                *load = match result {
-                    Ok(summary) => SummaryLoad::Ready(summary),
-                    Err(_) => SummaryLoad::Failed { history },
-                };
-                Some(Delivered::Summary)
-            }
+            } => (self.current(signal.trace, generation)
+                && self
+                    .summaries
+                    .deliver(&(signal, kind, history), request, result))
+            .then_some(Delivered::Summary),
             LoadResult::Integral {
                 generation,
+                request,
                 history,
                 reading,
                 result,
-            } => {
-                use crate::wave::stack::IntegralLoad;
-                let entry = self.integrals.get_mut(&(history, reading))?;
-                if generation != self.epoch
-                    || !matches!(entry.load, IntegralLoad::Building { history: h } if h == history)
-                {
-                    return None;
-                }
-                entry.load = match result {
-                    Ok(summary) => IntegralLoad::Ready(summary),
-                    Err(_) => IntegralLoad::Failed { history },
-                };
-                Some(Delivered::Summary)
-            }
+            } => (generation == self.epoch
+                && self.integrals.deliver(&(history, reading), request, result))
+            .then_some(Delivered::Summary),
             LoadResult::StackTotal {
                 generation,
+                request,
                 key,
                 result,
-            } => {
-                use crate::wave::stack::TotalLoad;
-                let load = self.stack_totals.get_mut(&key)?;
-                if generation != self.epoch || !matches!(load, TotalLoad::Building) {
-                    return None;
-                }
-                *load = match result {
-                    Ok(summary) => TotalLoad::Ready(summary),
-                    Err(_) => TotalLoad::Failed,
-                };
-                Some(Delivered::Summary)
-            }
+            } => (generation == self.epoch && self.stack_totals.deliver(&key, request, result))
+                .then_some(Delivered::Summary),
             LoadResult::GroupSummary {
                 generation,
+                request,
                 key,
                 result,
-            } => {
-                use crate::wave::group::SummaryLoad;
-                let load = self.group_summaries.get_mut(&key)?;
-                if generation != self.epoch || !matches!(load, SummaryLoad::Building) {
-                    return None;
-                }
-                *load = match result {
-                    Ok(summary) => SummaryLoad::Ready(summary),
-                    Err(_) => SummaryLoad::Failed,
-                };
-                Some(Delivered::Summary)
-            }
+            } => (generation == self.epoch && self.group_summaries.deliver(&key, request, result))
+                .then_some(Delivered::Summary),
             LoadResult::Opened {
                 trace,
                 generation,

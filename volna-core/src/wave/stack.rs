@@ -445,11 +445,6 @@ impl IntegralSummary {
         self.reading
     }
 
-    #[must_use]
-    pub fn identity(&self) -> usize {
-        self.history
-    }
-
     pub fn matches(&self, h: &Arc<dyn SignalHistory>, reading: Reading) -> bool {
         self.reading == reading
             && self.history == analog::history_identity(h)
@@ -555,22 +550,6 @@ impl<'a> Prefixes<'a> {
         let head = va * (h.time(first) as f64 - ta);
         let tail = vb * (tb - h.time(ib) as f64);
         Sample::Value((head + (to - from) + tail) / (tb - ta))
-    }
-}
-
-pub enum IntegralLoad {
-    Building { history: usize },
-    Ready(Arc<IntegralSummary>),
-    Failed { history: usize },
-}
-
-impl IntegralLoad {
-    #[must_use]
-    pub fn history(&self) -> usize {
-        match self {
-            Self::Building { history } | Self::Failed { history } => *history,
-            Self::Ready(s) => s.identity(),
-        }
     }
 }
 
@@ -955,12 +934,6 @@ impl TotalSummary {
     pub fn range(&self) -> (f64, f64) {
         self.range
     }
-}
-
-pub enum TotalLoad {
-    Building,
-    Ready(Arc<TotalSummary>),
-    Failed,
 }
 
 #[must_use]

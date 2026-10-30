@@ -251,12 +251,6 @@ impl GroupSummary {
     }
 }
 
-pub enum SummaryLoad {
-    Building,
-    Ready(Arc<GroupSummary>),
-    Failed,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reading {
     pub members: usize,

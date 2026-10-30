@@ -4,6 +4,7 @@ use vtr::Recorder;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use volna_core::analysis::AnalysisLoad;
 
 use volna_core::Theme;
 use volna_core::app::{Action, App, Command};
@@ -523,7 +524,7 @@ fn long_stacks_hold_integral_summaries_until_their_histories_go() {
     app.handle(Command::Action(Action::ToggleStack));
     assert!(layers.iter().all(|l| matches!(
         app.doc.integral(&l.history, l.reading),
-        Some(stack::IntegralLoad::Building { .. })
+        Some(AnalysisLoad::Building(_))
     )));
     let App { panels, doc, .. } = &mut app;
     panels.waves_mut(id).unwrap().nav.jump_to(
@@ -537,7 +538,7 @@ fn long_stacks_hold_integral_summaries_until_their_histories_go() {
     assert!(shown.iter().any(|s| s == "Summarizing…"), "{shown:?}");
     pump(&mut app);
     for l in &layers {
-        let Some(stack::IntegralLoad::Ready(s)) = app.doc.integral(&l.history, l.reading) else {
+        let Some(AnalysisLoad::Ready(s)) = app.doc.integral(&l.history, l.reading) else {
             panic!("no summary");
         };
         assert!(s.matches(&l.history, l.reading));
@@ -1202,7 +1203,7 @@ fn stacked(app: &mut App, path: &[&str]) -> (Vec<String>, (f64, f64)) {
         .map(|l| w.items()[l.entry].name().to_owned())
         .collect();
     let range = match app.doc.stack_total(&stack::key(&layers)) {
-        Some(stack::TotalLoad::Ready(s)) => s.range(),
+        Some(AnalysisLoad::Ready(s)) => s.range(),
         _ => panic!("{path:?}: no whole-trace walk"),
     };
     (names, range)

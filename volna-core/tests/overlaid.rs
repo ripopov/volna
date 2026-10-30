@@ -5,9 +5,9 @@ use vtr::Recorder;
 
 use std::sync::Arc;
 use volna_core::Theme;
+use volna_core::analysis::AnalysisLoad;
 use volna_core::app::{Action, App, Command};
 use volna_core::data::NumericKind;
-use volna_core::document::SummaryLoad;
 use volna_core::geometry::{Point, Rect, point};
 use volna_core::panels::PanelId;
 use volna_core::scene::{MonoMeasure, Prim, Scene};
@@ -663,7 +663,7 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
     assert!(matches!(
         app.doc
             .analog_summary(signal, NumericKind::Unsigned, &history),
-        Some(SummaryLoad::Building { .. })
+        Some(AnalysisLoad::Building(_))
     ));
     assert!(
         frame(&mut app, id, &Theme::volna(true))
@@ -674,7 +674,7 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
     assert!(matches!(
         app.doc
             .analog_summary(signal, NumericKind::Unsigned, &history),
-        Some(SummaryLoad::Ready(_))
+        Some(AnalysisLoad::Ready(_))
     ));
     assert!(
         !frame(&mut app, id, &Theme::volna(true))
@@ -692,7 +692,7 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
     assert!(matches!(
         app.doc
             .analog_summary(signal, NumericKind::Unsigned, &history),
-        Some(SummaryLoad::Ready(_))
+        Some(AnalysisLoad::Ready(_))
     ));
 }
 
