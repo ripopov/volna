@@ -2286,7 +2286,12 @@ fn pipeline_box_zoom_captures_outside_release_and_ignores_double_click_open(
         .update(&mut vcx, |ws, window, cx| {
             let track = ws.app.pipeline_generators()[0].1;
             ws.dispatch(Command::OpenPipeline { track }, Some(window), cx);
-            let id = ws.app.panels.focused_id();
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, _| {
             ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
             ws.app.doc.shared.viewport.set(Viewport {
                 start: 200.0,
@@ -2298,7 +2303,6 @@ fn pipeline_box_zoom_captures_outside_release_and_ignores_double_click_open(
                 top: 200.0,
                 row_px: 6.0,
             });
-            id
         })
         .unwrap();
     vcx.run_until_parked();
