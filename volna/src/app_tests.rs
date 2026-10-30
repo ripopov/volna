@@ -777,9 +777,11 @@ fn inactive_signal_names_follow_the_viewport_and_preserve_selection(cx: &mut Tes
                 .unwrap(),
         );
     }
-    writer
+    let tx = writer
         .transactions::<()>(vtr::SourceOptions::new("transactions", Some(top)), "raw")
         .unwrap();
+    let transaction = writer.begin_at(tx, 5, &(), None).unwrap();
+    writer.end_at(transaction, 15, vtr::Status::Ok).unwrap();
     writer.advance_time(0).unwrap();
     for &signal in &signals {
         writer.emit_u64(signal, 0).unwrap();
@@ -828,7 +830,8 @@ fn inactive_signal_names_follow_the_viewport_and_preserve_selection(cx: &mut Tes
         for (window_range, selected, muted) in [
             ((0.0, 100.0), None, vec![constant]),
             ((0.0, 100.0), Some(constant), vec![]),
-            ((20.0, 30.0), None, vec![changing, constant]),
+            ((20.0, 30.0), None, vec![changing, constant, generator]),
+            ((20.0, 30.0), Some(generator), vec![changing, constant]),
         ] {
             window
                 .update(&mut view, |ws, _, cx| {

@@ -538,7 +538,10 @@ fn a_row_labels_its_count_and_dims_only_nonempty_quiet_scopes() {
         total: 6779,
     };
     assert_eq!(active.label(), "2,483 / 6,779");
-    assert_eq!(active.detail(), "2,483 of 6,779 signals change in the view");
+    assert_eq!(
+        active.detail(),
+        "2,483 of 6,779 signals or generators have activity in the view"
+    );
     assert!((active.share() - 2483.0 / 6779.0).abs() < f32::EPSILON);
     assert!(!active.quiet());
     assert!(
@@ -1336,5 +1339,101 @@ fn a_client_disconnect_during_an_authorized_server_build_keeps_the_cache() {
     assert!(
         OpenSpec::Path(path).open().unwrap().activity().is_some(),
         "another client reuses the completed cache"
+    );
+}
+
+#[test]
+fn generator_only_scopes_and_member_rows_follow_exact_intervals() {
+    use volna_trace::data::Member;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("generators.vtr");
+    let mut w = Writer::create(&path).unwrap();
+    let top = w.scope("top", None).unwrap();
+    let child = w.scope("child", Some(top)).unwrap();
+    let tx = w
+        .transactions::<()>(vtr::SourceOptions::new("tx", Some(child)), "TX")
+        .unwrap();
+    w.transactions::<()>(vtr::SourceOptions::new("quiet", Some(child)), "TX")
+        .unwrap();
+    let logger = w.logger(vtr::SourceOptions::new("log", Some(top))).unwrap();
+    let callsite =
+        vtr::logging::declare::<()>(&mut w, vtr::logging::CallsiteOptions::new("message")).unwrap();
+    let a = w.begin_at(tx, 0, &(), None).unwrap();
+    w.end_at(a, 0, vtr::Status::Ok).unwrap();
+    let a = w.begin_at(tx, 10, &(), None).unwrap();
+    w.end_at(a, 100, vtr::Status::Ok).unwrap();
+    w.advance_time(150).unwrap();
+    w.log(logger, callsite, &(), None).unwrap();
+    w.close().unwrap();
+    index_beside(&path);
+    let (mut app, session) = open(&path);
+    #[cfg(unix)]
+    let (mut rig, remote) = RemoteRig::open(session.clone());
+    #[cfg(unix)]
+    let mut remote_app = {
+        let mut app = App::default();
+        app.set_session(remote);
+        rig.settle(&mut app);
+        app
+    };
+    let h = session.hierarchy();
+    let top = h.roots().iter().next().unwrap();
+    let child = h.scope(top).children.iter().next().unwrap();
+    for (begin, end, active, child_count, top_count) in [
+        (0, 0, true, 1, 1),
+        (1, 9, false, 0, 0),
+        (20, 30, true, 1, 1),
+        (100, 100, true, 1, 1),
+        (101, 149, false, 0, 0),
+        (150, 150, false, 0, 1),
+    ] {
+        view(&mut app, begin, end);
+        settle(&mut app);
+        #[cfg(unix)]
+        {
+            view(&mut remote_app, begin, end);
+            rig.settle(&mut remote_app);
+            assert_eq!(
+                remote_app.scope_activity(node(top)),
+                app.scope_activity(node(top))
+            );
+            assert_eq!(
+                remote_app.scope_activity(node(child)),
+                app.scope_activity(node(child))
+            );
+        }
+        assert_eq!(
+            app.scope_activity(node(child)),
+            Some(ScopeActivity {
+                changing: child_count,
+                total: 2
+            })
+        );
+        assert_eq!(
+            app.scope_activity(node(top)),
+            Some(ScopeActivity {
+                changing: top_count,
+                total: 3
+            })
+        );
+        for (id, generator) in h.generators().iter().enumerate() {
+            let expected = match generator.name.as_str() {
+                "tx" => active,
+                "log" => begin == 150,
+                _ => false,
+            };
+            let member = Traced::new(TraceId::A, Member::Generator(id));
+            assert_eq!(app.member_activity(member), Some(expected));
+            #[cfg(unix)]
+            assert_eq!(remote_app.member_activity(member), Some(expected));
+        }
+    }
+    #[cfg(unix)]
+    assert_eq!(
+        rig.commands
+            .iter()
+            .filter(|c| matches!(c, volna_trace::remote::transport::Command::Activity { .. }))
+            .count(),
+        1
     );
 }

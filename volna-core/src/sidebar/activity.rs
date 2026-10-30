@@ -1,4 +1,4 @@
-//! Signal activity and scope meters for the focused viewport.
+//! Signal and generator activity and scope meters for the focused viewport.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -451,6 +451,28 @@ impl ActivityModel {
         Some(
             self.matching_counts(trace, generation, window)?
                 .signal_active(signal),
+        )
+    }
+
+    #[must_use]
+    pub fn total(&self, trace: TraceId, scope: ScopeId) -> Option<u32> {
+        let Counter::Ready(counter) = &self.traces.get(&trace)?.counter else {
+            return None;
+        };
+        counter.total(scope)
+    }
+
+    #[must_use]
+    pub fn generator_active(
+        &self,
+        trace: TraceId,
+        generation: u64,
+        window: (u64, u64),
+        generator: u32,
+    ) -> Option<bool> {
+        Some(
+            self.matching_counts(trace, generation, window)?
+                .generator_active(generator),
         )
     }
 

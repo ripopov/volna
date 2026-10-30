@@ -172,10 +172,7 @@ impl Workspace {
                             .var()
                             .and_then(|id| direction_icon(h.var(id).direction));
                         let shown = on_waves.contains(&traced);
-                        let activity = member.var().and_then(|id| {
-                            this.app
-                                .signal_activity(Traced::new(traced.trace, h.signal(id)))
-                        });
+                        let activity = this.app.member_activity(traced);
                         let mut tooltip = if shown {
                             format!("{} · on the waves", describe(h, member))
                         } else {
@@ -183,9 +180,9 @@ impl Workspace {
                         };
                         if let Some(active) = activity {
                             tooltip.push_str(if active {
-                                "\nChanges in the view"
+                                "\nActivity in the view"
                             } else {
-                                "\nNo changes in the view"
+                                "\nNo activity in the view"
                             });
                         }
                         let addable = member.var().is_some()

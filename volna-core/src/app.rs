@@ -761,7 +761,7 @@ impl App {
         &self,
         node: crate::sidebar::TreeNode,
     ) -> Option<crate::data::ScopeActivity> {
-        let total = ScopeTreeModel::size(self.doc.traces(), node)?.signals;
+        let total = self.activity.total(node.trace, node.scope?)?;
         let slot = self.doc.traces().get(node.trace)?;
         let window =
             crate::sidebar::activity::trace_window(self.activity_viewport(), slot.placement());
@@ -778,6 +778,27 @@ impl App {
             crate::sidebar::activity::trace_window(self.activity_viewport(), slot.placement());
         self.activity
             .signal_active(signal.trace, slot.generation(), window, signal.item)
+    }
+
+    #[must_use]
+    pub fn member_activity(&self, member: Traced<Member>) -> Option<bool> {
+        let h = self.doc.hierarchy(member.trace)?;
+        match member.item {
+            Member::Var(id) => self.signal_activity(Traced::new(member.trace, h.signal(id))),
+            Member::Generator(id) => {
+                let slot = self.doc.traces().get(member.trace)?;
+                let window = crate::sidebar::activity::trace_window(
+                    self.activity_viewport(),
+                    slot.placement(),
+                );
+                self.activity.generator_active(
+                    member.trace,
+                    slot.generation(),
+                    window,
+                    h.generators().get(id)?.track.0,
+                )
+            }
+        }
     }
 
     pub fn deliver(&mut self, mut result: LoadResult) {
