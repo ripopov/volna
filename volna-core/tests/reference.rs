@@ -180,6 +180,7 @@ fn the_measure_lane_appears_with_a_reference_and_joins_it_to_the_cursor() {
     let mut app = app();
     let before = lane(&mut app);
     assert!(before.measure.is_none());
+    assert_eq!(before.band.height(), 0.0);
     assert_eq!(before.strip(), before.band);
     let rows_top = app
         .panels
@@ -194,8 +195,9 @@ fn the_measure_lane_appears_with_a_reference_and_joins_it_to_the_cursor() {
     app.doc.shared.cursor = Some(1700);
     let l = lane(&mut app);
     let m = l.measure.clone().expect("the Measure lane");
+    assert_eq!(l.band.height(), 0.0);
     assert_eq!(m.band.top(), l.band.bottom());
-    assert_eq!(m.band.height(), l.band.height());
+    assert_eq!(m.band, l.strip());
     let waves = app.panels.focused_waves().unwrap().last_layout().waves;
     assert_eq!(
         waves.top(),

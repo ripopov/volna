@@ -312,6 +312,31 @@ fn lane(app: &App) -> volna_core::wave::overlay::MarkerLane {
 }
 
 #[test]
+fn the_marker_row_appears_only_when_markers_exist() {
+    let mut app = app();
+    let texts: Vec<String> = frame(&mut app).texts().map(str::to_owned).collect();
+    assert!(!texts.iter().any(|t| t == "Markers" || t == "no markers"));
+    assert_eq!(lane(&app).strip().height(), 0.0);
+    let layout = app.panels.focused_waves().unwrap().last_layout();
+    assert_eq!(layout.names.top(), layout.rulers.bottom());
+
+    app.doc.shared.cursor = Some(100);
+    app.handle(Command::Action(Action::AddOrRenameMarker));
+    let texts: Vec<String> = frame(&mut app).texts().map(str::to_owned).collect();
+    assert!(texts.iter().any(|t| t == "Markers"));
+    let shown = lane(&app);
+    assert!(shown.band.height() > 0.0);
+    let layout = app.panels.focused_waves().unwrap().last_layout();
+    assert_eq!(layout.names.top(), shown.band.bottom());
+
+    app.handle(Command::Action(Action::RemoveAllMarkers));
+    frame(&mut app);
+    assert_eq!(lane(&app).strip().height(), 0.0);
+    let layout = app.panels.focused_waves().unwrap().last_layout();
+    assert_eq!(layout.names.top(), layout.rulers.bottom());
+}
+
+#[test]
 fn m_on_a_marker_opens_its_name_field_and_the_chip_grows_to_the_name() {
     use volna_core::app::EditTarget;
     let mut app = app();

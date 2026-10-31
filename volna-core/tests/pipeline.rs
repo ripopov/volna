@@ -1915,7 +1915,7 @@ fn one_cycle_primary_stage_fills_are_square_at_readable_scales() {
 
 #[test]
 fn square_zoom_stops_at_fit_and_retraces_its_scales() {
-    use volna_core::wave::viewport::Viewport;
+    use volna_core::wave::viewport::{FIT_MARGIN_PX, Viewport};
     for zoom in [1.0f32, 2.0] {
         let theme = Theme::one_dark().zoomed(zoom);
         let (mut app, _, _, pipeline) = opened(10_000);
@@ -1950,8 +1950,17 @@ fn square_zoom_stops_at_fit_and_retraces_its_scales() {
         }
         let p = app.panels.pipeline(pipeline).unwrap();
         let layout = p.last_layout();
-        let expected_fit = (layout.cells.height() - 24.0 * zoom) / 10_000.0;
-        assert!((layout.rows.row_px - expected_fit).abs() < 1e-5);
+        let width = f64::from(layout.cells.width());
+        let time_fit = width
+            / Viewport::fit_px(app.doc.limits(), width, FIT_MARGIN_PX * f64::from(zoom)).width();
+        let row_fit = (f64::from(layout.cells.height()) - 24.0 * f64::from(zoom)) / 10_000.0;
+        let expected_fit = time_fit.min(row_fit);
+        assert!(
+            (f64::from(layout.rows.row_px) - expected_fit).abs() < 1e-5,
+            "row height {} != fit {expected_fit}; cells height {}",
+            layout.rows.row_px,
+            layout.cells.height()
+        );
         assert!(p.nav.viewport(&app.doc).width() > app.doc.limits().1 as f64);
         assert!(layout.row_y(0) >= layout.cells.top() - 0.01);
         assert!(layout.row_y(10_000) <= layout.cells.bottom() + 0.01);
@@ -3540,6 +3549,78 @@ fn the_pipeline_measures_from_the_reference_like_the_waves() {
         Modifiers::default(),
     );
     assert_eq!(app.doc.reference(), None);
+}
+
+#[test]
+fn removing_the_last_marker_keeps_measurements_and_controls_in_both_panels() {
+    use volna_core::marker::{LaneHit, Reference};
+
+    for theme in [
+        Theme::one_dark().zoomed(1.25),
+        Theme::builtin("github-light").unwrap().zoomed(1.5),
+    ] {
+        let (mut app, _, waves, pipeline) = opened(60);
+        pump(&mut app);
+        let (lo, hi) = app.doc.limits();
+        let (a, b) = (lo + (hi - lo) / 4, lo + (hi - lo) / 2);
+        for id in [waves, pipeline] {
+            app.handle(Command::Panels(PanelsCommand::Focus(id)));
+            app.doc.add_marker(a);
+            app.doc.shared.cursor = Some(a);
+            app.handle(Command::Action(Action::SetReference));
+            assert!(matches!(app.doc.reference(), Some(Reference::Marker(_))));
+            app.doc.shared.cursor = Some(b);
+            let before = marker_lane(&mut app, id, &theme);
+            assert!(before.band.height() > 0.0 && before.measure.is_some());
+
+            app.handle(Command::Action(Action::RemoveAllMarkers));
+            assert!(app.doc.markers().is_empty());
+            assert_eq!(app.doc.reference(), Some(Reference::Time(a)));
+            let lane = marker_lane(&mut app, id, &theme);
+            let measure = lane.measure.as_ref().expect("measurement survives removal");
+            assert_eq!(lane.band.height(), 0.0);
+            assert_eq!(lane.strip(), measure.band);
+            assert_eq!(measure.band.top(), before.band.top());
+            assert!(lane.strip().bottom() < before.strip().bottom());
+            let rows_top = match app
+                .layout_panel(id, BOUNDS, &theme, 1.0, &mut MonoMeasure)
+                .unwrap()
+            {
+                PanelLayout::Waves(l) => l.waves.top(),
+                PanelLayout::Pipeline(l) => l.cells.top(),
+                PanelLayout::Table(_) => unreachable!(),
+            };
+            assert_eq!(rows_top, measure.band.bottom());
+            frame(&mut app, id, &theme);
+            let texts: Vec<_> = app.scene().texts().collect();
+            assert!(texts.contains(&"R → cursor"));
+            assert!(!texts.contains(&"Markers"));
+
+            let centre = |r: Rect| {
+                point(
+                    f32::midpoint(r.left(), r.right()),
+                    f32::midpoint(r.top(), r.bottom()),
+                )
+            };
+            let tag = centre(measure.tag);
+            let clear = centre(measure.clear);
+            let live = measure.live.as_ref().unwrap();
+            assert_eq!((live.measurement.from, live.measurement.to), (a, b));
+            let span = point(f32::midpoint(live.x0, live.x1), centre(measure.band).y);
+            assert_eq!(lane.hit(span), Some(LaneHit::Live));
+            assert_eq!(lane.hit(tag), Some(LaneHit::Tag));
+            assert_eq!(lane.hit(clear), Some(LaneHit::ClearReference));
+            for position in [span, tag] {
+                press(&mut app, id, position, Modifiers::default());
+                assert_eq!(app.doc.shared.cursor, Some(b));
+                assert_eq!(app.doc.reference(), Some(Reference::Time(a)));
+            }
+            press(&mut app, id, clear, Modifiers::default());
+            assert_eq!(app.doc.reference(), None);
+            assert_eq!(app.doc.shared.cursor, Some(b));
+            assert_eq!(marker_lane(&mut app, id, &theme).strip().height(), 0.0);
+        }
+    }
 }
 
 #[test]

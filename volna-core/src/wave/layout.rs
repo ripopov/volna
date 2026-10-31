@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::geometry::{Point, Rect, point, size};
 use crate::marker::Marker;
 use crate::wave::model::RowHeight;
-use crate::wave::overlay::{LANE_H, MarkerLane, Measuring, SpanClocks, marker_lane};
+use crate::wave::overlay::{MarkerLane, Measuring, SpanClocks, marker_lane};
 use crate::wave::viewport::Viewport;
 
 pub const MIN_COLUMN: f32 = 72.0;
@@ -125,22 +125,27 @@ impl WaveLayout {
             point(bounds.left(), header.bottom()),
             size(bounds.width(), ruler_h),
         );
-        let lanes = if input.measuring.is_some() { 2.0 } else { 1.0 };
-        let lane_h = (z(LANE_H) * lanes).min((bounds.height() - header_h - ruler_h).max(0.0));
-        let lane = Rect::new(
-            point(bounds.left(), rulers.bottom()),
-            size(bounds.width(), lane_h),
+        let metadata_w = input.metadata_width.unwrap_or(names_w + values_w);
+        let waves_left = bounds.left() + metadata_w;
+        let waves_w = (bounds.width() - metadata_w).max(0.0);
+        let marker_lane = marker_lane(
+            Rect::new(
+                point(bounds.left(), rulers.bottom()),
+                size(bounds.width(), bounds.bottom() - rulers.bottom()),
+            ),
+            waves_left,
+            f64::from(waves_w).max(1.0),
+            input.viewport,
+            input.markers,
+            input.spans,
+            input.measuring,
+            zoom,
         );
-        let rows_top = lane.bottom();
+        let rows_top = marker_lane.strip().bottom();
         let rows_h = (bounds.bottom() - rows_top).max(0.0);
         let names = Rect::new(point(bounds.left(), rows_top), size(names_w, rows_h));
         let values = Rect::new(point(names.right(), rows_top), size(values_w, rows_h));
-        let metadata_w = input.metadata_width.unwrap_or(names_w + values_w);
-        let waves_w = (bounds.width() - metadata_w).max(0.0);
-        let waves = Rect::new(
-            point(bounds.left() + metadata_w, rows_top),
-            size(waves_w, rows_h),
-        );
+        let waves = Rect::new(point(waves_left, rows_top), size(waves_w, rows_h));
 
         let tops = input.row_tops;
         let item_count = tops.len().saturating_sub(1);
@@ -174,18 +179,6 @@ impl WaveLayout {
                 badges.push((entry as usize, b));
             }
         }
-
-        let wave_wf = f64::from(waves_w).max(1.0);
-        let marker_lane = marker_lane(
-            lane,
-            waves.left(),
-            wave_wf,
-            input.viewport,
-            input.markers,
-            input.spans,
-            input.measuring,
-            zoom,
-        );
 
         let scrollbar = if max_scroll > 0.0 && rows_h > 0.0 {
             let track = Rect::new(
@@ -326,10 +319,27 @@ pub fn ruler_row(band: Rect, p: Point, count: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wave::overlay::CHIP_H;
+    use crate::wave::overlay::{CHIP_H, LANE_H};
     use crate::wave::timeline::TimeBase;
 
+    fn marker() -> Marker {
+        Marker {
+            id: crate::marker::MarkerId::new(1).unwrap(),
+            time: 50,
+            label: None,
+        }
+    }
+
     fn layout(zoom: f32, items: usize) -> WaveLayout {
+        layout_with(&[marker()], None, zoom, items)
+    }
+
+    fn layout_with(
+        markers: &[Marker],
+        measuring: Option<Measuring>,
+        zoom: f32,
+        items: usize,
+    ) -> WaveLayout {
         WaveLayout::compute(LayoutInput {
             metadata_width: None,
             bounds: Rect::from_xywh(0.0, 0.0, 2000.0, 300.0),
@@ -343,18 +353,37 @@ mod tests {
             row_tops: row_tops(vec![RowHeight::DEFAULT; items]),
             visible: (0..items as u32).collect(),
             scroll_y: 0.0,
-            markers: &[Marker {
-                id: crate::marker::MarkerId::new(1).unwrap(),
-                time: 50,
-                label: None,
-            }],
+            markers,
             spans: SpanClocks::time_only(TimeBase::si(-9)),
-            measuring: None,
+            measuring,
             viewport: Viewport {
                 start: 0.0,
                 end: 100.0,
             },
         })
+    }
+
+    #[test]
+    fn marker_and_measure_rows_only_take_space_when_present() {
+        let empty = layout_with(&[], None, 1.0, 10);
+        assert_eq!(empty.marker_lane.band.height(), 0.0);
+        assert_eq!(empty.marker_lane.strip().height(), 0.0);
+        assert_eq!(empty.names.top(), empty.rulers.bottom());
+
+        let measuring = Some(Measuring {
+            reference: 25,
+            cursor: Some(75),
+        });
+        let measured = layout_with(&[], measuring, 1.0, 10);
+        assert_eq!(measured.marker_lane.band.height(), 0.0);
+        let measure = measured.marker_lane.measure.as_ref().unwrap();
+        assert_eq!(measured.marker_lane.strip(), measure.band);
+        assert_eq!(measured.names.top(), measure.band.bottom());
+
+        let both = layout_with(&[marker()], measuring, 1.0, 10);
+        assert_eq!(both.marker_lane.band.height(), LANE_H);
+        assert_eq!(both.marker_lane.strip().height(), 2.0 * LANE_H);
+        assert_eq!(both.names.top(), both.marker_lane.strip().bottom());
     }
 
     #[test]
@@ -396,7 +425,7 @@ mod tests {
         let heights = [1, 4, 1, 8, 2].map(|h| RowHeight::try_from(h).unwrap());
         let input = |scroll_y| LayoutInput {
             metadata_width: None,
-            bounds: Rect::from_xywh(0.0, 0.0, 2000.0, 32.0 + LANE_H + 24.0 * 5.0),
+            bounds: Rect::from_xywh(0.0, 0.0, 2000.0, 32.0 + 24.0 * 5.0),
             row_h: 24.0,
             header_h: 32.0,
             ruler_h: 0.0,

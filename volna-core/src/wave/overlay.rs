@@ -387,6 +387,33 @@ pub struct Measuring {
     pub cursor: Option<u64>,
 }
 
+struct LaneBands {
+    markers: Rect,
+    measure: Rect,
+}
+
+impl LaneBands {
+    fn compute(available: Rect, has_markers: bool, has_measure: bool, zoom: f32) -> Self {
+        let rows = match (has_markers, has_measure) {
+            (false, false) => 0.0,
+            (true, true) => 2.0,
+            _ => 1.0,
+        };
+        let height = (LANE_H * zoom * rows).min(available.height().max(0.0));
+        let marker_h = match (has_markers, has_measure) {
+            (false, _) => 0.0,
+            (true, true) => (height / 2.0).floor(),
+            (true, false) => height,
+        };
+        let markers = Rect::new(available.origin, size(available.width(), marker_h));
+        let measure = Rect::new(
+            point(available.left(), markers.bottom()),
+            size(available.width(), height - marker_h),
+        );
+        Self { markers, measure }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeasureLane {
     pub band: Rect,
@@ -519,7 +546,7 @@ impl MarkerLane {
 )]
 #[must_use]
 pub fn marker_lane(
-    band: Rect,
+    available: Rect,
     time_left: f32,
     width_px: f64,
     viewport: Viewport,
@@ -529,19 +556,8 @@ pub fn marker_lane(
     zoom: f32,
 ) -> MarkerLane {
     let z = |v: f32| v * zoom;
-    let (band, measure_band) = match measuring {
-        Some(_) => {
-            let h = (band.height() / 2.0).floor();
-            (
-                Rect::new(band.origin, size(band.width(), h)),
-                Some(Rect::new(
-                    point(band.left(), band.top() + h),
-                    size(band.width(), band.height() - h),
-                )),
-            )
-        }
-        None => (band, None),
-    };
+    let bands = LaneBands::compute(available, !markers.is_empty(), measuring.is_some(), zoom);
+    let band = bands.markers;
     let first = markers.partition_point(|m| (m.time as f64) < viewport.start);
     let last = first + markers[first..].partition_point(|m| (m.time as f64) <= viewport.end);
     let chip_h = z(CHIP_H);
@@ -596,9 +612,17 @@ pub fn marker_lane(
         clocks,
         zoom,
     );
-    let measure = measuring
-        .zip(measure_band)
-        .map(|(m, band)| measure_lane(band, time_left, width_px, viewport, m, clocks, zoom));
+    let measure = measuring.map(|m| {
+        measure_lane(
+            bands.measure,
+            time_left,
+            width_px,
+            viewport,
+            m,
+            clocks,
+            zoom,
+        )
+    });
     MarkerLane {
         band,
         time_left,
@@ -878,53 +902,55 @@ pub fn marker_lane_paint(
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
     let band = lane.band;
-    if band.height() <= 0.0 {
+    if lane.strip().height() <= 0.0 {
         return;
     }
     let markers = doc.markers();
-    p.scene.fill(band, t.panel.bg);
-    p.scene.fill(
-        Rect::new(
-            point(band.left(), band.bottom() - 1.0),
-            size(band.width(), 1.0),
-        ),
-        t.border_variant,
-    );
-    let cell = |r: Rect| {
-        Rect::new(
-            point(r.left(), band.top()),
-            size(r.width(), band.height() - 1.0),
-        )
-    };
-    let title = cell(title);
-    p.scene.clipped(title, |scene| {
-        scene.text(
-            point(title.left() + z(12.0), title.top()),
-            title.height(),
-            "Markers",
-            FontRole::UiSemibold,
-            t.ui_size_small,
-            t.panel.text_muted,
-        );
-    });
-    if let Some(value) = value.map(cell) {
-        let here = cursor.and_then(|c| markers.iter().find(|m| m.time == c));
-        let (text, color) = match (here, markers.len()) {
-            (Some(m), _) => (format!("at {}", m.id), t.panel.text),
-            (None, 0) => ("no markers".into(), t.panel.text_placeholder),
-            (None, 1) => ("1 marker".into(), t.panel.text_muted),
-            (None, n) => (format!("{n} markers"), t.panel.text_muted),
+    if band.height() > 0.0 {
+        let cell = |r: Rect| {
+            Rect::new(
+                point(r.left(), band.top()),
+                size(r.width(), (band.height() - 1.0).max(0.0)),
+            )
         };
-        p.scene.clipped(value, |scene| {
+        let title = cell(title);
+        p.scene.fill(band, t.panel.bg);
+        p.scene.fill(
+            Rect::new(
+                point(band.left(), band.bottom() - 1.0),
+                size(band.width(), 1.0),
+            ),
+            t.border_variant,
+        );
+        p.scene.clipped(title, |scene| {
             scene.text(
-                point(value.left() + z(8.0), value.top()),
-                value.height(),
-                text,
-                FontRole::Mono,
+                point(title.left() + z(12.0), title.top()),
+                title.height(),
+                "Markers",
+                FontRole::UiSemibold,
                 t.ui_size_small,
-                color,
+                t.panel.text_muted,
             );
         });
+        if let Some(value) = value.map(cell) {
+            let here = cursor.and_then(|c| markers.iter().find(|m| m.time == c));
+            let (text, color) = match (here, markers.len()) {
+                (Some(m), _) => (format!("at {}", m.id), t.panel.text),
+                (None, 0) => ("no markers".into(), t.panel.text_placeholder),
+                (None, 1) => ("1 marker".into(), t.panel.text_muted),
+                (None, n) => (format!("{n} markers"), t.panel.text_muted),
+            };
+            p.scene.clipped(value, |scene| {
+                scene.text(
+                    point(value.left() + z(8.0), value.top()),
+                    value.height(),
+                    text,
+                    FontRole::Mono,
+                    t.ui_size_small,
+                    color,
+                );
+            });
+        }
     }
 
     if let Some(measure) = &lane.measure {
@@ -1068,7 +1094,7 @@ fn measure_lane_paint(
     let cell = |r: Rect| {
         Rect::new(
             point(r.left(), band.top()),
-            size(r.width(), band.height() - 1.0),
+            size(r.width(), (band.height() - 1.0).max(0.0)),
         )
     };
     let title = cell(title);
@@ -1604,6 +1630,67 @@ mod tests {
                 label: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn marker_lane_allocates_clamped_rows_from_its_contents_at_fractional_zoom() {
+        let markers = at(&[50]);
+        let measuring = Some(Measuring {
+            reference: 25,
+            cursor: Some(75),
+        });
+        for zoom in [0.75, 1.25, 1.5, 2.0] {
+            for height in [0.0, 0.5, 1.0, 7.5, 27.5, 100.0] {
+                let available = Rect::from_xywh(10.0, 50.0, 900.0, height);
+                let layout = |markers: &[Marker], measuring| {
+                    marker_lane(
+                        available,
+                        200.0,
+                        710.0,
+                        Viewport {
+                            start: 0.0,
+                            end: 100.0,
+                        },
+                        markers,
+                        SpanClocks::time_only(TimeBase::si(-9)),
+                        measuring,
+                        zoom,
+                    )
+                };
+                let empty = layout(&[], None);
+                assert_eq!(empty.strip(), Rect::from_xywh(10.0, 50.0, 900.0, 0.0));
+                assert!(empty.measure.is_none());
+
+                let marked = layout(&markers, None);
+                let measured = layout(&[], measuring);
+                let both = layout(&markers, measuring);
+                let row_h = (LANE_H * zoom).min(height);
+                assert_eq!(marked.band.height(), row_h);
+                assert_eq!(marked.strip(), marked.band);
+                assert!(marked.measure.is_none());
+                assert_eq!(measured.band.height(), 0.0);
+                assert_eq!(measured.strip(), measured.measure.as_ref().unwrap().band);
+                assert_eq!(measured.strip().height(), row_h);
+                assert!(both.measure.is_some());
+                assert_eq!(both.strip().height(), (2.0 * LANE_H * zoom).min(height));
+                assert_eq!(both.band.height().fract(), 0.0);
+
+                for lane in [marked, measured, both] {
+                    let strip = lane.strip();
+                    assert_eq!(strip.origin, available.origin);
+                    assert_eq!(strip.width(), available.width());
+                    assert!(strip.height() >= 0.0 && strip.bottom() <= available.bottom());
+                    if let Some(measure) = lane.measure {
+                        assert_eq!(measure.band.top(), lane.band.bottom());
+                        assert_eq!(measure.band.bottom(), strip.bottom());
+                        assert!(measure.band.height() >= 0.0);
+                        assert_eq!(measure.reference, 25);
+                        let live = measure.live.unwrap();
+                        assert_eq!((live.measurement.from, live.measurement.to), (25, 75));
+                    }
+                }
+            }
+        }
     }
 
     #[test]

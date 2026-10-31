@@ -8,7 +8,7 @@ use std::ops::Range;
 use super::rows::RowView;
 use crate::geometry::{Point, Rect, point, size};
 use crate::marker::Marker;
-use crate::wave::overlay::{LANE_H, MarkerLane, Measuring, SpanClocks, marker_lane};
+use crate::wave::overlay::{MarkerLane, Measuring, SpanClocks, marker_lane};
 use crate::wave::viewport::Viewport;
 
 pub const LABEL_W_MIN: f32 = 60.0;
@@ -79,35 +79,31 @@ impl PipelineLayout {
             point(bounds.left(), header.bottom()),
             size(bounds.width(), ruler_h),
         );
-        let lanes = if input.measuring.is_some() { 2.0 } else { 1.0 };
-        let lane_h = (z(LANE_H) * lanes).min((bounds.height() - header_h - ruler_h).max(0.0));
-        let lane = Rect::new(
-            point(bounds.left(), rulers.bottom()),
-            size(bounds.width(), lane_h),
-        );
-        let rows_top = lane.bottom();
-        let rows_h = (bounds.bottom() - rows_top).max(0.0);
-        let labels = Rect::new(point(bounds.left(), rows_top), size(labels_w, rows_h));
-        let cells = Rect::new(
-            point(labels.right(), rows_top),
-            size((bounds.width() - labels_w).max(0.0), rows_h),
-        );
-        let mut rows = input.rows.zoomed(zoom);
-        rows.clamp(rows_h, input.row_count, zoom);
-        let first = rows.top.floor().max(0.0) as usize;
-        let last = ((rows.top + f64::from(rows_h / rows.row_px)).ceil().max(0.0) as usize)
-            .min(input.row_count);
-        let row_range = first.min(last)..last;
+        let cells_left = bounds.left() + labels_w;
+        let cells_w = (bounds.width() - labels_w).max(0.0);
         let marker_lane = marker_lane(
-            lane,
-            cells.left(),
-            f64::from(cells.width()).max(1.0),
+            Rect::new(
+                point(bounds.left(), rulers.bottom()),
+                size(bounds.width(), bounds.bottom() - rulers.bottom()),
+            ),
+            cells_left,
+            f64::from(cells_w).max(1.0),
             input.viewport,
             input.markers,
             input.spans,
             input.measuring,
             zoom,
         );
+        let rows_top = marker_lane.strip().bottom();
+        let rows_h = (bounds.bottom() - rows_top).max(0.0);
+        let labels = Rect::new(point(bounds.left(), rows_top), size(labels_w, rows_h));
+        let cells = Rect::new(point(cells_left, rows_top), size(cells_w, rows_h));
+        let mut rows = input.rows.zoomed(zoom);
+        rows.clamp(rows_h, input.row_count, zoom);
+        let first = rows.top.floor().max(0.0) as usize;
+        let last = ((rows.top + f64::from(rows_h / rows.row_px)).ceil().max(0.0) as usize)
+            .min(input.row_count);
+        let row_range = first.min(last)..last;
         let retry = input.failed.then(|| {
             Rect::new(
                 point(
@@ -178,9 +174,28 @@ impl PipelineLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wave::overlay::LANE_H;
     use crate::wave::timeline::TimeBase;
 
+    fn marker() -> Marker {
+        Marker {
+            id: crate::marker::MarkerId::new(1).unwrap(),
+            time: 50,
+            label: None,
+        }
+    }
+
     fn layout(zoom: f32, row_px: f32, rows: usize) -> PipelineLayout {
+        layout_with(&[marker()], None, zoom, row_px, rows)
+    }
+
+    fn layout_with(
+        markers: &[Marker],
+        measuring: Option<Measuring>,
+        zoom: f32,
+        row_px: f32,
+        rows: usize,
+    ) -> PipelineLayout {
         PipelineLayout::compute(LayoutInput {
             metadata_width: None,
             bounds: Rect::from_xywh(0.0, 0.0, 1000.0, 332.0),
@@ -190,13 +205,9 @@ mod tests {
             label_width: 190.0,
             rows: RowView { top: 3.0, row_px },
             row_count: rows,
-            markers: &[Marker {
-                id: crate::marker::MarkerId::new(1).unwrap(),
-                time: 50,
-                label: None,
-            }],
+            markers,
             spans: SpanClocks::time_only(TimeBase::si(-9)),
-            measuring: None,
+            measuring,
             viewport: Viewport {
                 start: 0.0,
                 end: 100.0,
@@ -204,6 +215,28 @@ mod tests {
             failed: false,
             device_scale: 1.0,
         })
+    }
+
+    #[test]
+    fn empty_markers_leave_room_only_for_an_active_measurement() {
+        let empty = layout_with(&[], None, 1.0, 20.0, 10);
+        assert_eq!(empty.marker_lane.strip().height(), 0.0);
+        assert_eq!(empty.cells.top(), empty.rulers.bottom());
+
+        let measured = layout_with(
+            &[],
+            Some(Measuring {
+                reference: 25,
+                cursor: Some(75),
+            }),
+            1.0,
+            20.0,
+            10,
+        );
+        assert_eq!(measured.marker_lane.band.height(), 0.0);
+        let measure = measured.marker_lane.measure.as_ref().unwrap();
+        assert_eq!(measured.marker_lane.strip(), measure.band);
+        assert_eq!(measured.cells.top(), measure.band.bottom());
     }
 
     #[test]
