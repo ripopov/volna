@@ -1001,16 +1001,9 @@ fn sub_pixel_bursts_of_a_gated_clock_draw_a_band() {
     let shade = theme.wave_signal.with_alpha(0.16);
     let band: f32 = app
         .scene()
-        .prims
-        .iter()
-        .filter_map(|p| match p {
-            volna_core::scene::Prim::Quad { rect, fill, .. }
-                if *fill == shade && row.contains(rect.origin) =>
-            {
-                Some(rect.width())
-            }
-            _ => None,
-        })
+        .quads()
+        .filter(|(rect, fill)| *fill == shade && row.contains(rect.origin))
+        .map(|(rect, _)| rect.width())
         .sum();
     assert!(
         band > layout.waves.width() * 0.9,

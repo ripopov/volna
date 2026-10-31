@@ -365,6 +365,47 @@ fn cursor_style(icon: CursorIcon) -> CursorStyle {
     }
 }
 
+fn append_rect(builder: &mut PathBuilder, rect: CRect) {
+    builder.move_to(point(px(rect.left()), px(rect.top())));
+    builder.line_to(point(px(rect.right()), px(rect.top())));
+    builder.line_to(point(px(rect.right()), px(rect.bottom())));
+    builder.line_to(point(px(rect.left()), px(rect.bottom())));
+    builder.close();
+}
+
+// GPUI snaps quad bounds to device pixels; paths preserve fractional edges.
+fn subpixel_path(
+    rect: CRect,
+    color: volna_core::Color,
+    prims: &[Prim],
+    next: &mut usize,
+) -> Option<gpui_kit::Path<Pixels>> {
+    let mut builder = PathBuilder::fill();
+    append_rect(&mut builder, rect);
+    let mut bounds = rect;
+    while let Some(Prim::SubpixelFill { rect, color: ink }) = prims.get(*next) {
+        // Overlapping contours can change fill rules and translucent compositing.
+        let overlaps = bounds.left() < rect.right()
+            && bounds.right() > rect.left()
+            && bounds.top() < rect.bottom()
+            && bounds.bottom() > rect.top();
+        if *ink != color || overlaps {
+            break;
+        }
+        append_rect(&mut builder, *rect);
+        let left = bounds.left().min(rect.left());
+        let top = bounds.top().min(rect.top());
+        bounds = CRect::from_xywh(
+            left,
+            top,
+            bounds.right().max(rect.right()) - left,
+            bounds.bottom().max(rect.bottom()) - top,
+        );
+        *next += 1;
+    }
+    builder.build().ok()
+}
+
 fn paint_prims(
     prims: &[Prim],
     i: &mut usize,
@@ -390,6 +431,11 @@ fn paint_prims(
                     .paint_image(bounds, bounds, Default::default(), image.clone(), 0, false)
                     .ok();
                 images.push(image);
+            }
+            Prim::SubpixelFill { rect, color } => {
+                if let Some(path) = subpixel_path(*rect, *color, prims, i) {
+                    window.paint_path(path, hsla(*color));
+                }
             }
             Prim::Quad {
                 rect,
@@ -1456,6 +1502,73 @@ impl PanelCanvas {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod waveform_tests {
+    use super::*;
+
+    #[test]
+    fn path_batches_preserve_overlaps_colors_and_clip_boundaries() {
+        let rect = CRect::from_xywh(30.25, 5.0, 0.5, 14.0);
+        let other = CRect::from_xywh(31.25, 5.0, 0.5, 14.0);
+        for alpha in [0.5, 1.0] {
+            let color = volna_core::Color::rgb(0x007a_d59c).with_alpha(alpha);
+            for (next, consumed) in [
+                (Prim::SubpixelFill { rect: other, color }, 1),
+                (Prim::SubpixelFill { rect, color }, 0),
+                (
+                    Prim::SubpixelFill {
+                        rect: other,
+                        color: color.with_alpha(0.25),
+                    },
+                    0,
+                ),
+                (Prim::PushClip(other), 0),
+            ] {
+                let mut index = 0;
+                let path = subpixel_path(rect, color, &[next], &mut index).unwrap();
+                assert_eq!(index, consumed);
+                let expected_width = if consumed == 0 { 0.5 } else { 1.5 };
+                assert_eq!(f32::from(path.bounds.size.width), expected_width);
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_density_bands_keep_their_area_while_panning() {
+        let widths = [0.125, 0.375, 0.5, 0.75, 1.25, 2.5];
+        let expected = widths.iter().sum::<f32>() * 14.0;
+        for scale in [1.0, 1.5, 2.0] {
+            for offset in 0..128 {
+                let mut builder = PathBuilder::fill();
+                let mut x = 30.0 + offset as f32 / 128.0;
+                for width in widths {
+                    append_rect(&mut builder, CRect::from_xywh(x, 5.0, width, 14.0));
+                    x += width + 0.25;
+                }
+                let path = builder.build().unwrap().scale(scale);
+                let area: f32 = path
+                    .vertices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|[a, b, c]| {
+                        let a = a.xy_position;
+                        let b = b.xy_position;
+                        let c = c.xy_position;
+                        ((b.x.0 - a.x.0) * (c.y.0 - a.y.0) - (b.y.0 - a.y.0) * (c.x.0 - a.x.0))
+                            .abs()
+                            / 2.0
+                    })
+                    .sum();
+                assert!(
+                    (area - expected * scale * scale).abs() < 0.001,
+                    "scale {scale}, offset {offset}: {area}"
+                );
+            }
+        }
     }
 }
 

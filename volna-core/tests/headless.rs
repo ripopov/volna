@@ -988,15 +988,26 @@ fn dense_columns_collapse_into_one_band_and_zooming_in_resolves_edges() {
     let aliased =
         |c: &volna_core::Color| c.with_alpha(1.0) == theme.wave_signal && (0.3..1.0).contains(&c.a);
     let dense: Vec<_> = app.scene().quads().filter(|(_, c)| aliased(c)).collect();
-    assert_eq!(dense.len(), 1, "one dense band for the burst: {dense:?}");
+    assert!(!dense.is_empty());
+    for pair in dense.windows(2) {
+        assert!(
+            (pair[0].0.right() - pair[1].0.left()).abs() < 0.001,
+            "the burst forms a contiguous band: {dense:?}"
+        );
+    }
     assert!(
-        (dense[0].1.a - 0.75).abs() < 0.02,
+        dense.iter().any(|(_, c)| (c.a - 0.75).abs() < 0.02),
         "saturated: {:?}",
         dense[0].1
     );
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();
     let expected_w = 1000.0 / 100_000.0 * f64::from(layout.waves.width());
-    let (band, _) = dense[0];
+    let band = Rect::from_xywh(
+        dense[0].0.left(),
+        dense[0].0.top(),
+        dense.last().unwrap().0.right() - dense[0].0.left(),
+        dense[0].0.height(),
+    );
     assert!(
         (f64::from(band.width()) - expected_w).abs() <= 2.0,
         "band {band:?} vs {expected_w}"
@@ -1015,11 +1026,11 @@ fn dense_columns_collapse_into_one_band_and_zooming_in_resolves_edges() {
         .collect::<Vec<_>>();
     assert_eq!(
         edges.len(),
-        19,
-        "one vertical edge per change inside the window"
+        20,
+        "one vertical edge per change in the half-open window"
     );
     let layout = app.panels.focused_waves().unwrap().last_layout();
-    for (edge, tick) in edges.iter().zip(1..20) {
+    for (edge, tick) in edges.iter().zip(0..20) {
         let expected = layout.waves.left() + tick as f32 / 20.0 * layout.waves.width();
         assert!((edge.left() - expected).abs() < 0.001);
     }

@@ -2,6 +2,11 @@
 //! plus the timeline header, cursor, markers and a scrollbar.
 
 mod overlaid;
+#[cfg(test)]
+mod pan_tests;
+mod sampling;
+
+use sampling::SamplingGrid;
 
 use crate::analysis::AnalysisLoad;
 use crate::color::Color;
@@ -1325,6 +1330,11 @@ fn paint_event_counts(
     }
 }
 
+fn pattern_origin(vp: &Viewport, area: Rect, period: f32) -> f32 {
+    let unit = vp.width() / f64::from(area.width());
+    area.left() - (vp.start.rem_euclid(f64::from(period) * unit) / unit) as f32
+}
+
 pub fn paint_bit_row(
     h: &dyn SignalHistory,
     vp: &Viewport,
@@ -1345,13 +1355,22 @@ fn paint_bits(
     high_fill: bool,
     columns: std::ops::Range<usize>,
 ) {
-    let w_px = area.width().ceil().max(0.0) as usize;
-    let columns = columns.start.min(w_px)..columns.end.min(w_px);
-    if columns.is_empty() || area.height() <= 0.0 || vp.width() <= 0.0 {
+    let wf = f64::from(area.width());
+    if wf <= 0.0 || area.height() <= 0.0 || vp.width() <= 0.0 || columns.is_empty() {
         return;
     }
-    let wf = f64::from(area.width());
-    let x0 = area.left();
+    let grid = SamplingGrid::new(vp, wf);
+    let clip_start = columns.start as f32;
+    let clip_end = (columns.end as f32).min(area.width());
+    let first = ((clip_start - grid.left) / grid.pixel).floor().max(0.0) as usize;
+    let end = (((clip_end - grid.left) / grid.pixel).ceil() as usize).min(grid.len);
+    let columns = first..end;
+    let x0 = area.left() + grid.left;
+    let raster = marks::ColumnGrid {
+        left: x0,
+        width: grid.pixel,
+        hatch_origin: pattern_origin(vp, area, marks::HATCH_PX * t.zoom),
+    };
     let top = area.top() + trace_pad(area.height(), t);
     let bottom = area.bottom() - trace_pad(area.height(), t);
     let mid = (top + bottom - t.digital_wave_width) / 2.0;
@@ -1362,30 +1381,32 @@ fn paint_bits(
             _ => mid,
         }
     };
-    let mut idx = vp
-        .tick_at(columns.start as f64, wf)
-        .and_then(|t| h.index_at(t));
+    let mut idx = grid.index_before(h, columns.start, None);
     let mut bit = h.bit(idx);
     let mut hint = idx.unwrap_or(0);
-    let mut run_start = columns.start as f32;
+    let mut run_start = columns.start as f32 * grid.pixel;
     let mut dense: Vec<marks::Aliased> = Vec::new();
     let mut kinds = marks::KindReader::new(h, true);
     let mut dotted: Vec<[Point; 2]> = Vec::new();
     let mut dashed: Vec<[Point; 2]> = Vec::new();
+    let dotted_origin = pattern_origin(vp, area, marks::DOTTED.0 + marks::DOTTED.1);
+    let dashed_origin = pattern_origin(vp, area, (marks::DASHED.0 + marks::DASHED.1) * t.zoom);
 
     let mut emit_run = |scene: &mut Scene, xs: f32, xe: f32, b: Bit| {
         if xe <= xs || b == Bit::Unavailable {
             return;
         }
+        let xs = xs.max(clip_start - grid.left);
+        let xe = xe.min(clip_end - grid.left);
         let x = x0 + xs;
-        let w = xe - xs;
+        let w = (xe - xs).max(0.0);
         let kind = b.kind();
         let color = t.value_color(kind);
         match kind {
             ValueKind::Undef => {
                 let band = Rect::new(point(x, top), size(w, bottom - top));
-                scene.fill(band, t.wave_undef_fill);
-                marks::hatch(scene, t, band, x0);
+                scene.fill_subpixel(band, t.wave_undef_fill);
+                marks::hatch(scene, t, band, raster.hatch_origin);
             }
             ValueKind::DontCare => {
                 marks::dashes(
@@ -1393,7 +1414,7 @@ fn paint_bits(
                     x,
                     x + w,
                     mid + t.digital_wave_width / 2.0 - 0.5,
-                    x0,
+                    dotted_origin,
                     marks::DOTTED,
                 );
                 return;
@@ -1404,19 +1425,19 @@ fn paint_bits(
                     x,
                     x + w,
                     mid + t.digital_wave_width / 2.0 - 0.5,
-                    x0,
+                    dashed_origin,
                     scaled(marks::DASHED, t),
                 );
                 return;
             }
             _ => {}
         }
-        scene.fill(
+        scene.fill_subpixel(
             Rect::new(point(x, y_of(b)), size(w, t.digital_wave_width)),
             color,
         );
         if b == Bit::One && high_fill {
-            scene.fill(
+            scene.fill_subpixel(
                 Rect::new(
                     point(x, top + t.digital_wave_width),
                     size(w, (bottom - top - t.digital_wave_width).max(0.0)),
@@ -1426,11 +1447,11 @@ fn paint_bits(
         }
     };
 
-    for x in columns.clone() {
-        let idx1 = index_before_x(h, vp, wf, ((x + 1) as f64).min(wf), Some(hint));
+    for x in columns {
+        let idx1 = grid.index_before(h, x + 1, Some(hint));
         let n = changes_between(idx, idx1);
         if n < 2 && !dense.is_empty() {
-            marks::paint_aliased(scene, t, &dense, x0, top, bottom);
+            marks::paint_aliased(scene, t, &dense, &raster, top, bottom);
             dense.clear();
         }
         if n == 0 {
@@ -1438,10 +1459,9 @@ fn paint_bits(
         }
         let new_bit = h.bit(idx1);
         let edge = if n == 1 {
-            vp.x_of_tick(h.time(idx1.unwrap()), wf)
-                .clamp(x as f64, ((x + 1) as f64).min(wf)) as f32
+            vp.x_of_tick(h.time(idx1.unwrap()), wf) as f32 - grid.left
         } else {
-            x as f32
+            x as f32 * grid.pixel
         };
         emit_run(scene, run_start, edge, bit);
         if n == 1 && bit != Bit::Unavailable && new_bit != Bit::Unavailable {
@@ -1452,7 +1472,7 @@ fn paint_bits(
             } else {
                 new_bit.kind()
             });
-            scene.fill(
+            scene.fill_subpixel(
                 Rect::new(
                     point(x0 + edge + 0.5 - t.digital_wave_width / 2.0, lo),
                     size(t.digital_wave_width, hi - lo + t.digital_wave_width),
@@ -1467,40 +1487,25 @@ fn paint_bits(
                 kinds: kinds.column(idx, last),
             });
         }
-        run_start = if n == 1 { edge } else { (x + 1) as f32 };
+        run_start = if n == 1 {
+            edge
+        } else {
+            (x + 1) as f32 * grid.pixel
+        };
         bit = new_bit;
         idx = idx1;
         hint = idx1.unwrap_or(0);
     }
     if !dense.is_empty() {
-        marks::paint_aliased(scene, t, &dense, x0, top, bottom);
+        marks::paint_aliased(scene, t, &dense, &raster, top, bottom);
     }
-    emit_run(
-        scene,
-        run_start,
-        (columns.end as f32).min(area.width()),
-        bit,
-    );
+    emit_run(scene, run_start, clip_end - grid.left, bit);
     scene.lines(dotted, t.wave_dontcare, t.digital_wave_width);
     scene.lines(dashed, t.wave_weak, t.digital_wave_width);
 }
 
 fn scaled((on, off): (f32, f32), t: &Theme) -> (f32, f32) {
     (on * t.zoom, off * t.zoom)
-}
-
-fn index_before_x(
-    h: &dyn SignalHistory,
-    vp: &Viewport,
-    width_px: f64,
-    x: f64,
-    hint: Option<usize>,
-) -> Option<usize> {
-    let t = vp.tick_before(x, width_px)?;
-    match hint {
-        Some(hint) => h.index_at_hint(t, hint),
-        None => h.index_at(t),
-    }
 }
 
 struct Segment {
@@ -1593,7 +1598,7 @@ fn fill_hexagon(
         if open.1 { xb } else { xb - tw },
     );
     if rb > la {
-        scene.fill(Rect::from_xywh(la, top, rb - la, bottom - top), color);
+        scene.fill_subpixel(Rect::from_xywh(la, top, rb - la, bottom - top), color);
     }
     let half = (bottom - top) / 2.0;
     let mid = top + half;
@@ -1610,7 +1615,7 @@ fn fill_hexagon(
             } else {
                 edge - k as f32 - width
             };
-            scene.fill(Rect::from_xywh(x, mid - reach, width, 2.0 * reach), color);
+            scene.fill_subpixel(Rect::from_xywh(x, mid - reach, width, 2.0 * reach), color);
         }
     }
 }
@@ -1625,31 +1630,46 @@ fn paint_bus_row(
     p: &mut TextPainter<'_>,
 ) {
     let t = p.theme;
-    let w_px = area.width().ceil().max(0.0) as usize;
-    if w_px == 0 || area.height() <= 0.0 || vp.width() <= 0.0 {
+    let wf = f64::from(area.width());
+    if wf <= 0.0 || area.height() <= 0.0 || vp.width() <= 0.0 {
         return;
     }
-    let wf = f64::from(area.width());
-    let x0 = area.left();
+    let grid = SamplingGrid::new(vp, wf)
+        .with_padding((2.0 * SLANT_PX * t.zoom).max(MIN_SEGMENT_PX as f32));
+    let w_px = grid.len;
+    let x0 = area.left() + grid.left;
+    let raster = marks::ColumnGrid {
+        left: x0,
+        width: grid.pixel,
+        hatch_origin: pattern_origin(vp, area, marks::HATCH_PX * t.zoom),
+    };
     let top = area.top() + trace_pad(area.height(), t);
     let bottom = area.bottom() - trace_pad(area.height(), t);
     let midf = top + (bottom - top) / 2.0;
     let numeric = translator.numeric_kind().is_some();
 
     let mut segments: Vec<Segment> = Vec::new();
-    let mut columns: Vec<(usize, marks::Kinds)> = vec![(0, marks::Kinds::NONE); w_px];
+    let mut columns: Vec<_> = (0..w_px)
+        .map(|x| marks::Aliased {
+            x,
+            changes: 0,
+            kinds: marks::Kinds::NONE,
+        })
+        .collect();
     let mut kinds = marks::KindReader::new(h, false);
-    let mut idx = vp.tick_at(0.0, wf).and_then(|t| h.index_at(t));
+    let mut idx = grid.index_before(h, 0, None);
     let mut hint = idx.unwrap_or(0);
     let mut cur_start = 0usize;
     for (x, column) in columns.iter_mut().enumerate() {
-        let idx1 = index_before_x(h, vp, wf, ((x + 1) as f64).min(wf), Some(hint));
+        let idx1 = grid.index_before(h, x + 1, Some(hint));
         let n = changes_between(idx, idx1);
         if n == 0 {
+            column.kinds = kinds.state(idx);
             continue;
         }
         let last = idx1.expect("a column with changes ends on one");
-        *column = (n, kinds.column(idx, last));
+        column.changes = n;
+        column.kinds = kinds.column(idx, last);
         if x > cur_start {
             segments.push(Segment {
                 x_start: cur_start,
@@ -1685,41 +1705,46 @@ fn paint_bus_row(
     }
     for seg in &mut segments {
         if !seg.dense
-            && seg.x_end - seg.x_start < MIN_SEGMENT_PX
+            && (seg.x_end - seg.x_start) as f32 * grid.pixel < MIN_SEGMENT_PX as f32
             && seg.x_start != 0
             && seg.x_end != w_px
         {
             seg.dense = true;
         }
     }
-    let mut merged: Vec<Segment> = Vec::with_capacity(segments.len());
-    for seg in segments {
-        match merged.last_mut() {
-            Some(last) if last.dense && seg.dense && last.x_end == seg.x_start => {
-                last.x_end = seg.x_end;
-            }
-            _ => merged.push(seg),
+    segments.dedup_by(|next, last| {
+        if last.dense && next.dense && last.x_end == next.x_start {
+            last.x_end = next.x_end;
+            true
+        } else {
+            false
         }
-    }
-    let segments = merged;
+    });
 
     let mut slants: Vec<(Color, Vec<[Point; 2]>)> = Vec::new();
     let slant_w = SLANT_PX * t.zoom;
     let mut texts: Vec<(f32, String, Color)> = Vec::new();
-    p.scene.clipped(clip, |scene| {
+    p.scene.clipped(intersect(clip, area), |scene| {
         for seg in &segments {
-            let xa = x0 + seg.x_start as f32;
-            let xb = x0 + (seg.x_end as f32).min(area.width());
+            let xa = if seg.x_start == 0 {
+                area.left()
+            } else {
+                x0 + seg.x_start as f32 * grid.pixel
+            };
+            let xb = if seg.x_end == w_px {
+                area.right()
+            } else {
+                x0 + seg.x_end as f32 * grid.pixel
+            };
             if seg.dense {
-                let entering = marks::Kinds::of(h.value_view(seg.idx).kind());
-                let aliased: Vec<marks::Aliased> = (seg.x_start..seg.x_end)
-                    .map(|x| marks::Aliased {
-                        x,
-                        changes: columns[x].0.max(2),
-                        kinds: columns[x].1.union(entering),
-                    })
-                    .collect();
-                marks::paint_aliased(scene, t, &aliased, x0, top, bottom);
+                marks::paint_aliased(
+                    scene,
+                    t,
+                    &columns[seg.x_start..seg.x_end],
+                    &raster,
+                    top,
+                    bottom,
+                );
                 continue;
             }
             let value = h.value(seg.idx);
@@ -1752,7 +1777,7 @@ fn paint_bus_row(
             };
             match look {
                 BusLook::Floating => {
-                    scene.fill(
+                    scene.fill_subpixel(
                         Rect::from_xywh(
                             xa,
                             midf - t.digital_wave_width / 2.0,
@@ -1765,7 +1790,7 @@ fn paint_bus_row(
                 }
                 BusLook::Zero => {
                     if rb > la {
-                        scene.fill(
+                        scene.fill_subpixel(
                             Rect::from_xywh(
                                 la,
                                 bottom - t.digital_wave_width,
@@ -1799,7 +1824,7 @@ fn paint_bus_row(
                             scene,
                             t,
                             Rect::from_xywh(la, top, rb - la, bottom - top),
-                            x0,
+                            raster.hatch_origin,
                         );
                     }
                 }
@@ -1819,11 +1844,11 @@ fn paint_bus_row(
                 BusLook::Value => {}
             }
             if rb > la {
-                scene.fill(
+                scene.fill_subpixel(
                     Rect::new(point(la, top), size(rb - la, t.digital_wave_width)),
                     color,
                 );
-                scene.fill(
+                scene.fill_subpixel(
                     Rect::new(
                         point(la, bottom - t.digital_wave_width),
                         size(rb - la, t.digital_wave_width),
@@ -2003,15 +2028,15 @@ fn paint_clock_wave(
     let mut dashed: Vec<[Point; 2]> = Vec::new();
     let mut labels: Vec<(f32, f32, String, Color)> = Vec::new();
     let band = |scene: &mut Scene, xa: f32, xb: f32| {
-        scene.fill(
+        scene.fill_subpixel(
             Rect::from_xywh(xa, top, xb - xa, bottom - top),
             t.wave_signal.with_alpha(0.16),
         );
-        scene.fill(
+        scene.fill_subpixel(
             Rect::from_xywh(xa, top, xb - xa, t.digital_wave_width),
             t.wave_signal,
         );
-        scene.fill(
+        scene.fill_subpixel(
             Rect::from_xywh(
                 xa,
                 bottom - t.digital_wave_width,
@@ -2408,7 +2433,7 @@ fn paint_group_summary(
             let undefined = columns[settled..b].iter().any(|c| c.undefined);
             if dense {
                 let color = if undefined { undef } else { t.wave_dense };
-                scene.fill(Rect::from_xywh(xa, top, xb - xa, bottom - top), color);
+                scene.fill_subpixel(Rect::from_xywh(xa, top, xb - xa, bottom - top), color);
                 continue;
             }
             let mut x = own;
@@ -2418,7 +2443,7 @@ fn paint_group_summary(
                     continue;
                 }
                 let run = columns[x..b].iter().take_while(|c| c.undefined).count();
-                scene.fill(
+                scene.fill_subpixel(
                     Rect::from_xywh(x0 + x as f32 * pixel, top, run as f32 * pixel, bottom - top),
                     undef.with_alpha(0.14),
                 );
@@ -2430,11 +2455,11 @@ fn paint_group_summary(
             let la = if open_left { xa } else { xa + tw };
             let rb = if open_right { xb } else { xb - tw };
             if rb > la {
-                scene.fill(
+                scene.fill_subpixel(
                     Rect::from_xywh(la, top, rb - la, t.digital_wave_width),
                     color,
                 );
-                scene.fill(
+                scene.fill_subpixel(
                     Rect::from_xywh(
                         la,
                         bottom - t.digital_wave_width,
@@ -3425,7 +3450,7 @@ mod tests {
         );
     }
 
-    fn bus(values: &[(u64, &str)]) -> VecHistory {
+    pub(super) fn bus(values: &[(u64, &str)]) -> VecHistory {
         VecHistory {
             shape: SignalShape::Vector { width: 8 },
             times: values.iter().map(|(t, _)| *t).collect(),
@@ -3668,7 +3693,7 @@ mod tests {
             };
             for column in 0..100u64 {
                 for i in 0..n {
-                    times.push(c * 10_000 + column * 100 + 1 + i * (98 / n));
+                    times.push(c * 12_800 + column * 128 + 1 + i * (126 / n));
                     values.push(bits(pick(i)));
                 }
             }
@@ -3685,7 +3710,7 @@ mod tests {
             &h,
             &Viewport {
                 start: 0.0,
-                end: 40_000.0,
+                end: 51_200.0,
             },
             area,
             &t,

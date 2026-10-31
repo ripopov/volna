@@ -330,7 +330,11 @@ fn inks_in(scene: &Scene, area: Rect) -> Vec<volna_core::Color> {
             Prim::Lines {
                 segments, color, ..
             } if segments.iter().any(|[a, b]| inside(*a) || inside(*b)) => Some(*color),
-            Prim::Quad { rect, fill, .. } if inside(rect.origin) => Some(*fill),
+            Prim::Quad { rect, fill, .. } | Prim::SubpixelFill { rect, color: fill }
+                if inside(rect.origin) =>
+            {
+                Some(*fill)
+            }
             _ => None,
         })
         .collect()

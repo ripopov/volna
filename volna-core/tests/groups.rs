@@ -513,14 +513,9 @@ fn a_folded_group_summarises_its_signals_and_steps_through_their_changes() {
     let in_row =
         |r: &Rect| r.top() >= y - 0.5 && r.bottom() <= y + h + 0.5 && r.left() >= l.waves.left();
     let x_rects: Vec<Rect> = scene
-        .prims
-        .iter()
-        .filter_map(|p| match p {
-            Prim::Quad { rect, fill, .. } if in_row(rect) && same_hue(*fill, x_color) => {
-                Some(*rect)
-            }
-            _ => None,
-        })
+        .quads()
+        .filter(|(rect, fill)| in_row(rect) && same_hue(*fill, x_color))
+        .map(|(rect, _)| rect)
         .collect();
     assert!(!x_rects.is_empty(), "the X stretch is drawn");
     let x_of = |t: f64| l.waves.left() + (t / END as f64 * f64::from(l.waves.width())) as f32;
@@ -534,8 +529,11 @@ fn a_folded_group_summarises_its_signals_and_steps_through_their_changes() {
 
     view(&mut app, id, 0.0, 1.0e6);
     let scene = frame(&mut app, id);
-    assert!(scene.prims.iter().any(|p| matches!(p,
-        Prim::Quad { rect, fill, .. } if in_row(rect) && same_hue(*fill, x_color))));
+    assert!(
+        scene
+            .quads()
+            .any(|(rect, fill)| in_row(&rect) && same_hue(fill, x_color))
+    );
 
     view(&mut app, id, 0.0, END as f64);
     let members: Vec<_> = waves(&app, id).group_histories(2);

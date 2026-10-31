@@ -547,7 +547,10 @@ fn stacked_and_overlaid_members_share_colors_stripes_and_solid_swatches() {
                                 *stroke == color
                                     && segments.iter().any(|[a, b]| in_wave(*a) && in_wave(*b))
                             }
-                            Prim::Quad { rect, fill, .. } => *fill == color && in_wave(rect.origin),
+                            Prim::Quad { rect, fill, .. }
+                            | Prim::SubpixelFill { rect, color: fill } => {
+                                *fill == color && in_wave(rect.origin)
+                            }
                             _ => false,
                         }
                     }),

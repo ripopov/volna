@@ -32,6 +32,11 @@ pub enum Prim {
         border_width: f32,
         border_color: Color,
     },
+    /// A filled rectangle whose fractional edges must survive rasterization.
+    SubpixelFill {
+        rect: Rect,
+        color: Color,
+    },
     Lines {
         segments: Vec<[Point; 2]>,
         color: Color,
@@ -95,13 +100,11 @@ impl Scene {
     }
 
     pub fn fill(&mut self, rect: Rect, color: Color) {
-        self.prims.push(Prim::Quad {
-            rect,
-            fill: color,
-            radius: 0.0,
-            border_width: 0.0,
-            border_color: Color::TRANSPARENT,
-        });
+        self.quad(rect, color, 0.0, 0.0, Color::TRANSPARENT);
+    }
+
+    pub fn fill_subpixel(&mut self, rect: Rect, color: Color) {
+        self.prims.push(Prim::SubpixelFill { rect, color });
     }
 
     pub fn quad(
@@ -162,7 +165,9 @@ impl Scene {
 
     pub fn quads(&self) -> impl Iterator<Item = (Rect, Color)> + '_ {
         self.prims.iter().filter_map(|p| match p {
-            Prim::Quad { rect, fill, .. } => Some((*rect, *fill)),
+            Prim::Quad { rect, fill, .. } | Prim::SubpixelFill { rect, color: fill } => {
+                Some((*rect, *fill))
+            }
             _ => None,
         })
     }

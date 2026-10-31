@@ -36,11 +36,6 @@ impl Kinds {
     }
 
     #[must_use]
-    pub fn union(self, other: Kinds) -> Self {
-        Kinds(self.0 | other.0)
-    }
-
-    #[must_use]
     pub fn has(self, kind: ValueKind) -> bool {
         self.0 & Self::of(kind).0 != 0
     }
@@ -81,6 +76,14 @@ impl<'a> KindReader<'a> {
         };
         self.last = Some((i, kind));
         kind
+    }
+
+    pub fn state(&mut self, index: Option<usize>) -> Kinds {
+        if self.normal {
+            Kinds::of(ValueKind::Normal)
+        } else {
+            Kinds::of(self.kind(index))
+        }
     }
 
     pub fn column(&mut self, before: Option<usize>, last: usize) -> Kinds {
@@ -124,11 +127,17 @@ pub struct Aliased {
     pub kinds: Kinds,
 }
 
+pub struct ColumnGrid {
+    pub left: f32,
+    pub width: f32,
+    pub hatch_origin: f32,
+}
+
 pub fn paint_aliased(
     scene: &mut Scene,
     t: &Theme,
     columns: &[Aliased],
-    x0: f32,
+    grid: &ColumnGrid,
     top: f32,
     bottom: f32,
 ) {
@@ -144,15 +153,18 @@ pub fn paint_aliased(
         {
             j += 1;
         }
-        let (xa, w) = (x0 + c.x as f32, (columns[j - 1].x + 1 - c.x) as f32);
+        let (xa, w) = (
+            grid.left + c.x as f32 * grid.width,
+            (columns[j - 1].x + 1 - c.x) as f32 * grid.width,
+        );
         let (fill, rail, x_band) = style;
-        scene.fill(Rect::from_xywh(xa, top, w, h), fill);
+        scene.fill_subpixel(Rect::from_xywh(xa, top, w, h), fill);
         if x_band {
-            hatch(scene, t, Rect::from_xywh(xa, top, w, h), x0);
+            hatch(scene, t, Rect::from_xywh(xa, top, w, h), grid.hatch_origin);
         }
         if let Some(rail) = rail {
-            scene.fill(Rect::from_xywh(xa, top, w, 1.0), rail);
-            scene.fill(Rect::from_xywh(xa, bottom - 1.0, w, 1.0), rail);
+            scene.fill_subpixel(Rect::from_xywh(xa, top, w, 1.0), rail);
+            scene.fill_subpixel(Rect::from_xywh(xa, bottom - 1.0, w, 1.0), rail);
         }
         i = j;
     }
