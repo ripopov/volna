@@ -22,6 +22,31 @@ fn linked_app() -> App {
     app
 }
 
+#[test]
+fn closing_last_content_resets_shared_viewport_even_on_redo() {
+    use volna_core::wave::viewport::Viewport;
+
+    let mut app = linked_app();
+    let first = app.panels.focused_id();
+    panel(&mut app, PanelsCommand::NewTab { group_of: first });
+    let second = app.panels.focused_id();
+    let zoomed = Viewport {
+        start: 10.0,
+        end: 20.0,
+    };
+    app.doc.shared.viewport.set(zoomed);
+    panel(&mut app, PanelsCommand::Close(second));
+    assert_eq!(app.doc.shared.viewport.value, zoomed);
+    panel(&mut app, PanelsCommand::Close(first));
+    let fit = Viewport::fit(app.doc.limits());
+    assert_eq!(app.doc.shared.viewport.value, fit);
+    app.handle(Command::Undo);
+    app.doc.shared.viewport.set(zoomed);
+    app.handle(Command::Redo);
+    assert_eq!(app.doc.shared.viewport.value, fit);
+    assert_eq!(app.doc.shared.viewport.target(), fit);
+}
+
 fn panel(app: &mut App, command: PanelsCommand) {
     app.handle(Command::Panels(command));
 }

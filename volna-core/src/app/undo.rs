@@ -76,6 +76,9 @@ impl App {
         for panel in &mut reopen {
             panel.kind.retire(&mut self.doc);
         }
+        if reopen.iter().any(|p| p.kind.is_content()) {
+            self.reset_viewport_without_content();
+        }
         let notices = self.adopt_panels(&close);
         self.events.extend(notices.into_iter().map(Event::Notice));
         if revision != self.panels.revision() {
@@ -287,12 +290,28 @@ impl App {
                 for panel in &mut inverse.reopen {
                     panel.kind.retire(&mut self.doc);
                 }
+                if inverse.reopen.iter().any(|p| p.kind.is_content()) {
+                    self.reset_viewport_without_content();
+                }
                 let notices = self.adopt_panels(&inverse.close);
                 self.events.extend(notices.into_iter().map(Event::Notice));
                 self.layout_changed();
                 Edit::Layout(Box::new(inverse))
             }
         })
+    }
+
+    fn reset_viewport_without_content(&mut self) {
+        if self
+            .panels
+            .iter()
+            .all(|p| !p.kind.is_content() || p.kind.is_start())
+        {
+            self.doc
+                .shared
+                .viewport
+                .set(crate::wave::viewport::Viewport::fit(self.doc.limits()));
+        }
     }
 
     fn swap_prop(&mut self, id: PanelId, prop: Prop) -> Result<Prop> {
