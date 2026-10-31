@@ -44,27 +44,14 @@ try {
   assert.equal(await page.locator('.site-title').getAttribute('href'), base);
   assert.equal(await page.getByRole('navigation', { name: 'Site' }).getByRole('link', { name: 'Docs' }).getAttribute('href'), `${base}docs/`);
   assert.equal(await page.getByRole('navigation', { name: 'Site' }).getByRole('link', { name: 'Web App' }).getAttribute('href'), `${base}app/`);
-  const sample = page.frameLocator('iframe[title="Interactive Volna sample recording"]');
-  await sample.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
-  verifySampleWorkspace(await sample.locator('body').evaluate(() => window.volnaCurrentState));
-  await page.screenshot({ path: `${results}/landing-restored-dark-1440.png`, fullPage: true });
-  await page.setViewportSize({ width: 1440, height: 1600 });
-  const frameBounds = await page.locator('.v-viewer-frame').boundingBox();
-  assert.ok(frameBounds && Math.abs(frameBounds.x - 72) < 2 && Math.abs(frameBounds.width - 1296) < 2,
-    'landing viewer must occupy 90% of the viewport width');
-  assert.ok(Math.abs(1600 - frameBounds.y - frameBounds.height - 24) < 2,
-    'landing viewer must grow to fill available viewport height');
+  assert.equal(await page.locator('iframe').count(), 0);
+  const preview = page.locator('.v-viewer-preview');
+  assert.equal(await preview.getAttribute('href'), './app/');
+  assert.ok(await preview.locator('img').evaluate(img => img.complete && img.naturalWidth > 0));
   await page.setViewportSize({ width: 360, height: 800 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
-  const frameScroll = page.locator('.v-viewer-frame');
-  assert.ok(await frameScroll.evaluate(element => element.scrollWidth > element.clientWidth));
-  await page.screenshot({ path: `${results}/landing-restored-dark-360.png`, fullPage: true });
-  await page.getByRole('button', { name: 'Show right viewer panels' }).click();
-  await page.waitForFunction(() => document.querySelector('.v-viewer-frame').scrollLeft > 0);
   await page.locator('html').evaluate(element => { element.dataset.theme = 'light'; });
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
-  await page.evaluate(() => scrollTo(0, 0));
-  await page.screenshot({ path: `${results}/landing-restored-light-360.png`, fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${origin}${base}docs/`);
   assert.match(await page.locator('h1').textContent(), /engineering docs/);
@@ -130,14 +117,7 @@ try {
   await page.mouse.move(950, 500, { steps: 3 });
   await page.mouse.up();
   assert.deepEqual(appErrors, [], 'dragging the Table panel must not panic in the browser');
-  report.behavior.push('landing workspace restore, header destinations, docs overview, standalone app default workspace, local file, workspace import and export, Table panel drag');
-  const failedViewer = await behaviorContext.newPage();
-  await failedViewer.route('**/viewer/pkg/volna_bg.wasm', route => route.abort());
-  await failedViewer.goto(`${origin}${base}`);
-  await failedViewer.frameLocator('iframe[title="Interactive Volna sample recording"]').getByRole('alert').waitFor();
-  assert.equal(await failedViewer.getByRole('link', { name: 'Read the Docs' }).first().getAttribute('href'), './docs/');
-  await failedViewer.close();
-  report.behavior.push('viewer initialization failure keeps landing documentation links usable');
+  report.behavior.push('landing screenshot, header destinations, docs overview, standalone app default workspace, local file, workspace import and export, Table panel drag');
   await page.goto(`${origin}${base}vtr/`);
   const guide = await readFile(new URL('../../vtr/README.md', import.meta.url), 'utf8');
   const commands = [...guide.matchAll(/```sh\n([\s\S]*?)\n```/g)].map(match => match[1]);
@@ -254,7 +234,7 @@ try {
   const noJs = await browser.newContext({ javaScriptEnabled: false });
   const staticPage = await noJs.newPage();
   await staticPage.goto(`${origin}${base}`);
-  assert.match(await staticPage.locator('.sl-markdown-content').textContent(), /sample below opens a VTR recording/);
+  assert.match(await staticPage.locator('.sl-markdown-content').textContent(), /sample workspace shows waveforms/);
   assert.equal(await staticPage.getByRole('link', { name: 'Read the Docs' }).first().getAttribute('href'), './docs/');
   await staticPage.goto(`${origin}${base}vtr/`);
   assert.equal(await staticPage.getByRole('button', { name: 'Documentation navigator', exact: true }).isVisible(), false);

@@ -61,13 +61,8 @@ static. The text accompanying the bar names the phase and input/output sizes.
 <div class="v-progress" role="progressbar" aria-label="Import progress specimen" aria-valuemin="0" aria-valuemax="100" aria-valuenow="42" style="--progress:42%;width:100%"><span></span></div>
 </div>
 
-The landing page also contains the `v-viewer-frame` specimen. It spans 90% of
-the viewport width and grows to use the available viewport height while the
-surrounding documentation remains scrollable. The viewer itself runs in a
-separate document because GPUI attaches
-its canvas to the document body and sizes it to that document's viewport. On
-narrow screens, the frame scrolls horizontally and offers panel navigation
-buttons; the page width stays fixed.
+The landing page uses `v-viewer-preview` to present a screenshot linking to the
+standalone Web App.
 
 Controls have visible keyboard focus and native labels. Tables and code blocks
 scroll within their own containers. Motion changes only color or opacity and

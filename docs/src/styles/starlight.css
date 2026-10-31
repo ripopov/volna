@@ -92,9 +92,6 @@ volna-panel-controls { display: none; flex: none; gap: var(--space-1); }
 .hero .sl-link-button.primary:hover { background: var(--btn-primary-hover); }
 .hero .sl-link-button.secondary { border-color: var(--border-strong); color: var(--text-1); box-shadow: none; }
 [data-has-hero] .sl-markdown-content { max-width: 62rem; }
-:root:has(.v-viewer-frame) { --sl-content-width: 80rem; }
-:root:has(.v-viewer-frame) .sl-markdown-content { max-width: none; }
-:root:has(.v-viewer-frame) .sl-markdown-content > p { max-width: 74ch; }
 
 .sl-markdown-content svg[id^='mermaid'] { display: block; width: 100%; height: auto; min-width: 480px; padding: var(--space-6); background: var(--surface-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); }
 .sl-markdown-content svg[id^='mermaid'] .node :is(rect,polygon,path) { fill: var(--accent-soft) !important; stroke: var(--accent) !important; }
