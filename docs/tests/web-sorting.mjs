@@ -233,12 +233,12 @@ try {
   const staticContext = await browser.newContext();
   await staticContext.addInitScript(() => Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 }));
   const staticPage = await staticContext.newPage();
-  await staticPage.goto(`${origin}${base}`);
-  await staticPage.frameLocator('iframe[title="Interactive Volna sample recording"]').locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
+  await staticPage.goto(`${origin}${base}app/`);
+  await staticPage.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
   assert.equal(await staticPage.evaluate(() => crossOriginIsolated), true);
   assert.equal(await staticPage.evaluate(() => !!navigator.serviceWorker.controller), true);
   await staticContext.close();
-  console.log('Static hosting without response headers: isolation bootstrap and embedded worker pool passed');
+  console.log('Static hosting without response headers: isolation bootstrap and worker pool passed');
 
   headers = true;
   const unsupported = await browser.newContext();
