@@ -1187,7 +1187,7 @@ impl Panel for CanvasPanelView {
                     .label("Details")
                     .ghost()
                     .xsmall()
-                    .tooltip("Show the selected record in a Transaction panel (⏎)")
+                    .tooltip("Show the selected record in Record details (⏎)")
                     .on_click(move |_, window, cx| {
                         drop(owner.update(cx, |ws, cx| {
                             ws.dispatch_if_current(

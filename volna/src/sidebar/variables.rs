@@ -186,8 +186,7 @@ impl Workspace {
                             });
                         }
                         let addable = member.var().is_some()
-                            || (matches!(member, volna_trace::data::Member::Generator(_))
-                                && !h.is_log(member));
+                            || matches!(member, volna_trace::data::Member::Generator(_));
                         let clock = this.app.member_clock(traced).is_some();
                         let mut row = div()
                             .id(("var", ix))

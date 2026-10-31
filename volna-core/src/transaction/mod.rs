@@ -1,5 +1,6 @@
 //! The Transaction panel: one recorded transaction, prepared for reading.
 
+pub mod group;
 pub mod model;
 pub mod parents;
 pub mod view;

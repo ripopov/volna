@@ -195,8 +195,8 @@ fn search_order_activation_and_keyboard() {
             volna_core::session::LoadRequest::Trace(TraceRequest::Track { .. })
         ]
     ));
-    assert_eq!(app.panels.len(), 4);
-    assert!(app.panels.focused().kind.table().is_some());
+    assert_eq!(app.panels.len(), 3);
+    assert_eq!(app.panels.focused_waves().unwrap().items().len(), 2);
     assert!(
         app.panels
             .iter()
@@ -213,10 +213,10 @@ fn search_order_activation_and_keyboard() {
     assert!(!app.variables.search_everywhere);
     app.handle(Command::SetFilter(String::new()));
     app.handle(Command::ScopesKey(Key::Enter));
-    assert_eq!(app.panels.len(), 4);
+    assert_eq!(app.panels.len(), 3);
     app.handle(Command::ActivateMembers(vec![a(Member::Generator(0))]));
     assert!(app.status().sidebar_notice.is_none());
-    assert_eq!(app.panels.len(), 5);
+    assert_eq!(app.panels.len(), 4);
     assert_eq!(
         app.panels.focused().kind.pipeline().unwrap().track.path(),
         ["soc", "cpu", "thread0", "instructions"]

@@ -84,10 +84,13 @@ fn finish_query(app: &mut App, panel: volna_core::panels::PanelId) {
 }
 
 #[test]
-fn log_activation_opens_a_generic_table_with_formatted_filterable_sortable_columns() {
+fn logs_can_explicitly_open_a_table_with_formatted_filterable_sortable_columns() {
     let mut app = App::new();
     app.set_session(log_fixture());
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(0)])));
+    app.handle(Command::OpenTable {
+        selected: a_all(vec![Member::Generator(0)]),
+        clicked: None,
+    });
     let panel = app.panels.focused_id();
     pump(&mut app);
     frame(&mut app, panel);
@@ -170,7 +173,7 @@ fn log_activation_opens_a_generic_table_with_formatted_filterable_sortable_colum
 }
 
 #[test]
-fn log_table_customization_survives_activation_restore_and_reset_undo() {
+fn log_table_customization_survives_waveform_activation_restore_and_reset_undo() {
     let mut app = App::new();
     app.set_session(log_fixture());
     app.handle(Command::OpenTable {
@@ -218,8 +221,8 @@ fn log_table_customization_survives_activation_restore_and_reset_undo() {
         Member::Generator(0),
         Member::Generator(0),
     ])));
-    assert_eq!(app.panels.len(), count);
-    assert_eq!(app.panels.focused_id(), panel);
+    assert_eq!(app.panels.len(), count + 1);
+    assert!(app.panels.focused().kind.waves().is_some());
     let saved = Workspace::capture(
         &app,
         volna_core::testing::paths("file:///tmp/logs.vtr"),
@@ -267,7 +270,10 @@ fn log_table_keeps_generic_attribute_sizing_when_message_is_hidden_or_resized() 
     for hide_message in [false, true] {
         let mut app = App::new();
         app.set_session(log_fixture());
-        app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(0)])));
+        app.handle(Command::OpenTable {
+            selected: a_all(vec![Member::Generator(0)]),
+            clicked: None,
+        });
         let panel = app.panels.focused_id();
         pump(&mut app);
         frame(&mut app, panel);

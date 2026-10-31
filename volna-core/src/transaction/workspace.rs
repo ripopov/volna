@@ -8,7 +8,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-pub(crate) const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct SavedRecord {
@@ -16,6 +16,7 @@ struct SavedRecord {
     trace: TraceId,
     track: Vec<String>,
     id: u64,
+    range: Option<crate::document::RecordRange>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -49,6 +50,7 @@ pub(crate) fn save(
             trace: record.track.trace(),
             track: record.track.path().to_vec(),
             id: record.id.0,
+            range: record.range,
         }),
         collapsed: model
             .prefs()
@@ -82,6 +84,9 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     }
     let record = match saved.record {
         Some(record) => {
+            if let Some(range) = record.range {
+                ensure!(range.begin <= range.end, "invalid record group time range");
+            }
             ensure!(!record.track.is_empty(), "empty transaction track path");
             let trace = record.trace;
             let found = ctx
@@ -105,6 +110,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             Some(ShownRecord {
                 track,
                 id: volna_trace::data::transactions::TransactionRef(record.id),
+                range: record.range,
             })
         }
         None => None,

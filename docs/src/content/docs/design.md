@@ -113,6 +113,16 @@ values. Focus a divider with Tab, resize with Left or Right, and fit with Enter.
 Attributes fills unused space until given an explicit width. Workspace files
 remember widths, including hidden columns; resetting columns restores defaults.
 
+The native waveform point tracks in `volna/examples/landing.vtr` are a specimen
+of inline labels, exact-time groups, and time-range groups. Labels use the viewer
+panel surface and border; a severity-colored edge remains visible beside a
+selected outline. Timestamp anchors and range brackets locate records independently
+of label width. Group boundaries and lanes stay fixed while panning; edge labels
+are clipped without moving their anchors. Three lanes bound track density; counts
+retain individual occurrences, including rare errors. Logs and located events share the geometry
+and hit targets. Record details reuses one panel for individual records and bounded,
+searchable group pages, with log arguments separated from runtime source metadata.
+
 The desktop header is a live specimen of the shared ghost icon buttons
 (`v-btn v-btn--ghost v-btn--icon`). The left and right panel icons independently
 hide or show the documentation navigator and page navigation. Each button reports

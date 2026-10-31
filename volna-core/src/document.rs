@@ -34,6 +34,19 @@ pub struct TxSelection {
     pub origin: crate::panels::PanelId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RecordRange {
+    pub begin: u64,
+    pub end: u64,
+}
+
+impl Retime for RecordRange {
+    fn retime(&mut self, by: Rescale) {
+        self.begin.retime(by);
+        self.end.retime(by);
+    }
+}
+
 pub struct Shared {
     pub viewport: Tween<Viewport>,
     pub cursor: Option<u64>,
@@ -98,6 +111,7 @@ pub struct Document {
     tracks: HashMap<Traced<TrackRef>, TrackLoad>,
     next_track_request: u64,
     selection: Option<TxSelection>,
+    selection_range: Option<RecordRange>,
     pub copied_rows: Vec<crate::wave::Entry>,
     summaries: AnalysisCache<(Traced<SignalRef>, NumericKind, usize), AnalogSummary>,
     group_summaries: AnalysisCache<Vec<usize>, crate::wave::group::GroupSummary>,
@@ -147,6 +161,7 @@ impl Document {
             tracks: HashMap::new(),
             next_track_request: 1,
             selection: None,
+            selection_range: None,
             copied_rows: Vec::new(),
             summaries: AnalysisCache::default(),
             group_summaries: AnalysisCache::default(),
@@ -162,7 +177,22 @@ impl Document {
     }
 
     pub fn select(&mut self, selection: Option<TxSelection>) -> bool {
-        let changed = self.selection != selection;
+        self.select_range(selection, None)
+    }
+
+    #[must_use]
+    pub fn selection_range(&self) -> Option<RecordRange> {
+        self.selection_range
+    }
+
+    pub fn select_range(
+        &mut self,
+        selection: Option<TxSelection>,
+        range: Option<RecordRange>,
+    ) -> bool {
+        let range = selection.and(range);
+        let changed = self.selection != selection || self.selection_range != range;
+        self.selection_range = range;
         self.selection = selection;
         changed
     }
@@ -362,7 +392,7 @@ impl Document {
 
     fn reset_state(&mut self) {
         self.tracks.clear();
-        self.selection = None;
+        self.select(None);
         self.pending.clear();
         self.requests
             .retain(|r| matches!(r, LoadRequest::Open { .. }));
@@ -459,6 +489,7 @@ impl Document {
     pub(crate) fn retime(&mut self, by: Rescale) {
         self.shared.viewport.retime(by);
         self.shared.cursor.retime(by);
+        self.selection_range.retime(by);
         let mut markers = self.markers.to_vec();
         for m in &mut markers {
             m.time.retime(by);
@@ -524,7 +555,7 @@ impl Document {
         });
         self.summaries.retain(|(s, _, _)| s.trace != trace);
         if self.selection.is_some_and(|s| s.track.trace == trace) {
-            self.selection = None;
+            self.select(None);
         }
         self.copied_rows
             .retain(|e| e.row.trace().is_none_or(|t| t != trace));

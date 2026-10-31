@@ -105,12 +105,12 @@ Relation IDs preserve stored order and duplicate edges
 across tracks. Endpoints outside the recording or missing from an incomplete
 trace retain their IDs and have no generator location.
 
-A VTI 3.0 activity sidecar records exact signal-change times. It identifies
+A VTI 4.0 activity sidecar records exact signal-change times. It identifies
 signals that change in a time window without loading their waveform histories. Path-backed sessions can build an
 index with `build_activity()`, a memory budget, and VTR's `BuildOptions`.
 `BuildControl` provides progress and cancellation. Byte images and recovered
 recordings have no stable activity build source. See the
-[activity sidecar specification](../vtr/docs/SPEC.md#9-activity-index-sidecar-vti-30).
+[activity sidecar specification](../vtr/docs/SPEC.md#9-activity-index-sidecar-vti-40).
 
 ## Remote loading
 

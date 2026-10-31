@@ -19,6 +19,7 @@ use gpui_kit::{
     uniform_list,
 };
 use volna_core::Command;
+use volna_core::data::points::PointKind;
 use volna_core::panels::{PanelId, PanelsCommand};
 use volna_core::transaction::view::FILTER_THRESHOLD;
 use volna_core::transaction::{
@@ -55,6 +56,8 @@ pub(crate) struct TransactionPanelView {
     pub(crate) focus: FocusHandle,
     filter: Entity<InputState>,
     synced_filter: String,
+    group_filter: Entity<InputState>,
+    synced_group_filter: String,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -79,6 +82,17 @@ impl TransactionPanelView {
                 view.dispatch(TransactionCommand::Filter(text), window, cx);
             }
         });
+        let group_filter = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Find records, IDs, timestamps, arguments")
+        });
+        let group_subscription =
+            cx.subscribe_in(&group_filter, window, |view, input, event, window, cx| {
+                if let InputEvent::Change = event {
+                    let text = input.read(cx).value().to_string();
+                    view.synced_group_filter.clone_from(&text);
+                    view.dispatch(TransactionCommand::GroupSearch(text), window, cx);
+                }
+            });
         Self {
             ws,
             id,
@@ -86,7 +100,9 @@ impl TransactionPanelView {
             focus,
             filter,
             synced_filter: String::new(),
-            _subscriptions: vec![subscription],
+            group_filter,
+            synced_group_filter: String::new(),
+            _subscriptions: vec![subscription, group_subscription],
         }
     }
 
@@ -215,6 +231,23 @@ impl Panel for TransactionPanelView {
 impl Render for TransactionPanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_filter(window, cx);
+        let group_search = self
+            .ws
+            .upgrade()
+            .and_then(|owner| {
+                owner
+                    .read(cx)
+                    .app
+                    .panels
+                    .transaction(self.id)
+                    .map(|m| m.group_query().search.clone())
+            })
+            .unwrap_or_default();
+        if self.synced_group_filter != group_search {
+            self.synced_group_filter.clone_from(&group_search);
+            self.group_filter
+                .update(cx, |input, cx| input.set_value(group_search, window, cx));
+        }
         let t = *theme(cx);
         let Some(owner) = self.ws.upgrade() else {
             return div().into_any_element();
@@ -255,7 +288,7 @@ impl Render for TransactionPanelView {
             TxPanelState::Empty => notice(
                 &t,
                 "No record selected",
-                "Click a row in a pipeline or a table; the panel follows the selection.",
+                "Select a record in waveforms, a pipeline, or a table.",
             ),
             TxPanelState::Loading => notice(&t, "Loading the record's track…", ""),
             TxPanelState::Missing => notice(
@@ -422,8 +455,29 @@ impl TransactionPanelView {
                         .unwrap_or_else(|| "(no label)".into()),
                 )),
         );
-        title = title.child(status_badge(&t, identity.status_text, identity.status));
-        if let Some(kind) = identity.kind {
+        let mut point_metadata = div().flex().flex_wrap().items_center().gap_2();
+        if let Some(kind) = view.point_kind {
+            point_metadata = point_metadata.child(
+                div()
+                    .text_size(px(t.ui_size_small))
+                    .text_color(muted)
+                    .child(match kind {
+                        PointKind::Log => "Log message",
+                        PointKind::Event => "Event",
+                    }),
+            );
+            if let Some(severity) = &view.severity {
+                point_metadata = point_metadata.child(
+                    div()
+                        .text_size(px(t.ui_size_small))
+                        .text_color(muted)
+                        .child(SharedString::from(severity.clone())),
+                );
+            }
+        } else {
+            title = title.child(status_badge(&t, identity.status_text, identity.status));
+        }
+        if let Some(kind) = identity.kind.filter(|_| view.point_kind.is_none()) {
             title = title.child(
                 div()
                     .text_size(px(t.ui_size_small))
@@ -432,12 +486,15 @@ impl TransactionPanelView {
             );
         }
         if let Some(parent) = identity.parent {
-            title = title.child(
-                div()
-                    .text_size(px(t.ui_size_small))
-                    .text_color(muted)
-                    .child(SharedString::from(format!("child of #{}", parent.0))),
-            );
+            let parent = div()
+                .text_size(px(t.ui_size_small))
+                .text_color(muted)
+                .child(SharedString::from(format!("Owner #{}", parent.0)));
+            if view.point_kind.is_some() {
+                point_metadata = point_metadata.child(parent);
+            } else {
+                title = title.child(parent);
+            }
         }
 
         let timing = &view.timing;
@@ -447,7 +504,19 @@ impl TransactionPanelView {
             ("End", timing.end_text.clone(), timing.end),
             ("Duration", timing.duration_text.clone(), None),
         ] {
-            tiles = tiles.child(Self::tile(&t, label, text, time, cx));
+            if view.point_kind.is_none() || label == "Begin" {
+                tiles = tiles.child(Self::tile(
+                    &t,
+                    if view.point_kind.is_some() {
+                        "Timestamp"
+                    } else {
+                        label
+                    },
+                    text,
+                    time,
+                    cx,
+                ));
+            }
         }
 
         let mut actions = div().flex().items_center().gap_1().flex_wrap();
@@ -456,21 +525,27 @@ impl TransactionPanelView {
             _ => "Open in Pipeline",
         };
         actions = actions
-            .child(
-                action_button(
-                    "tx-reveal",
-                    gpui_kit::component::Icon::empty().path(IconName::Locate.path()),
-                    cx,
+            .when(view.point_kind.is_none(), |actions| {
+                actions.child(
+                    action_button(
+                        "tx-reveal",
+                        gpui_kit::component::Icon::empty().path(IconName::Locate.path()),
+                        cx,
+                    )
+                    .label(reveal_label)
+                    .ghost()
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.send(Command::RevealTransaction { panel: view.id }, window, cx);
+                    })),
                 )
-                .label(reveal_label)
-                .ghost()
-                .on_click(cx.listener(|view, _, window, cx| {
-                    view.send(Command::RevealTransaction { panel: view.id }, window, cx);
-                })),
-            )
+            })
             .child(
                 Button::new("tx-fit")
-                    .label("Fit lifetime")
+                    .label(if view.point_kind.is_some() {
+                        "Zoom here"
+                    } else {
+                        "Fit lifetime"
+                    })
                     .ghost()
                     .small()
                     .tooltip("Fit the shared viewport to this record")
@@ -500,14 +575,55 @@ impl TransactionPanelView {
                     .p_3()
                     .child(breadcrumb)
                     .child(title)
+                    .when(view.point_kind.is_some(), |body| body.child(point_metadata))
                     .child(tiles)
-                    .child(Self::lifeline(&t, &view, cx))
+                    .when(view.point_kind.is_none(), |body| {
+                        body.child(Self::lifeline(&t, &view, cx))
+                    })
                     .child(actions),
             );
 
         body = body.child(self.attributes(&t, &view, cx));
-        body = body.child(Self::section(&t, &view.stages, cx, stage_row));
-        body = body.child(Self::section(&t, &view.events, cx, event_row));
+        if !view.source.is_empty() {
+            let mut source = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_3()
+                .border_t_1()
+                .border_color(t.border_variant)
+                .child(
+                    div()
+                        .text_size(px(t.ui_size_small))
+                        .text_color(muted)
+                        .child("Runtime source"),
+                );
+            for (name, value) in &view.source {
+                source = source.child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(t.px(70.0))
+                                .text_color(muted)
+                                .child(SharedString::from(name.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .font_family(t.mono_font)
+                                .child(SharedString::from(value.clone())),
+                        ),
+                );
+            }
+            body = body.child(source);
+        }
+        if view.point_kind.is_none() {
+            body = body.child(Self::section(&t, &view.stages, cx, stage_row));
+            body = body.child(Self::section(&t, &view.events, cx, event_row));
+        }
         body = body.child(Self::related(&t, &view.related, cx));
         body = body.child(self.parents(&t, cx));
         if view.truncated_bytes {
@@ -520,7 +636,202 @@ impl TransactionPanelView {
                     .child("Values were cut at the admitted byte limit."),
             );
         }
+        if let Some(group) = self.record_group(view.point_kind, cx) {
+            return div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .child(group)
+                .child(body)
+                .into_any_element();
+        }
         body.into_any_element()
+    }
+
+    fn record_group(&self, kind: Option<PointKind>, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use gpui_kit::component::input::Input;
+        use volna_core::transaction::group::PAGE_SIZE;
+        let owner = self.ws.upgrade()?;
+        let (group, query, selected, time_base) = {
+            let ws = owner.read(cx);
+            let model = ws.app.panels.transaction(self.id)?;
+            let group = model.group(&ws.app.doc)?.clone();
+            (
+                group,
+                model.group_query().clone(),
+                model.shown()?.id,
+                ws.app.doc.time_base(),
+            )
+        };
+        let t = *theme(cx);
+        let time = |tick| volna_core::wave::timeline::format_time(tick as f64, time_base);
+        let bounds = if group.range.begin == group.range.end {
+            format!("at {}", time(group.range.begin))
+        } else {
+            format!("{}–{}", time(group.range.begin), time(group.range.end))
+        };
+        let mut header = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(SharedString::from(format!(
+                "{} records {bounds}",
+                group.total
+            )));
+        if group.range.begin != group.range.end {
+            header = header.child(
+                Button::new("record-group-fit")
+                    .label("Zoom to group")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dispatch(TransactionCommand::FitGroup, window, cx);
+                    })),
+            );
+        }
+        let mut filters = div().flex().flex_wrap().gap_1().child(
+            Button::new("record-group-all")
+                .label("All")
+                .small()
+                .ghost()
+                .selected(query.severity.is_none())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.dispatch(TransactionCommand::GroupSeverity(None), window, cx);
+                })),
+        );
+        if kind == Some(PointKind::Log) {
+            for (level, label) in [
+                "Trace", "Debug", "Info", "Warning", "Error", "Fatal", "Unknown",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if group.counts[level] == 0 {
+                    continue;
+                }
+                filters = filters.child(
+                    Button::new(("record-group-level", level))
+                        .label(format!("{label} {}", group.counts[level]))
+                        .small()
+                        .ghost()
+                        .selected(query.severity == Some(level))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.dispatch(
+                                TransactionCommand::GroupSeverity(Some(level)),
+                                window,
+                                cx,
+                            );
+                        })),
+                );
+            }
+        }
+        let mut records = div()
+            .flex()
+            .flex_col()
+            .max_h(t.px(180.0))
+            .overflow_y_scrollbar();
+        for record in &group.records {
+            let id = record.id;
+            let severity = if kind == Some(PointKind::Log) {
+                format!(
+                    "{} · ",
+                    [
+                        "TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL", "UNKNOWN"
+                    ][record.severity]
+                )
+            } else {
+                String::new()
+            };
+            records = records.child(
+                Button::new(("record-group-row", id.0))
+                    .label(format!(
+                        "{} · #{} · {severity}{}",
+                        time(record.time),
+                        id.0,
+                        record.label
+                    ))
+                    .small()
+                    .ghost()
+                    .selected(selected == id)
+                    .w_full()
+                    .justify_start()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(TransactionCommand::GroupSelect(id), window, cx);
+                    })),
+            );
+        }
+        if group.matching == 0 {
+            records = records.child("No matching records");
+        }
+        if !group.records.iter().any(|record| record.id == selected) {
+            records = records.child(div().text_color(t.panel.text_muted).child(
+                SharedString::from(format!("Details show #{} outside this page.", selected.0)),
+            ));
+        }
+        let page = group.page;
+        let footer = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(SharedString::from(format!(
+                "{}–{} of {} matching / {} total",
+                if group.matching == 0 {
+                    0
+                } else {
+                    page * PAGE_SIZE + 1
+                },
+                ((page + 1) * PAGE_SIZE).min(group.matching),
+                group.matching,
+                group.total
+            )))
+            .child(
+                Button::new("record-group-prev")
+                    .label("Previous")
+                    .small()
+                    .ghost()
+                    .disabled(page == 0)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(
+                            TransactionCommand::GroupPage(page.saturating_sub(1)),
+                            window,
+                            cx,
+                        );
+                    })),
+            )
+            .child(
+                Button::new("record-group-next")
+                    .label("Next")
+                    .small()
+                    .ghost()
+                    .disabled((page + 1) * PAGE_SIZE >= group.matching)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(TransactionCommand::GroupPage(page + 1), window, cx);
+                    })),
+            );
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .gap_2()
+                .p_3()
+                .border_b_1()
+                .border_color(t.border)
+                .text_size(px(t.ui_size_small))
+                .child(header)
+                .child(
+                    div()
+                        .debug_selector(|| "record-group-search".into())
+                        .child(Input::new(&self.group_filter).small()),
+                )
+                .child(filters)
+                .child(records)
+                .child(footer)
+                .into_any_element(),
+        )
     }
 
     fn parents(&self, t: &crate::theme::Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -857,6 +1168,15 @@ impl TransactionPanelView {
         section: &Section<T>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        Self::named_heading(t, section, section.key.title(), cx)
+    }
+
+    fn named_heading<T>(
+        t: &crate::theme::Theme,
+        section: &Section<T>,
+        title: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let key = section.key;
         let collapsed = section.collapsed;
         div()
@@ -880,11 +1200,7 @@ impl TransactionPanelView {
                 .size(t.px(12.0))
                 .color(t.panel.icon_muted),
             )
-            .child(SharedString::from(format!(
-                "{} · {}",
-                key.title(),
-                section.total
-            )))
+            .child(SharedString::from(format!("{} · {}", title, section.total)))
             .on_click(cx.listener(move |view, _, window, cx| {
                 view.dispatch(TransactionCommand::Collapse(key, !collapsed), window, cx);
             }))
@@ -942,7 +1258,16 @@ impl TransactionPanelView {
             .flex_col()
             .border_t_1()
             .border_color(t.border_variant)
-            .child(Self::heading(t, section, cx));
+            .child(Self::named_heading(
+                t,
+                section,
+                if view.point_kind.is_some() {
+                    "Arguments"
+                } else {
+                    "Attributes"
+                },
+                cx,
+            ));
         if section.collapsed {
             return element.into_any_element();
         }

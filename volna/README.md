@@ -4,16 +4,31 @@
 owns viewer state, input interpretation, loading requests, viewport math, and
 toolkit-neutral painting. `volna-trace` owns immutable recording data and the
 complete-object remote protocol used by `volna-server`. Pipeline, table, and
-transaction panels inspect runtime records from VTR. VDB attachment is not
+record detail panels inspect runtime records from VTR. VDB attachment is not
 implemented.
 
-In Transaction details, **Trace parents** after **Related** loads the full parent
+In Record details, **Trace parents** after **Related** loads the full parent
 chain on demand and displays a clickable graph. Click a node to open its details;
 cancel tracing or hide the graph when finished.
 
-The fixed Transaction header provides **Back** and **Forward** navigation through
+The fixed Record details header provides **Back** and **Forward** navigation through
 visited records. Use **Alt+←/→** on Windows and Linux or **⌘[/]** on macOS;
 shortcuts apply to the focused detail panel.
+
+Double-click a log or located-event generator to add it to waveforms, or use
+**Add to Waves** in the member context menu. Logs use `log.message`; located
+events use `vtr.label`. Sparse records have inline labels. Simultaneous records
+share a counted label, and nearby timestamps merge into time-range groups as you
+zoom out. Groups use trace-time boundaries and stable lanes, so panning translates
+the badges and their timestamp anchors together. Severity counts retain rare
+errors in a burst.
+
+Selecting a group opens its records in the shared **Record details** panel.
+Filter by severity or search the message, ID, timestamp, and argument previews;
+pages retain individual record IDs and exact timestamps. **Zoom to group** fits
+a time range. Records at the same timestamp remain grouped at every zoom.
+A selected log shows its message, arguments, and runtime source; an event shows
+its label and arguments; a transaction shows its lifetime and related activity.
 
 See the [`volna-core` guide](../volna-core/README.md) for the frontend contract,
 headless tests, persistence model, and undo journal.
@@ -143,8 +158,14 @@ flushes, and instructions still in flight at close.
 running the same instruction loop, including cache stalls, branch flushes,
 dependencies, and child memory requests. [`landing.rs`](examples/landing.rs)
 records a core, L2 cache, DRAM refills, an interrupt handler, declared clocks,
-and typed logs. Both generators validate their completed recording with VTR's
-reader and check the simulated populations and timing.
+typed logs, and located events. The landing trace includes sparse records, dense
+sequences, and hundreds of records at the same timestamp. The
+[`landing-page.volna.json`](examples/landing-page.volna.json) workspace includes
+both point tracks and the shared detail panel.
+[`landing-points.volna.json`](examples/landing-points.volna.json) opens a focused
+log/event demonstration with the 300-message burst selected. Both generators
+validate their completed recording with VTR's reader and check the simulated
+populations and timing.
 
 From the workspace root:
 

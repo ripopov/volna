@@ -11,6 +11,7 @@ pub mod model;
 pub mod overlaid;
 pub mod overlay;
 pub mod paint;
+pub mod points;
 pub mod stack;
 pub mod timeline;
 pub mod tint;

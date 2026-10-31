@@ -291,6 +291,9 @@ impl RefRow {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TxView {
+    pub point_kind: Option<crate::data::points::PointKind>,
+    pub severity: Option<String>,
+    pub source: Vec<(String, String)>,
     pub identity: Identity,
     pub timing: Timing,
     pub lifeline: Vec<LaneRow>,
@@ -337,10 +340,25 @@ pub fn view(
     let palette = generator.palette();
     let limit = prefs.detail_items.clamp(1, 1000);
 
+    let point_kind = crate::data::points::PointKind::from_generator(&declaration.kind);
+    let label_key = if point_kind == Some(crate::data::points::PointKind::Log) {
+        "log.message"
+    } else {
+        LABEL_ATTRIBUTE
+    };
+    let severity = (point_kind == Some(crate::data::points::PointKind::Log)).then(|| {
+        tx.attributes
+            .iter()
+            .find(|a| a.key == "log.severity")
+            .map_or_else(
+                || "unknown".into(),
+                |a| budget.text(&format_attribute(&a.value, PREVIEW_BYTES)),
+            )
+    });
     let label = tx
         .attributes
         .iter()
-        .find(|a| a.key == LABEL_ATTRIBUTE)
+        .find(|a| a.key == label_key)
         .map(|a| budget.text(&format_attribute(&a.value, PREVIEW_BYTES)));
     let identity = Identity {
         track,
@@ -383,7 +401,27 @@ pub fn view(
         .filter(|c| (tx.begin..=tx.end.max(tx.begin)).contains(c))
         .map(fraction);
 
-    let attributes = attributes(tx, prefs, limit, &mut budget);
+    let source = if point_kind == Some(crate::data::points::PointKind::Log) {
+        [
+            ("log.file", "File"),
+            ("log.line", "Line"),
+            ("log.func", "Function"),
+            ("log.format", "Format"),
+        ]
+        .into_iter()
+        .filter_map(|(key, name)| {
+            tx.attributes.iter().find(|a| a.key == key).map(|a| {
+                (
+                    name.to_owned(),
+                    budget.text(&format_attribute(&a.value, PREVIEW_BYTES)),
+                )
+            })
+        })
+        .collect()
+    } else {
+        Vec::new()
+    };
+    let attributes = attributes(tx, prefs, limit, point_kind, &mut budget);
     let mut stages = stages(
         tx,
         palette,
@@ -400,6 +438,9 @@ pub fn view(
     related.collapsed = prefs.collapsed.contains(&SectionKey::Related);
 
     Some(TxView {
+        point_kind,
+        severity,
+        source,
         identity,
         timing,
         lifeline,
@@ -665,14 +706,15 @@ fn attributes(
     tx: &Transaction,
     prefs: &ViewPrefs,
     limit: usize,
+    point_kind: Option<crate::data::points::PointKind>,
     budget: &mut Budget,
 ) -> Section<AttrRow> {
     let filter = prefs.filter.trim();
-    let listed = tx
-        .attributes
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| a.key != LABEL_ATTRIBUTE);
+    let listed = tx.attributes.iter().enumerate().filter(|(_, a)| {
+        (a.key != LABEL_ATTRIBUTE || point_kind == Some(crate::data::points::PointKind::Log))
+            && (point_kind.is_none()
+                || (a.key != "record.kind" && a.key != "kind" && !a.key.starts_with("log.")))
+    });
     let total = listed.clone().count();
     let matching = listed.filter(|(_, a)| {
         filter.is_empty()

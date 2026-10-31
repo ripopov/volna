@@ -4,6 +4,7 @@
 mod overlaid;
 #[cfg(test)]
 mod pan_tests;
+mod points;
 mod sampling;
 
 use sampling::SamplingGrid;
@@ -3093,7 +3094,9 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
         LaneData::Ready(g) => Some(g),
         _ => None,
     };
-    let folded = generator.map_or(0, |g| lane::folded(g.depth(), lane.height));
+    let folded = generator
+        .filter(|g| g.points().is_none())
+        .map_or(0, |g| lane::folded(g.depth(), lane.height));
 
     let pad = cells.name_x - names.left();
     let name_w = p.width(&lane.name, FontRole::Ui, t.ui_size);
@@ -3140,7 +3143,7 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
             let n = g.transactions().len();
             lines.push(format!("{n} record{}", if n == 1 { "" } else { "s" }));
         }
-        if full_h >= 3.0 * row_h {
+        if full_h >= 3.0 * row_h && g.points().is_none() {
             lines.push(if folded > 0 {
                 format!(
                     "{folded} sub-row{} folded",
@@ -3199,6 +3202,10 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
 
     let status = match data {
         LaneData::Ready(g) => {
+            if let Some(index) = g.points() {
+                points::paint(lane, g, index, doc, cells, p);
+                return;
+            }
             let width = f64::from(waves.width()).max(1.0);
             if lane::is_density(g, cells.viewport.px_per_unit(width)) {
                 paint_lane_density(

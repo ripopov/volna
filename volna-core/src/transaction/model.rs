@@ -1,27 +1,38 @@
 //! `TransactionModel`: the state of a Transaction panel.
 
+use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
+use std::sync::{Arc, Weak};
 
 use web_time::Instant;
 
+use super::group::{GROUP_BYTES, GroupQuery, GroupView};
 use super::parents::{ParentTrace, ParentTraceState};
 use super::view::{SectionKey, TxView, VIEW_BYTES, ViewPrefs};
+use crate::data::loaded_tracks::LoadedGenerator;
 use crate::data::text::{COPY_BYTES, Radix};
 use crate::document::{Document, TrackLoadState, TxSelection};
 use crate::history::{Before, Edit, History, MergeKey};
 use crate::pipeline::TrackSource;
-use crate::trace::Traced;
+use crate::trace::{Retime, Traced};
 use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{TrackRef, TransactionRef};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
-pub const PANEL_BYTES: u64 = VIEW_BYTES as u64;
+pub const PANEL_BYTES: u64 = (VIEW_BYTES + GROUP_BYTES) as u64;
 pub const MAX_HISTORY: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShownRecord {
     pub track: TrackSource,
     pub id: TransactionRef,
+    pub range: Option<crate::document::RecordRange>,
+}
+
+impl Retime for ShownRecord {
+    fn retime(&mut self, by: crate::trace::Rescale) {
+        self.range.retime(by);
+    }
 }
 
 impl ShownRecord {
@@ -60,6 +71,11 @@ pub enum TransactionCommand {
     Filter(String),
     TraceParents,
     ClearParents,
+    GroupSearch(String),
+    GroupSeverity(Option<usize>),
+    GroupPage(usize),
+    GroupSelect(TransactionRef),
+    FitGroup,
 }
 
 pub struct TransactionModel {
@@ -75,6 +91,15 @@ pub struct TransactionModel {
     budget: MemoryBudget,
     reservation: Option<Reservation>,
     parents: ParentTrace,
+    group_query: GroupQuery,
+    group_cache: RefCell<Option<(Weak<LoadedGenerator>, GroupView)>>,
+}
+
+impl Retime for TransactionModel {
+    fn retime(&mut self, by: crate::trace::Rescale) {
+        self.history.retime(by);
+        *self.group_cache.get_mut() = None;
+    }
 }
 
 impl TransactionModel {
@@ -96,6 +121,8 @@ impl TransactionModel {
             budget,
             reservation: None,
             parents: ParentTrace::default(),
+            group_query: GroupQuery::default(),
+            group_cache: RefCell::default(),
         }
     }
 
@@ -304,6 +331,7 @@ impl TransactionModel {
 
     pub(crate) fn park(&mut self, doc: &mut Document) {
         self.detach(doc);
+        *self.group_cache.get_mut() = None;
         self.reservation = None;
     }
 
@@ -327,6 +355,8 @@ impl TransactionModel {
             return false;
         }
         self.parents.clear(doc);
+        self.group_query = GroupQuery::default();
+        *self.group_cache.get_mut() = None;
         self.history.truncate(self.cursor + 1);
         self.history.push(record);
         if self.history.len() > MAX_HISTORY {
@@ -346,8 +376,10 @@ impl TransactionModel {
         }
         self.parents.clear(doc);
         self.cursor = cursor;
+        self.group_query = GroupQuery::default();
+        *self.group_cache.get_mut() = None;
         if let Some(selection) = self.shown().and_then(|shown| shown.selection(panel)) {
-            doc.select(Some(selection));
+            doc.select_range(Some(selection), self.shown().and_then(|s| s.range));
         }
         true
     }
@@ -370,6 +402,7 @@ impl TransactionModel {
                     path,
                 },
                 id: selection.id,
+                range: doc.selection_range(),
             },
         )
     }
@@ -395,6 +428,33 @@ impl TransactionModel {
             None if doc.track(track).is_none() => TxPanelState::Loading,
             None => TxPanelState::Missing,
         }
+    }
+
+    pub fn group_query(&self) -> &GroupQuery {
+        &self.group_query
+    }
+
+    pub fn group(&self, doc: &Document) -> Option<Ref<'_, GroupView>> {
+        let shown = self.shown()?;
+        let range = shown.range?;
+        let generator = doc.resident_generator(shown.track.track()?)?;
+        let valid = self
+            .group_cache
+            .borrow()
+            .as_ref()
+            .is_some_and(|(source, _)| {
+                source
+                    .upgrade()
+                    .is_some_and(|source| Arc::ptr_eq(&source, &generator))
+            });
+        if !valid {
+            *self.group_cache.borrow_mut() = GroupView::build(&generator, range, &self.group_query)
+                .map(|view| (Arc::downgrade(&generator), view));
+        }
+        Ref::filter_map(self.group_cache.borrow(), |v| {
+            v.as_ref().map(|(_, view)| view)
+        })
+        .ok()
     }
 
     pub fn copy_tsv(&self, doc: &Document) -> anyhow::Result<String> {
@@ -451,6 +511,72 @@ impl TransactionModel {
                 self.parents.clear(doc);
                 changed
             }
+            TransactionCommand::GroupSearch(search) => {
+                self.group_query.search = super::group::bounded_search(&search);
+                self.group_query.page = 0;
+                *self.group_cache.get_mut() = None;
+                true
+            }
+            TransactionCommand::GroupSeverity(severity) => {
+                self.group_query.severity =
+                    severity.filter(|s| *s < crate::data::points::SEVERITIES);
+                self.group_query.page = 0;
+                *self.group_cache.get_mut() = None;
+                true
+            }
+            TransactionCommand::GroupPage(page) => {
+                self.group_query.page = page;
+                *self.group_cache.get_mut() = None;
+                true
+            }
+            TransactionCommand::GroupSelect(id) => {
+                let Some(shown) = self.shown().cloned() else {
+                    return false;
+                };
+                let Some(track) = shown.track.track() else {
+                    return false;
+                };
+                let Some(range) = shown.range else {
+                    return false;
+                };
+                let Some(generator) = doc.resident_generator(track) else {
+                    return false;
+                };
+                let Some(record) = generator.transaction(id) else {
+                    return false;
+                };
+                if !(range.begin..=range.end).contains(&record.begin) {
+                    return false;
+                }
+                if shown.id != id {
+                    self.parents.clear(doc);
+                }
+                doc.shared.cursor = Some(record.begin);
+                self.history[self.cursor].id = id;
+                doc.select_range(
+                    Some(TxSelection {
+                        track,
+                        id,
+                        origin: panel,
+                    }),
+                    Some(range),
+                );
+                true
+            }
+            TransactionCommand::FitGroup => {
+                let Some(range) = self.shown().and_then(|s| s.range) else {
+                    return false;
+                };
+                let mut viewport = Viewport::fit((range.begin, range.end));
+                let pad = viewport.width() * 0.1;
+                viewport.start -= pad;
+                viewport.end += pad;
+                viewport.clamp(doc.limits());
+                doc.shared
+                    .viewport
+                    .animate_to(viewport, now, doc.navigation.animation);
+                true
+            }
             TransactionCommand::Jump { track, id } => {
                 let Some(path) = track_path(doc, track) else {
                     return false;
@@ -460,6 +586,7 @@ impl TransactionModel {
                     ShownRecord {
                         track: TrackSource::Resolved { track, path },
                         id,
+                        range: None,
                     },
                 );
                 doc.select(Some(TxSelection {
@@ -544,6 +671,14 @@ fn track_path(doc: &Document, track: Traced<TrackRef>) -> Option<Vec<String>> {
 pub(crate) enum Prop {
     Pin(bool, Option<ShownRecord>),
     Radix(BTreeMap<String, Radix>),
+}
+
+impl Retime for Prop {
+    fn retime(&mut self, by: crate::trace::Rescale) {
+        if let Self::Pin(_, record) = self {
+            record.retime(by);
+        }
+    }
 }
 
 impl Prop {

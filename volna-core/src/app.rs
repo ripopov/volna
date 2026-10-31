@@ -1115,7 +1115,7 @@ impl App {
     pub fn handle_at(&mut self, command: Command, now: Instant) {
         let before = crate::workspace::Stamp::capture(self, &command);
         let tracked = before.as_ref().map(|_| command.clone());
-        let selection = self.doc.selection();
+        let selection = (self.doc.selection(), self.doc.selection_range());
         let pointer = matches!(command, Command::Pointer(..));
         let press = matches!(
             command,
@@ -1147,7 +1147,7 @@ impl App {
         } else if press {
             self.sync_group_summaries();
         }
-        if self.doc.selection() != selection {
+        if (self.doc.selection(), self.doc.selection_range()) != selection {
             self.sync_selection();
         }
         self.end_step(now);
@@ -1221,6 +1221,28 @@ impl App {
                     && panel.pointer(&mut self.doc, ev, now)
                 {
                     self.changed();
+                }
+                if matches!(
+                    ev,
+                    PointerEvent::Down {
+                        button: MouseButton::Left,
+                        ..
+                    }
+                ) && self.panels.waves(id).is_some_and(|w| w.pressed_record)
+                    && self.doc.selection().is_some_and(|selection| {
+                        self.doc
+                            .resident_generator(selection.track)
+                            .is_some_and(|generator| generator.points().is_some())
+                    })
+                    && self
+                        .panels
+                        .first_free_transaction()
+                        .is_none_or(|details| !self.panels.layout().visible().contains(&details))
+                {
+                    self.show_transaction(id);
+                    if self.panels.layout().visible().contains(&id) {
+                        self.panel_command(PanelsCommand::Focus(id));
+                    }
                 }
             }
             Command::AddVars(vars) => self.add_vars(&vars),
@@ -1600,7 +1622,7 @@ impl App {
     fn activate_members(&mut self, members: &[Traced<Member>]) {
         let mut vars = Vec::new();
         let mut tracks = Vec::new();
-        let mut logs = Vec::new();
+        let mut points = Vec::new();
         for &member in members {
             let Some(h) = self.doc.hierarchy(member.trace) else {
                 continue;
@@ -1611,9 +1633,15 @@ impl App {
                 }
             } else if let Some(track) = h.member_track(member.item) {
                 let track = member.with(track);
-                if h.is_log(member.item) {
-                    if !logs.contains(&member) {
-                        logs.push(member);
+                let point = match member.item {
+                    Member::Generator(index) => h.generators().get(index).is_some_and(|g| {
+                        crate::data::points::PointKind::from_generator(&g.kind).is_some()
+                    }),
+                    Member::Var(_) => false,
+                };
+                if point {
+                    if !points.contains(&member) {
+                        points.push(member);
                     }
                 } else if !tracks.contains(&track) {
                     tracks.push(track);
@@ -1627,26 +1655,7 @@ impl App {
         for track in tracks {
             self.open_pipeline(track);
         }
-        for member in logs {
-            let track = self
-                .doc
-                .hierarchy(member.trace)
-                .and_then(|h| h.member_track(member.item));
-            let existing = self
-                .panels
-                .iter()
-                .find(|panel| {
-                    panel.kind.table().is_some_and(|table| {
-                        table.source.generator_track() == track.map(|track| member.with(track))
-                    })
-                })
-                .map(|panel| panel.id);
-            if let Some(panel) = existing {
-                self.panel_command(PanelsCommand::Focus(panel));
-            } else {
-                self.open_table(&[member], None);
-            }
-        }
+        self.add_to_waves(&points);
         self.changed();
     }
 
@@ -2009,10 +2018,7 @@ impl App {
                 if !clocks.contains(&key) {
                     clocks.push(key);
                 }
-            } else if matches!(member.item, Member::Generator(_))
-                && !h.is_log(member.item)
-                && !tracks.contains(&track)
-            {
+            } else if matches!(member.item, Member::Generator(_)) && !tracks.contains(&track) {
                 tracks.push(track);
             }
         }

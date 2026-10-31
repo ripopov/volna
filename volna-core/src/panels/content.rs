@@ -41,6 +41,9 @@ impl crate::trace::Retime for Prop {
         if let Self::Clocks { origin, .. } = self {
             origin.retime(by);
         }
+        if let Self::Transaction(prop) = self {
+            prop.retime(by);
+        }
     }
 }
 

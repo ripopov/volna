@@ -109,7 +109,11 @@ impl TxLane {
             return false;
         };
         self.auto_height = false;
-        let height = default_height(depth);
+        let height = if self.generator(doc).is_some_and(|g| g.points().is_some()) {
+            RowHeight::PRESETS[4]
+        } else {
+            default_height(depth)
+        };
         let changed = height != self.height;
         self.height = height;
         changed
@@ -343,6 +347,28 @@ pub fn label(tx: &Transaction) -> String {
 
 #[must_use]
 pub fn value_text(generator: &LoadedGenerator, cursor: u64) -> (String, bool) {
+    if let Some(index) = generator.points() {
+        let records = generator.transactions();
+        let first = records.partition_point(|r| r.begin < cursor);
+        let end = records.partition_point(|r| r.begin <= cursor);
+        let counts = index.counts(first..end);
+        let text = match end - first {
+            0 => "–".into(),
+            1 => index.kind.label(&records[first]).map_or_else(
+                || format!("#{}", records[first].id.0),
+                |value| crate::data::text::format_attribute(value, 256),
+            ),
+            count => format!(
+                "{count} {}",
+                if index.kind == crate::data::points::PointKind::Log {
+                    "messages"
+                } else {
+                    "events"
+                }
+            ),
+        };
+        return (text, counts[4] + counts[5] > 0);
+    }
     let open = open_at(generator, cursor);
     let failed = open.iter().any(|tx| tx.status == Status::Error);
     let text = match open.as_slice() {

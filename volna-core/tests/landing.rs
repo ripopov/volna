@@ -29,9 +29,9 @@ fn pump(app: &mut App) {
     }
 }
 
-fn landing() -> App {
+fn landing(workspace: &str) -> App {
     let trace = examples().join("landing.vtr").canonicalize().unwrap();
-    let workspace = examples().join("landing-page.volna.json");
+    let workspace = examples().join(workspace);
     let saved = std::fs::read(&workspace).unwrap();
     let trace_uri = url::Url::from_file_path(&trace).unwrap().to_string();
     let location = url::Url::from_file_path(workspace).unwrap().to_string();
@@ -51,7 +51,7 @@ fn landing() -> App {
 
 #[test]
 fn landing_waveforms_render_at_full_range_and_saved_zoom() {
-    let mut app = landing();
+    let mut app = landing("landing-page.volna.json");
     let theme = Theme::volna(true);
     let bounds = Rect::from_xywh(0.0, 0.0, 1200.0, 640.0);
     let (first, last) = app.doc.limits();
@@ -88,6 +88,40 @@ fn landing_waveforms_render_at_full_range_and_saved_zoom() {
         texts.iter().any(|t| t == "\"dot product loop\""),
         "{texts:?}"
     );
+}
+
+#[test]
+fn point_demo_restores_both_tracks_and_the_simultaneous_log_group() {
+    let mut app = landing("landing-points.volna.json");
+    let waves = PanelId(39);
+    let generators: Vec<_> = app
+        .panels
+        .waves(waves)
+        .unwrap()
+        .items()
+        .iter()
+        .filter_map(|item| item.lane()?.generator(&app.doc))
+        .map(|g| (g.points().unwrap().kind, g.transactions().len()))
+        .collect();
+    use volna_core::data::points::PointKind;
+    assert_eq!(generators, [(PointKind::Log, 490), (PointKind::Event, 676)]);
+    let detail = app.panels.transaction(PanelId(37)).unwrap();
+    assert_eq!(detail.group(&app.doc).unwrap().total, 300);
+    for dark in [true, false] {
+        let theme = Theme::volna(dark);
+        app.layout_panel(
+            waves,
+            Rect::from_xywh(0.0, 0.0, 1200.0, 700.0),
+            &theme,
+            1.0,
+            &mut MonoMeasure,
+        )
+        .unwrap();
+        let scene = app.render_panel(waves, &theme, &mut MonoMeasure);
+        let text: Vec<_> = scene.texts().collect();
+        assert!(text.contains(&"300 messages"));
+        assert!(text.iter().any(|text| text.ends_with(" events")));
+    }
 }
 
 #[test]
@@ -148,7 +182,7 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         TxPanelState::Ready(view) => {
             assert_eq!(
                 view.identity.label.as_deref(),
-                Some("80000054: addi a4, a4, 4")
+                Some("8000004c: add  a0, a0, a5")
             );
             view.identity.id
         }

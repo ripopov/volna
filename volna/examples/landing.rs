@@ -731,6 +731,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let temperature = real(&mut w, perf, "temperature_c")?;
 
     let logs = w.logger(SourceOptions::new("log", Some(soc)))?;
+    let events = w.events::<MemoryRequest>(SourceOptions::new("events", Some(soc)))?;
+    let progress_sites = [
+        log_callsite::<Boot>(&mut w, 2, "cycle {}: {}", 104)?,
+        log_callsite::<Boot>(&mut w, 3, "cycle {}: {}", 108)?,
+        log_callsite::<Boot>(&mut w, 4, "cycle {}: {}", 112)?,
+    ];
     let boot_site = log_callsite::<Boot>(&mut w, 2, "reset released at cycle {}", 41)?;
     let irq_site = log_callsite::<Interrupt>(&mut w, 2, "irq {} taken at pc {}", 58)?;
     let miss_site = log_callsite::<Miss>(&mut w, 3, "l2 miss at {} refilled in {} cycles", 73)?;
@@ -900,6 +906,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ids: Vec<Transaction<Instruction>> = Vec::with_capacity(insns.len());
     let mut refills = 0u64;
     let mut dram_misses = Vec::new();
+    let mut diagnostic_count = 0;
+    let mut event_count = 0;
     for insn in insns {
         let begin = edge(insn.stages[0].0);
         let payload = Instruction {
@@ -909,6 +917,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let tx = w.begin_at(instruction, begin, &payload, None)?;
         ids.push(tx);
+        w.event_at(
+            events,
+            tx.owner(),
+            begin,
+            &MemoryRequest {
+                label: format!("dispatch {}", insn.op.text),
+                address: insn.pc,
+                bytes: 4,
+            },
+        )?;
+        event_count += 1;
+        if insn.index % 8 == 0 || insn.index == 24 {
+            let count = if insn.index == 24 { 300 } else { 1 };
+            for occurrence in 0..count {
+                let severity = if count == 1 {
+                    usize::from(insn.index % 64 == 0)
+                } else if occurrence % 50 == 0 {
+                    2
+                } else {
+                    usize::from(occurrence % 12 == 0)
+                };
+                w.log_at(
+                    logs,
+                    progress_sites[severity],
+                    begin,
+                    &Boot {
+                        cycle: insn.stages[0].0,
+                        label: format!(
+                            "{} (request {occurrence})",
+                            ["response queued", "queue near capacity", "response timeout"]
+                                [severity]
+                        ),
+                    },
+                    Some(tx.owner()),
+                )?;
+                diagnostic_count += 1;
+            }
+        }
+        if insn.index == 24 || insn.index == 96 {
+            for occurrence in 0..128 {
+                let time = if insn.index == 24 {
+                    begin
+                } else {
+                    begin + occurrence % (edge(insn.end) - begin).max(1)
+                };
+                w.event_at(
+                    events,
+                    tx.owner(),
+                    time,
+                    &MemoryRequest {
+                        label: format!("response fragment {occurrence}"),
+                        address: insn.pc + occurrence * 4,
+                        bytes: 4,
+                    },
+                )?;
+                event_count += 1;
+                if insn.index == 96 {
+                    w.log_at(
+                        logs,
+                        progress_sites[occurrence as usize % 3],
+                        time,
+                        &Boot {
+                            cycle: insn.stages[0].0,
+                            label: format!("fragment {occurrence} received"),
+                        },
+                        Some(tx.owner()),
+                    )?;
+                    diagnostic_count += 1;
+                }
+            }
+        }
         if insn.op.kind == Kind::Load && insn.status == Status::Ok {
             w.attribute(
                 tx.owner(),
@@ -1136,7 +1215,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(flushed > 0);
     assert_eq!(errors, 1);
     assert!(with_stalls > 0 && report.relations > 0);
-    assert_eq!(log_count, 4 + dram_misses.len());
+    assert_eq!(log_count, 4 + dram_misses.len() + diagnostic_count);
+    let mut located_events = 0;
+    r.records(
+        RecordQuery {
+            kind: Some(RecordKind::Event),
+            ..Default::default()
+        },
+        |_| {
+            located_events += 1;
+            true
+        },
+    )?;
+    assert_eq!(located_events, event_count);
     for (source, clock) in [
         (instruction.id(), core_clk.id()),
         (reads.id(), core_clk.id()),

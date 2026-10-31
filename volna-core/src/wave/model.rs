@@ -3016,11 +3016,37 @@ impl WaveModel {
         Traced<TrackRef>,
         volna_trace::data::transactions::TransactionRef,
     )> {
+        self.lane_pick(doc, row, p)
+            .map(|(track, id, _)| (track, id))
+    }
+
+    fn lane_pick(
+        &self,
+        doc: &Document,
+        row: usize,
+        p: Point,
+    ) -> Option<(
+        Traced<TrackRef>,
+        volna_trace::data::transactions::TransactionRef,
+        Option<crate::document::RecordRange>,
+    )> {
         let lane = self.items.get(row)?.lane()?;
         let generator = lane.generator(doc)?;
         let layout = &self.layout;
         let viewport = self.viewport(doc);
         let width = layout.wave_width_f64();
+        if generator.points().is_some() {
+            let group = self.point_hit(doc, row, p)?;
+            let tx = &generator.transactions()[group.records.start];
+            return Some((
+                Traced::new(lane.source.trace(), tx.generator),
+                tx.id,
+                (group.records.len() > 1).then_some(crate::document::RecordRange {
+                    begin: group.first,
+                    end: group.last,
+                }),
+            ));
+        }
         let ppu = viewport.px_per_unit(width);
         if lane::is_density(generator, ppu) {
             return None;
@@ -3032,7 +3058,37 @@ impl WaveModel {
         let tolerance = 3.0 * f64::from(layout.zoom) / ppu;
         let ordinal = lane::hit(generator, lane.height, sub, time, tolerance)?;
         let tx = &generator.transactions()[ordinal];
-        Some((Traced::new(lane.source.trace(), tx.generator), tx.id))
+        Some((Traced::new(lane.source.trace(), tx.generator), tx.id, None))
+    }
+
+    #[must_use]
+    pub fn point_hit(
+        &self,
+        doc: &Document,
+        row: usize,
+        p: Point,
+    ) -> Option<super::points::PointGroup> {
+        let generator = self.items.get(row)?.lane()?.generator(doc)?;
+        let index = generator.points()?;
+        let (y, h) = self.layout.entry_span(row)?;
+        let area = crate::geometry::Rect::from_xywh(
+            self.layout.waves.left(),
+            y,
+            self.layout.waves.width(),
+            h,
+        );
+        if !area.contains(p) {
+            return None;
+        }
+        super::points::layout(
+            generator.transactions(),
+            index,
+            self.viewport(doc),
+            area,
+            self.layout.zoom,
+        )
+        .into_iter()
+        .find(|group| group.contains(p))
     }
 
     #[must_use]
@@ -3314,7 +3370,7 @@ impl WaveModel {
                 MouseButton::Left => {
                     let x = f64::from(p.x - layout.waves.left());
                     let clock = self.nav.selected_clock(doc);
-                    let t = snapped_time(
+                    let mut t = snapped_time(
                         &self.viewport(doc),
                         row.and_then(|r| self.edge_source(doc, r)).as_ref(),
                         clock.as_deref(),
@@ -3323,12 +3379,22 @@ impl WaveModel {
                         snap_px,
                     );
                     if let Some(r) = row.filter(|r| self.items[*r].lane().is_some()) {
-                        let hit = self.lane_hit(doc, r, p);
-                        doc.select(hit.map(|(track, id)| TxSelection {
-                            track,
-                            id,
-                            origin: panel,
-                        }));
+                        let hit = self.lane_pick(doc, r, p);
+                        if let Some((track, id, _)) = hit
+                            && let Some(generator) = doc.resident_generator(track)
+                            && generator.points().is_some()
+                            && let Some(record) = generator.transaction(id)
+                        {
+                            t = record.begin;
+                        }
+                        doc.select_range(
+                            hit.map(|(track, id, _)| TxSelection {
+                                track,
+                                id,
+                                origin: panel,
+                            }),
+                            hit.and_then(|(_, _, range)| range),
+                        );
                         self.pressed_record = hit.is_some();
                     }
                     self.set_cursor(doc, Some(t));

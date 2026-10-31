@@ -256,6 +256,114 @@ fn conversion_cancel_preserves_other_recordings(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn point_group_search_and_pagination_keep_the_inspector_selection(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+    use volna_core::{
+        document::{RecordRange, TxSelection},
+        panels::PanelsCommand,
+        testing::a,
+    };
+    init(cx);
+    for (dark, width) in [(true, 900.0), (false, 360.0)] {
+        let mut workspace = None;
+        let root = cx.add_window(|window, cx| {
+            let ws = cx.new(|cx| Workspace::new(window, cx));
+            workspace = Some(ws.clone());
+            gpui_kit::component::Root::new(ws, window, cx)
+        });
+        let window = RootWindow {
+            root,
+            workspace: workspace.unwrap(),
+        };
+        let mut view = VisualTestContext::from_window(root.into(), cx);
+        view.simulate_resize(size(px(width), px(1000.0)));
+        let (detail, selected) = window
+            .update(&mut view, |ws, window, cx| {
+                let session = OpenSpec::Path(
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/examples/landing.vtr").into(),
+                )
+                .open()
+                .unwrap();
+                let track = session
+                    .tracks()
+                    .iter()
+                    .find(|t| t.path.join(".") == "soc.log")
+                    .unwrap()
+                    .id;
+                let loaded = session.load_track(track).unwrap();
+                let records = loaded.generators[0].transactions();
+                let burst = records
+                    .chunk_by(|a, b| a.begin == b.begin)
+                    .max_by_key(|g| g.len())
+                    .unwrap();
+                let (selected, time) = (burst[0].id, burst[0].begin);
+                ws.set_session(session, cx);
+                ws.app.sidebar_visible = false;
+                let origin = ws.app.panels.focused_id();
+                ws.app.doc.select_range(
+                    Some(TxSelection {
+                        track: a(track),
+                        id: selected,
+                        origin,
+                    }),
+                    Some(RecordRange {
+                        begin: time,
+                        end: time,
+                    }),
+                );
+                ws.dispatch(Command::ShowTransaction { from: origin }, Some(window), cx);
+                let detail = ws.app.panels.focused_id();
+                ws.dispatch(
+                    Command::Panels(PanelsCommand::Close(origin)),
+                    Some(window),
+                    cx,
+                );
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                (detail, selected)
+            })
+            .unwrap();
+        view.run_until_parked();
+        view.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            window.click("record-group-next", cx);
+        });
+        view.run_until_parked();
+        window
+            .update(&mut view, |ws, _, _| {
+                let model = ws.app.panels.transaction(detail).unwrap();
+                assert_eq!(model.group(&ws.app.doc).unwrap().page, 1);
+                assert_eq!(model.shown().unwrap().id, selected);
+            })
+            .unwrap();
+        view.update(|window, cx| window.draw(cx).clear(cx));
+        let search = view.debug_bounds("record-group-search").unwrap();
+        view.simulate_click(search.center(), Modifiers::default());
+        view.simulate_input("response timeout");
+        view.run_until_parked();
+        window
+            .update(&mut view, |ws, _, _| {
+                let model = ws.app.panels.transaction(detail).unwrap();
+                assert_eq!(model.group_query().search, "response timeout");
+                let group = model.group(&ws.app.doc).unwrap();
+                assert_eq!((group.page, group.matching, group.total), (0, 6, 300));
+                assert_eq!(model.shown().unwrap().id, selected);
+            })
+            .unwrap();
+        view.simulate_keystrokes(SELECT_ALL);
+        view.simulate_keystrokes("backspace");
+        view.run_until_parked();
+        window
+            .update(&mut view, |ws, _, _| {
+                let model = ws.app.panels.transaction(detail).unwrap();
+                assert_eq!(model.group(&ws.app.doc).unwrap().matching, 300);
+                assert_eq!(model.shown().unwrap().id, selected);
+            })
+            .unwrap();
+    }
+}
+
+#[gpui_kit::test]
 fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
     use volna_core::{
@@ -706,6 +814,7 @@ fn large_scope_addition_requires_confirmation(cx: &mut TestAppContext) {
     use vtr::Recorder;
 
     init(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("large.vtr");
     let mut writer = vtr::Writer::create(&path).unwrap();
@@ -773,7 +882,10 @@ fn large_scope_addition_requires_confirmation(cx: &mut TestAppContext) {
             });
         });
         view.run_until_parked();
-        view.update(|window, cx| assert_eq!(window.has_active_dialog(cx), scenario != 0));
+        view.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            assert_eq!(window.has_active_dialog(cx), scenario != 0);
+        });
         match scenario {
             1 => view.update(|window, cx| window.click("cancel-add-scope", cx)),
             2 => view.update(|window, cx| window.click("confirm-add-scope", cx)),
@@ -784,7 +896,7 @@ fn large_scope_addition_requires_confirmation(cx: &mut TestAppContext) {
         let rows = ws.read_with(&view, |ws, _| {
             ws.app.panels.focused_waves().map_or(0, |w| w.items().len())
         });
-        assert_eq!(rows, [1000, 0, 1001, 1003][scenario]);
+        assert_eq!(rows, [1000, 0, 1001, 1003][scenario], "scenario {scenario}");
     }
 }
 

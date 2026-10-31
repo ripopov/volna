@@ -1,0 +1,104 @@
+{
+  "format": "volna-workspace",
+  "version": 8,
+  "traces": [
+    {
+      "letter": "A",
+      "path": "landing.vtr",
+      "name": "landing.vtr",
+      "timescale": -9,
+      "time_range": [
+        0,
+        1685
+      ],
+      "design_id": null
+    }
+  ],
+  "timescale": -9,
+  "layout": {
+    "center": {
+      "tabs": [
+        39
+      ],
+      "active": 39
+    },
+    "right": {
+      "layout": {
+        "tabs": [
+          37
+        ],
+        "active": 37
+      },
+      "width": 440.0,
+      "open": true
+    },
+    "windows": {}
+  },
+  "timeline_dividers": [],
+  "focused": 39,
+  "panels": [
+    {"id":37,"kind":"transaction","version":3,"title":null,"pinned":false,"record":{"track":["soc","log"],"id":208,"range":{"begin":103,"end":103}},"collapsed":[],"radix":{}},
+    {"id":39,"kind":"waves","version":8,"title":null,"link":{"viewport":true,"cursor":true},"scroll_y":0.0,"columns":{"names":150.0,"values":80.0},"rows":[{"type":"signal","shape":"Bit","projection":null,"bus":null,"signal":["soc","l2","req_valid"],"format":"bit"},{"type":"signal","shape":{"Vector":{"width":32}},"projection":null,"bus":{"collapsed":true,"initialized":false},"signal":["soc","cpu0","pc"],"format":"hex"},{"type":"lane","generator":["soc","log"],"height":8},{"type":"lane","generator":["soc","events"],"height":8}],"selected":[2]}
+  ],
+  "shared": {
+    "viewport": {
+      "start": 80.0,
+      "end": 160.0
+    },
+    "cursor": 103,
+    "markers": [
+      {
+        "id": 1,
+        "time": 51,
+        "label": null
+      },
+      {
+        "id": 2,
+        "time": 63,
+        "label": null
+      }
+    ],
+    "reference": null
+  },
+  "sidebar": {
+    "visible": true,
+    "width": 250.0,
+    "scopes_fraction": 0.3810638,
+    "selected_scope": [
+      "A",
+      [
+        "soc"
+      ]
+    ],
+    "expanded": [
+      [
+        "A",
+        [
+          "soc"
+        ]
+      ],
+      [
+        "A",
+        [
+          "soc",
+          "cpu0"
+        ]
+      ],
+      [
+        "A",
+        [
+          "soc",
+          "dram"
+        ]
+      ],
+      [
+        "A",
+        [
+          "soc",
+          "l2"
+        ]
+      ]
+    ],
+    "filter": ""
+  }
+}

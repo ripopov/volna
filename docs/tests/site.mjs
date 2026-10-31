@@ -347,7 +347,7 @@ async function writeReport() {
 }
 
 function verifySampleWorkspace(state) {
-  assert.match(state, /panel=39 .*items=13 loaded=13 .*cursor=Some\(69\).*viewport=\(46,95\)/);
+  assert.match(state, /panel=39 .*items=15 loaded=13 .*cursor=Some\(69\).*viewport=\(46,95\)/);
   assert.match(state, /panel=38 pipeline track=soc.cpu0.pipeline.instruction .*ready rows=420/);
   assert.match(state, /panel=40 table .*rows=420/);
   const transaction = state.split('\n').find(line => line.includes('panel=37 transaction '));

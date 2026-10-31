@@ -231,6 +231,9 @@ impl crate::trace::Retime for PanelKind {
         if let Self::Table(t) = self {
             t.retime(by);
         }
+        if let Self::Transaction(t) = self {
+            t.retime(by);
+        }
     }
 }
 
@@ -268,8 +271,8 @@ impl Panel {
                     }
                 },
                 PanelKind::Transaction(model) => match model.shown() {
-                    Some(shown) => format!("Transaction {} · #{}", self.id.0, shown.id.0),
-                    None => format!("Transaction {}", self.id.0),
+                    Some(shown) => format!("Record details {} · #{}", self.id.0, shown.id.0),
+                    None => format!("Record details {}", self.id.0),
                 },
                 PanelKind::Start => "Start".into(),
                 PanelKind::Settings => "Settings".into(),

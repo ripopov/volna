@@ -117,6 +117,7 @@ impl StageCensus {
 pub struct LoadedGenerator {
     raw: Arc<RawGenerator>,
     sub_rows: Vec<u16>,
+    points: Option<crate::data::points::PointIndex>,
     depth: u16,
     median_lifetime: u64,
     stage_census: StageCensus,
@@ -165,6 +166,7 @@ impl LoadedGenerator {
         let mut reservation = budget
             .map(|b| b.reserve_object("the generator view", upper))
             .transpose()?;
+        let points = crate::data::points::PointIndex::build(transactions, &mut checkpoint).await;
         let mut sub_rows = Vec::new();
         sub_rows.try_reserve_exact(transactions.len())?;
         let mut open = std::collections::BinaryHeap::new();
@@ -172,6 +174,11 @@ impl LoadedGenerator {
         let mut depth = 0u16;
         for tx in transactions {
             checkpoint().await;
+            if points.is_some() {
+                sub_rows.push(0);
+                depth = 1;
+                continue;
+            }
             while let Some(&std::cmp::Reverse((end, row))) = open.peek() {
                 if end > tx.begin {
                     break;
@@ -242,7 +249,10 @@ impl LoadedGenerator {
         }
         drop(open);
         drop(free);
-        let bytes = palette.resident_bytes()
+        let bytes = points
+            .as_ref()
+            .map_or(0, crate::data::points::PointIndex::bytes)
+            + palette.resident_bytes()
             + (stage_order.capacity() * std::mem::size_of::<Vec<usize>>()) as u64
             + stage_order
                 .iter()
@@ -263,6 +273,7 @@ impl LoadedGenerator {
         Ok(Self {
             raw,
             sub_rows,
+            points,
             depth,
             median_lifetime,
             stage_census,
@@ -361,6 +372,11 @@ impl LoadedGenerator {
     #[must_use]
     pub fn sub_row(&self, ordinal: usize) -> u16 {
         self.sub_rows.get(ordinal).copied().unwrap_or(0)
+    }
+
+    #[must_use]
+    pub fn points(&self) -> Option<&crate::data::points::PointIndex> {
+        self.points.as_ref()
     }
 
     #[must_use]
