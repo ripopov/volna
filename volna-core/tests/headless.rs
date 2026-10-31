@@ -280,7 +280,7 @@ fn aliases_share_pending_and_loaded_histories() {
     app.close_trace();
     assert_eq!(
         weak.strong_count(),
-        before - 4,
+        before - 2,
         "rows released their histories"
     );
 }
@@ -334,7 +334,10 @@ fn retry_menu_reloads_aliases_without_adding_rows_or_changing_ready_data() {
     use volna_core::wave::model::MenuAction;
     let (mut app, source) = loaded_app(10);
     source.fail.store(true, SeqCst);
-    app.handle(Command::AddVars(a_all(vec![0, 0])));
+    app.handle(Command::AddVars(a_all(vec![
+        0,
+        source.hierarchy.var_count() - 1,
+    ])));
     pump(&mut app);
     source.fail.store(false, SeqCst);
     app.handle(Command::AddVars(a_all(vec![1])));
@@ -413,7 +416,10 @@ fn retry_menu_reloads_aliases_without_adding_rows_or_changing_ready_data() {
 fn failed_loads_can_retry_for_all_alias_rows() {
     let (mut app, source) = loaded_app(10);
     source.fail.store(true, SeqCst);
-    app.handle(Command::AddVars(a_all(vec![0, 0])));
+    app.handle(Command::AddVars(a_all(vec![
+        0,
+        source.hierarchy.var_count() - 1,
+    ])));
     pump(&mut app);
     assert!(
         app.panels.focused_waves().unwrap().items().iter().all(|i| i
@@ -423,7 +429,15 @@ fn failed_loads_can_retry_for_all_alias_rows() {
             .is_some())
     );
     source.fail.store(false, SeqCst);
-    app.handle(Command::AddVars(a_all(vec![0])));
+    let panel = app.panels.focused_id();
+    app.panels
+        .waves_mut(panel)
+        .unwrap()
+        .open_format_menu(&app.doc, 0, point(100.0, 100.0));
+    app.handle(Command::MenuSelect(
+        panel,
+        volna_core::wave::model::MenuAction::RetryLoad,
+    ));
     pump(&mut app);
     assert_eq!(source.loads.load(SeqCst), 2);
     assert!(
@@ -657,7 +671,7 @@ fn cursor_markers_and_selection_follow_the_document() {
 #[test]
 fn shift_wheel_scrolls_rows_without_panning_time() {
     let (mut app, _) = loaded_app(1000);
-    app.handle(Command::AddVars(a_all(vec![0; 80])));
+    volna_core::testing::add_signal_copies(&mut app, &[volna_core::testing::a(0)], 80);
     pump(&mut app);
     frame(&mut app, &Theme::one_dark());
     let panel = app.panels.focused_id();
@@ -1391,7 +1405,7 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
 fn row_height_actions_step_presets_and_keep_the_anchor_row_on_screen() {
     let theme = Theme::one_dark();
     let (mut app, _) = loaded_app(100);
-    app.handle(Command::AddVars(a_all(vec![0; 60])));
+    volna_core::testing::add_signal_copies(&mut app, &[volna_core::testing::a(0)], 60);
     pump(&mut app);
     frame(&mut app, &theme);
     let waves = app.panels.focused_id();
@@ -1568,7 +1582,7 @@ fn dragging_rows_past_an_edge_scrolls_and_keeps_heights_with_their_rows() {
     let theme = Theme::one_dark();
     let (mut app, _) = loaded_app(10);
     let waves = app.panels.focused_id();
-    app.handle(Command::AddVars(a_all((0..40).map(|i| i % 8))));
+    volna_core::testing::add_signal_copies(&mut app, &a_all(0..8), 5);
     pump(&mut app);
     frame(&mut app, &theme);
     press_row(&mut app, 0, 0.5, Modifiers::default());
@@ -1844,7 +1858,7 @@ fn sidebar_models_follow_scope_selection_and_keys() {
 fn layout_hit_regions_and_scene_cursors_agree() {
     let (mut app, _) = loaded_app(10);
     let theme = Theme::one_dark();
-    app.handle(Command::AddVars(a_all((0..40).map(|i| i % 4))));
+    volna_core::testing::add_signal_copies(&mut app, &a_all(0..4), 10);
     pump(&mut app);
     frame(&mut app, &theme);
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();

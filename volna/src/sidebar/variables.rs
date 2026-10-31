@@ -185,11 +185,11 @@ impl Workspace {
                                 "\nNo activity in the view"
                             });
                         }
-                        let addable = member.var().is_some()
-                            || matches!(member, volna_trace::data::Member::Generator(_));
+                        let track = h.member_track(member).map(|track| traced.with(track));
                         let clock = this.app.member_clock(traced).is_some();
                         let mut row = div()
                             .id(("var", ix))
+                            .debug_selector(move || format!("member-row-{}-{ix}", traced.trace))
                             .w_full()
                             .min_w_0()
                             .flex()
@@ -316,8 +316,22 @@ impl Workspace {
                                 let menu = if clock {
                                     menu.item(add("Add as Ruler", Command::AddClockRulers))
                                         .item(add("Add as Waveform", Command::AddToWaves))
-                                } else if addable {
+                                } else {
                                     menu.item(add("Add to Waves", Command::AddToWaves))
+                                };
+                                let menu = if let Some(track) = track.filter(|_| !clock) {
+                                    let owner = owner.clone();
+                                    menu.item(PopupMenuItem::new("Open in Pipeline").on_click(
+                                        move |_, window, cx| {
+                                            drop(owner.update(cx, |workspace, cx| {
+                                                workspace.dispatch(
+                                                    Command::OpenPipeline { track },
+                                                    Some(window),
+                                                    cx,
+                                                );
+                                            }));
+                                        },
+                                    ))
                                 } else {
                                     menu
                                 };

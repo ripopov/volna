@@ -51,3 +51,18 @@ pub fn paths(
 pub fn a_all<T>(items: impl IntoIterator<Item = T>) -> Vec<crate::trace::Traced<T>> {
     items.into_iter().map(a).collect()
 }
+
+pub fn add_signal_copies(
+    app: &mut App,
+    vars: &[crate::trace::Traced<volna_trace::data::VarId>],
+    count: usize,
+) {
+    use crate::{Action, Command};
+    assert!(count > 0);
+    app.handle(Command::AddVars(vars.to_vec()));
+    app.handle(Command::Action(Action::CopySignals));
+    for _ in 1..count {
+        app.handle(Command::Action(Action::PasteSignals));
+    }
+    app.handle(Command::Action(Action::SelectAll));
+}

@@ -984,15 +984,15 @@ impl App {
             self.panel_command(PanelsCommand::Focus(focused));
             return Some(focused);
         }
+        if let Some(id) = self.panels.first_waves() {
+            self.panel_command(PanelsCommand::Focus(id));
+            return Some(id);
+        }
         if kind.is_start()
             && self.panels.layout().placement(focused) == Some(crate::panels::Placement::Center)
         {
             let waves = self.fresh_waves();
             return self.replace_panel(focused, waves, None).ok();
-        }
-        if let Some(id) = self.panels.first_waves() {
-            self.panel_command(PanelsCommand::Focus(id));
-            return Some(id);
         }
         if let Some(start) = self.panels.first_start() {
             let waves = self.fresh_waves();
@@ -1246,9 +1246,10 @@ impl App {
                 }
             }
             Command::AddVars(vars) => self.add_vars(&vars),
-            Command::AddToWaves(members) => self.add_to_waves(&members),
             Command::AddClockRulers(members) => self.add_clock_rulers(&members),
-            Command::ActivateMembers(members) => self.activate_members(&members),
+            Command::ActivateMembers(members) | Command::AddToWaves(members) => {
+                self.add_to_waves(&members);
+            }
             Command::OpenPipeline { track } => self.open_pipeline(track),
             Command::OpenTable { selected, clicked } => self.open_table(&selected, clicked),
             Command::OpenTableFromPanel { panel, row } => self.open_table_from_panel(panel, row),
@@ -1333,7 +1334,7 @@ impl App {
                     self.events.push(Event::RevealScopeRow(row));
                 }
                 if let Some(member) = out.activate {
-                    self.activate_members(&[member]);
+                    self.add_to_waves(&[member]);
                 }
                 self.changed();
             }
@@ -1351,7 +1352,7 @@ impl App {
             }
             Command::AddSelectedOrAllVars => {
                 let vars = self.variables.selected_or_all();
-                self.activate_members(&vars);
+                self.add_to_waves(&vars);
             }
             Command::VariablesKey(key, modifiers) => {
                 if key == Key::Escape && self.variables.selected.is_empty() {
@@ -1360,7 +1361,7 @@ impl App {
                 }
                 let out = self.variables.key(&key, modifiers);
                 if let Some(members) = out.activate {
-                    self.activate_members(&members);
+                    self.add_to_waves(&members);
                 }
                 if let Some(row) = out.reveal {
                     self.events.push(Event::RevealVarRow(row));
@@ -1616,46 +1617,6 @@ impl App {
         if let Some(pipeline) = panels.pipeline_mut(target) {
             pipeline.reveal_record(doc, track.item, shown.id, now);
         }
-        self.changed();
-    }
-
-    fn activate_members(&mut self, members: &[Traced<Member>]) {
-        let mut vars = Vec::new();
-        let mut tracks = Vec::new();
-        let mut points = Vec::new();
-        for &member in members {
-            let Some(h) = self.doc.hierarchy(member.trace) else {
-                continue;
-            };
-            if let Member::Var(id) = member.item {
-                if id < h.var_count() {
-                    vars.push(member.with(id));
-                }
-            } else if let Some(track) = h.member_track(member.item) {
-                let track = member.with(track);
-                let point = match member.item {
-                    Member::Generator(index) => h.generators().get(index).is_some_and(|g| {
-                        crate::data::points::PointKind::from_generator(&g.kind).is_some()
-                    }),
-                    Member::Var(_) => false,
-                };
-                if point {
-                    if !points.contains(&member) {
-                        points.push(member);
-                    }
-                } else if !tracks.contains(&track) {
-                    tracks.push(track);
-                }
-            }
-        }
-        if !vars.is_empty() {
-            self.add_vars(&vars);
-        }
-        self.variables.notice = None;
-        for track in tracks {
-            self.open_pipeline(track);
-        }
-        self.add_to_waves(&points);
         self.changed();
     }
 
@@ -1986,54 +1947,32 @@ impl App {
     }
 
     fn add_vars(&mut self, vars: &[Traced<VarId>]) {
-        if vars.is_empty() {
+        let members: Vec<_> = vars
+            .iter()
+            .map(|var| var.with(Member::Var(var.item)))
+            .collect();
+        self.add_to_waves(&members);
+    }
+
+    fn add_to_waves(&mut self, members: &[Traced<Member>]) {
+        if !members.iter().any(|member| {
+            self.doc
+                .hierarchy(member.trace)
+                .is_some_and(|h| match member.item {
+                    Member::Var(id) => h.get_var(id).is_some(),
+                    Member::Generator(_) => h.member_track(member.item).is_some(),
+                })
+        }) {
             return;
         }
         let Some(target) = self.waves_target() else {
             return;
         };
         let loaded = self.resident_histories();
-        if let Some(w) = self.panels.waves_mut(target) {
-            w.add_vars(&mut self.doc, vars, loaded);
+        if let Some(waves) = self.panels.waves_mut(target) {
+            waves.add_members(&mut self.doc, members, &loaded);
         }
-        self.changed();
-    }
-
-    fn add_to_waves(&mut self, members: &[Traced<Member>]) {
-        let vars: Vec<Traced<VarId>> = members
-            .iter()
-            .filter_map(|m| Some(m.with(m.item.var()?)))
-            .collect();
-        let mut tracks = Vec::new();
-        let mut clocks: Vec<ClockKey> = Vec::new();
-        for &member in members {
-            let Some(h) = self.doc.hierarchy(member.trace) else {
-                continue;
-            };
-            let Some(track) = h.member_track(member.item) else {
-                continue;
-            };
-            let track = member.with(track);
-            if let Some(key) = self.member_clock(member) {
-                if !clocks.contains(&key) {
-                    clocks.push(key);
-                }
-            } else if matches!(member.item, Member::Generator(_)) && !tracks.contains(&track) {
-                tracks.push(track);
-            }
-        }
-        self.add_vars(&vars);
-        if tracks.is_empty() && clocks.is_empty() {
-            return;
-        }
-        let Some(target) = self.waves_target() else {
-            return;
-        };
-        let Self { panels, doc, .. } = self;
-        if let Some(w) = panels.waves_mut(target) {
-            w.add_lanes(doc, &tracks);
-            w.add_clocks(&clocks);
-        }
+        self.variables.notice = None;
         self.sync_lane_tracks();
         self.changed();
     }

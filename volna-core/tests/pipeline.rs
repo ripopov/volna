@@ -7,7 +7,6 @@ use vtr::Recorder;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
-use volna_core::sidebar::TreeNode;
 use volna_core::testing::{a, a_all};
 use volna_core::trace::TraceId;
 
@@ -18,7 +17,6 @@ use volna_core::panels::{Layout, PanelId, PanelsCommand};
 use volna_core::pipeline::{Hit, PipelineModel, RowView, Rows, TrackSource};
 use volna_core::scene::{FontRole, MonoMeasure, Prim};
 use volna_core::session::LoadRequest;
-use volna_core::sidebar::Key;
 use volna_core::wave::PointerEvent;
 use volna_core::workspace::Workspace;
 use volna_core::{Instant, Theme};
@@ -154,6 +152,19 @@ fn generator_track(session: &dyn Session, path: &[&str]) -> TrackRef {
     .unwrap()
 }
 
+fn open_pipeline(app: &App, member: Member) -> Command {
+    let member = a(member);
+    let track = app
+        .doc
+        .hierarchy(member.trace)
+        .unwrap()
+        .member_track(member.item)
+        .unwrap();
+    Command::OpenPipeline {
+        track: member.with(track),
+    }
+}
+
 fn pump(app: &mut App) {
     loop {
         let requests = app.take_requests();
@@ -186,16 +197,9 @@ fn opened(n: u64) -> (App, Arc<dyn Session>, PanelId, PanelId) {
     app.handle(Command::AddVars(a_all(vec![0])));
     let waves = app.panels.focused_id();
     assert!(app.panels.waves(waves).is_some());
-    app.handle(Command::SelectScope(TreeNode::scope(a(scope(
-        session.as_ref(),
-        &["cpu", "thread0"],
-    )))));
-    app.take_events();
-    app.handle(Command::SelectVar {
-        ix: 0,
-        modifiers: Modifiers::default(),
+    app.handle(Command::OpenPipeline {
+        track: a(generator_track(session.as_ref(), &["cpu", "thread0"])),
     });
-    app.handle(Command::VariablesKey(Key::Enter, Modifiers::default()));
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, waves);
     app.handle(Command::Action(Action::GoToStart));
@@ -728,15 +732,18 @@ fn narrow_pipeline_stages_show_the_prefix_that_fits() {
     let mut app = App::new();
     app.set_session(session.clone());
     pump(&mut app);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        session
-            .hierarchy()
-            .scope(scope(session.as_ref(), &["cpu", "thread0"]))
-            .generators
-            .iter()
-            .next()
-            .unwrap(),
-    )])));
+    app.handle(open_pipeline(
+        &app,
+        Member::Generator(
+            session
+                .hierarchy()
+                .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
+        ),
+    ));
     pump(&mut app);
     let panel = app.panels.focused_id();
     let theme = Theme::one_dark();
@@ -787,7 +794,7 @@ fn narrow_pipeline_stages_show_the_prefix_that_fits() {
 }
 
 #[test]
-fn enter_on_a_generator_opens_a_panel_loads_the_track_once_and_paints_cells() {
+fn opening_a_pipeline_loads_the_track_once_and_paints_cells() {
     let (mut app, session, waves, pipeline) = opened(40);
     assert!(app.status().sidebar_notice.is_none());
     assert!(
@@ -889,7 +896,7 @@ fn enter_on_a_generator_opens_a_panel_loads_the_track_once_and_paints_cells() {
 
     let generator = Member::Generator(0);
     pump(&mut app);
-    app.handle(Command::ActivateMembers(a_all(vec![generator])));
+    app.handle(open_pipeline(&app, generator));
     assert_eq!(app.panels.len(), 3);
     assert!(app.take_requests().is_empty());
     let second = app.panels.focused_id();
@@ -898,27 +905,33 @@ fn enter_on_a_generator_opens_a_panel_loads_the_track_once_and_paints_cells() {
         app.panels.pipeline(second).unwrap().rows(&app.doc),
         Rows::Ready(set) if set.len() == 40
     ));
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        session
-            .hierarchy()
-            .scope(scope(session.as_ref(), &["cpu", "thread0"]))
-            .generators
-            .iter()
-            .next()
-            .unwrap(),
-    )])));
+    app.handle(open_pipeline(
+        &app,
+        Member::Generator(
+            session
+                .hierarchy()
+                .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
+        ),
+    ));
     assert_eq!(app.panels.len(), 3);
     assert_eq!(app.panels.focused_id(), pipeline);
     let bus = scope(session.as_ref(), &["cpu", "bus"]);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        session
-            .hierarchy()
-            .scope(bus)
-            .generators
-            .iter()
-            .next()
-            .unwrap(),
-    )])));
+    app.handle(open_pipeline(
+        &app,
+        Member::Generator(
+            session
+                .hierarchy()
+                .scope(bus)
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
+        ),
+    ));
     pump(&mut app);
     let bus_panel = app.panels.focused_id();
     assert_eq!(app.panels.len(), 4);
@@ -1839,9 +1852,7 @@ fn square_cells_use_the_stream_clock_period_instead_of_time_units() {
         else {
             panic!("the bound pipeline generator exists")
         };
-        app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-            generator,
-        )])));
+        app.handle(open_pipeline(&app, Member::Generator(generator)));
         pump(&mut app);
         let pipeline = app.panels.focused_id();
         let theme = Theme::one_dark().zoomed(zoom);
@@ -2780,7 +2791,7 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
         app.doc.track(a(track)).is_none(),
         "late delivery is a no-op"
     );
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(0)])));
+    app.handle(open_pipeline(&app, Member::Generator(0)));
     let generator = app
         .panels
         .pipeline(app.panels.focused_id())
@@ -2870,7 +2881,7 @@ fn a_stream_opened_first_replaces_the_start_panel_and_rows_find_a_waveform_tab()
     app.handle(Command::AddVars(a_all(vec![0])));
     assert_eq!(app.panels.len(), 3);
     assert_eq!(app.panels.focused_id(), waves);
-    assert_eq!(app.panels.waves(waves).unwrap().items().len(), 2);
+    assert_eq!(app.panels.waves(waves).unwrap().items().len(), 1);
     app.handle(Command::Panels(PanelsCommand::Close(waves)));
     app.handle(Command::Panels(PanelsCommand::Close(pipeline)));
     assert_eq!(app.panels.len(), 1);
@@ -2891,15 +2902,18 @@ fn the_checked_in_showcase_has_two_pipeline_generators_on_a_cycle_time_base() {
     let mut counts = Vec::new();
     for core in ["cpu0", "cpu1"] {
         let stream = scope(session.as_ref(), &["soc", core, "pipeline"]);
-        app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-            session
-                .hierarchy()
-                .scope(stream)
-                .generators
-                .iter()
-                .next()
-                .unwrap(),
-        )])));
+        app.handle(open_pipeline(
+            &app,
+            Member::Generator(
+                session
+                    .hierarchy()
+                    .scope(stream)
+                    .generators
+                    .iter()
+                    .next()
+                    .unwrap(),
+            ),
+        ));
         pump(&mut app);
         let id = app.panels.focused_id();
         frame(&mut app, id, &theme);
@@ -2948,15 +2962,18 @@ fn the_feature_showcase_cpu_paints_stage_cells_and_stall_bands() {
     app.set_session(session.clone());
     pump(&mut app);
     let stream = scope(session.as_ref(), &["soc", "cpu", "thread0"]);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        session
-            .hierarchy()
-            .scope(stream)
-            .generators
-            .iter()
-            .next()
-            .unwrap(),
-    )])));
+    app.handle(open_pipeline(
+        &app,
+        Member::Generator(
+            session
+                .hierarchy()
+                .scope(stream)
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
+        ),
+    ));
     pump(&mut app);
     let id = app.panels.focused_id();
     let theme = Theme::one_dark();
@@ -3009,15 +3026,18 @@ fn the_theme_showcase_runs_the_c910_stage_ladder_with_flushed_and_open_rows() {
         ),
     ] {
         let stream = scope(session.as_ref(), &["soc", core, "pipeline"]);
-        app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-            session
-                .hierarchy()
-                .scope(stream)
-                .generators
-                .iter()
-                .next()
-                .unwrap(),
-        )])));
+        app.handle(open_pipeline(
+            &app,
+            Member::Generator(
+                session
+                    .hierarchy()
+                    .scope(stream)
+                    .generators
+                    .iter()
+                    .next()
+                    .unwrap(),
+            ),
+        ));
         pump(&mut app);
         let id = app.panels.focused_id();
         frame(&mut app, id, &theme);
@@ -3061,9 +3081,7 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     else {
         panic!("the bound pipeline generator exists")
     };
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        generator,
-    )])));
+    app.handle(open_pipeline(&app, Member::Generator(generator)));
     pump(&mut app);
     let id = app.panels.focused_id();
     app.handle(Command::PipelineActivity(
@@ -3362,15 +3380,18 @@ fn half_million_rows_load_lay_out_and_paint() {
     let stream = scope(session.as_ref(), &parts);
     let opened = t0.elapsed().as_secs_f64();
     let t1 = Clock::now();
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        session
-            .hierarchy()
-            .scope(stream)
-            .generators
-            .iter()
-            .next()
-            .unwrap(),
-    )])));
+    app.handle(open_pipeline(
+        &app,
+        Member::Generator(
+            session
+                .hierarchy()
+                .scope(stream)
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
+        ),
+    ));
     pump(&mut app);
     let loaded = t1.elapsed().as_secs_f64();
     let id = app.panels.focused_id();

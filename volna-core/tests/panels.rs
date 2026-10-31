@@ -404,10 +404,10 @@ fn split_copies_rows_but_shares_history_and_clears_transient_input() {
     doc.set_session(source.clone());
     let a = p.focused_id();
     let w = p.focused_mut().kind.waves_mut().unwrap();
-    w.add_vars(
+    w.add_members(
         &mut doc,
-        &volna_core::testing::a_all([0, 1]),
-        Default::default(),
+        &volna_core::testing::a_all([0, 1].map(volna_trace::data::Member::Var)),
+        &Default::default(),
     );
     w.finish_signal(
         volna_core::testing::a(source.hierarchy().var(0).signal),

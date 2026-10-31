@@ -237,6 +237,13 @@ presentation, and workspace edits stay in the viewer.
 
 ### Docking and transaction details
 
+Double-clicking a hierarchy member or pressing Enter adds it to Waves. Signals,
+clocks, transactions, logs, and events share the focused Waves panel; when another
+panel has focus, an existing Waves panel is reused before creating one. Adding
+an existing member selects and reveals its row, expanding enclosing groups as
+needed. **Add to Waves** uses the same behavior. **Open in Pipeline** and
+**Open in table** remain explicit choices in the member context menu.
+
 New waveform, pipeline, table, and Settings panels open in the center, even
 when the sidebar has focus or the center is empty. Requests that reuse an
 existing panel preserve its placement and reveal it if its sidebar is hidden.

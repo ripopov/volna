@@ -108,6 +108,19 @@ fn fixture() -> Arc<dyn Session> {
     OpenSpec::Path(file.path().into()).open().unwrap()
 }
 
+fn open_pipeline(app: &App, member: Member) -> Command {
+    let member = a(member);
+    let track = app
+        .doc
+        .hierarchy(member.trace)
+        .unwrap()
+        .member_track(member.item)
+        .unwrap();
+    Command::OpenPipeline {
+        track: member.with(track),
+    }
+}
+
 fn pump(app: &mut App) {
     loop {
         let requests = app.take_requests();
@@ -441,15 +454,18 @@ fn a_pipeline_counts_in_its_stream_clock_and_its_clock_becomes_the_default_ruler
     let (mut app, session, waves) = waves();
     let theme = Theme::one_dark();
     let pipe = scope(session.as_ref(), &["top", "pipe"]);
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        session
-            .hierarchy()
-            .scope(pipe)
-            .generators
-            .iter()
-            .next()
-            .unwrap(),
-    )])));
+    app.handle(open_pipeline(
+        &app,
+        Member::Generator(
+            session
+                .hierarchy()
+                .scope(pipe)
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
+        ),
+    ));
     pump(&mut app);
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, waves);
@@ -538,9 +554,7 @@ fn a_kanata_import_counts_its_pipeline_in_the_cycle_clock() {
         Lookup::Found(id) => id,
         other => panic!("{other:?}"),
     };
-    app.handle(Command::ActivateMembers(a_all(vec![Member::Generator(
-        thread,
-    )])));
+    app.handle(open_pipeline(&app, Member::Generator(thread)));
     pump(&mut app);
     let pipeline = app.panels.focused_id();
     app.handle(Command::PipelineActivity(

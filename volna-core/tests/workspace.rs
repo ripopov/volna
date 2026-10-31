@@ -963,11 +963,12 @@ fn a_save_that_keeps_failing_the_same_way_notices_once() {
 #[test]
 fn saves_refuse_excess_rows_without_acknowledging_or_overwriting_live_state() {
     let mut app = persistent_app();
-    app.handle(Command::AddVars(a_all(vec![
-        0;
-        volna_core::workspace::MAX_ROWS
-            + 1
-    ])));
+    app.handle(Command::AddVars(a_all(vec![0])));
+    while app.panels.focused_waves().unwrap().items().len() <= volna_core::workspace::MAX_ROWS {
+        app.handle(Command::Action(volna_core::Action::SelectAll));
+        app.handle(Command::Action(volna_core::Action::CopySignals));
+        app.handle(Command::Action(volna_core::Action::PasteSignals));
+    }
     let count = app.panels.focused_waves().unwrap().items().len();
     assert!(Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).is_err());
     app.save_workspace(None);

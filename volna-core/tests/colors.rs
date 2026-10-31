@@ -188,7 +188,7 @@ fn the_menu_colours_the_selection_in_one_step_and_checks_only_shared_colours() {
     set_tint(&mut app, Some(Tint::Blue));
     app.handle(Command::Undo);
     assert_eq!(inks(&app, id), [None; 4]);
-    assert_eq!(app.undo_label(), Some("Add 4 signals"));
+    assert_eq!(app.undo_label(), Some("Add 4 rows"));
     app.handle(Command::Redo);
     assert_eq!(own(&app, id)[VALID], Some(Tint::Blue));
 

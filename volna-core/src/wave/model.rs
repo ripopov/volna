@@ -27,7 +27,7 @@ use crate::selection;
 use crate::theme::Theme;
 use crate::trace::{TraceId, Traced};
 use volna_trace::data::transactions::TrackRef;
-use volna_trace::data::{SignalHistory, SignalRef, SignalShape, VarId};
+use volna_trace::data::{Member, SignalHistory, SignalRef, SignalShape, VarId};
 
 pub const ZOOM_RANGE_MIN_PX: f32 = 4.0;
 pub const ROW_DRAG_MIN_PX: f32 = 4.0;
@@ -307,6 +307,55 @@ pub enum WaveRow {
     Lane(TxLane),
     Clock(ClockRow),
     Group(GroupRow),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum RowKey {
+    Signal(Traced<VarId>),
+    Track(Traced<TrackRef>),
+}
+
+impl RowKey {
+    fn from_member(doc: &Document, member: Traced<Member>) -> Option<Self> {
+        let hierarchy = doc.hierarchy(member.trace)?;
+        match member.item {
+            Member::Var(id) => {
+                hierarchy.get_var(id)?;
+                Some(Self::Signal(member.with(id)))
+            }
+            Member::Generator(_) => Some(Self::Track(
+                member.with(hierarchy.member_track(member.item)?),
+            )),
+        }
+    }
+
+    fn from_row(doc: &Document, row: &WaveRow) -> Option<Self> {
+        match row {
+            WaveRow::Signal(signal) if signal.projection.is_none() => {
+                signal.source.var().map(Self::Signal)
+            }
+            WaveRow::Lane(lane) => lane.track().map(Self::Track),
+            WaveRow::Clock(clock) => doc
+                .clocks
+                .find(&clock.key)
+                .map(|c| Self::Track(c.generator())),
+            _ => None,
+        }
+    }
+
+    fn row(self, doc: &mut Document, loaded: &Resident) -> Option<WaveRow> {
+        match self {
+            Self::Signal(var) => var_row(doc, var, loaded),
+            Self::Track(track) => {
+                let session = doc.session(track.trace)?;
+                if let Some(clock) = doc.clocks.of_track(track, session.tracks()) {
+                    Some(WaveRow::Clock(ClockRow::new(clock.key())))
+                } else {
+                    TxLane::new(doc, track).map(WaveRow::Lane)
+                }
+            }
+        }
+    }
 }
 
 impl From<DisplayedSignal> for WaveRow {
@@ -739,6 +788,7 @@ pub struct WaveModel {
     analog_eased_at: Option<Instant>,
     pub(crate) overlaid_ranges: std::collections::HashMap<usize, super::overlaid::Ranges>,
     layout: WaveLayout,
+    reveal_row: Option<usize>,
     revision: u64,
 }
 
@@ -812,6 +862,7 @@ impl WaveModel {
             analog_eased_at: None,
             overlaid_ranges: HashMap::default(),
             layout: WaveLayout::default(),
+            reveal_row: None,
             revision: 0,
         }
     }
@@ -823,6 +874,7 @@ impl WaveModel {
         self.selected.clear();
         self.anchor = None;
         self.scroll_y = 0.0;
+        self.reveal_row = None;
         self.menu = None;
         self.drag = None;
         self.row_edit = None;
@@ -1070,6 +1122,7 @@ impl WaveModel {
     }
 
     pub(crate) fn detach_rows(&mut self) {
+        self.reveal_row = None;
         for entry in &mut self.items {
             entry.row = entry.row.detached();
         }
@@ -1115,7 +1168,7 @@ impl WaveModel {
             }
         }
         let top = self.row_units_before(shown) as f32 * row_h;
-        let bottom = top + f32::from(self.items[shown].height().multiple()) * row_h;
+        let bottom = top + (f32::from(self.items[shown].height().multiple()) * row_h).min(height);
         if top < self.scroll_y {
             self.scroll_y = top;
         } else if bottom > self.scroll_y + height {
@@ -1123,29 +1176,73 @@ impl WaveModel {
         }
     }
 
-    fn push_rows(&mut self, label: String, rows: impl IntoIterator<Item = WaveRow>) {
+    pub fn add_members(
+        &mut self,
+        doc: &mut Document,
+        members: &[Traced<Member>],
+        loaded: &Resident,
+    ) {
+        let mut existing = HashMap::new();
+        for (index, entry) in self.items.iter().enumerate() {
+            if let Some(key) = RowKey::from_row(doc, &entry.row) {
+                existing.entry(key).or_insert(index);
+            }
+        }
         let first = self.items.len();
-        let insert: Vec<Entry> = rows.into_iter().map(|row| Entry::new(0, row)).collect();
-        let n = insert.len();
-        if n == 0 {
+        let mut insert = Vec::new();
+        let mut selected = BTreeSet::new();
+        let mut anchor = None;
+        for &member in members {
+            let Some(key) = RowKey::from_member(doc, member) else {
+                continue;
+            };
+            let index = if let Some(&index) = existing.get(&key) {
+                index
+            } else {
+                let Some(row) = key.row(doc, loaded) else {
+                    continue;
+                };
+                let index = first + insert.len();
+                insert.push(Entry::new(0, row));
+                existing.insert(key, index);
+                index
+            };
+            selected.insert(index);
+            anchor.get_or_insert(index);
+        }
+        let Some(anchor) = anchor else {
             return;
+        };
+        if !insert.is_empty() {
+            let selection_before = self.row_selection();
+            self.journal.selection.note(|| selection_before);
+        }
+        for &index in selected.iter().filter(|&&index| index < first) {
+            let mut parent = tree::parent(&self.items, index);
+            while let Some(index) = parent {
+                self.set_folded(doc, index, false, false);
+                parent = tree::parent(&self.items, index);
+            }
         }
         let selection = RowSelection {
-            selected: (first..first + n).collect(),
-            anchor: Some(first),
+            selected,
+            anchor: Some(anchor),
         };
-        let splice = Splice {
-            at: first,
-            remove: 0,
-            insert,
-        };
-        self.edit_rows(label, vec![splice], selection);
-    }
-
-    pub fn add_vars(&mut self, doc: &mut Document, vars: &[Traced<VarId>], loaded: Resident) {
-        let rows = var_rows(doc, vars, &loaded);
-        let label = format!("Add {}", count(rows.len(), "signal", "signals"));
-        self.push_rows(label, rows);
+        if insert.is_empty() {
+            self.set_row_selection(selection);
+        } else {
+            let label = format!("Add {}", count(insert.len(), "row", "rows"));
+            self.edit_rows(
+                label,
+                vec![Splice {
+                    at: first,
+                    remove: 0,
+                    insert,
+                }],
+                selection,
+            );
+        }
+        self.reveal_row = Some(anchor);
     }
 
     pub fn add_scope_group(
@@ -1187,25 +1284,6 @@ impl WaveModel {
         true
     }
 
-    pub fn add_lanes(&mut self, doc: &Document, tracks: &[Traced<TrackRef>]) {
-        let lanes: Vec<WaveRow> = tracks
-            .iter()
-            .filter_map(|&track| TxLane::new(doc, track))
-            .map(WaveRow::Lane)
-            .collect();
-        let label = format!("Add {}", count(lanes.len(), "lane", "lanes"));
-        self.push_rows(label, lanes);
-    }
-
-    pub fn add_clocks(&mut self, keys: &[ClockKey]) {
-        let label = format!("Add {}", count(keys.len(), "clock row", "clock rows"));
-        self.push_rows(
-            label,
-            keys.iter()
-                .map(|k| WaveRow::Clock(ClockRow::new(k.clone()))),
-        );
-    }
-
     pub fn fit_lanes(&mut self, doc: &Document) {
         for row in &mut self.items {
             if let WaveRow::Lane(lane) = &mut row.row {
@@ -1230,6 +1308,7 @@ impl WaveModel {
     }
 
     fn edited(&mut self) {
+        self.reveal_row = None;
         self.row_edit = None;
         self.menu = None;
         self.revision += 1;
@@ -2760,6 +2839,13 @@ impl WaveModel {
         self.layout
             .badges
             .retain(|(ix, _)| items.get(*ix).is_some_and(|row| row.signal().is_some()));
+        if let Some(row) = self.reveal_row.take() {
+            let scroll = self.scroll_y;
+            self.reveal_entry(row);
+            if self.scroll_y != scroll {
+                return self.layout(bounds, doc, theme, metadata_width);
+            }
+        }
         self.update_hover();
         self.update_row_drag();
         self.update_analog_targets(doc);
@@ -3655,58 +3741,55 @@ pub(crate) fn scope_nodes(
 }
 
 fn var_rows(doc: &mut Document, vars: &[Traced<VarId>], loaded: &Resident) -> Vec<WaveRow> {
-    let mut rows = Vec::with_capacity(vars.len());
-    for &var in vars {
-        let Some(session) = doc.session(var.trace).cloned() else {
-            continue;
-        };
-        let h = session.hierarchy();
-        let Some(v) = h.get_var(var.item) else {
-            continue;
-        };
-        let signal = var.with(v.signal);
-        let translator = doc.translators.default_for(v.shape);
-        let history = loaded.get(&signal).cloned();
-        let needs_load = history.is_none();
-        let analog = (v.shape == SignalShape::Real
-            && analog::supports(v.shape, translator.as_ref()))
+    vars.iter()
+        .filter_map(|&var| var_row(doc, var, loaded))
+        .collect()
+}
+
+fn var_row(doc: &mut Document, var: Traced<VarId>, loaded: &Resident) -> Option<WaveRow> {
+    let session = doc.session(var.trace)?.clone();
+    let h = session.hierarchy();
+    let v = h.get_var(var.item)?;
+    let signal = var.with(v.signal);
+    let translator = doc.translators.default_for(v.shape);
+    let history = loaded.get(&signal).cloned();
+    let needs_load = history.is_none();
+    let analog = (v.shape == SignalShape::Real && analog::supports(v.shape, translator.as_ref()))
         .then(|| {
             let mut a = Analog::new(AnalogDraw::Linear, AnalogRange::Trace);
             a.restore_height = Some(RowHeight::DEFAULT);
             a
         });
-        rows.push(WaveRow::from(DisplayedSignal {
-            source_shape: v.shape,
-            projection: None,
-            bus: matches!(v.shape, SignalShape::Vector { .. })
-                .then(super::bus::BusExpansion::default),
-            projection_source: None,
-            source: RowSource::Resolved {
-                trace: var.trace,
-                var: var.item,
-                signal: v.signal,
-            },
-            requested_format: None,
-            name: v.name.to_owned(),
-            scope: h.scope_path(v.scope).join("."),
-            shape: v.shape,
-            translator,
-            history,
-            error: None,
-            height: if analog.is_some() {
-                RowHeight::ANALOG
-            } else {
-                RowHeight::DEFAULT
-            },
-            analog,
-            overlay_hidden: false,
-            tint: None,
-        }));
-        if needs_load {
-            doc.request_signal(signal);
-        }
+    let row = WaveRow::from(DisplayedSignal {
+        source_shape: v.shape,
+        projection: None,
+        bus: matches!(v.shape, SignalShape::Vector { .. }).then(super::bus::BusExpansion::default),
+        projection_source: None,
+        source: RowSource::Resolved {
+            trace: var.trace,
+            var: var.item,
+            signal: v.signal,
+        },
+        requested_format: None,
+        name: v.name.to_owned(),
+        scope: h.scope_path(v.scope).join("."),
+        shape: v.shape,
+        translator,
+        history,
+        error: None,
+        height: if analog.is_some() {
+            RowHeight::ANALOG
+        } else {
+            RowHeight::DEFAULT
+        },
+        analog,
+        overlay_hidden: false,
+        tint: None,
+    });
+    if needs_load {
+        doc.request_signal(signal);
     }
-    rows
+    Some(row)
 }
 
 fn snapped_time(

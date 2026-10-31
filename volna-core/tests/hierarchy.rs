@@ -195,13 +195,9 @@ fn search_order_activation_and_keyboard() {
             volna_core::session::LoadRequest::Trace(TraceRequest::Track { .. })
         ]
     ));
-    assert_eq!(app.panels.len(), 3);
-    assert_eq!(app.panels.focused_waves().unwrap().items().len(), 2);
-    assert!(
-        app.panels
-            .iter()
-            .any(|panel| panel.kind.pipeline().is_some())
-    );
+    assert_eq!(app.panels.len(), 1);
+    assert_eq!(app.panels.focused_waves().unwrap().items().len(), 3);
+    assert!(app.panels.iter().all(|panel| panel.kind.waves().is_some()));
     assert!(app.status().sidebar_notice.is_none());
     assert!(
         !app.take_events()
@@ -213,13 +209,14 @@ fn search_order_activation_and_keyboard() {
     assert!(!app.variables.search_everywhere);
     app.handle(Command::SetFilter(String::new()));
     app.handle(Command::ScopesKey(Key::Enter));
-    assert_eq!(app.panels.len(), 3);
+    assert_eq!(app.panels.len(), 1);
     app.handle(Command::ActivateMembers(vec![a(Member::Generator(0))]));
     assert!(app.status().sidebar_notice.is_none());
-    assert_eq!(app.panels.len(), 4);
+    assert_eq!(app.panels.len(), 1);
+    assert_eq!(app.panels.focused_waves().unwrap().items().len(), 4);
     assert_eq!(
-        app.panels.focused().kind.pipeline().unwrap().track.path(),
-        ["soc", "cpu", "thread0", "instructions"]
+        app.panels.focused_waves().unwrap().items()[3].name(),
+        "instructions"
     );
     app.handle(Command::ScopesKey(Key::Left));
     assert_eq!(

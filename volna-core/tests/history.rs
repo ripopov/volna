@@ -955,7 +955,7 @@ fn a_small_cap_evicts_the_oldest_steps_and_keeps_the_newest() {
         1,
         "the newest step stays"
     );
-    assert_eq!(d.app.undo_label(), Some("Add 1 signal"));
+    assert_eq!(d.app.undo_label(), Some("Add 1 row"));
     assert!(d.app.history.evicted() >= 1);
 }
 
@@ -1503,7 +1503,7 @@ fn the_history_is_cleared_with_the_trace_and_never_saved() {
     assert!(!app.can_undo() && !app.can_redo());
     assert_ne!(app.history.revision(), revision);
 
-    app.handle(Command::AddVars(a_all(vec![1])));
+    app.handle(Command::AddVars(a_all(vec![4])));
     assert!(app.can_undo());
     app.handle(Command::CloseTrace);
     assert!(!app.can_undo());
@@ -1519,7 +1519,7 @@ fn undo_and_redo_are_named_commands_and_mark_the_workspace_changed() {
     app.handle(Command::Undo);
     assert_eq!(notices(&mut app), ["Nothing to undo"]);
     app.handle(Command::AddVars(a_all(vec![0])));
-    assert_eq!(app.undo_label(), Some("Add 1 signal"));
+    assert_eq!(app.undo_label(), Some("Add 1 row"));
     assert!(app.can_undo() && !app.can_redo());
 }
 

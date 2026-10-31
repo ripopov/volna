@@ -1328,7 +1328,7 @@ fn theme_changes_preserve_trace_and_interaction_state(cx: &mut TestAppContext) {
             ws.set_session(source.clone(), cx);
             ws.app.handle(Command::SetSidebarWidth(355.0));
             ws.app.handle(Command::SetScopesFraction(0.61));
-            ws.app.handle(Command::AddVars(a_all(vec![0; 100])));
+            volna_core::testing::add_signal_copies(&mut ws.app, &[volna_core::testing::a(0)], 100);
             ws.after(None, cx);
             ws.app.doc.shared.cursor = Some(42);
             ws.app
@@ -1649,7 +1649,7 @@ fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(source.clone(), cx);
-            ws.app.handle(Command::AddVars(a_all(vec![0; 400])));
+            volna_core::testing::add_signal_copies(&mut ws.app, &[volna_core::testing::a(0)], 400);
             ws.after(None, cx);
             ws.app.doc.shared.cursor = Some(42);
             ws.app.doc.shared.viewport.value.start = 20.0;
@@ -1793,7 +1793,7 @@ fn tab_close_buttons_and_middle_click_close_their_own_tab(cx: &mut TestAppContex
     let (first, second, settings) = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
-            ws.app.handle(Command::AddVars(a_all(vec![0; 4])));
+            volna_core::testing::add_signal_copies(&mut ws.app, &[volna_core::testing::a(0)], 4);
             let first = ws.app.panels.focused_id();
             ws.dispatch(
                 Command::Panels(PanelsCommand::NewTab { group_of: first }),
@@ -3412,7 +3412,7 @@ fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppCo
     assert_eq!(
         edit_menu(&mut vcx),
         [
-            ("Undo Add 4 signals".into(), false),
+            ("Undo Add 4 rows".into(), false),
             (format!("Redo {removed}"), false)
         ]
     );
@@ -7180,5 +7180,141 @@ fn auxiliary_file_drop_choosers_render_locally_and_add_or_replace_traces(cx: &mu
         );
         main.update(&mut view, |_, window, _| window.remove_window())
             .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn hierarchy_activation_shares_waves_and_explicit_views_remain_available(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{MouseButton, MouseDownEvent, MouseUpEvent, VisualTestContext};
+    use volna_core::trace::Traced;
+    use volna_trace::data::Member;
+
+    init(cx);
+    for dark in [true, false] {
+        let host = cx.add_window(Workspace::new);
+        let mut view = VisualTestContext::from_window(host.into(), cx);
+        host.update(&mut view, |ws, _, cx| {
+            crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+            ws.open_path(
+                concat!(env!("CARGO_MANIFEST_DIR"), "/examples/landing.vtr").into(),
+                cx,
+            );
+        })
+        .unwrap();
+        view.run_until_parked();
+        for (count, kind) in [
+            None,
+            Some("CLOCK"),
+            Some("PIPELINE"),
+            Some("LOG"),
+            Some("EVENT"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let ix = host
+                .update(&mut view, |ws, window, cx| {
+                    let h = ws.app.doc.hierarchy(TraceId::A).unwrap();
+                    let member = kind.map_or(Member::Var(0), |kind| {
+                        Member::Generator(
+                            h.generators().iter().position(|g| g.kind == kind).unwrap(),
+                        )
+                    });
+                    let name = h.member_name(member).to_owned();
+                    ws.dispatch(Command::SetSearchEverywhere(true), Some(window), cx);
+                    ws.dispatch(Command::SetFilter(name), Some(window), cx);
+                    ws.app
+                        .variables
+                        .rows
+                        .iter()
+                        .position(|m| *m == Traced::new(TraceId::A, member))
+                        .unwrap()
+                })
+                .unwrap();
+            view.run_until_parked();
+            view.update(|window, cx| window.draw(cx).clear(cx));
+            let selector = Box::leak(format!("member-row-A-{ix}").into_boxed_str());
+            let at = view.debug_bounds(selector).unwrap().center();
+            for clicks in [1, 2] {
+                view.simulate_event(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: at,
+                    modifiers: Default::default(),
+                    click_count: clicks,
+                    first_mouse: false,
+                });
+                view.simulate_event(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: at,
+                    modifiers: Default::default(),
+                    click_count: clicks,
+                });
+            }
+            view.run_until_parked();
+            host.update(&mut view, |ws, _, _| {
+                assert_eq!(ws.app.panels.len(), 1);
+                assert_eq!(
+                    ws.app.panels.focused_waves().unwrap().items().len(),
+                    count + 1
+                );
+            })
+            .unwrap();
+            view.simulate_mouse_down(at, MouseButton::Left, Default::default());
+            view.simulate_mouse_up(at, MouseButton::Left, Default::default());
+            view.simulate_keystrokes("enter");
+            view.run_until_parked();
+            host.update(&mut view, |ws, _, _| {
+                assert_eq!(ws.app.panels.len(), 1);
+                assert_eq!(
+                    ws.app.panels.focused_waves().unwrap().items().len(),
+                    count + 1
+                );
+            })
+            .unwrap();
+        }
+        host.update(&mut view, |ws, window, cx| {
+            ws.dispatch(Command::SetFilter("instruction".into()), Some(window), cx);
+        })
+        .unwrap();
+        view.run_until_parked();
+        for label in ["Open in Pipeline", "Open in table"] {
+            view.update(|window, cx| window.draw(cx).clear(cx));
+            let at = view.debug_bounds("member-row-A-0").unwrap().center();
+            view.simulate_mouse_down(at, MouseButton::Right, Default::default());
+            view.simulate_mouse_up(at, MouseButton::Right, Default::default());
+            view.run_until_parked();
+            view.update(|window, cx| {
+                window.render_frame(cx);
+                let mut menu = window.within("popup-menu");
+                let item = (0..16usize)
+                    .find(|&ix| {
+                        menu.try_find(ix)
+                            .is_some_and(|item| item.label() == Some(label))
+                    })
+                    .unwrap();
+                menu.click(item, cx);
+            });
+            view.run_until_parked();
+            host.update(&mut view, |ws, _, _| {
+                let kind = &ws.app.panels.focused().kind;
+                if label == "Open in Pipeline" {
+                    assert!(kind.pipeline().is_some());
+                } else {
+                    assert!(kind.table().is_some());
+                }
+                assert_eq!(
+                    ws.app
+                        .panels
+                        .first_waves()
+                        .and_then(|id| ws.app.panels.waves(id))
+                        .unwrap()
+                        .items()
+                        .len(),
+                    5
+                );
+            })
+            .unwrap();
+        }
     }
 }
