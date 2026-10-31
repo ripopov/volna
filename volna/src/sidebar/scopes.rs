@@ -1,6 +1,7 @@
 //! The scope tree panel: GPUI rows over `ScopeTreeModel`.
 
 use gpui_kit::base::Disableable;
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
@@ -43,6 +44,85 @@ fn activity_meter(a: volna_core::data::ScopeActivity, t: &crate::theme::Theme) -
 }
 
 impl Workspace {
+    pub(crate) fn request_add_scope(
+        &mut self,
+        scope: Traced<volna_trace::data::ScopeId>,
+        recursive: bool,
+        grouped: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = self.app.scope_vars(scope, recursive, grouped).len();
+        let command = move || {
+            if grouped {
+                Command::AddScopeAsGroup { scope, recursive }
+            } else {
+                Command::AddScopeFlat(scope)
+            }
+        };
+        if count <= 1_000 {
+            self.dispatch(command(), Some(window), cx);
+            return;
+        }
+        let generation = self.app.doc.generation();
+        let owner = cx.weak_entity();
+        let count = count
+            .to_string()
+            .as_bytes()
+            .rchunks(3)
+            .rev()
+            .map(|part| std::str::from_utf8(part).unwrap())
+            .collect::<Vec<_>>()
+            .join(",");
+        let title = format!("Add {count} signals to Waves?");
+        let label = format!("Add {count} signals");
+        let description = if recursive {
+            "This includes signals in the selected scope and its descendant scopes. Adding many signals may affect performance."
+        } else {
+            "This includes signals in the selected scope. Adding many signals may affect performance."
+        };
+        window.open_dialog(cx, move |dialog, _, _| {
+            let owner = owner.clone();
+            let button_owner = owner.clone();
+            dialog
+                .title(title.clone())
+                .child(div().child(description))
+                .footer(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel-add-scope")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("confirm-add-scope")
+                                .label(label.clone())
+                                .primary()
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    drop(button_owner.update(cx, |ws, cx| {
+                                        ws.dispatch_if_current(
+                                            generation,
+                                            command(),
+                                            Some(window),
+                                            cx,
+                                        );
+                                    }));
+                                }),
+                        ),
+                )
+                .on_ok(move |_, window, cx| {
+                    drop(owner.update(cx, |ws, cx| {
+                        ws.dispatch_if_current(generation, command(), Some(window), cx);
+                    }));
+                    true
+                })
+        });
+    }
+
     fn activity_banners(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         use volna_core::sidebar::activity::ActivityBuildState;
         let views = self.app.activity.builds(
@@ -446,24 +526,31 @@ impl Workspace {
                                     PopupMenuItem::new("No variables to add").disabled(true),
                                 );
                             }
-                            let add = |label: &'static str, recursive: bool| {
+                            let add = |label: &'static str, recursive: bool, grouped: bool| {
                                 let owner = owner.clone();
                                 PopupMenuItem::new(label).on_click(move |_, window, cx| {
                                     drop(owner.update(cx, |ws, cx| {
-                                        ws.dispatch(
-                                            Command::AddScopeAsGroup {
-                                                scope: Traced::new(node.trace, id),
-                                                recursive,
-                                            },
-                                            Some(window),
+                                        ws.request_add_scope(
+                                            Traced::new(node.trace, id),
+                                            recursive,
+                                            grouped,
+                                            window,
                                             cx,
                                         );
                                     }));
                                 })
                             };
-                            let menu = menu.item(add("Add to Waves as Group", true));
+                            let menu = menu.item(add("Add to Waves", true, false)).item(add(
+                                "Add to Waves as Group",
+                                true,
+                                true,
+                            ));
                             if nested {
-                                menu.item(add("Add to Waves as Group, This Scope Only", false))
+                                menu.item(add(
+                                    "Add to Waves as Group, This Scope Only",
+                                    false,
+                                    true,
+                                ))
                             } else {
                                 menu
                             }

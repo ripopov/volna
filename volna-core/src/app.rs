@@ -271,6 +271,7 @@ pub enum Command {
     AddAllVars,
     AddSelectedOrAllVars,
     VariablesKey(Key, Modifiers),
+    AddScopeFlat(Traced<ScopeId>),
     AddScopeAsGroup {
         scope: Traced<ScopeId>,
         recursive: bool,
@@ -1349,6 +1350,10 @@ impl App {
                     self.changed();
                 }
             }
+            Command::AddScopeFlat(scope) => {
+                let vars = self.scope_vars(scope, true, false);
+                self.add_vars(&vars);
+            }
             Command::AddScopeAsGroup { scope, recursive } => self.add_scope_group(scope, recursive),
             Command::CommitText(target, text) => self.commit_text(target, text),
             Command::RenameMarker(panel, id) => self.open_marker_name(panel, id, now),
@@ -1941,6 +1946,21 @@ impl App {
                 self.changed();
             }
         }
+    }
+
+    pub fn scope_vars(
+        &self,
+        scope: Traced<ScopeId>,
+        recursive: bool,
+        grouped: bool,
+    ) -> Vec<Traced<VarId>> {
+        let Some(h) = self.doc.hierarchy(scope.trace) else {
+            return Vec::new();
+        };
+        crate::wave::model::scope_nodes(h, scope.item, recursive, grouped)
+            .into_iter()
+            .flat_map(|(id, _)| h.scope(id).vars.iter().map(|v| scope.with(v)))
+            .collect()
     }
 
     fn add_scope_group(&mut self, scope: Traced<ScopeId>, recursive: bool) {

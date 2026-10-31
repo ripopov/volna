@@ -1160,19 +1160,14 @@ impl WaveModel {
         };
         let h = session.hierarchy();
         let mut entries = Vec::new();
-        let mut stack = vec![(scope.item, 0u8)];
-        while let Some((id, depth)) = stack.pop() {
-            let Some(s) = h.get_scope(id) else { continue };
+        for (id, depth) in scope_nodes(h, scope.item, recursive, true) {
+            let s = h.scope(id);
             let mut group = GroupRow::new(s.name);
             group.collapsed = depth > 0;
-            entries.push(Entry::new(depth, WaveRow::Group(group)));
+            entries.push(Entry::new(depth as u8, WaveRow::Group(group)));
             let vars: Vec<_> = s.vars.iter().map(|v| scope.with(v)).collect();
             let rows = var_rows(doc, &vars, &loaded);
-            entries.extend(rows.into_iter().map(|row| Entry::new(depth + 1, row)));
-            if recursive && depth + 2 < tree::MAX_DEPTH {
-                let children = s.children.iter().rev().filter(|&c| h.has_vars(c));
-                stack.extend(children.map(|c| (c, depth + 1)));
-            }
+            entries.extend(rows.into_iter().map(|row| Entry::new(depth as u8 + 1, row)));
         }
         if entries.is_empty() {
             return false;
@@ -3564,6 +3559,33 @@ impl WaveModel {
             }
         }
     }
+}
+
+pub fn scope_nodes(
+    h: &volna_trace::data::Hierarchy,
+    root: volna_trace::data::ScopeId,
+    recursive: bool,
+    grouped: bool,
+) -> Vec<(volna_trace::data::ScopeId, usize)> {
+    let mut nodes = Vec::new();
+    let mut stack = vec![(root, 0usize)];
+    while let Some((id, depth)) = stack.pop() {
+        let Some(scope) = h.get_scope(id) else {
+            continue;
+        };
+        nodes.push((id, depth));
+        if recursive && (!grouped || depth + 2 < usize::from(tree::MAX_DEPTH)) {
+            stack.extend(
+                scope
+                    .children
+                    .iter()
+                    .rev()
+                    .filter(|&c| h.has_vars(c))
+                    .map(|c| (c, depth + 1)),
+            );
+        }
+    }
+    nodes
 }
 
 fn var_rows(doc: &mut Document, vars: &[Traced<VarId>], loaded: &Resident) -> Vec<WaveRow> {

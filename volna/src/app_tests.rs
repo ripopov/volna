@@ -668,6 +668,127 @@ fn loads_run_on_the_executor_and_fill_rows(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn adding_scope_flat_includes_descendant_variables(cx: &mut TestAppContext) {
+    use volna_core::trace::Traced;
+    init(cx);
+    let window = cx.add_window(Workspace::new);
+    let trace = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/picorv32.vtr");
+    window
+        .update(cx, |ws, _, cx| ws.open_path(trace.into(), cx))
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |ws, window, cx| {
+            let h = ws.app.doc.hierarchy(TraceId::A).unwrap();
+            let root = h
+                .roots()
+                .iter()
+                .find(|&id| !h.scope(id).children.is_empty())
+                .unwrap();
+            let scope = Traced::new(TraceId::A, root);
+            let direct = ws.app.scope_vars(scope, false, false);
+            let recursive = ws.app.scope_vars(scope, true, false);
+            assert!(recursive.len() > direct.len());
+            ws.dispatch(Command::AddScopeFlat(scope), Some(window), cx);
+            let items = ws.app.panels.focused_waves().unwrap().items();
+            assert_eq!(items.len(), recursive.len());
+            assert!(items.iter().all(|entry| entry.depth == 0));
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn large_scope_addition_requires_confirmation(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::test::TestWindowExt as _;
+    use volna_core::trace::Traced;
+    use vtr::Recorder;
+
+    init(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("large.vtr");
+    let mut writer = vtr::Writer::create(&path).unwrap();
+    let top = writer
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            vtr::ScopeType::Module,
+            "top",
+        )
+        .unwrap();
+    let child = writer
+        .scope_with(
+            vtr::SourceOptions::new("child", Some(top)),
+            vtr::ScopeType::Module,
+            "child",
+        )
+        .unwrap();
+    let mut signals = Vec::new();
+    for i in 0..1001 {
+        let name = format!("signal_{i}");
+        signals.push(
+            writer
+                .signal(
+                    vtr::SourceOptions::new(&name, Some(if i == 0 { top } else { child })),
+                    vtr::SignalKind::Bits {
+                        width: 1,
+                        states: 2,
+                    },
+                    vtr::VarType::Wire,
+                    vtr::Direction::Input,
+                )
+                .unwrap(),
+        );
+    }
+    writer.advance_time(0).unwrap();
+    for signal in signals {
+        writer.emit_u64(signal, 0).unwrap();
+    }
+    writer.advance_time(1).unwrap();
+    writer.close().unwrap();
+    for scenario in 0..4 {
+        let mut workspace = None;
+        let root = cx.add_window(|window, cx| {
+            let ws = cx.new(|cx| Workspace::new(window, cx));
+            workspace = Some(ws.clone());
+            gpui_kit::component::Root::new(ws, window, cx)
+        });
+        let ws = workspace.unwrap();
+        let mut view = VisualTestContext::from_window(root.into(), cx);
+        ws.update(&mut view, |ws, cx| ws.open_path(path.clone(), cx));
+        view.run_until_parked();
+        let scope = ws.read_with(&view, |ws, _| {
+            let h = ws.app.doc.hierarchy(TraceId::A).unwrap();
+            let top = h.roots().first().unwrap();
+            let scope = if scenario == 0 {
+                h.scope(top).children.first().unwrap()
+            } else {
+                top
+            };
+            Traced::new(TraceId::A, scope)
+        });
+        view.update(|window, cx| {
+            ws.update(cx, |ws, cx| {
+                ws.request_add_scope(scope, true, scenario == 1 || scenario == 3, window, cx)
+            })
+        });
+        view.run_until_parked();
+        view.update(|window, cx| assert_eq!(window.has_active_dialog(cx), scenario != 0));
+        match scenario {
+            1 => view.update(|window, cx| window.click("cancel-add-scope", cx)),
+            2 => view.update(|window, cx| window.click("confirm-add-scope", cx)),
+            3 => view.simulate_keystrokes("enter"),
+            _ => {}
+        }
+        view.run_until_parked();
+        let rows = ws.read_with(&view, |ws, _| {
+            ws.app.panels.focused_waves().map_or(0, |w| w.items().len())
+        });
+        assert_eq!(rows, [1000, 0, 1001, 1003][scenario]);
+    }
+}
+
+#[gpui_kit::test]
 fn scope_rows_without_activity_hide_counts_in_both_themes(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     use volna_core::sidebar::{ScopeTreeModel, TreeNode};
