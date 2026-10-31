@@ -769,8 +769,8 @@ fn large_scope_addition_requires_confirmation(cx: &mut TestAppContext) {
         });
         view.update(|window, cx| {
             ws.update(cx, |ws, cx| {
-                ws.request_add_scope(scope, true, scenario == 1 || scenario == 3, window, cx)
-            })
+                ws.request_add_scope(scope, true, scenario == 1 || scenario == 3, window, cx);
+            });
         });
         view.run_until_parked();
         view.update(|window, cx| assert_eq!(window.has_active_dialog(cx), scenario != 0));

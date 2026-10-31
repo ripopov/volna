@@ -1948,6 +1948,7 @@ impl App {
         }
     }
 
+    #[must_use]
     pub fn scope_vars(
         &self,
         scope: Traced<ScopeId>,

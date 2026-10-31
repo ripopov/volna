@@ -3561,7 +3561,7 @@ impl WaveModel {
     }
 }
 
-pub fn scope_nodes(
+pub(crate) fn scope_nodes(
     h: &volna_trace::data::Hierarchy,
     root: volna_trace::data::ScopeId,
     recursive: bool,
