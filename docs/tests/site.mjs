@@ -56,9 +56,25 @@ try {
   await page.goto(`${origin}${base}docs/`);
   assert.match(await page.locator('h1').textContent(), /engineering docs/);
   assert.equal(await page.locator('.v-guide').count(), 8);
+  let releaseWasm, wasmRequested;
+  const wasmRequest = new Promise(resolve => { wasmRequested = resolve; });
+  const wasmResponse = new Promise(resolve => { releaseWasm = resolve; });
+  const wasmRoute = `${origin}${base}viewer/pkg/volna_bg.wasm`;
+  await page.route(wasmRoute, async route => {
+    wasmRequested();
+    await wasmResponse;
+    await route.continue();
+  });
   await page.goto(`${origin}${base}app/`);
+  await wasmRequest;
+  assert.equal(await page.locator('#viewer-message').textContent(), 'Downloading the Volna viewer…');
+  assert.equal(await page.getByRole('progressbar', { name: 'Viewer startup progress' }).isVisible(), true);
+  await page.screenshot({ path: `${results}/viewer-startup.png` });
+  releaseWasm();
   assert.equal(await page.locator('.volna-header, #starlight__sidebar').count(), 0);
   await page.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
+  await page.unroute(wasmRoute);
+  assert.equal(await page.getByRole('progressbar', { name: 'Viewer startup progress', includeHidden: true }).isVisible(), false);
   verifySampleWorkspace(await page.evaluate(() => window.volnaCurrentState));
   const loadedSampleState = await page.evaluate(() => window.volnaCurrentState);
   const appCanvas = await page.locator('body > canvas').boundingBox();

@@ -1,9 +1,11 @@
 import { ensureIsolation } from '../isolation.js';
 import { Conversion, conversionStatus } from './conversion.js';
+import { trackDownload } from './startup.js';
 
 const base = new URL('../', import.meta.url);
 const status = document.getElementById('viewer-status');
 const statusText = document.getElementById('viewer-message');
+const startupProgress = document.getElementById('startup-progress');
 const importProgress = document.getElementById('import-progress');
 const error = document.getElementById('viewer-error');
 const fileInput = document.getElementById('recording-file');
@@ -32,6 +34,7 @@ new MutationObserver(labelViewerInputs).observe(document.body, { childList: true
 const startupTimer = setTimeout(() => showError('The viewer did not start. Check browser graphics support and reload this page.'), 30000);
 
 function showError(message) {
+  startupProgress.hidden = true;
   importProgress.hidden = true;
   error.textContent = message;
   error.hidden = false;
@@ -217,6 +220,7 @@ window.volnaWorkspace = json => {
 
 window.volnaReady = () => {
   clearTimeout(startupTimer);
+  startupProgress.hidden = true;
   status.hidden = true;
   document.querySelectorAll('#viewer-actions button').forEach(button => { button.disabled = false; });
   if (document.body.dataset.sample === 'true') void openSample();
@@ -247,7 +251,22 @@ try {
     throw new Error('Background workers require Atomics.waitAsync. Update to a browser that supports it.');
   }
   viewer = await import(new URL('viewer/pkg/volna.js', base));
-  await viewer.default({ module_or_path: new URL('viewer/pkg/volna_bg.wasm', base) });
+  statusText.textContent = 'Downloading the Volna viewer…';
+  const response = await fetch(new URL('viewer/pkg/volna_bg.wasm', base));
+  const wasm = trackDownload(response, fraction => {
+    if (fraction === null) {
+      startupProgress.removeAttribute('aria-valuenow');
+      startupProgress.style.removeProperty('--progress');
+    } else {
+      startupProgress.setAttribute('aria-valuenow', String(Math.floor(fraction * 100)));
+      startupProgress.style.setProperty('--progress', `${fraction * 100}%`);
+    }
+  }, () => {
+    statusText.textContent = 'Starting the Volna viewer…';
+    startupProgress.removeAttribute('aria-valuenow');
+    startupProgress.style.removeProperty('--progress');
+  });
+  await viewer.default({ module_or_path: wasm });
 } catch (cause) {
   clearTimeout(startupTimer);
   showError(`The viewer could not start: ${cause.message}`);

@@ -15,7 +15,8 @@ const { sample, controls = false } = Astro.props;
     <main id="viewer" aria-label="Volna viewer">
       <div id="viewer-notices">
         <div id="viewer-status" role="status">
-          <span id="viewer-message">Loading the Volna viewer…</span>
+          <span id="viewer-message">Preparing the Volna viewer…</span>
+          <div id="startup-progress" class="v-progress" role="progressbar" aria-label="Viewer startup progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
           <div id="import-progress" class="v-progress" role="progressbar" aria-label="Conversion progress" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
         </div>
         <div id="viewer-error" role="alert" hidden></div>
@@ -42,7 +43,7 @@ const { sample, controls = false } = Astro.props;
   #viewer-notices > * { pointer-events: auto; }
   #viewer-status, #viewer-error { width: max-content; max-width: 100%; padding: .75rem 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-raised); color: var(--text-1); font: var(--text-sm) var(--font-sans); overflow-wrap: anywhere; box-sizing: border-box; }
   #viewer-error { border-color: var(--danger); }
-  #import-progress { margin-top: .75rem; }
+  #startup-progress, #import-progress { margin-top: .75rem; }
   #viewer-actions { align-self: end; display: flex; justify-content: end; flex-wrap: wrap; gap: .5rem; }
   #viewer-actions:not(:has(button:not([hidden]))) { display: none; }
   #cancel-import[hidden] { display: none; }
