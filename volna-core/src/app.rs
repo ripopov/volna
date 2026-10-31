@@ -1374,8 +1374,8 @@ impl App {
                 }
             }
             Command::AddScopeFlat(scope) => {
-                let vars = self.scope_vars(scope, true, false);
-                self.add_vars(&vars);
+                let members = self.scope_members(scope, true, false);
+                self.add_to_waves(&members);
             }
             Command::AddScopeAsGroup { scope, recursive } => self.add_scope_group(scope, recursive),
             Command::CommitText(target, text) => self.commit_text(target, text),
@@ -1919,18 +1919,25 @@ impl App {
     }
 
     #[must_use]
-    pub fn scope_vars(
+    pub fn scope_members(
         &self,
         scope: Traced<ScopeId>,
         recursive: bool,
         grouped: bool,
-    ) -> Vec<Traced<VarId>> {
+    ) -> Vec<Traced<Member>> {
         let Some(h) = self.doc.hierarchy(scope.trace) else {
             return Vec::new();
         };
         crate::wave::model::scope_nodes(h, scope.item, recursive, grouped)
             .into_iter()
-            .flat_map(|(id, _)| h.scope(id).vars.iter().map(|v| scope.with(v)))
+            .flat_map(|(id, _)| {
+                let s = h.scope(id);
+                s.vars
+                    .iter()
+                    .map(Member::Var)
+                    .chain(s.generators.iter().map(Member::Generator))
+                    .map(move |member| scope.with(member))
+            })
             .collect()
     }
 

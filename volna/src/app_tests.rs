@@ -794,8 +794,8 @@ fn adding_scope_flat_includes_descendant_variables(cx: &mut TestAppContext) {
                 .find(|&id| !h.scope(id).children.is_empty())
                 .unwrap();
             let scope = Traced::new(TraceId::A, root);
-            let direct = ws.app.scope_vars(scope, false, false);
-            let recursive = ws.app.scope_vars(scope, true, false);
+            let direct = ws.app.scope_members(scope, false, false);
+            let recursive = ws.app.scope_members(scope, true, false);
             assert!(recursive.len() > direct.len());
             ws.dispatch(Command::AddScopeFlat(scope), Some(window), cx);
             let items = ws.app.panels.focused_waves().unwrap().items();

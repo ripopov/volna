@@ -52,7 +52,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let count = self.app.scope_vars(scope, recursive, grouped).len();
+        let count = self.app.scope_members(scope, recursive, grouped).len();
         let command = move || {
             if grouped {
                 Command::AddScopeAsGroup { scope, recursive }
@@ -74,12 +74,12 @@ impl Workspace {
             .map(|part| std::str::from_utf8(part).unwrap())
             .collect::<Vec<_>>()
             .join(",");
-        let title = format!("Add {count} signals to Waves?");
-        let label = format!("Add {count} signals");
+        let title = format!("Add {count} tracks to Waves?");
+        let label = format!("Add {count} tracks");
         let description = if recursive {
-            "This includes signals in the selected scope and its descendant scopes. Adding many signals may affect performance."
+            "This includes tracks in the selected scope and its descendant scopes. Adding many tracks may affect performance."
         } else {
-            "This includes signals in the selected scope. Adding many signals may affect performance."
+            "This includes tracks in the selected scope. Adding many tracks may affect performance."
         };
         window.open_dialog(cx, move |dialog, _, _| {
             let owner = owner.clone();
@@ -496,8 +496,8 @@ impl Workspace {
                                         .inherit_color(),
                                     )
                             });
-                        let addable = h.has_vars(id);
-                        let nested = scope.children.iter().any(|c| h.has_vars(c));
+                        let addable = h.has_members(id);
+                        let nested = scope.children.iter().any(|c| h.has_members(c));
                         let owner = cx.weak_entity();
                         let (icon, tint) = scope_icon(&scope);
                         let size = ScopeTreeModel::size(this.app.doc.traces(), node);
@@ -522,9 +522,8 @@ impl Workspace {
                             gpui_kit::component::menu::PopupMenu,
                         >| {
                             if !addable {
-                                return menu.item(
-                                    PopupMenuItem::new("No variables to add").disabled(true),
-                                );
+                                return menu
+                                    .item(PopupMenuItem::new("No tracks to add").disabled(true));
                             }
                             let add = |label: &'static str, recursive: bool, grouped: bool| {
                                 let owner = owner.clone();

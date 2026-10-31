@@ -1262,8 +1262,16 @@ impl WaveModel {
             let mut group = GroupRow::new(s.name);
             group.collapsed = depth > 0;
             entries.push(Entry::new(depth as u8, WaveRow::Group(group)));
-            let vars: Vec<_> = s.vars.iter().map(|v| scope.with(v)).collect();
-            let rows = var_rows(doc, &vars, &loaded);
+            let members = s
+                .vars
+                .iter()
+                .map(Member::Var)
+                .chain(s.generators.iter().map(Member::Generator));
+            let rows: Vec<_> = members
+                .filter_map(|member| {
+                    RowKey::from_member(doc, scope.with(member))?.row(doc, &loaded)
+                })
+                .collect();
             entries.extend(rows.into_iter().map(|row| Entry::new(depth as u8 + 1, row)));
         }
         if entries.is_empty() {
@@ -3732,18 +3740,12 @@ pub(crate) fn scope_nodes(
                     .children
                     .iter()
                     .rev()
-                    .filter(|&c| h.has_vars(c))
+                    .filter(|&c| h.has_members(c))
                     .map(|c| (c, depth + 1)),
             );
         }
     }
     nodes
-}
-
-fn var_rows(doc: &mut Document, vars: &[Traced<VarId>], loaded: &Resident) -> Vec<WaveRow> {
-    vars.iter()
-        .filter_map(|&var| var_row(doc, var, loaded))
-        .collect()
 }
 
 fn var_row(doc: &mut Document, var: Traced<VarId>, loaded: &Resident) -> Option<WaveRow> {

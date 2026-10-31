@@ -394,6 +394,21 @@ impl Hierarchy {
         false
     }
 
+    #[must_use]
+    pub fn has_members(&self, scope: ScopeId) -> bool {
+        let mut pending = vec![scope];
+        while let Some(id) = pending.pop() {
+            let Some(scope) = self.get_scope(id) else {
+                continue;
+            };
+            if !scope.vars.is_empty() || !scope.generators.is_empty() {
+                return true;
+            }
+            pending.extend(scope.children.iter());
+        }
+        false
+    }
+
     pub fn find_scope(&self, path: &[impl AsRef<str>]) -> Lookup<ScopeId> {
         let mut children = self.roots();
         let mut result = Lookup::Missing;

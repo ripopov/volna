@@ -368,3 +368,111 @@ fn a_slice_does_not_hide_the_full_signal_from_activation() {
     assert_eq!(w.items().len(), 2);
     assert_eq!(w.selected, BTreeSet::from([1]));
 }
+
+#[test]
+fn scope_addition_includes_every_member_kind_and_preserves_group_depths() {
+    fn member(app: &App, row: &WaveRow) -> Traced<Member> {
+        let track = match row {
+            WaveRow::Signal(signal) => {
+                let var = signal.source.var().unwrap();
+                return var.with(Member::Var(var.item));
+            }
+            WaveRow::Lane(lane) => lane.track().unwrap(),
+            WaveRow::Clock(clock) => app.doc.clocks.find(&clock.key).unwrap().generator(),
+            _ => panic!("expected a track row"),
+        };
+        let generator = app
+            .doc
+            .hierarchy(track.trace)
+            .unwrap()
+            .generators()
+            .iter()
+            .position(|g| g.track == track.item)
+            .unwrap();
+        track.with(Member::Generator(generator))
+    }
+
+    let (_, session) = opened();
+    let h = session.hierarchy();
+    let mut kinds = BTreeSet::new();
+    let mut generator_only = false;
+    for id in 0..h.scopes().len() {
+        let scope = h.scope(id);
+        if !scope.generators.is_empty() && scope.vars.is_empty() {
+            assert!(h.has_members(id));
+            generator_only = true;
+        }
+        for recursive in [false, true] {
+            let mut pending = vec![(id, 0)];
+            let mut expected = Vec::new();
+            while let Some((id, depth)) = pending.pop() {
+                let scope = h.scope(id);
+                expected.extend(scope.vars.iter().map(|v| (Member::Var(v), depth + 1)));
+                expected.extend(scope.generators.iter().map(|g| {
+                    kinds.insert(h.generators()[g].kind.clone());
+                    (Member::Generator(g), depth + 1)
+                }));
+                if recursive {
+                    pending.extend(scope.children.iter().rev().map(|c| (c, depth + 1)));
+                }
+            }
+            let (mut reference, _) = opened();
+            reference.handle(Command::AddToWaves(a_all(expected.iter().map(|(m, _)| *m))));
+            let rows: Vec<_> = reference
+                .panels
+                .focused_waves()
+                .unwrap()
+                .items()
+                .iter()
+                .map(|entry| {
+                    (
+                        member(&reference, &entry.row),
+                        std::mem::discriminant(&entry.row),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                rows.iter().map(|(member, _)| *member).collect::<Vec<_>>(),
+                a_all(expected.iter().map(|(member, _)| *member))
+            );
+            for grouped in [false, true] {
+                if !grouped && !recursive {
+                    continue;
+                }
+                let (mut app, _) = opened();
+                app.handle(if grouped {
+                    Command::AddScopeAsGroup {
+                        scope: a(id),
+                        recursive,
+                    }
+                } else {
+                    Command::AddScopeFlat(a(id))
+                });
+                pump(&mut app);
+                let items = app.panels.focused_waves().unwrap().items();
+                let actual: Vec<_> = items
+                    .iter()
+                    .filter(|e| !e.is_group())
+                    .map(|e| (member(&app, &e.row), std::mem::discriminant(&e.row)))
+                    .collect();
+                assert_eq!(actual, rows);
+                let depths: Vec<_> = items
+                    .iter()
+                    .filter(|e| !e.is_group())
+                    .map(|e| e.depth)
+                    .collect();
+                assert_eq!(
+                    depths,
+                    expected
+                        .iter()
+                        .map(|(_, depth)| if grouped { *depth as u8 } else { 0 })
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+    assert!(generator_only);
+    for kind in ["EVENT", "CLOCK", "PIPELINE", "LOG"] {
+        assert!(kinds.contains(kind));
+    }
+}
