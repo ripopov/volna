@@ -341,7 +341,7 @@ async function verifySampleIslandContour(page, screenshot) {
     const context = canvas.getContext('2d');
     context.drawImage(bitmap, 0, 0);
     bitmap.close();
-    const points = { untabbed: [4, 50], headerLeft: [sidebarWidth + 4, 50], contentLeft: [sidebarWidth + 4, 70], headerTop: [sidebarWidth + 20, 36] };
+    const points = { untabbed: [4, 58], headerLeft: [sidebarWidth + 4, 58], contentLeft: [sidebarWidth + 4, 78], headerTop: [sidebarWidth + 20, 44] };
     return Object.fromEntries(Object.entries(points).map(([name, [x, y]]) =>
       [name, [...context.getImageData(x, y, 1, 1).data]]));
   }, { bytes: [...screenshot], sidebarWidth: 423 });

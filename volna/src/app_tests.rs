@@ -5932,6 +5932,10 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
         })
         .unwrap();
 
+    vcx.simulate_resize(size(px(1440.0), px(1000.0)));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+
     let show_close_menu = |vcx: &mut VisualTestContext| {
         let (owner, generation) = window
             .update(vcx, |ws, _, cx| (cx.weak_entity(), ws.app.doc.generation()))

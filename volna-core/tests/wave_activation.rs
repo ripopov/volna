@@ -379,7 +379,7 @@ fn scope_addition_includes_every_member_kind_and_preserves_group_depths() {
             }
             WaveRow::Lane(lane) => lane.track().unwrap(),
             WaveRow::Clock(clock) => app.doc.clocks.find(&clock.key).unwrap().generator(),
-            _ => panic!("expected a track row"),
+            WaveRow::Group(_) => panic!("expected a track row"),
         };
         let generator = app
             .doc
