@@ -81,7 +81,7 @@ fn window_options(cx: &mut App) -> WindowOptions {
         titlebar: Some(TitlebarOptions {
             title: Some("Volna".into()),
             appears_transparent: true,
-            traffic_light_position: Some(point(px(10.0), px(10.0))),
+            traffic_light_position: Some(point(px(10.0), px(13.0))),
         }),
         app_owns_titlebar_drag: true,
         window_decorations: Some(window_decorations(decorations.as_deref())),

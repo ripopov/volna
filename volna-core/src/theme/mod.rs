@@ -445,7 +445,7 @@ impl Theme<Color> {
 
             row_height: 24.0,
             header_height: 32.0,
-            titlebar_height: 32.0,
+            titlebar_height: 40.0,
             statusbar_height: 24.0,
             timeline_height: 32.0,
             icon_size: 16.0,

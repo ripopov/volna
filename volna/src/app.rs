@@ -10,7 +10,7 @@ mod window_actions;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{Disableable, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, App, Context, CursorStyle, Entity, FocusHandle, Focusable,
@@ -1590,7 +1590,7 @@ impl Workspace {
                             let top = if this.embedded {
                                 0.0
                             } else {
-                                t.titlebar_height
+                                crate::theme::titlebar_height(cx)
                             };
                             let total = (f32::from(window.viewport_size().height)
                                 - top
@@ -1617,6 +1617,103 @@ impl Workspace {
         .with_priority(100)
     }
 
+    fn titlebar_divider(cx: &App) -> impl IntoElement {
+        let t = theme(cx);
+        div()
+            .flex_none()
+            .w(px(1.0))
+            .h(t.px(18.0))
+            .mx(t.px(4.0))
+            .bg(crate::theme::chrome_border(cx))
+    }
+
+    fn render_wave_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = *theme(cx);
+        let panel = self.app.panels.focused_id();
+        let waves = self.app.panels.focused().kind.waves();
+        let enabled = self.app.doc.is_loaded()
+            && waves.is_some()
+            && self
+                .panel_focus(panel, cx)
+                .is_some_and(|focus| focus.contains_focused(window, cx));
+        let transitions = waves.is_some_and(|waves| !waves.selected.is_empty());
+        let mut toolbar = div()
+            .id("wave-toolbar")
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_1();
+        for (index, (id, icon, label, action, available)) in [
+            (
+                "wave-zoom-in",
+                IconName::ZoomIn,
+                "Zoom in (=)",
+                Action::ZoomIn,
+                enabled,
+            ),
+            (
+                "wave-zoom-out",
+                IconName::ZoomOut,
+                "Zoom out (-)",
+                Action::ZoomOut,
+                enabled,
+            ),
+            (
+                "wave-zoom-fit",
+                IconName::ZoomFit,
+                "Zoom to fit (F)",
+                Action::ZoomFit,
+                enabled,
+            ),
+            (
+                "wave-pan-left",
+                IconName::ArrowLeft,
+                "Pan left",
+                Action::PanPageLeft,
+                enabled,
+            ),
+            (
+                "wave-pan-right",
+                IconName::ArrowRight,
+                "Pan right",
+                Action::PanPageRight,
+                enabled,
+            ),
+            (
+                "wave-prev-transition",
+                IconName::StepBack,
+                "Previous transition / record",
+                Action::PrevEdge,
+                enabled && transitions,
+            ),
+            (
+                "wave-next-transition",
+                IconName::StepForward,
+                "Next transition / record",
+                Action::NextEdge,
+                enabled && transitions,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if matches!(index, 3 | 5) {
+                toolbar = toolbar.child(Self::titlebar_divider(cx));
+            }
+            toolbar = toolbar.child(
+                icon_button(id, icon, t.bar, t.bar_hover, cx)
+                    .w(t.px(32.0))
+                    .h(t.px(32.0))
+                    .disabled(!available)
+                    .tooltip(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dispatch(Command::Action(action), Some(window), cx);
+                    })),
+            );
+        }
+        toolbar
+    }
+
     fn render_titlebar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
         let colors = t.bar;
@@ -1637,7 +1734,7 @@ impl Workspace {
         let left_pad = if fullscreen || left_controls.is_some() {
             t.px(8.0)
         } else if is_macos {
-            t.px(80.0)
+            px(80.0)
         } else {
             t.px(12.0)
         };
@@ -1646,7 +1743,7 @@ impl Workspace {
             .flex()
             .flex_none()
             .items_center()
-            .h(px(t.titlebar_height))
+            .h(px(crate::theme::titlebar_height(cx)))
             .w_full()
             .pl(left_pad)
             .when(right_controls.is_none(), gpui_kit::Styled::pr_2)
@@ -1696,6 +1793,8 @@ impl Workspace {
                     })
                     .when_some(chips, gpui_kit::ParentElement::child),
             )
+            .child(self.render_wave_toolbar(window, cx))
+            .child(Self::titlebar_divider(cx))
             .child(
                 icon_button(
                     "toggle-sidebar",
@@ -1731,6 +1830,7 @@ impl Workspace {
                     })),
                 )
             })
+            .child(Self::titlebar_divider(cx))
             .child(
                 icon_button("open-file", IconName::FolderOpen, t.bar, t.bar_hover, cx)
                     .tooltip("Open trace (⌘O)")

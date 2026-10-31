@@ -3,6 +3,13 @@
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum IconName {
+    StepForward,
+    StepBack,
+    ArrowRight,
+    ArrowLeft,
+    ZoomFit,
+    ZoomOut,
+    ZoomIn,
     Boxes,
     Cpu,
     Component,
@@ -86,6 +93,13 @@ macro_rules! icons {
 }
 
 icons!(
+    StepForward => "step-forward",
+    StepBack => "step-back",
+    ArrowRight => "arrow-right",
+    ArrowLeft => "arrow-left",
+    ZoomFit => "zoom-fit",
+    ZoomOut => "zoom-out",
+    ZoomIn => "zoom-in",
     Boxes => "boxes",
     Cpu => "cpu",
     Component => "component",

@@ -411,11 +411,11 @@ impl Render for AuxiliaryWindow {
             .flex()
             .flex_none()
             .items_center()
-            .h(px(t.titlebar_height))
+            .h(px(crate::theme::titlebar_height(cx)))
             .bg(crate::theme::chrome_background(cx))
             .text_color(t.bar.text)
             .when(cfg!(target_os = "macos") && !window.is_fullscreen(), |el| {
-                el.pl(px(80.0 * t.zoom))
+                el.pl(px(80.0))
             })
             .children(render_window_controls(Side::Left, window, cx))
             .child(

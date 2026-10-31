@@ -213,3 +213,13 @@ pub fn is_dark(appearance: gpui_kit::WindowAppearance) -> bool {
     use gpui_kit::WindowAppearance::{Dark, VibrantDark};
     matches!(appearance, Dark | VibrantDark)
 }
+
+/// Native macOS controls retain their size and position when the interface zooms.
+pub fn titlebar_height(cx: &App) -> f32 {
+    let t = theme(cx);
+    if cfg!(target_os = "macos") {
+        t.titlebar_height / t.zoom
+    } else {
+        t.titlebar_height
+    }
+}
