@@ -457,7 +457,11 @@ fn row_commands_take_the_subtree_and_value_commands_reach_its_signals() {
     let changed: Vec<usize> = (0..before.len())
         .filter(|&i| before[i] != after[i])
         .collect();
-    assert_eq!(changed, [5, 6], "rvalid and rdata");
+    assert_eq!(
+        changed,
+        [6],
+        "rdata changes format; scalar rvalid retains bit format"
+    );
     app.handle(Command::Action(Action::ToggleAnalog));
     assert!(
         waves(&app, id).items()[8]

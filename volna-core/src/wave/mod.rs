@@ -3,6 +3,7 @@
 
 pub mod analog;
 pub mod bus;
+mod format;
 pub mod group;
 pub mod lane;
 pub mod layout;

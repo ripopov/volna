@@ -997,12 +997,28 @@ fn notices(app: &mut App) -> Vec<String> {
 
 #[test]
 fn repeated_format_presses_merge_within_the_window_only() {
-    let (mut app, id, now) = four_rows();
-    select(&mut app, id, &[1]);
+    let mut app = opened(landing());
+    let buses: Vec<_> = app
+        .doc
+        .hierarchy(TraceId::A)
+        .unwrap()
+        .vars()
+        .enumerate()
+        .filter(|(_, var)| matches!(var.shape, volna_trace::data::SignalShape::Vector { .. }))
+        .map(|(id, _)| id)
+        .take(2)
+        .collect();
+    assert_eq!(buses.len(), 2);
+    let now = Instant::now();
+    app.handle_at(Command::AddVars(a_all(buses)), now);
+    pump(&mut app);
+    let id = app.panels.focused_id();
+    frame(&mut app, id);
+    select(&mut app, id, &[0]);
     let steps = |app: &App| app.history.undo_steps().count();
     let before = steps(&app);
     let format = |app: &App| {
-        app.panels.waves(id).unwrap().items()[1]
+        app.panels.waves(id).unwrap().items()[0]
             .signal()
             .unwrap()
             .format_id()
@@ -1021,7 +1037,7 @@ fn repeated_format_presses_merge_within_the_window_only() {
     app.handle(Command::Undo);
     assert_eq!(format(&app), original);
     app.handle_at(Command::Action(Action::CycleFormat), t);
-    select(&mut app, id, &[2]);
+    select(&mut app, id, &[1]);
     app.handle_at(
         Command::Action(Action::CycleFormat),
         t + Duration::from_millis(100),

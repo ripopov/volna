@@ -1,5 +1,4 @@
-//! The single icon set (Lucide) and the bundled fonts, compiled in so every frontend
-//! renders identically.
+//! Bundled viewer icons and fonts shared by every frontend.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum IconName {
@@ -38,6 +37,9 @@ pub enum IconName {
     ArrowUpDown,
     Activity,
     AudioWaveform,
+    WaveDigital,
+    WaveStep,
+    WaveLinear,
     Binary,
     Box,
     Braces,
@@ -128,6 +130,9 @@ icons!(
     ArrowUpDown => "arrow-up-down",
     Activity => "activity",
     AudioWaveform => "audio-waveform",
+    WaveDigital => "wave-digital",
+    WaveStep => "wave-step",
+    WaveLinear => "wave-linear",
     Binary => "binary",
     Box => "box",
     Braces => "braces",

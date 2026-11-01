@@ -18,7 +18,7 @@ use volna_core::scene::{MonoMeasure, Prim};
 use volna_core::session::{LoadRequest, LoadResult};
 use volna_core::sidebar::Key;
 use volna_core::testing::ProceduralTrace;
-use volna_core::wave::{MenuEntry, PointerEvent, RowHeight, Tint, WaveMenuKind};
+use volna_core::wave::{PointerEvent, RowHeight, WaveMenuKind};
 use volna_core::{Instant, Theme};
 use volna_trace::data::{
     Bit, Hierarchy, SignalHistory, SignalRef, SignalShape, TraceInfo, WaveValue,
@@ -1083,12 +1083,6 @@ fn format_menu_and_translator_cycle() {
         .expect("menu opened");
     assert_eq!(menu.kind, WaveMenuKind::Format);
     assert!(menu.items().any(|i| i.checked));
-    assert!(menu.items().all(|item| matches!(
-        item.action,
-        volna_core::wave::model::MenuAction::Format(_)
-            | volna_core::wave::model::MenuAction::Draw(_)
-            | volna_core::wave::model::MenuAction::RetryLoad
-    )));
     assert!(app.debug_state().contains("menu=true"));
     let before = app.panels.focused_waves().unwrap().items()[0]
         .signal()
@@ -1185,41 +1179,11 @@ fn signal_name_menu_opens_and_removes_the_selected_signal_group() {
             (&MenuAction::OpenTable, "Open in table"),
             (&MenuAction::CutSignals, "Cut"),
             (&MenuAction::CopySignals, "Copy"),
+            (&MenuAction::OpenFormat, "Format signals…"),
             (&MenuAction::Group, "Group selection"),
-            (&MenuAction::Tint(None), "Default"),
-            (&MenuAction::Tint(Some(Tint::Blue)), "Blue"),
-            (&MenuAction::Tint(Some(Tint::Cyan)), "Cyan"),
-            (&MenuAction::Tint(Some(Tint::Violet)), "Violet"),
-            (&MenuAction::Tint(Some(Tint::Pink)), "Pink"),
-            (&MenuAction::Tint(Some(Tint::Grey)), "Grey"),
-            (
-                &MenuAction::RowHeight(RowHeight::PRESETS[0]),
-                "1× (Default)"
-            ),
-            (&MenuAction::RowHeight(RowHeight::PRESETS[1]), "2×"),
-            (&MenuAction::RowHeight(RowHeight::PRESETS[2]), "3×"),
-            (&MenuAction::RowHeight(RowHeight::PRESETS[3]), "4×"),
-            (&MenuAction::RowHeight(RowHeight::PRESETS[4]), "8×"),
             (&MenuAction::RemoveSignals, "Remove signal"),
         ]
     );
-    assert!(matches!(
-        &menu.entries[..],
-        [
-            MenuEntry::Item(_),
-            MenuEntry::Separator,
-            MenuEntry::Item(_),
-            MenuEntry::Item(_),
-            MenuEntry::Separator,
-            MenuEntry::Item(_),
-            MenuEntry::Separator,
-            MenuEntry::Submenu { label: color, .. },
-            MenuEntry::Submenu { label, .. },
-            MenuEntry::Separator,
-            MenuEntry::Item(_),
-        ] if color == "Color" && label == "Height"
-    ));
-
     app.handle(Command::MenuSelect(waves, MenuAction::OpenTable));
     let table = app.panels.focused().kind.table().expect("table opened");
     let TableSource::Signals(signals) = &table.source else {
@@ -1252,8 +1216,7 @@ fn height_checks(app: &App) -> Vec<u8> {
         .filter(|item| item.checked)
         .filter_map(|item| match item.action {
             volna_core::wave::model::MenuAction::RowHeight(h) => Some(h.multiple()),
-            volna_core::wave::model::MenuAction::Tint(_) => None,
-            _ => panic!("only heights and colours are checkable here"),
+            _ => None,
         })
         .collect()
 }
@@ -1289,6 +1252,7 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
             modifiers: Modifiers::default(),
         },
     ));
+    app.handle(Command::MenuSelect(waves, MenuAction::OpenFormat));
     assert_eq!(height_checks(&app), [1]);
     app.handle(Command::MenuSelect(
         waves,
@@ -1299,6 +1263,7 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
 
     app.handle(Command::Action(Action::SelectAll));
     app.handle(Command::OpenSignalMenu(waves));
+    app.handle(Command::MenuSelect(waves, MenuAction::OpenFormat));
     assert_eq!(height_checks(&app), Vec::<u8>::new());
     app.handle(Command::MenuSelect(
         waves,
@@ -1306,6 +1271,7 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
     ));
     assert_eq!(heights(&app), [2, 2, 2, 2]);
     app.handle(Command::OpenSignalMenu(waves));
+    app.handle(Command::MenuSelect(waves, MenuAction::OpenFormat));
     assert_eq!(height_checks(&app), [2]);
     app.handle(Command::MenuDismiss(waves));
 
@@ -1331,6 +1297,7 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
         [2]
     );
     app.handle(Command::OpenSignalMenu(waves));
+    app.handle(Command::MenuSelect(waves, MenuAction::OpenFormat));
     app.handle(Command::MenuSelect(
         waves,
         MenuAction::RowHeight(RowHeight::try_from(8).unwrap()),

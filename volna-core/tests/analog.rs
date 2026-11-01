@@ -269,7 +269,7 @@ fn reals_open_as_plots_and_a_toggles_the_selection_with_its_height() {
 }
 
 #[test]
-fn the_format_menu_draws_and_ranges_and_the_signal_menu_toggles() {
+fn the_shared_format_menu_changes_waveforms_and_vertical_scale() {
     let (_file, mut app, id) = app();
     let labels = |app: &App| -> Vec<String> {
         app.panels
@@ -299,6 +299,7 @@ fn the_format_menu_draws_and_ranges_and_the_signal_menu_toggles() {
             .collect()
     };
     let open_format = |app: &mut App, row: usize| {
+        select(app, id, &[row]);
         let theme = Theme::one_dark();
         app.layout_panel(
             id,
@@ -321,7 +322,10 @@ fn the_format_menu_draws_and_ranges_and_the_signal_menu_toggles() {
     };
 
     open_format(&mut app, BUS);
-    assert_eq!(labels(&app), ["Draw"], "no Range section while digital");
+    assert_eq!(
+        labels(&app),
+        ["Format signal", "Waveform · Digital", "Appearance"]
+    );
     assert!(checked(&app).contains(&MenuAction::Draw(None)));
     app.handle(Command::MenuSelect(
         id,
@@ -330,7 +334,10 @@ fn the_format_menu_draws_and_ranges_and_the_signal_menu_toggles() {
     assert_eq!(draws(&app, id)[BUS], Some(AnalogDraw::Linear));
 
     open_format(&mut app, BUS);
-    assert_eq!(labels(&app), ["Draw", "Range"]);
+    assert_eq!(
+        labels(&app),
+        ["Format signal", "Waveform · Analog lines", "Appearance"]
+    );
     let items: Vec<_> = app
         .panels
         .waves(id)
@@ -369,26 +376,241 @@ fn the_format_menu_draws_and_ranges_and_the_signal_menu_toggles() {
         .collect();
     assert!(!items.contains(&MenuAction::Range(AnalogRange::Type)));
     open_format(&mut app, BIT);
-    assert!(labels(&app).is_empty());
+    assert_eq!(labels(&app), ["Format signal", "Appearance"]);
     app.handle(Command::MenuDismiss(id));
 
     select(&mut app, id, &[BUS, REAL, BIT]);
     app.handle(Command::OpenSignalMenu(id));
-    let toggle = app
-        .panels
-        .waves(id)
-        .unwrap()
-        .menu
-        .as_ref()
-        .unwrap()
-        .items()
-        .find(|i| i.action == MenuAction::ToggleAnalog)
-        .cloned()
-        .unwrap();
-    assert!(toggle.checked);
-    app.handle(Command::MenuSelect(id, MenuAction::ToggleAnalog));
+    assert!(
+        app.panels
+            .waves(id)
+            .unwrap()
+            .menu
+            .as_ref()
+            .unwrap()
+            .items()
+            .any(|i| i.action == MenuAction::OpenFormat)
+    );
+    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
+    assert_eq!(labels(&app)[0], "Format 3 signals");
+    app.handle(Command::MenuSelect(id, MenuAction::Draw(None)));
     assert_eq!(draws(&app, id), [None, None, None]);
     assert_eq!(heights(&app, id), [1, 1, 1], "grown rows get their 1× back");
+}
+
+#[test]
+fn bulk_formatting_reports_mixed_settings_and_changes_only_the_chosen_setting() {
+    use volna_core::wave::Tint;
+
+    let (_file, mut app, id) = app();
+    select(&mut app, id, &[BUS]);
+    app.handle(Command::Action(Action::ToggleAnalog));
+    set_format(&mut app, id, BUS, "sdec");
+    {
+        let w = app.panels.waves_mut(id).unwrap();
+        w.set_tint(&[BUS], Some(Tint::Pink));
+        w.set_tint(&[REAL], Some(Tint::Cyan));
+        w.set_analog_range(&[BUS], AnalogRange::Window);
+        w.open_format_menu(&app.doc, BUS, Point::default());
+        w.menu_select(&app.doc, &MenuAction::RowHeight(RowHeight::PRESETS[3]));
+    }
+    let settings = |app: &App| {
+        app.panels
+            .waves(id)
+            .unwrap()
+            .items()
+            .iter()
+            .map(|row| {
+                let s = row.signal().unwrap();
+                (
+                    s.translator.id(),
+                    row.tint(),
+                    row.height(),
+                    s.analog.as_ref().map(|a| a.range),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = settings(&app);
+    select(&mut app, id, &[BUS, REAL, BIT]);
+    app.handle(Command::OpenSignalMenu(id));
+    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
+    let menu = app.panels.waves(id).unwrap().menu.as_ref().unwrap();
+    assert!(
+        menu.entries
+            .contains(&MenuEntry::Label("Format 3 signals".into()))
+    );
+    assert!(
+        menu.entries
+            .contains(&MenuEntry::Label("Waveform · Mixed".into()))
+    );
+    assert!(
+        menu.entries
+            .contains(&MenuEntry::Label("Value format · Mixed".into()))
+    );
+    assert!(
+        menu.entries
+            .contains(&MenuEntry::Label("No shared value format".into()))
+    );
+    for setting in [
+        "Vertical scale · Mixed",
+        "Color · Mixed",
+        "Row height · Mixed",
+    ] {
+        assert!(menu.entries.iter().any(|entry| matches!(entry, MenuEntry::Submenu { label, items } if label == setting && items.iter().all(|i| !i.checked))));
+    }
+    app.handle(Command::MenuSelect(
+        id,
+        MenuAction::Draw(Some(AnalogDraw::Linear)),
+    ));
+    assert_eq!(
+        draws(&app, id),
+        [Some(AnalogDraw::Linear), Some(AnalogDraw::Linear), None]
+    );
+    assert_eq!(settings(&app), before);
+
+    app.handle(Command::OpenSignalMenu(id));
+    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
+    app.handle(Command::MenuSelect(id, MenuAction::Tint(Some(Tint::Grey))));
+    for (i, (format, tint, height, range)) in settings(&app).into_iter().enumerate() {
+        assert_eq!(tint, Some(Tint::Grey));
+        assert_eq!(
+            (format, height, range),
+            (before[i].0, before[i].2, before[i].3)
+        );
+    }
+}
+
+#[test]
+fn scalar_bits_keep_appearance_controls_without_value_format_choices() {
+    use volna_core::wave::Tint;
+
+    let (_file, mut app, id) = app();
+    select(&mut app, id, &[BIT]);
+    let undo_before = app.undo_label().map(str::to_owned);
+    app.handle(Command::OpenSignalMenu(id));
+    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
+    let menu = app.panels.waves(id).unwrap().menu.as_ref().unwrap();
+    assert!(!menu.entries.iter().any(|entry| match entry {
+        MenuEntry::Label(label) | MenuEntry::Submenu { label, .. } =>
+            label.starts_with("Value format"),
+        _ => false,
+    }));
+    assert!(
+        !menu
+            .items()
+            .any(|item| matches!(item.action, MenuAction::Format(_)))
+    );
+    app.handle(Command::MenuSelect(id, MenuAction::Tint(Some(Tint::Pink))));
+    assert_eq!(
+        app.panels.waves(id).unwrap().items()[BIT].tint(),
+        Some(Tint::Pink)
+    );
+    assert_eq!(app.panels.waves(id).unwrap().items()[BUS].tint(), None);
+    app.handle(Command::Undo);
+    assert_eq!(app.panels.waves(id).unwrap().items()[BIT].tint(), None);
+
+    app.handle(Command::OpenSignalMenu(id));
+    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
+    app.handle(Command::MenuSelect(
+        id,
+        MenuAction::RowHeight(RowHeight::PRESETS[1]),
+    ));
+    assert_eq!(heights(&app, id), [1, 3, 2]);
+    app.handle(Command::Undo);
+    assert_eq!(heights(&app, id), [1, 3, 1]);
+    app.handle(Command::Action(Action::CycleFormat));
+    assert_eq!(
+        app.panels
+            .waves(id)
+            .unwrap()
+            .signal(BIT)
+            .unwrap()
+            .translator
+            .id(),
+        "bit"
+    );
+    assert_eq!(app.undo_label(), undo_before.as_deref());
+}
+
+#[test]
+fn mixed_bits_and_buses_have_no_shared_format_and_cycling_changes_only_the_bus() {
+    let (_file, mut app, id) = app();
+    select(&mut app, id, &[BUS, BIT]);
+    app.handle(Command::OpenSignalMenu(id));
+    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
+    let menu = app.panels.waves(id).unwrap().menu.as_ref().unwrap();
+    assert!(
+        !menu
+            .items()
+            .any(|item| matches!(item.action, MenuAction::Format(_)))
+    );
+    assert!(
+        menu.entries
+            .contains(&MenuEntry::Label("No shared value format".into()))
+    );
+    let initial_draws = draws(&app, id);
+    let initial_heights = heights(&app, id);
+    app.handle(Command::MenuDismiss(id));
+    app.handle(Command::Action(Action::CycleFormat));
+    let w = app.panels.waves(id).unwrap();
+    assert_eq!(w.signal(BUS).unwrap().translator.id(), "bin");
+    assert_eq!(w.signal(BIT).unwrap().translator.id(), "bit");
+    assert_eq!(w.signal(REAL).unwrap().translator.id(), "real");
+    assert_eq!(draws(&app, id), initial_draws);
+    assert_eq!(heights(&app, id), initial_heights);
+}
+
+#[test]
+fn badge_and_analog_summary_open_the_same_menu_and_preserve_bulk_selection() {
+    let (_file, mut app, id) = app();
+    for dark in [true, false] {
+        for zoom in [0.75, 1.0, 1.5] {
+            let theme = Theme::volna(dark).zoomed(zoom);
+            app.layout_panel(
+                id,
+                Rect::from_xywh(0.0, 0.0, 1400.0, 700.0),
+                &theme,
+                1.0,
+                &mut MonoMeasure,
+            );
+            select(&mut app, id, &[BUS, REAL]);
+            let layout = app.panels.waves(id).unwrap().last_layout();
+            let badge = layout.badges.iter().find(|(r, _)| *r == REAL).unwrap().1;
+            let summary = layout
+                .format_summaries
+                .iter()
+                .find(|(r, _)| *r == REAL)
+                .unwrap()
+                .1;
+            let mut entries = Vec::new();
+            for target in [badge, summary] {
+                let p = point(
+                    target.left() + target.width() / 2.0,
+                    target.top() + target.height() / 2.0,
+                );
+                app.handle(Command::Pointer(id, PointerEvent::Move { position: p }));
+                assert_eq!(app.panels.waves(id).unwrap().format_hover, Some(REAL));
+                app.handle(Command::Pointer(
+                    id,
+                    PointerEvent::Down {
+                        position: p,
+                        button: MouseButton::Left,
+                        modifiers: Modifiers::default(),
+                    },
+                ));
+                let w = app.panels.waves(id).unwrap();
+                assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [BUS, REAL]);
+                let menu = w.menu.as_ref().expect("format menu opened");
+                if entries.is_empty() {
+                    entries = menu.entries.clone();
+                } else {
+                    assert_eq!(menu.entries, entries);
+                }
+                app.handle(Command::MenuDismiss(id));
+            }
+        }
+    }
 }
 
 #[test]

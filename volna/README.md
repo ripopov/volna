@@ -135,6 +135,26 @@ Appearance to use rounded tab-group islands on continuous surrounding chrome.
 white islands, and a soft blue-to-sea-glass backdrop.
 See [geometry and implementation](ISLANDS.md).
 
+## Signal formatting
+
+Right-click a signal and choose **Format signal…**, or click its value-format
+badge or analog status line. All three open the same menu. **Waveform** offers
+Digital, Analog steps (hold each sample), and Analog lines (interpolate between
+samples), with waveform icons and hover descriptions. **Vertical scale** controls
+the analog value axis; **Value format** controls numeric or text representation.
+Color and row height are grouped under **Appearance**.
+Value format is omitted when only one representation is supported. Scalar bits
+keep their bit representation, including when cycling formats with the keyboard.
+
+For a native control specimen, open `volna/examples/analog_showcase.vtr` and add
+`analog.waves.sine` and `analog.waves.cosine`. The format badge and the
+`linear · whole trace` status line both have dropdown chevrons. Select both rows
+to open **Format 2 signals**. Differing settings show **Mixed**; changing a setting
+applies that setting to the selection. Waveform controls identify the applicable
+numeric subset when a selection also contains signals that cannot be plotted.
+Value-format choices must support every target. The menu uses the native theme,
+keyboard navigation, and window bounds at each interface zoom.
+
 ## Feature, pipeline, and landing examples
 
 [`verilator_pipeline`](examples/verilator_pipeline/README.md) contains the bound

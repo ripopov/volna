@@ -612,6 +612,7 @@ pub enum Drag {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
+    OpenFormat,
     Format(String),
     RetryLoad,
     OpenTable,
@@ -622,7 +623,6 @@ pub enum MenuAction {
     RowHeight(RowHeight),
     Draw(Option<AnalogDraw>),
     Range(AnalogRange),
-    ToggleAnalog,
     HideRuler(ClockKey),
     Group,
     Ungroup,
@@ -662,7 +662,7 @@ pub enum MenuEntry {
 }
 
 impl MenuItem {
-    fn plain(action: MenuAction, label: &str) -> Self {
+    pub(super) fn plain(action: MenuAction, label: &str) -> Self {
         Self {
             action,
             label: label.into(),
@@ -773,7 +773,7 @@ pub struct WaveModel {
     pub names_width: f32,
     pub values_width: f32,
     pub hover_row: Option<usize>,
-    pub badge_hover: Option<usize>,
+    pub format_hover: Option<usize>,
     pub edge_hover: Option<usize>,
     pub split_hover: bool,
     pub lane_hover: Option<crate::marker::LaneHit>,
@@ -847,7 +847,7 @@ impl WaveModel {
             names_width: 220.0,
             values_width: 120.0,
             hover_row: None,
-            badge_hover: None,
+            format_hover: None,
             edge_hover: None,
             split_hover: false,
             lane_hover: None,
@@ -879,7 +879,7 @@ impl WaveModel {
         self.drag = None;
         self.row_edit = None;
         self.hover_row = None;
-        self.badge_hover = None;
+        self.format_hover = None;
     }
 
     #[must_use]
@@ -1715,7 +1715,7 @@ impl WaveModel {
             .map(|a| shown(&self.items, a));
     }
 
-    fn leaves_of(&self, rows: &[usize]) -> Vec<usize> {
+    pub(super) fn leaves_of(&self, rows: &[usize]) -> Vec<usize> {
         let set: BTreeSet<usize> = rows.iter().copied().collect();
         tree::selected_leaves(&self.items, &set)
     }
@@ -2146,80 +2146,6 @@ impl WaveModel {
         self.set_stacked(&groups, on)
     }
 
-    pub fn open_format_menu(&mut self, doc: &Document, row: usize, position: Point) {
-        let Some(item) = self.signal(row) else {
-            return;
-        };
-        let current = item.translator.id();
-        let mut entries: Vec<_> = doc
-            .translators
-            .applicable(item.shape)
-            .into_iter()
-            .map(|t| {
-                MenuEntry::Item(MenuItem {
-                    action: MenuAction::Format(t.id().into()),
-                    label: t.name().into(),
-                    badge: Some(t.badge().into()),
-                    checked: t.id() == current,
-                })
-            })
-            .collect();
-        if analog::supports(item.shape, item.translator.as_ref()) {
-            let a = item.analog.as_ref();
-            let choice = |action, label: &str, checked| {
-                MenuEntry::Item(MenuItem {
-                    action,
-                    label: label.into(),
-                    badge: None,
-                    checked,
-                })
-            };
-            let draw = a.map(|a| a.draw);
-            entries.extend([
-                MenuEntry::Separator,
-                MenuEntry::Label("Draw".into()),
-                choice(MenuAction::Draw(None), "Digital", draw.is_none()),
-                choice(
-                    MenuAction::Draw(Some(AnalogDraw::Step)),
-                    "Analog · step",
-                    draw == Some(AnalogDraw::Step),
-                ),
-                choice(
-                    MenuAction::Draw(Some(AnalogDraw::Linear)),
-                    "Analog · linear",
-                    draw == Some(AnalogDraw::Linear),
-                ),
-            ]);
-            if let Some(a) = a {
-                let mut ranges = vec![AnalogRange::Trace, AnalogRange::Window];
-                if item.translator.limits(item.shape).is_some() {
-                    ranges.push(AnalogRange::Type);
-                }
-                entries.extend([MenuEntry::Separator, MenuEntry::Label("Range".into())]);
-                entries.extend(ranges.into_iter().map(|range| {
-                    let label = match range {
-                        AnalogRange::Trace => "Whole trace",
-                        AnalogRange::Window => "Visible window",
-                        AnalogRange::Type => "Type limits",
-                    };
-                    choice(MenuAction::Range(range), label, a.range == range)
-                }));
-            }
-        }
-        if item.error.is_some() && item.source.signal().is_some() {
-            entries.push(MenuEntry::Item(MenuItem::plain(
-                MenuAction::RetryLoad,
-                "Retry loading",
-            )));
-        }
-        self.menu = Some(WaveMenu {
-            kind: WaveMenuKind::Format,
-            row,
-            position,
-            entries,
-        });
-    }
-
     pub fn open_signal_menu(&mut self, doc: &Document, row: usize, position: Point) {
         if row >= self.items.len() {
             return;
@@ -2228,22 +2154,6 @@ impl WaveModel {
             self.select_row(row, Modifiers::default());
         }
         let targets = self.menu_rows(row);
-        let mut heights = targets.iter().map(|&r| self.items[r].height());
-        let first = heights.next();
-        let shared = first.filter(|h| heights.all(|other| other == *h));
-        let heights = RowHeight::PRESETS
-            .into_iter()
-            .map(|height| MenuItem {
-                action: MenuAction::RowHeight(height),
-                label: if height.is_default() {
-                    "1× (Default)".into()
-                } else {
-                    format!("{}×", height.multiple())
-                },
-                badge: None,
-                checked: shared == Some(height),
-            })
-            .collect();
         self.menu = Some(WaveMenu {
             kind: WaveMenuKind::Signal,
             row,
@@ -2269,24 +2179,18 @@ impl WaveModel {
                 "Paste",
             )));
         }
-        let plottable: Vec<usize> = self
-            .leaves_of(&targets)
-            .into_iter()
-            .filter(|&r| self.can_plot(r))
-            .collect();
-        if !plottable.is_empty() {
-            let checked = plottable
-                .iter()
-                .all(|&r| self.signal(r).is_some_and(|s| s.analog.is_some()));
-            let menu = self.menu.as_mut().expect("just opened");
-            menu.entries.extend([
+        let format_count = self.format_rows(row).len();
+        if format_count > 0 {
+            self.menu.as_mut().expect("just opened").entries.extend([
                 MenuEntry::Separator,
-                MenuEntry::Item(MenuItem {
-                    action: MenuAction::ToggleAnalog,
-                    label: "Show as analog".into(),
-                    badge: None,
-                    checked,
-                }),
+                MenuEntry::Item(MenuItem::plain(
+                    MenuAction::OpenFormat,
+                    if format_count == 1 {
+                        "Format signal…"
+                    } else {
+                        "Format signals…"
+                    },
+                )),
             ]);
         }
         let group = self.items[row].group();
@@ -2451,28 +2355,21 @@ impl WaveModel {
                 MenuEntry::Item(MenuItem::plain(MenuAction::FoldAll(false), "Unfold all")),
             ]);
         }
-        let mut own = targets.iter().map(|&r| self.items[r].tint());
-        let first = own.next();
-        let shared = first.filter(|t| own.all(|other| other == *t));
-        let colors = std::iter::once(None)
-            .chain(Tint::ALL.map(Some))
-            .map(|tint| MenuItem {
-                action: MenuAction::Tint(tint),
-                label: Tint::label(tint).into(),
-                badge: None,
-                checked: shared == Some(tint),
-            })
-            .collect();
+        if any_group || format_count == 0 {
+            let appearance = self.appearance_menu(&targets, false);
+            self.menu
+                .as_mut()
+                .expect("just opened")
+                .entries
+                .push(MenuEntry::Separator);
+            self.menu
+                .as_mut()
+                .expect("just opened")
+                .entries
+                .extend(appearance);
+        }
+        let menu = self.menu.as_mut().expect("just opened");
         menu.entries.extend([
-            MenuEntry::Separator,
-            MenuEntry::Submenu {
-                label: "Color".into(),
-                items: colors,
-            },
-            MenuEntry::Submenu {
-                label: "Height".into(),
-                items: heights,
-            },
             MenuEntry::Separator,
             MenuEntry::Item(MenuItem::plain(
                 MenuAction::RemoveSignals,
@@ -2552,7 +2449,15 @@ impl WaveModel {
         ) {
             return None;
         }
-        let rows = self.menu_rows(menu.row);
+        if *action == MenuAction::OpenFormat {
+            self.open_format_menu(doc, menu.row, menu.position);
+            return None;
+        }
+        let rows = if menu.kind == WaveMenuKind::Format {
+            self.format_rows(menu.row)
+        } else {
+            self.menu_rows(menu.row)
+        };
         let leaves = self.leaves_of(&rows);
         match action {
             MenuAction::Format(id) => self.set_translator(doc, &leaves, id),
@@ -2560,7 +2465,6 @@ impl WaveModel {
             MenuAction::Tint(tint) => _ = self.set_tint(&rows, *tint),
             MenuAction::Draw(draw) => self.set_analog(&leaves, *draw),
             MenuAction::Range(range) => self.set_analog_range(&leaves, *range),
-            MenuAction::ToggleAnalog => self.toggle_analog_rows(&leaves),
             MenuAction::Group => _ = self.group_selected(),
             MenuAction::Ungroup => _ = self.ungroup_selected(),
             MenuAction::Rename => {
@@ -2603,7 +2507,7 @@ impl WaveModel {
         None
     }
 
-    fn menu_rows(&self, row: usize) -> Vec<usize> {
+    pub(super) fn menu_rows(&self, row: usize) -> Vec<usize> {
         if self.selected.contains(&row) {
             self.selected.iter().copied().collect()
         } else {
@@ -2847,6 +2751,28 @@ impl WaveModel {
         self.layout
             .badges
             .retain(|(ix, _)| items.get(*ix).is_some_and(|row| row.signal().is_some()));
+        for pos in self.layout.rows.clone() {
+            let Some(row) = self.layout.entry(pos) else {
+                continue;
+            };
+            if self.signal(row).is_none_or(|s| s.analog.is_none())
+                || self.layout.row_height(pos) < 2.0 * self.layout.row_h - 0.5
+            {
+                continue;
+            }
+            let x = super::layout::indent_x(self.layout.name_left, items[row].depth, theme.zoom);
+            let y = (self.layout.row_y(pos) + self.layout.row_h - 4.0 * theme.zoom)
+                .max(self.layout.names.top());
+            let bottom = (self.layout.row_y(pos) + 2.0 * self.layout.row_h - 4.0 * theme.zoom)
+                .min(self.layout.names.bottom());
+            let width = self.layout.names.right() - 6.0 * theme.zoom - x;
+            if width > 0.0 && bottom > y {
+                self.layout.format_summaries.push((
+                    row,
+                    crate::geometry::Rect::from_xywh(x, y, width, bottom - y),
+                ));
+            }
+        }
         if let Some(row) = self.reveal_row.take() {
             let scroll = self.scroll_y;
             self.reveal_entry(row);
@@ -3206,26 +3132,26 @@ impl WaveModel {
 
     fn update_hover(&mut self) {
         self.edge_hover = self.pointer.and_then(|p| self.row_edge_at(p));
-        let (hover_row, badge_hover) = match self.pointer {
+        let (hover_row, format_hover) = match self.pointer {
             Some(p) if self.layout.bounds.contains(p) && p.y >= self.layout.names.top() => {
                 let row = self.entry_under(&self.layout, p.y);
-                let badge = self.layout.badge_at(p).map(|(ix, _)| ix);
-                (row, badge)
+                let format_row = self.layout.format_at(p).map(|(ix, _)| ix);
+                (row, format_row)
             }
             _ => (None, None),
         };
         self.hover_row = hover_row;
-        self.badge_hover = badge_hover;
+        self.format_hover = format_hover;
     }
 
     fn clear_hover(&mut self) -> bool {
         let had = self.hover_row.is_some()
-            || self.badge_hover.is_some()
+            || self.format_hover.is_some()
             || self.edge_hover.is_some()
             || self.split_hover
             || self.lane_hover.is_some();
         self.hover_row = None;
-        self.badge_hover = None;
+        self.format_hover = None;
         self.edge_hover = None;
         self.split_hover = false;
         self.lane_hover = None;
@@ -3528,7 +3454,7 @@ impl WaveModel {
             self.set_folded(doc, g, !collapsed, modifiers.alt);
             return;
         }
-        if let Some((ix, b)) = layout.badge_at(p) {
+        if let Some((ix, b)) = layout.format_at(p) {
             let pos = point(b.left(), b.bottom() + 4.0 * layout.zoom);
             if !self.selected.contains(&ix) {
                 self.select_row(ix, modifiers);
@@ -3664,9 +3590,9 @@ impl WaveModel {
                 false
             }
             None => {
-                let (prev_row, prev_badge, prev_split, prev_lane, prev_edge) = (
+                let (prev_row, prev_format, prev_split, prev_lane, prev_edge) = (
                     self.hover_row,
-                    self.badge_hover,
+                    self.format_hover,
                     self.split_hover,
                     self.lane_hover.take(),
                     self.edge_hover,
@@ -3684,7 +3610,7 @@ impl WaveModel {
                             || self.items.get(r).is_some_and(Entry::is_group)
                     });
                 self.hover_row != prev_row
-                    || self.badge_hover != prev_badge
+                    || self.format_hover != prev_format
                     || self.split_hover != prev_split
                     || self.lane_hover != prev_lane
                     || self.edge_hover != prev_edge

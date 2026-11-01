@@ -286,7 +286,7 @@ impl Translator for BinaryTranslator {
         "bin"
     }
     fn applies(&self, shape: SignalShape) -> bool {
-        shape.is_digital()
+        matches!(shape, SignalShape::Vector { .. })
     }
     fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
         raw_bits(value, limit)
@@ -311,7 +311,7 @@ impl Translator for HexTranslator {
         "hex"
     }
     fn applies(&self, shape: SignalShape) -> bool {
-        shape.is_digital()
+        matches!(shape, SignalShape::Vector { .. })
     }
     fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
         let ValueView::Logic(bits) = value else {
@@ -403,7 +403,7 @@ impl Translator for UnsignedTranslator {
         "dec"
     }
     fn applies(&self, shape: SignalShape) -> bool {
-        shape.is_digital()
+        matches!(shape, SignalShape::Vector { .. })
     }
     fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
         match value {
@@ -754,6 +754,6 @@ mod tests {
         let t = Translators::builtin();
         assert_eq!(t.default_for(SignalShape::Bit).id(), "bit");
         assert_eq!(t.default_for(SignalShape::Vector { width: 8 }).id(), "hex");
-        assert_eq!(t.applicable(SignalShape::Bit).len(), 4);
+        assert_eq!(t.applicable(SignalShape::Bit).len(), 1);
     }
 }

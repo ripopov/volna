@@ -423,6 +423,13 @@ pub fn paint(
             && full_h >= 2.0 * row_h - 0.5
         {
             let label = format!("{} · {}", a.draw.label(), a.range.label());
+            let hovered = model.format_hover == Some(ix);
+            let color = if hovered {
+                colors.text
+            } else {
+                colors.text_muted
+            };
+            let label_w = p.width(&label, FontRole::Ui, t.ui_size_small);
             p.scene.clipped(layout.names, |scene| {
                 scene.text(
                     point(name_x, y + row_h - z(4.0)),
@@ -430,13 +437,23 @@ pub fn paint(
                     label,
                     FontRole::Ui,
                     t.ui_size_small,
-                    colors.text_placeholder,
+                    color,
+                );
+                scene.icon(
+                    IconName::ChevronDown,
+                    Rect::from_xywh(
+                        name_x + label_w + z(3.0),
+                        y + row_h - z(4.0) + (row_h - z(12.0)) / 2.0,
+                        z(12.0),
+                        z(12.0),
+                    ),
+                    color,
                 );
             });
         }
 
         {
-            let pad = z(8.0);
+            let pad = z(4.0);
             let badge = layout
                 .badges
                 .iter()
@@ -494,34 +511,41 @@ pub fn paint(
                 });
             }
             if let Some(b) = badge {
-                let hovered = model.badge_hover == Some(ix);
-                let show = hovered || is_selected || is_hover;
-                if show {
-                    let bg = if hovered {
-                        t.badge_hover.bg
-                    } else {
-                        t.badge.bg
-                    };
-                    let label = item.translator.badge();
-                    let label_w = p.width(label, FontRole::UiMedium, t.ui_size_small);
-                    let color = if hovered {
-                        t.badge_hover.text
-                    } else {
-                        t.badge.text_muted
-                    };
-                    let x = b.left() + (b.width() - label_w) / 2.0;
-                    p.scene.clipped(values_rect, |scene| {
-                        scene.quad(b, bg, z(3.0), 1.0, t.border_variant);
-                        scene.text(
-                            point(snap(x), b.top()),
-                            b.height(),
-                            label,
-                            FontRole::UiMedium,
-                            t.ui_size_small,
-                            color,
-                        );
-                    });
-                }
+                let hovered = model.format_hover == Some(ix);
+                let bg = if hovered {
+                    t.badge_hover.bg
+                } else {
+                    t.badge.bg
+                };
+                let label = item.translator.badge();
+                let label_w = p.width(label, FontRole::UiMedium, t.ui_size_small);
+                let color = if hovered {
+                    t.badge_hover.text
+                } else {
+                    t.badge.text_muted
+                };
+                let x = b.left() + (b.width() - label_w - z(14.0)) / 2.0;
+                p.scene.clipped(values_rect, |scene| {
+                    scene.quad(b, bg, z(3.0), 1.0, t.border_variant);
+                    scene.text(
+                        point(snap(x), b.top()),
+                        b.height(),
+                        label,
+                        FontRole::UiMedium,
+                        t.ui_size_small,
+                        color,
+                    );
+                    scene.icon(
+                        IconName::ChevronDown,
+                        Rect::from_xywh(
+                            b.right() - z(14.0),
+                            b.top() + (b.height() - z(12.0)) / 2.0,
+                            z(12.0),
+                            z(12.0),
+                        ),
+                        color,
+                    );
+                });
             }
         }
 
@@ -891,6 +915,9 @@ pub fn paint(
         for (_, b) in &layout.badges {
             p.scene.cursors.push((*b, CursorIcon::PointingHand));
         }
+        for (_, rect) in &layout.format_summaries {
+            p.scene.cursors.push((*rect, CursorIcon::PointingHand));
+        }
     }
 
     if let Some((track, thumb)) = layout.scrollbar {
@@ -903,24 +930,28 @@ pub fn paint(
         };
         p.scene.quad(thumb, color, z(3.0), 0.0, Color::TRANSPARENT);
     }
-    if let Some((hint, pointer)) = model.disclosure_hint()
+    let format_hint = model
+        .pointer
+        .filter(|p| model.drag.is_none() && model.menu.is_none() && layout.format_at(*p).is_some())
+        .map(|p| ("Format signal", p));
+    if let Some((hint, pointer)) = format_hint.or_else(|| model.disclosure_hint())
         && let Some(label) = fit_width(
             &mut p,
             hint,
             FontRole::Ui,
             t.ui_size_small,
-            layout.names.width() - z(14.0),
+            layout.bounds.width() - z(14.0),
         )
     {
         let w = p.width(&label, FontRole::Ui, t.ui_size_small) + z(14.0);
         let h = z(22.0);
         let x = (pointer.x + z(12.0))
-            .min(layout.names.right() - w)
-            .max(layout.names.left());
+            .min(layout.bounds.right() - w)
+            .max(layout.bounds.left());
         let y = (pointer.y + z(16.0))
             .min(layout.names.bottom() - h)
             .max(layout.names.top());
-        p.scene.clipped(layout.names, |scene| {
+        p.scene.clipped(layout.bounds, |scene| {
             scene.quad(
                 Rect::from_xywh(x, y, w, h),
                 t.tooltip.bg,

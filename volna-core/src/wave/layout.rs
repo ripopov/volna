@@ -14,7 +14,7 @@ use crate::wave::viewport::Viewport;
 pub const MIN_COLUMN: f32 = 72.0;
 const SPLITTER_TOLERANCE: f32 = 4.0;
 pub const SCROLLBAR_W: f32 = 10.0;
-const BADGE_W: f32 = 36.0;
+const BADGE_W: f32 = 44.0;
 pub const NAME_PAD: f32 = 12.0;
 pub const INDENT: f32 = 14.0;
 pub const CHEVRON_W: f32 = 16.0;
@@ -45,6 +45,7 @@ pub struct WaveLayout {
     pub max_scroll: f32,
     pub scrollbar: Option<(Rect, Rect)>,
     pub badges: Vec<(usize, Rect)>,
+    pub format_summaries: Vec<(usize, Rect)>,
     pub marker_lane: MarkerLane,
     pub names_split: Rect,
     pub values_split: Rect,
@@ -228,6 +229,7 @@ impl WaveLayout {
             max_scroll,
             scrollbar,
             badges,
+            format_summaries: Vec::new(),
             marker_lane,
             names_split: split_zone(names.right()),
             values_split: split_zone(values.right()),
@@ -290,6 +292,16 @@ impl WaveLayout {
     #[must_use]
     pub fn badge_at(&self, p: Point) -> Option<(usize, Rect)> {
         self.badges.iter().copied().find(|(_, b)| b.contains(p))
+    }
+
+    #[must_use]
+    pub fn format_at(&self, p: Point) -> Option<(usize, Rect)> {
+        self.badge_at(p).or_else(|| {
+            self.format_summaries
+                .iter()
+                .copied()
+                .find(|(_, rect)| rect.contains(p))
+        })
     }
 
     #[must_use]
