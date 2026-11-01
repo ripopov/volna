@@ -1876,11 +1876,7 @@ impl WaveModel {
             .iter()
             .any(|&r| self.signal(r).is_some_and(|s| s.analog.is_none()));
         self.draw_rows(&rows, |s| {
-            on.then(|| {
-                s.analog
-                    .as_ref()
-                    .map_or(AnalogDraw::default_for(s.shape), |a| a.draw)
-            })
+            on.then(|| s.analog.as_ref().map_or(AnalogDraw::default(), |a| a.draw))
         });
     }
 
@@ -3684,7 +3680,7 @@ fn var_row(doc: &mut Document, var: Traced<VarId>, loaded: &Resident) -> Option<
     let needs_load = history.is_none();
     let analog = (v.shape == SignalShape::Real && analog::supports(v.shape, translator.as_ref()))
         .then(|| {
-            let mut a = Analog::new(AnalogDraw::Linear, AnalogRange::Trace);
+            let mut a = Analog::new(AnalogDraw::default(), AnalogRange::Trace);
             a.restore_height = Some(RowHeight::DEFAULT);
             a
         });

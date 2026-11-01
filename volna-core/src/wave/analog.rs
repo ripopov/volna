@@ -10,9 +10,10 @@ use crate::wave::viewport::Viewport;
 use volna_trace::data::value_view::ValueView;
 use volna_trace::data::{Bit, SignalHistory, SignalShape};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalogDraw {
+    #[default]
     Step,
     Linear,
 }
@@ -26,15 +27,6 @@ pub enum AnalogRange {
 }
 
 impl AnalogDraw {
-    #[must_use]
-    pub fn default_for(shape: SignalShape) -> Self {
-        if shape == SignalShape::Real {
-            Self::Linear
-        } else {
-            Self::Step
-        }
-    }
-
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {

@@ -240,16 +240,16 @@ fn translators_read_numbers_like_their_values() {
 }
 
 #[test]
-fn reals_open_as_plots_and_a_toggles_the_selection_with_its_height() {
+fn reals_open_as_step_plots_and_a_toggles_the_selection_with_its_height() {
     let (_file, mut app, id) = app();
-    assert_eq!(draws(&app, id), [None, Some(AnalogDraw::Linear), None]);
+    assert_eq!(draws(&app, id), [None, Some(AnalogDraw::Step), None]);
     assert_eq!(heights(&app, id), [1, 3, 1]);
 
     select(&mut app, id, &[BUS, BIT]);
     app.handle(Command::Action(Action::ToggleAnalog));
     assert_eq!(
         draws(&app, id),
-        [Some(AnalogDraw::Step), Some(AnalogDraw::Linear), None]
+        [Some(AnalogDraw::Step), Some(AnalogDraw::Step), None]
     );
     assert_eq!(heights(&app, id), [3, 3, 1]);
     app.handle(Command::Action(Action::ToggleAnalog));
@@ -266,6 +266,9 @@ fn reals_open_as_plots_and_a_toggles_the_selection_with_its_height() {
     app.handle(Command::Action(Action::ToggleAnalog));
     assert_eq!(draws(&app, id)[REAL], None);
     assert_eq!(heights(&app, id)[REAL], 1, "the real row got its 1× back");
+    app.handle(Command::Action(Action::ToggleAnalog));
+    assert_eq!(draws(&app, id)[REAL], Some(AnalogDraw::Step));
+    assert_eq!(heights(&app, id)[REAL], 3);
 }
 
 #[test]
@@ -408,6 +411,7 @@ fn bulk_formatting_reports_mixed_settings_and_changes_only_the_chosen_setting() 
     set_format(&mut app, id, BUS, "sdec");
     {
         let w = app.panels.waves_mut(id).unwrap();
+        w.set_analog(&[REAL], Some(AnalogDraw::Linear));
         w.set_tint(&[BUS], Some(Tint::Pink));
         w.set_tint(&[REAL], Some(Tint::Cyan));
         w.set_analog_range(&[BUS], AnalogRange::Window);
@@ -713,6 +717,10 @@ fn zoomed_out_columns_keep_the_glitch_and_x_breaks_the_line() {
 #[test]
 fn zoomed_in_plots_draw_every_sample_with_dots_and_the_cursor_dot() {
     let (_file, mut app, id) = app();
+    app.panels
+        .waves_mut(id)
+        .unwrap()
+        .set_analog(&[REAL], Some(AnalogDraw::Linear));
     view(&mut app, id, 41_900.0, 42_130.0);
     {
         let App { panels, doc, .. } = &mut app;
@@ -790,10 +798,7 @@ fn hovering_a_plot_reads_a_sample_or_a_dense_column() {
     view(&mut app, id, 41_900.0, 42_130.0);
     frame(&mut app, id);
     let texts = hover(&mut app, GLITCH as f64 + 2.0);
-    assert!(
-        texts.iter().any(|t| t.starts_with("1.32  sample at")),
-        "{texts:?}"
-    );
+    assert!(texts.iter().any(|t| t.starts_with("1.32  at")), "{texts:?}");
 }
 
 #[test]
@@ -889,7 +894,7 @@ fn analog_rows_round_trip_through_workspaces() {
     assert_eq!(panel["rows"][0]["height"], 3);
     assert_eq!(
         panel["rows"][1]["analog"],
-        serde_json::json!({"draw": "linear", "range": "trace"})
+        serde_json::json!({"draw": "step", "range": "trace"})
     );
     assert!(panel["rows"][2].get("analog").is_none());
 
@@ -904,7 +909,7 @@ fn analog_rows_round_trip_through_workspaces() {
     let rid = restored.panels.focused_id();
     assert_eq!(
         draws(&restored, rid),
-        [Some(AnalogDraw::Step), Some(AnalogDraw::Linear), None]
+        [Some(AnalogDraw::Step), Some(AnalogDraw::Step), None]
     );
     assert_eq!(heights(&restored, rid), [3, 3, 1]);
     let again = serde_json::to_value(
