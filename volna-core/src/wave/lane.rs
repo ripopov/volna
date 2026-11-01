@@ -345,10 +345,62 @@ pub fn label(tx: &Transaction) -> String {
     }
 }
 
+#[derive(Default)]
 pub struct LaneReadout {
     pub text: String,
     pub failed: bool,
     pub truncated: bool,
+}
+
+#[must_use]
+pub fn row_values(
+    generator: &LoadedGenerator,
+    cursor: u64,
+    height: RowHeight,
+    limit: usize,
+) -> Vec<LaneReadout> {
+    use crate::data::text::push_limited;
+
+    let capacity = capacity(height);
+    let last = capacity - 1;
+    let folded = generator.depth() > capacity;
+    let mut rows: Vec<LaneReadout> = (0..capacity).map(|_| LaneReadout::default()).collect();
+    let mut folded_count = 0usize;
+    drop(
+        generator.visit_window_ordinals(cursor, cursor, |ordinal, tx| {
+            if cursor >= tx.end && tx.begin != tx.end {
+                return true;
+            }
+            let sub = shown_sub_row(generator.sub_row(ordinal), height);
+            let row = &mut rows[usize::from(sub)];
+            row.failed |= tx.status == Status::Error;
+            if folded && sub == last {
+                folded_count += 1;
+            } else {
+                let fallback;
+                let label = PipelineModel::label(tx);
+                let label = if label.is_empty() {
+                    fallback = format!("#{}", tx.id.0);
+                    &fallback
+                } else {
+                    label
+                };
+                row.truncated = label.len() > limit;
+                push_limited(&mut row.text, label, limit);
+            }
+            true
+        }),
+    );
+    if folded_count > 0 {
+        let row = &mut rows[usize::from(last)];
+        let text = format!(
+            "{folded_count} transaction{}",
+            if folded_count == 1 { "" } else { "s" }
+        );
+        row.truncated = text.len() > limit;
+        push_limited(&mut row.text, &text, limit);
+    }
+    rows
 }
 
 #[must_use]
@@ -520,6 +572,53 @@ mod tests {
         assert!(bounded.truncated && bounded.failed);
         assert!(bounded.text.len() <= 4);
         assert!(is_density(&g, 0.1) && !is_density(&g, 1.0));
+    }
+
+    #[test]
+    fn cursor_rows_follow_placement_folding_and_half_open_lifetimes() {
+        let g = episode();
+        let rows = row_values(&g, 19, RowHeight::PRESETS[2], 256);
+        assert_eq!(
+            rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
+            ["#0", "#1", "#2", ""]
+        );
+        assert!(!rows[0].failed && !rows[1].failed && rows[2].failed);
+
+        let rows = row_values(&g, 19, RowHeight::PRESETS[1], 256);
+        assert_eq!(rows[0].text, "#0");
+        assert_eq!(rows[1].text, "2 transactions");
+        assert!(rows[1].failed);
+        let rows = row_values(&g, 20, RowHeight::PRESETS[1], 256);
+        assert!(rows[0].text.is_empty(), "ended records leave an empty row");
+        assert_eq!(rows[1].text, "2 transactions");
+        let rows = row_values(&g, 26, RowHeight::PRESETS[1], 256);
+        assert_eq!(rows[0].text, "#3", "reused sub-row keeps its placement");
+        assert_eq!(rows[1].text, "1 transaction");
+        assert!(
+            row_values(&g, 45, RowHeight::PRESETS[1], 256)
+                .iter()
+                .all(|r| r.text.is_empty())
+        );
+        assert_eq!(
+            row_values(&g, 19, RowHeight::DEFAULT, 256)[0].text,
+            "3 transactions"
+        );
+    }
+
+    #[test]
+    fn cursor_rows_bound_unicode_labels_and_include_instant_records() {
+        let mut first = tx(0, 5, 5, Status::Error);
+        first
+            .attributes
+            .push(volna_trace::data::transactions::TransactionAttribute {
+                key: "vtr.label".into(),
+                value: volna_trace::data::transactions::AttributeValue::Text("λ".repeat(100_000)),
+            });
+        let g = LoadedGenerator::new(TrackRef(1), vec![first], HashMap::new(), vec![]).unwrap();
+        let rows = row_values(&g, 5, RowHeight::DEFAULT, 31);
+        assert!(rows[0].failed && rows[0].truncated);
+        assert!(!rows[0].text.is_empty() && rows[0].text.len() <= 31);
+        assert!(row_values(&g, 6, RowHeight::DEFAULT, 31)[0].text.is_empty());
     }
 
     #[test]

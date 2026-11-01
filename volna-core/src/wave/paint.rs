@@ -3368,39 +3368,76 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
         }
     }
 
-    let (value, value_color) = match data {
-        _ if cells.left_out.is_some() => (cells.left_out.unwrap().into(), cells.muted),
-        LaneData::Ready(g) => match cells.cursor {
-            Some(c) => {
-                let value = lane::value_text(g, c, crate::data::text::PREVIEW_BYTES);
-                (
-                    value.text,
-                    if value.failed {
-                        t.editor.error
-                    } else {
-                        cells.text
-                    },
-                )
+    let geometry = LaneGeometry::new(y, full_h, row_h, lane.height);
+    if let (Some(g), Some(cursor), None) = (generator, cells.cursor, cells.left_out)
+        && g.points().is_none()
+    {
+        let bar_h = (geometry.sub_h - z(4.0)).max(1.0);
+        let font = (bar_h * 0.9).min(t.mono_size);
+        let room = values.width() - z(16.0);
+        for (sub, value) in
+            lane::row_values(g, cursor, lane.height, crate::data::text::PREVIEW_BYTES)
+                .into_iter()
+                .enumerate()
+        {
+            if value.text.is_empty() {
+                continue;
             }
-            None => (String::new(), cells.text),
-        },
-        LaneData::Loading => ("loading…".into(), cells.muted),
-        LaneData::Unresolved => ("not in trace".into(), cells.muted),
-        LaneData::Failed(_) | LaneData::Unavailable => ("–".into(), cells.muted),
-    };
-    let char_w = p.width("0", FontRole::Mono, t.mono_size).max(1.0);
-    let max_chars = ((values.width() - z(16.0)) / char_w).floor().max(0.0) as usize;
-    if let Some(text) = truncate_chars(&value, max_chars) {
-        p.scene.clipped(values, |scene| {
-            scene.text(
-                point(values.left() + z(8.0), y),
-                row_h,
-                text,
-                FontRole::Mono,
-                t.mono_size,
-                value_color,
-            );
-        });
+            if let Some(text) = fit_mono_prefix(p, &value.text, font, room) {
+                p.scene.clipped(values, |scene| {
+                    scene.text(
+                        point(
+                            values.left() + z(8.0),
+                            geometry.sub_top(sub as u16) + z(2.0),
+                        ),
+                        bar_h,
+                        text,
+                        FontRole::Mono,
+                        font,
+                        if value.failed {
+                            t.editor.error
+                        } else {
+                            cells.text
+                        },
+                    );
+                });
+            }
+        }
+    } else {
+        let (value, value_color) = match data {
+            _ if cells.left_out.is_some() => (cells.left_out.unwrap().into(), cells.muted),
+            LaneData::Ready(g) => match cells.cursor {
+                Some(c) => {
+                    let value = lane::value_text(g, c, crate::data::text::PREVIEW_BYTES);
+                    (
+                        value.text,
+                        if value.failed {
+                            t.editor.error
+                        } else {
+                            cells.text
+                        },
+                    )
+                }
+                None => (String::new(), cells.text),
+            },
+            LaneData::Loading => ("loading…".into(), cells.muted),
+            LaneData::Unresolved => ("not in trace".into(), cells.muted),
+            LaneData::Failed(_) | LaneData::Unavailable => ("–".into(), cells.muted),
+        };
+        let char_w = p.width("0", FontRole::Mono, t.mono_size).max(1.0);
+        let max_chars = ((values.width() - z(16.0)) / char_w).floor().max(0.0) as usize;
+        if let Some(text) = truncate_chars(&value, max_chars) {
+            p.scene.clipped(values, |scene| {
+                scene.text(
+                    point(values.left() + z(8.0), y),
+                    row_h,
+                    text,
+                    FontRole::Mono,
+                    t.mono_size,
+                    value_color,
+                );
+            });
+        }
     }
 
     let status = match data {
@@ -3418,7 +3455,6 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
                     p,
                 );
             } else {
-                let geometry = LaneGeometry::new(y, full_h, row_h, lane.height);
                 paint_lane_bars(lane, g, doc, &cells.viewport, waves, &geometry, p);
             }
             return;

@@ -411,6 +411,99 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
 }
 
 #[test]
+fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
+    let (mut app, _, waves, _) = with_lanes(&[CPU1]);
+    let cursor = {
+        let g = app.panels.waves(waves).unwrap().items()[0]
+            .lane()
+            .unwrap()
+            .generator(&app.doc)
+            .unwrap();
+        g.transactions()
+            .iter()
+            .map(|tx| tx.begin)
+            .find(|&time| lane::open_at(g, time).len() > 5)
+            .unwrap()
+    };
+    show(
+        &mut app,
+        waves,
+        cursor.saturating_sub(10) as f64,
+        (cursor + 100) as f64,
+    );
+    let App { panels, doc, .. } = &mut app;
+    panels.waves_mut(waves).unwrap().values_width = 400.0;
+    panels
+        .waves_mut(waves)
+        .unwrap()
+        .set_cursor(doc, Some(cursor));
+
+    for theme in [Theme::one_dark(), Theme::islands_light()] {
+        for zoom in [1.0, 1.5] {
+            let theme = theme.zoomed(zoom);
+            app.layout_panel(
+                waves,
+                Rect::from_xywh(0.0, 0.0, 1800.0, 600.0),
+                &theme,
+                1.0,
+                &mut MonoMeasure,
+            )
+            .unwrap();
+            let w = app.panels.waves(waves).unwrap();
+            let layout = w.last_layout();
+            let lane = w.items()[0].lane().unwrap();
+            let geometry = LaneGeometry::new(
+                layout.row_y(0),
+                layout.row_height(0),
+                layout.row_h,
+                lane.height,
+            );
+            let values = layout.values;
+            let expected =
+                lane::row_values(lane.generator(&app.doc).unwrap(), cursor, lane.height, 256);
+            assert!(expected.last().unwrap().text.ends_with("transactions"));
+            let scene = app.render_panel(waves, &theme, &mut MonoMeasure);
+            let texts: Vec<_> = scene
+                .prims
+                .iter()
+                .filter_map(|prim| match prim {
+                    Prim::Text {
+                        origin,
+                        height,
+                        text,
+                        size,
+                        color,
+                        ..
+                    } if values.contains(*origin) => Some((origin, height, text, size, color)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                texts.len(),
+                expected.iter().filter(|row| !row.text.is_empty()).count()
+            );
+            for (sub, row) in expected
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| !row.text.is_empty())
+            {
+                let (origin, height, text, size, color) = texts
+                    .iter()
+                    .find(|(origin, ..)| origin.y == geometry.sub_top(sub as u16) + 2.0 * zoom)
+                    .unwrap();
+                assert_eq!(origin.x, values.left() + 8.0 * zoom);
+                assert_eq!(**height, geometry.sub_h - 4.0 * zoom);
+                assert_eq!(**size, (0.9 * **height).min(theme.mono_size));
+                assert!(row.text.starts_with(text.trim_end_matches('…')));
+                if row.failed {
+                    assert_eq!(**color, theme.editor.error);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
     let (mut app, _session, waves, _tracks) = with_lanes(&[CPU1]);
     let theme = Theme::one_dark();
@@ -451,15 +544,7 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
         .waves_mut(waves)
         .unwrap()
         .set_cursor(doc, Some(first.begin));
-    let expected = {
-        let g = app.panels.waves(waves).unwrap().items()[0]
-            .lane()
-            .unwrap()
-            .generator(&app.doc)
-            .unwrap();
-        lane::value_text(g, first.begin, 256).text
-    };
-    assert!(expected.contains(&label));
+    let expected = label;
     let scene = frame(&mut app, waves);
     assert!(
         scene
