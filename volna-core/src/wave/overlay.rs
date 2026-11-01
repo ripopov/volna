@@ -81,15 +81,16 @@ impl TimeColumn {
     }
 }
 
-pub struct RulerCells {
+pub struct RulerCells<'a> {
     pub names: Rect,
     pub values: Option<Rect>,
+    pub selected: Option<&'a clock::ClockKey>,
 }
 
 pub fn clock_rulers(
     p: &mut TextPainter<'_>,
     column: &TimeColumn,
-    cells: RulerCells,
+    cells: RulerCells<'_>,
     view: &ClockView,
     clocks: &Clocks,
     base: TimeBase<'_>,
@@ -103,7 +104,6 @@ pub fn clock_rulers(
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
     let row_h = column.rulers.height() / rows.len() as f32;
-    let selected = view.selected(clocks).map(|c| c.track);
     let band_all = Rect::new(
         point(names.left(), column.rulers.top()),
         size(column.rulers.right() - names.left(), column.rulers.height()),
@@ -116,7 +116,7 @@ pub fn clock_rulers(
             size(column.rulers.width(), row_h),
         );
         let cell = Rect::new(point(names.left(), y), size(names.width(), row_h));
-        let is_selected = selected == Some(c.track);
+        let is_selected = cells.selected.is_some_and(|key| c.is(key));
         if is_selected {
             p.scene.fill(
                 Rect::new(cell.origin, size(band.left() - cell.left(), row_h)),

@@ -579,6 +579,7 @@ pub fn paint(
                 size(labels.width(), layout.rulers.height()),
             ),
             values: None,
+            selected: model.nav.ruler_selection(),
         },
         clocks,
         &doc.clocks,

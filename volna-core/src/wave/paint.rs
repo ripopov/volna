@@ -881,6 +881,7 @@ pub(crate) fn paint(
                 ),
             ),
             values: Some(layout.values),
+            selected: model.nav.ruler_selection(),
         },
         clocks,
         &doc.clocks,

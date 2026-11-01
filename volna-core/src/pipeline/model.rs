@@ -363,6 +363,7 @@ impl PipelineModel {
                 origin: panel,
             }
         };
+        self.nav.clear_ruler_selection();
         doc.select(Some(selection))
     }
 
@@ -1046,7 +1047,8 @@ impl PipelineModel {
     pub fn escape(&mut self, doc: &mut Document) {
         if self.drag.is_some() {
             self.drag = None;
-        } else if self.selected_row(doc).is_some() {
+        } else if self.selected_row(doc).is_some() || self.nav.ruler_selection().is_some() {
+            self.nav.clear_ruler_selection();
             doc.select(None);
         } else {
             self.nav.set_cursor(doc, None);
@@ -1260,7 +1262,12 @@ impl PipelineModel {
                 .collect();
             let ruler = layout.ruler_at(p, rulers.len());
             if let Some(ix) = ruler {
-                self.nav.select_clock(rulers[ix].clone());
+                doc.select(None);
+                if modifiers.secondary() && self.nav.ruler_selection() == Some(&rulers[ix]) {
+                    self.nav.clear_ruler_selection();
+                } else {
+                    self.nav.select_ruler(rulers[ix].clone());
+                }
             }
             let strip = layout.header.contains(p) || layout.marker_lane.strip().contains(p);
             if (strip || ruler.is_some()) && p.x >= layout.cells.left() {

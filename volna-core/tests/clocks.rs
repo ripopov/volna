@@ -351,6 +351,173 @@ fn ruler_value_cells_show_cursor_frequency_and_cycles_even_outside_the_view() {
     }
 }
 
+fn assert_selected_rulers(app: &mut App, panel: PanelId, theme: &Theme, expected: &[usize]) {
+    use volna_core::scene::Prim;
+
+    frame(app, panel, theme);
+    let rulers = app
+        .panels
+        .get(panel)
+        .unwrap()
+        .kind
+        .nav()
+        .unwrap()
+        .clocks()
+        .rulers(&app.doc.clocks);
+    let row_h = 16.0 * theme.zoom;
+    let top = match &app.panels.get(panel).unwrap().kind {
+        volna_core::panels::PanelKind::Waves(w) => w.last_layout().rulers.top(),
+        volna_core::panels::PanelKind::Pipeline(p) => p.last_layout().rulers.top(),
+        _ => unreachable!(),
+    };
+    let selected: Vec<usize> = app
+        .scene()
+        .prims
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Quad { rect, fill, .. }
+                if *fill == theme.selection.bg
+                    && rect.top() >= top
+                    && rect.top() < top + rulers.len() as f32 * row_h =>
+            {
+                Some(((rect.top() - top) / row_h).round() as usize)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(selected, expected);
+}
+
+#[test]
+fn ruler_selection_follows_clicks_and_clears_when_selecting_signal_rows() {
+    for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
+        let (mut app, _, panel) = waves();
+        for name in ["top.core_clk", "top.bus_clk"] {
+            app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(name.into()))));
+        }
+        assert_selected_rulers(&mut app, panel, &theme, &[]);
+        app.handle(Command::Clocks(ClockCommand::Select(a(
+            "top.bus_clk".into()
+        ))));
+        assert_selected_rulers(&mut app, panel, &theme, &[]);
+        let layout = app.panels.waves(panel).unwrap().last_layout().clone();
+        let row_h = layout.rulers.height() / 2.0;
+        let core = point(
+            layout.names.left() + 30.0 * theme.zoom,
+            layout.rulers.top() + row_h / 2.0,
+        );
+        let bus = point(
+            layout.values.left() + layout.values.width() / 2.0,
+            core.y + row_h,
+        );
+        let signal = point(core.x, layout.row_y(0) + layout.row_height(0) / 2.0);
+        for at in [core, bus, point(layout.waves.left() + 50.0, core.y)] {
+            click(&mut app, panel, at);
+            let index = usize::from(at.y == bus.y);
+            assert_selected_rulers(&mut app, panel, &theme, &[index]);
+            let w = app.panels.waves(panel).unwrap();
+            assert!(w.selected.is_empty());
+            assert!(w.anchor.is_none());
+            let active = w.nav.clocks().selected.clone();
+
+            click(&mut app, panel, signal);
+            assert_selected_rulers(&mut app, panel, &theme, &[]);
+            let w = app.panels.waves(panel).unwrap();
+            assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [0]);
+            assert_eq!(
+                w.nav.clocks().selected,
+                active,
+                "navigation keeps its clock"
+            );
+        }
+        for action in [
+            Action::ClearSelection,
+            Action::SelectAll,
+            Action::MoveSelectionDown,
+        ] {
+            click(&mut app, panel, bus);
+            app.handle(Command::Action(action));
+            assert_selected_rulers(&mut app, panel, &theme, &[]);
+        }
+        click(&mut app, panel, bus);
+        app.handle(Command::Pointer(
+            panel,
+            PointerEvent::Down {
+                position: bus,
+                button: MouseButton::Left,
+                modifiers: Modifiers {
+                    platform: true,
+                    ..Modifiers::default()
+                },
+            },
+        ));
+        app.handle(Command::Pointer(panel, PointerEvent::Up));
+        assert_selected_rulers(&mut app, panel, &theme, &[]);
+
+        click(&mut app, panel, bus);
+        app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(
+            "top.bus_clk".into()
+        ))));
+        app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(
+            "top.bus_clk".into()
+        ))));
+        assert_selected_rulers(&mut app, panel, &theme, &[]);
+    }
+}
+
+#[test]
+fn pipeline_ruler_selection_clears_when_selecting_transactions() {
+    let (mut app, session, _) = waves();
+    let pipe = scope(session.as_ref(), &["top", "pipe"]);
+    let generator = session
+        .hierarchy()
+        .scope(pipe)
+        .generators
+        .iter()
+        .next()
+        .unwrap();
+    app.handle(open_pipeline(&app, Member::Generator(generator)));
+    pump(&mut app);
+    let panel = app.panels.focused_id();
+    let theme = Theme::one_dark();
+    app.handle(Command::PipelineActivity(
+        panel,
+        volna_core::pipeline::ActivityCommand::Toggle,
+    ));
+    assert_selected_rulers(&mut app, panel, &theme, &[]);
+    let layout = app.panels.pipeline(panel).unwrap().last_layout().clone();
+    let ruler = point(
+        layout.labels.left() + 40.0,
+        layout.rulers.top() + layout.rulers.height() / 2.0,
+    );
+    let row = point(
+        layout.labels.left() + 40.0,
+        layout.row_y(0) + layout.rows.row_px / 2.0,
+    );
+    click(&mut app, panel, row);
+    assert!(
+        app.panels
+            .pipeline(panel)
+            .unwrap()
+            .selected_row(&app.doc)
+            .is_some()
+    );
+    click(&mut app, panel, ruler);
+    assert_selected_rulers(&mut app, panel, &theme, &[0]);
+    assert!(
+        app.panels
+            .pipeline(panel)
+            .unwrap()
+            .selected_row(&app.doc)
+            .is_none()
+    );
+    click(&mut app, panel, row);
+    assert_selected_rulers(&mut app, panel, &theme, &[]);
+    click(&mut app, panel, ruler);
+    app.handle(Command::Action(Action::ClearSelection));
+    assert_selected_rulers(&mut app, panel, &theme, &[]);
+}
+
 #[test]
 fn clicks_snap_to_the_selected_clock_and_brackets_step_cycles() {
     let (mut app, _, panel) = waves();
@@ -471,6 +638,14 @@ fn a_clock_row_draws_from_stretches_and_survives_a_workspace() {
         "top.bus_clk".into()
     ))));
     app.handle(Command::Action(Action::ToggleCycleOrigin));
+    frame(&mut app, panel, &theme);
+    let layout = app.panels.waves(panel).unwrap().last_layout();
+    let ruler = point(
+        layout.names.left() + 40.0,
+        layout.rulers.top() + 8.0 * theme.zoom,
+    );
+    click(&mut app, panel, ruler);
+    assert_selected_rulers(&mut app, panel, &theme, &[0]);
     let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
     let json = serde_json::to_value(&saved).unwrap();
     let panel_json = &json["panels"][0];
@@ -509,6 +684,7 @@ fn a_clock_row_draws_from_stretches_and_survives_a_workspace() {
         w.nav.clocks(),
         app.panels.waves(panel).unwrap().nav.clocks()
     );
+    assert_selected_rulers(&mut restored, panel, &theme, &[]);
 }
 
 #[test]

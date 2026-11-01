@@ -39,6 +39,8 @@ pub struct NavState {
     pub local_viewport: Tween<Viewport>,
     pub local_cursor: Option<u64>,
     clocks: crate::clock::ClockView,
+    // Row selection is transient; the navigation clock stays active after deselection.
+    ruler_selection: Option<ClockKey>,
     clocks_before: crate::history::Before<ClockChoice>,
     back: Option<Spot>,
 }
@@ -79,6 +81,7 @@ impl NavState {
             local_viewport: Tween::new(Viewport::fit((0, 1000))),
             local_cursor: None,
             clocks: crate::clock::ClockView::default(),
+            ruler_selection: None,
             clocks_before: Before::default(),
             back: None,
         }
@@ -91,6 +94,7 @@ impl NavState {
             local_viewport: Tween::new(self.local_viewport.value),
             local_cursor: self.local_cursor,
             clocks: self.clocks.clone(),
+            ruler_selection: None,
             clocks_before: Before::default(),
             back: None,
         }
@@ -98,6 +102,7 @@ impl NavState {
 
     pub fn reset(&mut self, limits: Option<(u64, u64)>) {
         self.local_cursor = None;
+        self.ruler_selection = None;
         self.back = None;
         let viewport = limits.map_or(self.local_viewport.value, Viewport::fit);
         self.local_viewport.set(viewport);
@@ -327,6 +332,20 @@ impl NavState {
         self.clocks.selected = Some(key);
     }
 
+    pub fn select_ruler(&mut self, key: ClockKey) {
+        self.select_clock(key.clone());
+        self.ruler_selection = Some(key);
+    }
+
+    #[must_use]
+    pub fn ruler_selection(&self) -> Option<&ClockKey> {
+        self.ruler_selection.as_ref()
+    }
+
+    pub fn clear_ruler_selection(&mut self) {
+        self.ruler_selection = None;
+    }
+
     #[must_use]
     pub fn clocks(&self) -> &crate::clock::ClockView {
         &self.clocks
@@ -340,14 +359,27 @@ impl NavState {
     pub fn hide_ruler(&mut self, clocks: &crate::clock::Clocks, key: &ClockKey) {
         self.note_clocks();
         self.clocks.hide_ruler(clocks, key);
+        if self.ruler_selection.as_ref() == Some(key) {
+            self.clear_ruler_selection();
+        }
     }
 
     pub fn toggle_ruler(&mut self, clocks: &crate::clock::Clocks, key: &ClockKey) {
         self.note_clocks();
         self.clocks.toggle_ruler(clocks, key);
+        if self.ruler_selection.as_ref() == Some(key) {
+            self.clear_ruler_selection();
+        }
     }
 
     pub(crate) fn forget_trace(&mut self, trace: crate::trace::TraceId) {
+        if self
+            .ruler_selection
+            .as_ref()
+            .is_some_and(|key| key.trace == trace)
+        {
+            self.clear_ruler_selection();
+        }
         let mut clocks = self.clocks.clone();
         if clocks.forget_trace(trace) {
             self.note_clocks();
@@ -362,6 +394,7 @@ impl NavState {
     }
 
     pub(crate) fn restore_clocks(&mut self, view: crate::clock::ClockView) {
+        self.clear_ruler_selection();
         self.clocks = view;
         self.clocks_before.take();
     }
@@ -380,6 +413,14 @@ impl NavState {
                 .is_some_and(|r| !r.contains(selected))
         {
             self.clocks.selected = None;
+        }
+        if self.ruler_selection.as_ref().is_some_and(|key| {
+            self.clocks
+                .rulers
+                .as_ref()
+                .is_some_and(|rulers| !rulers.contains(key))
+        }) {
+            self.clear_ruler_selection();
         }
         old
     }

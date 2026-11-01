@@ -1101,6 +1101,7 @@ impl WaveModel {
     }
 
     pub(crate) fn set_row_selection(&mut self, selection: RowSelection) {
+        self.nav.clear_ruler_selection();
         let len = self.items.len();
         self.selected = selection
             .selected
@@ -1501,6 +1502,7 @@ impl WaveModel {
     }
 
     pub fn select_all(&mut self) {
+        self.nav.clear_ruler_selection();
         self.selected = self.visible().iter().map(|&i| i as usize).collect();
     }
 
@@ -1511,8 +1513,9 @@ impl WaveModel {
             self.row_edit = None;
         } else if self.menu.is_some() {
             self.menu = None;
-        } else if !self.selected.is_empty() {
+        } else if !self.selected.is_empty() || self.nav.ruler_selection().is_some() {
             self.selected.clear();
+            self.nav.clear_ruler_selection();
         } else {
             self.set_cursor(doc, None);
         }
@@ -1522,6 +1525,7 @@ impl WaveModel {
         if row >= self.items.len() {
             return;
         }
+        self.nav.clear_ruler_selection();
         if modifiers.shift {
             let visible = self.visible();
             let pos = |i: usize| visible.binary_search(&(i as u32)).ok();
@@ -1546,6 +1550,7 @@ impl WaveModel {
             .and_then(|i| visible.binary_search(&(i as u32)).ok())
             .unwrap_or(0) as isize;
         let next = visible[(pos + delta).clamp(0, visible.len() as isize - 1) as usize] as usize;
+        self.nav.clear_ruler_selection();
         self.selected.clear();
         self.selected.insert(next);
         self.anchor = Some(next);
@@ -3414,7 +3419,15 @@ impl WaveModel {
                 self.open_ruler_menu(doc, ix, p);
                 return;
             }
-            self.nav.select_clock(rulers[ix].clone());
+            if button == MouseButton::Left {
+                self.selected.clear();
+                self.anchor = None;
+                if modifiers.secondary() && self.nav.ruler_selection() == Some(&rulers[ix]) {
+                    self.nav.clear_ruler_selection();
+                } else {
+                    self.nav.select_ruler(rulers[ix].clone());
+                }
+            }
         }
         if layout.header.contains(p) || ruler.is_some() || layout.marker_lane.strip().contains(p) {
             if in_waves_x && button == MouseButton::Left {
@@ -3512,6 +3525,7 @@ impl WaveModel {
             return;
         }
         let Some(r) = row else {
+            self.nav.clear_ruler_selection();
             self.selected.clear();
             return;
         };
