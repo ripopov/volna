@@ -574,6 +574,7 @@ pub fn paint(
         &mut p,
         &column,
         overlay::RulerCells {
+            scopes: None,
             names: Rect::new(
                 point(bounds.left(), layout.rulers.top()),
                 size(labels.width(), layout.rulers.height()),

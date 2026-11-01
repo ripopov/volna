@@ -143,30 +143,6 @@ fn fit_signal_name(p: &mut TextPainter<'_>, item: &DisplayedSignal, max_w: f32) 
     fit_width(p, &item.name, FontRole::Ui, size, max_w)
 }
 
-fn fit_scope(p: &mut TextPainter<'_>, scope: &str, max_w: f32) -> Option<String> {
-    let font = FontRole::Ui;
-    let size = p.theme.ui_size;
-    if p.width(scope, font, size) <= max_w {
-        return (!scope.is_empty()).then(|| scope.to_owned());
-    }
-    let chars: Vec<char> = scope.chars().collect();
-    let suffix = |n: usize| {
-        std::iter::once(&'…')
-            .chain(chars[chars.len() - n..].iter())
-            .collect::<String>()
-    };
-    let (mut lo, mut hi) = (0, chars.len());
-    while lo < hi {
-        let mid = (lo + hi).div_ceil(2);
-        if p.width(&suffix(mid), font, size) <= max_w {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    (lo > 0).then(|| suffix(lo))
-}
-
 fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     match (a, b) {
         (None | Some(_), None) => 0,
@@ -307,7 +283,9 @@ pub(crate) fn paint(
                 .clipped(layout.names, |scene| scene.fill(stripe, t.wave_signal));
         }
         let colors = t.row(is_selected, is_hover);
-        if let Some(scope) = fit_scope(&mut p, row.scope(), layout.scopes.width() - z(16.0)) {
+        if let Some(scope) =
+            overlay::fit_scope(&mut p, row.scope(), layout.scopes.width() - z(16.0))
+        {
             let scope_w = p.width(&scope, FontRole::Ui, t.ui_size);
             p.scene.clipped(layout.scopes, |scene| {
                 scene.text(
@@ -873,13 +851,8 @@ pub(crate) fn paint(
         &mut p,
         &column,
         overlay::RulerCells {
-            names: Rect::new(
-                point(bounds.left(), layout.rulers.top()),
-                size(
-                    layout.names.width() + layout.scopes.width(),
-                    layout.rulers.height(),
-                ),
-            ),
+            scopes: Some(layout.scopes),
+            names: layout.names,
             values: Some(layout.values),
             selected: model.nav.ruler_selection(),
         },

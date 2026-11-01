@@ -81,7 +81,32 @@ impl TimeColumn {
     }
 }
 
+pub(super) fn fit_scope(p: &mut TextPainter<'_>, scope: &str, max_w: f32) -> Option<String> {
+    let font = FontRole::Ui;
+    let size = p.theme.ui_size;
+    if p.width(scope, font, size) <= max_w {
+        return (!scope.is_empty()).then(|| scope.to_owned());
+    }
+    let chars: Vec<char> = scope.chars().collect();
+    let suffix = |n: usize| {
+        std::iter::once(&'…')
+            .chain(chars[chars.len() - n..].iter())
+            .collect::<String>()
+    };
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if p.width(&suffix(mid), font, size) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    (lo > 0).then(|| suffix(lo))
+}
+
 pub struct RulerCells<'a> {
+    pub scopes: Option<Rect>,
     pub names: Rect,
     pub values: Option<Rect>,
     pub selected: Option<&'a clock::ClockKey>,
@@ -97,6 +122,7 @@ pub fn clock_rulers(
     cursor: Option<u64>,
 ) {
     let names = cells.names;
+    let left = cells.scopes.map_or(names.left(), |scopes| scopes.left());
     let rows = view.rulers(clocks);
     if rows.is_empty() || column.rulers.height() <= 0.0 {
         return;
@@ -105,8 +131,8 @@ pub fn clock_rulers(
     let z = |v: f32| v * t.zoom;
     let row_h = column.rulers.height() / rows.len() as f32;
     let band_all = Rect::new(
-        point(names.left(), column.rulers.top()),
-        size(column.rulers.right() - names.left(), column.rulers.height()),
+        point(left, column.rulers.top()),
+        size(column.rulers.right() - left, column.rulers.height()),
     );
     p.scene.fill(band_all, t.panel.bg);
     for (i, c) in rows.iter().enumerate() {
@@ -119,7 +145,7 @@ pub fn clock_rulers(
         let is_selected = cells.selected.is_some_and(|key| c.is(key));
         if is_selected {
             p.scene.fill(
-                Rect::new(cell.origin, size(band.left() - cell.left(), row_h)),
+                Rect::new(point(left, y), size(band.left() - left, row_h)),
                 t.selection.bg,
             );
         }
@@ -129,6 +155,23 @@ pub fn clock_rulers(
         } else {
             t.panel.text_muted
         };
+        if let Some(scopes) = cells.scopes {
+            let scope = c.path.rsplit_once('.').map_or("", |(scope, _)| scope);
+            if let Some(scope) = fit_scope(p, scope, scopes.width() - z(16.0)) {
+                let width = p.width(&scope, FontRole::Ui, t.ui_size);
+                let cell = Rect::new(point(scopes.left(), y), size(scopes.width(), row_h));
+                p.scene.clipped(cell, |scene| {
+                    scene.text(
+                        point(cell.right() - z(8.0) - width, y),
+                        row_h,
+                        scope,
+                        FontRole::Ui,
+                        t.ui_size,
+                        color,
+                    );
+                });
+            }
+        }
         p.scene.clipped(cell, |scene| {
             scene.text(
                 point(cell.left() + z(12.0), y),
@@ -141,8 +184,8 @@ pub fn clock_rulers(
         });
         p.scene.fill(
             Rect::new(
-                point(names.left(), band.bottom() - 1.0),
-                size(band.right() - names.left(), 1.0),
+                point(left, band.bottom() - 1.0),
+                size(band.right() - left, 1.0),
             ),
             t.border_variant,
         );

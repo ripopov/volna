@@ -351,6 +351,111 @@ fn ruler_value_cells_show_cursor_frequency_and_cycles_even_outside_the_view() {
     }
 }
 
+#[test]
+fn ruler_labels_use_separate_scope_and_name_cells() {
+    use volna_core::scene::{FontRole, Prim, TextMeasure};
+    use vtr::{ScopeType, SourceOptions};
+
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut w = vtr::Writer::create(file.path()).unwrap();
+    let top = w
+        .scope_with(SourceOptions::new("soc", None), ScopeType::Module, "soc")
+        .unwrap();
+    let domain = "a_long_clock_domain_name_時鐘";
+    let nested = w
+        .scope_with(
+            SourceOptions::new(domain, Some(top)),
+            ScopeType::Generic,
+            "",
+        )
+        .unwrap();
+    for options in [
+        SourceOptions::new("root_clk", None),
+        SourceOptions::new("nested_clk", Some(nested)),
+    ] {
+        let clock = w.clock(options).unwrap();
+        w.clock_run(clock, 0, 100).unwrap();
+        w.clock_stop(clock, 1000).unwrap();
+    }
+    w.advance_time(1000).unwrap();
+    w.close().unwrap();
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
+    pump(&mut app);
+    app.handle(Command::AddClockRulers(a_all([
+        Member::Generator(0),
+        Member::Generator(1),
+    ])));
+    let panel = app.panels.focused_id();
+    for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
+        for (width, scopes_width) in [(1200.0, 400.0), (1200.0, 100.0), (360.0, 100.0)] {
+            app.panels.waves_mut(panel).unwrap().scopes_width = scopes_width;
+            app.layout_panel(
+                panel,
+                Rect::from_xywh(25.0, 0.0, width, 600.0),
+                &theme,
+                1.0,
+                &mut MonoMeasure,
+            )
+            .unwrap();
+            let layout = app.panels.waves(panel).unwrap().last_layout().clone();
+            let scene = app.render_panel(panel, &theme, &mut MonoMeasure);
+            let mut clips = Vec::new();
+            let mut names = Vec::new();
+            let mut scopes = Vec::new();
+            for prim in &scene.prims {
+                match prim {
+                    Prim::PushClip(rect) => clips.push(*rect),
+                    Prim::PopClip => {
+                        clips.pop();
+                    }
+                    Prim::Text {
+                        origin,
+                        text,
+                        font,
+                        size,
+                        ..
+                    } if origin.y >= layout.rulers.top() && origin.y < layout.rulers.bottom() => {
+                        let clip = clips.last().unwrap();
+                        if clip.left() == layout.names.left()
+                            && clip.width() == layout.names.width()
+                        {
+                            assert_eq!(*font, FontRole::Mono);
+                            assert_eq!(origin.x, layout.names.left() + 12.0 * theme.zoom);
+                            names.push(text.as_str());
+                        } else if clip.left() == layout.scopes.left()
+                            && clip.width() == layout.scopes.width()
+                        {
+                            assert_eq!(*font, FontRole::Ui);
+                            assert_eq!(origin.y, layout.rulers.top() + 16.0 * theme.zoom);
+                            let right = origin.x + MonoMeasure.text_width(text, *font, *size);
+                            assert!(
+                                (right - (layout.scopes.right() - 8.0 * theme.zoom)).abs() < 0.01
+                            );
+                            assert!(origin.x >= clip.left() + 8.0 * theme.zoom);
+                            scopes.push(text.as_str());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(names, ["root_clk", "nested_clk"]);
+            if layout.scopes.width() <= 16.0 * theme.zoom {
+                assert!(scopes.is_empty());
+                continue;
+            }
+            assert_eq!(scopes.len(), 1, "root clocks have no scope label");
+            let scope = scopes[0];
+            if scopes_width == 400.0 {
+                assert_eq!(scope, format!("soc.{domain}"));
+            } else {
+                assert!(scope.starts_with('…'));
+                assert!(scope.ends_with("時鐘"));
+            }
+        }
+    }
+}
+
 fn assert_selected_rulers(app: &mut App, panel: PanelId, theme: &Theme, expected: &[usize]) {
     use volna_core::scene::Prim;
 
