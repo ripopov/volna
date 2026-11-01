@@ -1,4 +1,4 @@
-//! Paint the wave panel into a [`Scene`]: the three aligned columns (names, values, waves)
+//! Paint the wave panel into a [`Scene`]: aligned names, scopes, values, and waves
 //! plus the timeline header, cursor, markers and a scrollbar.
 
 mod overlaid;
@@ -138,6 +138,30 @@ fn fit_signal_name(p: &mut TextPainter<'_>, item: &DisplayedSignal, max_w: f32) 
     fit_width(p, &item.name, FontRole::Ui, size, max_w)
 }
 
+fn fit_scope(p: &mut TextPainter<'_>, scope: &str, max_w: f32) -> Option<String> {
+    let font = FontRole::Ui;
+    let size = p.theme.ui_size;
+    if p.width(scope, font, size) <= max_w {
+        return (!scope.is_empty()).then(|| scope.to_owned());
+    }
+    let chars: Vec<char> = scope.chars().collect();
+    let suffix = |n: usize| {
+        std::iter::once(&'…')
+            .chain(chars[chars.len() - n..].iter())
+            .collect::<String>()
+    };
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if p.width(&suffix(mid), font, size) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    (lo > 0).then(|| suffix(lo))
+}
+
 fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     match (a, b) {
         (None | Some(_), None) => 0,
@@ -191,9 +215,9 @@ pub fn paint(
     p.scene.fill(bounds, t.editor.bg);
     p.scene.fill(
         Rect::new(
-            layout.names.origin,
+            layout.scopes.origin,
             size(
-                layout.names.width() + layout.values.width(),
+                layout.names.width() + layout.scopes.width() + layout.values.width(),
                 layout.names.height(),
             ),
         ),
@@ -243,7 +267,10 @@ pub fn paint(
         let is_hover = model.hover_row == Some(ix);
         let left_row = Rect::new(
             point(bounds.left(), y),
-            size(layout.names.width() + layout.values.width(), full_h),
+            size(
+                layout.names.width() + layout.scopes.width() + layout.values.width(),
+                full_h,
+            ),
         );
         let wave_row = Rect::new(point(waves.left(), y), size(waves.width(), full_h));
         if is_selected {
@@ -280,6 +307,19 @@ pub fn paint(
                 .clipped(layout.names, |scene| scene.fill(stripe, t.wave_signal));
         }
         let colors = t.row(is_selected, is_hover);
+        if let Some(scope) = fit_scope(&mut p, row.scope(), layout.scopes.width() - z(16.0)) {
+            let scope_w = p.width(&scope, FontRole::Ui, t.ui_size);
+            p.scene.clipped(layout.scopes, |scene| {
+                scene.text(
+                    point(layout.scopes.right() - z(8.0) - scope_w, y),
+                    row_h,
+                    scope,
+                    FontRole::Ui,
+                    t.ui_size,
+                    colors.text_muted,
+                );
+            });
+        }
         let cells = LaneCells {
             layout: &layout,
             pos,
@@ -663,7 +703,7 @@ pub fn paint(
     }) = model.drag
     {
         let rows_area = Rect::new(
-            layout.names.origin,
+            layout.scopes.origin,
             size(bounds.width(), layout.names.height()),
         );
         let w = z(2.0).max(2.0);
@@ -740,12 +780,36 @@ pub fn paint(
     let panel_theme = t.panel;
     let header = layout.header;
     p.scene.clipped(
-        Rect::new(header.origin, size(layout.names.width(), header.height())),
+        Rect::from_xywh(
+            layout.names.left(),
+            header.top(),
+            layout.names.width(),
+            header.height(),
+        ),
         |scene| {
             scene.text(
                 point(layout.names.left() + z(12.0), header.top()),
                 header.height(),
-                "SIGNALS",
+                "NAME",
+                FontRole::UiSemibold,
+                t.ui_size_small,
+                panel_theme.text_muted,
+            );
+        },
+    );
+    let scope_title_w = p.width("SCOPE", FontRole::UiSemibold, t.ui_size_small);
+    p.scene.clipped(
+        Rect::from_xywh(
+            layout.scopes.left(),
+            header.top(),
+            layout.scopes.width(),
+            header.height(),
+        ),
+        |scene| {
+            scene.text(
+                point(layout.scopes.right() - z(8.0) - scope_title_w, header.top()),
+                header.height(),
+                "SCOPE",
                 FontRole::UiSemibold,
                 t.ui_size_small,
                 panel_theme.text_muted,
@@ -789,7 +853,7 @@ pub fn paint(
         Rect::new(
             point(bounds.left(), layout.rulers.top()),
             size(
-                layout.names.width() + layout.values.width(),
+                layout.names.width() + layout.scopes.width() + layout.values.width(),
                 layout.rulers.height(),
             ),
         ),
@@ -803,7 +867,13 @@ pub fn paint(
         &mut p,
         &column,
         &layout.marker_lane,
-        layout.names,
+        Rect::new(
+            layout.scopes.origin,
+            size(
+                layout.names.width() + layout.scopes.width(),
+                layout.names.height(),
+            ),
+        ),
         Some(layout.values),
         doc,
         cursor,
@@ -830,10 +900,18 @@ pub fn paint(
     let near_names = model
         .pointer
         .is_some_and(|mp| layout.names_split.contains(mp));
+    let near_scopes = model
+        .pointer
+        .is_some_and(|mp| layout.scopes_split.contains(mp));
     let near_values = model
         .pointer
         .is_some_and(|mp| layout.values_split.contains(mp));
     let names_border = if near_names || drag == Some(Drag::NamesSplit) {
+        t.border_focused
+    } else {
+        t.border
+    };
+    let scopes_border = if near_scopes || drag == Some(Drag::ScopesSplit) {
         t.border_focused
     } else {
         t.border
@@ -849,6 +927,13 @@ pub fn paint(
             size(1.0, bounds.height()),
         ),
         names_border,
+    );
+    p.scene.fill(
+        Rect::new(
+            point(layout.scopes.right() - 1.0, bounds.top()),
+            size(1.0, bounds.height()),
+        ),
+        scopes_border,
     );
     p.scene.fill(
         Rect::new(
@@ -901,7 +986,10 @@ pub fn paint(
     }
     if matches!(drag, Some(Drag::RowHeight { .. })) {
         p.scene.window_cursor = Some(CursorIcon::ResizeUpDown);
-    } else if matches!(drag, Some(Drag::NamesSplit | Drag::ValuesSplit)) {
+    } else if matches!(
+        drag,
+        Some(Drag::NamesSplit | Drag::ScopesSplit | Drag::ValuesSplit)
+    ) {
         p.scene.window_cursor = Some(CursorIcon::ResizeLeftRight);
     } else if matches!(drag, Some(Drag::Rows { started: true, .. })) {
         p.scene.window_cursor = Some(CursorIcon::Grabbing);
@@ -909,6 +997,9 @@ pub fn paint(
         p.scene
             .cursors
             .push((layout.names_split, CursorIcon::ResizeLeftRight));
+        p.scene
+            .cursors
+            .push((layout.scopes_split, CursorIcon::ResizeLeftRight));
         p.scene
             .cursors
             .push((layout.values_split, CursorIcon::ResizeLeftRight));
@@ -934,7 +1025,21 @@ pub fn paint(
         .pointer
         .filter(|p| model.drag.is_none() && model.menu.is_none() && layout.format_at(*p).is_some())
         .map(|p| ("Format signal", p));
-    if let Some((hint, pointer)) = format_hint.or_else(|| model.disclosure_hint())
+    let scope_hint = model
+        .pointer
+        .filter(|p| {
+            model.drag.is_none()
+                && model.menu.is_none()
+                && layout.scopes.contains(*p)
+                && !layout.near_split(*p)
+        })
+        .and_then(|pointer| {
+            let scope = model.items().get(layout.entry_at(pointer.y)?)?.scope();
+            (!scope.is_empty()).then_some((scope, pointer))
+        });
+    if let Some((hint, pointer)) = format_hint
+        .or_else(|| model.disclosure_hint())
+        .or(scope_hint)
         && let Some(label) = fit_width(
             &mut p,
             hint,
@@ -968,7 +1073,9 @@ pub fn paint(
                 t.tooltip.text,
             );
         });
-        p.scene.window_cursor = Some(CursorIcon::PointingHand);
+        if scope_hint.is_none() {
+            p.scene.window_cursor = Some(CursorIcon::PointingHand);
+        }
     }
 }
 

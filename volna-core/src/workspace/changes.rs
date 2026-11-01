@@ -55,7 +55,7 @@ struct WaveStamp {
     viewport: Option<Viewport>,
     cursor: Option<u64>,
     scroll: f32,
-    columns: (f32, f32),
+    columns: (f32, f32, f32),
     rows: usize,
     selected: Option<BTreeSet<usize>>,
     revision: u64,
@@ -136,7 +136,7 @@ impl Stamp {
                     w.nav.local_cursor
                 },
                 scroll: w.scroll_y,
-                columns: (w.names_width, w.values_width),
+                columns: (w.names_width, w.scopes_width, w.values_width),
                 rows: w.items().len(),
                 selected: selection.then(|| w.selected.clone()),
                 revision: w.revision(),

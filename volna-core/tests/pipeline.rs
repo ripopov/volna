@@ -2279,7 +2279,7 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
     let target = app.doc.shared.viewport.target();
     assert!(target.start < near as f64 && target.end > last as f64);
     assert!(
-        target.width() < 4.0,
+        target.width() <= 4.0,
         "zoomed to the cluster, not beyond: {target:?}"
     );
     app.doc.shared.viewport.set(target);
@@ -3805,7 +3805,7 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
         app.panels.pipeline_mut(pipeline).unwrap().label_width = 400.0;
         dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
         timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
-        assert_eq!(aligned_metadata(&app, waves, pipeline), 400.0 * theme.zoom);
+        assert_eq!(aligned_metadata(&app, waves, pipeline), 500.0 * theme.zoom);
 
         let pipe_split = app
             .panels
@@ -3813,15 +3813,15 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
             .unwrap()
             .last_layout()
             .label_split;
-        drag_divider(&mut app, pipeline, pipe_split, 25.0 + 500.0 * theme.zoom);
+        drag_divider(&mut app, pipeline, pipe_split, 25.0 + 600.0 * theme.zoom);
         timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
-        assert_eq!(aligned_metadata(&app, waves, pipeline), 500.0 * theme.zoom);
+        assert_eq!(aligned_metadata(&app, waves, pipeline), 600.0 * theme.zoom);
         assert_eq!(app.panels.pipeline(pipeline).unwrap().label_width, 400.0);
 
         let names_split = app.panels.waves(waves).unwrap().last_layout().names_split;
-        drag_divider(&mut app, waves, names_split, 25.0 + 300.0 * theme.zoom);
+        drag_divider(&mut app, waves, names_split, 25.0 + 460.0 * theme.zoom);
         timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
-        assert_eq!(aligned_metadata(&app, waves, pipeline), 500.0 * theme.zoom);
+        assert_eq!(aligned_metadata(&app, waves, pipeline), 600.0 * theme.zoom);
         assert_eq!(
             app.panels.waves(waves).unwrap().last_layout().names.width(),
             300.0 * theme.zoom
@@ -3833,8 +3833,17 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
                 .last_layout()
                 .values
                 .width(),
-            200.0 * theme.zoom
+            140.0 * theme.zoom
         );
+
+        let scopes_split = app.panels.waves(waves).unwrap().last_layout().scopes_split;
+        drag_divider(&mut app, waves, scopes_split, 25.0 + 120.0 * theme.zoom);
+        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        assert_eq!(aligned_metadata(&app, waves, pipeline), 600.0 * theme.zoom);
+        let layout = app.panels.waves(waves).unwrap().last_layout();
+        assert_eq!(layout.names.width(), 300.0 * theme.zoom);
+        assert_eq!(layout.scopes.width(), 120.0 * theme.zoom);
+        assert_eq!(layout.values.width(), 180.0 * theme.zoom);
 
         let wave_split = app.panels.waves(waves).unwrap().last_layout().values_split;
         drag_divider(&mut app, waves, wave_split, 25.0 + 350.0 * theme.zoom);
@@ -3857,7 +3866,7 @@ fn timeline_alignment_requires_stacked_viewport_links() {
     timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
     assert_eq!(
         app.panels.waves(waves).unwrap().last_layout().waves.left(),
-        365.0
+        525.0
     );
     assert_eq!(
         app.panels
@@ -3870,7 +3879,7 @@ fn timeline_alignment_requires_stacked_viewport_links() {
     );
     dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
     timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
-    assert_eq!(aligned_metadata(&app, waves, pipeline), 340.0);
+    assert_eq!(aligned_metadata(&app, waves, pipeline), 500.0);
     app.handle(Command::Panels(PanelsCommand::ToggleLink {
         panel: pipeline,
         dim: LinkDim::Cursor,
@@ -4008,10 +4017,10 @@ fn timeline_columns_include_inactive_tabs_and_exclude_different_horizontal_spans
     );
     let theme = Theme::one_dark();
     timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
-    assert_eq!(aligned_metadata(&app, waves, pipeline), 620.0);
+    assert_eq!(aligned_metadata(&app, waves, pipeline), 780.0);
     app.handle(Command::Panels(PanelsCommand::Focus(inactive)));
     timeline_frames(&mut app, inactive, pipeline, 1200.0, &theme);
-    assert_eq!(aligned_metadata(&app, inactive, pipeline), 620.0);
+    assert_eq!(aligned_metadata(&app, inactive, pipeline), 780.0);
     app.layout_panel(
         side,
         Rect::from_xywh(1240.0, 20.0, 500.0, 600.0),

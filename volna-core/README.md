@@ -121,7 +121,7 @@ A member's context menu can hide or isolate it in the overlay. Show all
 overlay lines restores the members. These choices keep the individual rows
 available and exclude hidden lines from the shared range and group edge
 navigation. Rendering, range, and visibility edits are undoable and saved in
-wave panel workspace version 8.
+wave panel workspace version 9.
 
 For a three-line specimen, open `volna/examples/analog_showcase.vtr`, add the
 `analog.phases` scope as a group, choose Overlaid lines and Linear, then
@@ -151,7 +151,7 @@ edges or dense activity in a bit row. Signal groups treat an expanded bus as
 one member, preserving their aggregate values and edge navigation.
 
 Expansion materializes child rows as an undoable edit. Subsequent folding is
-presentation state. Workspace version 8 saves the source shape, projection,
+presentation state. Workspace version 9 saves the source shape, projection,
 expansion state and nested bit rows. The tree validates bus ownership during
 edits and restore; an unrelated signal cannot be dropped into a bus.
 

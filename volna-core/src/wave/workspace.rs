@@ -25,6 +25,7 @@ use volna_trace::data::source::Lookup;
 #[derive(Debug, Serialize, Deserialize)]
 struct Columns {
     names: f32,
+    scopes: f32,
     values: f32,
 }
 
@@ -250,7 +251,7 @@ struct SavedAnalog {
     range: AnalogRange,
 }
 
-pub(crate) const VERSION: u32 = 8;
+pub(crate) const VERSION: u32 = 9;
 
 #[derive(Serialize, Deserialize)]
 struct WavePanel {
@@ -329,6 +330,7 @@ pub(crate) fn save(
         scroll_y: w.scroll_y,
         columns: Columns {
             names: w.names_width,
+            scopes: w.scopes_width,
             values: w.values_width,
         },
         rows,
@@ -347,9 +349,13 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         "invalid row scroll"
     );
     ensure!(
-        [saved.columns.names, saved.columns.values]
-            .iter()
-            .all(|v| v.is_finite() && *v >= crate::wave::layout::MIN_COLUMN),
+        [
+            saved.columns.names,
+            saved.columns.scopes,
+            saved.columns.values
+        ]
+        .iter()
+        .all(|v| v.is_finite() && *v >= crate::wave::layout::MIN_COLUMN),
         "invalid column width"
     );
     ensure!(
@@ -376,6 +382,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     }
     w.scroll_y = saved.scroll_y;
     w.names_width = saved.columns.names;
+    w.scopes_width = saved.columns.scopes;
     w.values_width = saved.columns.values;
     let mut items = Vec::with_capacity(flat.len());
     for (depth, row) in flat {

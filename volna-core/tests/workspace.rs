@@ -48,6 +48,7 @@ fn complete_round_trip_preserves_layout_rows_links_chrome_and_exact_times() {
             end: 420.25,
         });
     w.scroll_y = 2.5;
+    w.scopes_width = 235.0;
     app.doc.shared.cursor = Some(u64::MAX - 1);
     let id = app.doc.add_marker(u64::MAX - 2).unwrap();
     app.doc.rename_marker(id, "interrupt");
@@ -540,6 +541,7 @@ fn invalid_open_workspace_cannot_flush_live_edits_or_queue_trace_opens() {
         ("/shared/reference", json!({"marker": 99})),
         ("/sidebar/width", json!(-1)),
         ("/panels/0/selected", json!([999])),
+        ("/panels/0/columns/scopes", json!(-1)),
         ("/panels/0/link/cursor", json!(false)),
         ("/layout/center/tabs", json!([999])),
         ("/focused", json!(999)),
@@ -1370,51 +1372,64 @@ fn cancelling_a_table_resize_after_a_save_persists_the_restored_width() {
 fn a_shared_timeline_divider_drag_schedules_an_autosave() {
     use volna_core::geometry::{Modifiers, MouseButton, Rect, point};
     use volna_core::wave::PointerEvent;
-    let mut app = persistent_app();
-    let now = Instant::now();
-    app.handle_at(Command::AddVars(a_all(vec![0])), now);
-    let first = app.panels.focused_id();
-    app.handle_at(Command::Action(Action::SplitDown), now);
-    let second = app.panels.focused_id();
-    let theme = volna_core::Theme::one_dark();
-    app.layout_panel(
-        second,
-        Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
-        &theme,
-        1.0,
-        &mut volna_core::scene::MonoMeasure,
-    )
-    .unwrap();
-    let split = app.panels.waves(second).unwrap().last_layout().values_split;
-    let position = point(split.left() + split.width() / 2.0, split.top() + 100.0);
-    app.handle_at(
-        Command::Pointer(
+    for scope_column in [false, true] {
+        let mut app = persistent_app();
+        let now = Instant::now();
+        app.handle_at(Command::AddVars(a_all(vec![0])), now);
+        let first = app.panels.focused_id();
+        app.handle_at(Command::Action(Action::SplitDown), now);
+        let second = app.panels.focused_id();
+        let theme = volna_core::Theme::one_dark();
+        app.layout_panel(
             second,
-            PointerEvent::Down {
-                position,
-                button: MouseButton::Left,
-                modifiers: Modifiers::default(),
-            },
-        ),
-        now,
-    );
-    let revision = app.workspace.scheduler.revision();
-    app.handle_at(
-        Command::Pointer(
-            second,
-            PointerEvent::Move {
-                position: point(500.0, position.y),
-            },
-        ),
-        now,
-    );
-    assert!(app.workspace.scheduler.revision() > revision);
-    app.handle_at(Command::Pointer(second, PointerEvent::Up), now);
-    app.tick(now + IDLE * 2);
-    let (_, bytes) = emitted_save(&mut app);
-    let saved = Workspace::parse(&bytes).unwrap();
-    assert_eq!(saved.timeline_dividers[0].panels, vec![first, second]);
-    assert_eq!(saved.timeline_dividers[0].width, 500.0);
+            Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
+            &theme,
+            1.0,
+            &mut volna_core::scene::MonoMeasure,
+        )
+        .unwrap();
+        let layout = app.panels.waves(second).unwrap().last_layout();
+        let split = if scope_column {
+            layout.scopes_split
+        } else {
+            layout.values_split
+        };
+        let position = point(split.left() + split.width() / 2.0, split.top() + 100.0);
+        app.handle_at(
+            Command::Pointer(
+                second,
+                PointerEvent::Down {
+                    position,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                },
+            ),
+            now,
+        );
+        let revision = app.workspace.scheduler.revision();
+        app.handle_at(
+            Command::Pointer(
+                second,
+                PointerEvent::Move {
+                    position: point(600.0, position.y),
+                },
+            ),
+            now,
+        );
+        assert!(app.workspace.scheduler.revision() > revision);
+        app.handle_at(Command::Pointer(second, PointerEvent::Up), now);
+        app.tick(now + IDLE * 2);
+        let (_, bytes) = emitted_save(&mut app);
+        let saved = Workspace::parse(&bytes).unwrap();
+        assert_eq!(saved.timeline_dividers[0].panels, vec![first, second]);
+        assert_eq!(
+            saved.timeline_dividers[0].width,
+            if scope_column { 500.0 } else { 600.0 }
+        );
+        if scope_column {
+            assert_eq!(app.panels.waves(second).unwrap().scopes_width, 208.0);
+        }
+    }
 }
 
 #[test]

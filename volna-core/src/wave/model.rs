@@ -376,6 +376,16 @@ impl WaveRow {
     }
 
     #[must_use]
+    pub fn scope(&self) -> &str {
+        match self {
+            Self::Signal(s) => &s.scope,
+            Self::Lane(l) => &l.scope,
+            Self::Clock(c) => c.key.item.rsplit_once('.').map_or("", |(scope, _)| scope),
+            Self::Group(_) => "",
+        }
+    }
+
+    #[must_use]
     pub fn height(&self) -> RowHeight {
         match self {
             Self::Signal(s) => s.height,
@@ -591,6 +601,7 @@ pub enum Drag {
         click: Option<Point>,
     },
     NamesSplit,
+    ScopesSplit,
     ValuesSplit,
     Scroll {
         grab: f32,
@@ -771,6 +782,7 @@ pub struct WaveModel {
     pub nav: NavState,
     pub scroll_y: f32,
     pub names_width: f32,
+    pub scopes_width: f32,
     pub values_width: f32,
     pub hover_row: Option<usize>,
     pub format_hover: Option<usize>,
@@ -830,6 +842,7 @@ impl WaveModel {
             nav: self.nav.clone_view(),
             scroll_y: if with_rows { self.scroll_y } else { 0.0 },
             names_width: self.names_width,
+            scopes_width: self.scopes_width,
             values_width: self.values_width,
             ..Self::new()
         }
@@ -845,6 +858,7 @@ impl WaveModel {
             nav: NavState::new(),
             scroll_y: 0.0,
             names_width: 220.0,
+            scopes_width: 160.0,
             values_width: 120.0,
             hover_row: None,
             format_hover: None,
@@ -2725,6 +2739,7 @@ impl WaveModel {
             ruler_h: rulers.len() as f32 * super::overlay::RULER_H * theme.zoom,
             zoom: theme.zoom,
             names_width: self.names_width,
+            scopes_width: self.scopes_width,
             values_width: self.values_width,
             trace_gutter: doc.traces().is_combined(),
             row_tops: super::layout::row_tops(visible.iter().map(|&i| items[i as usize].height())),
@@ -3282,6 +3297,10 @@ impl WaveModel {
                 self.drag = Some(Drag::NamesSplit);
                 return;
             }
+            if layout.scopes_split.contains(p) {
+                self.drag = Some(Drag::ScopesSplit);
+                return;
+            }
             if layout.values_split.contains(p) {
                 self.drag = Some(Drag::ValuesSplit);
                 return;
@@ -3430,7 +3449,7 @@ impl WaveModel {
             }
             return;
         }
-        if button == MouseButton::Right && layout.names.contains(p) {
+        if button == MouseButton::Right && (layout.names.contains(p) || layout.scopes.contains(p)) {
             if let Some(row) = row {
                 self.open_signal_menu(doc, row, p);
             }
@@ -3480,6 +3499,7 @@ impl WaveModel {
     }
 
     fn pointer_move(&mut self, doc: &mut Document, p: Point) -> bool {
+        let was_scope = self.pointer.is_some_and(|p| self.layout.scopes.contains(p));
         self.pointer = Some(p);
         let layout = &self.layout;
         let wave_wf = layout.wave_width_f64();
@@ -3538,11 +3558,29 @@ impl WaveModel {
                 true
             }
             Some(Drag::NamesSplit) => {
-                let width = ((p.x - layout.bounds.left()) / layout.zoom).max(MIN_COLUMN);
+                let width = ((p.x - layout.names.left()) / layout.zoom).max(MIN_COLUMN);
                 self.names_width = if layout.shared_metadata {
                     let metadata = (layout.waves.left() - layout.bounds.left()) / layout.zoom;
-                    let min = MIN_COLUMN.min(metadata / 2.0);
-                    width.clamp(min, metadata - min).max(MIN_COLUMN)
+                    let min = MIN_COLUMN.min(metadata / 3.0);
+                    width
+                        .clamp(
+                            min,
+                            (metadata - layout.scopes.width() / layout.zoom - min).max(min),
+                        )
+                        .max(MIN_COLUMN)
+                } else {
+                    width
+                };
+                true
+            }
+            Some(Drag::ScopesSplit) => {
+                let width = ((p.x - layout.scopes.left()) / layout.zoom).max(MIN_COLUMN);
+                self.scopes_width = if layout.shared_metadata {
+                    let remaining =
+                        (layout.waves.left() - layout.bounds.left() - layout.names.width())
+                            / layout.zoom;
+                    let min = MIN_COLUMN.min(remaining / 2.0);
+                    width.clamp(min, (remaining - min).max(min)).max(MIN_COLUMN)
                 } else {
                     width
                 };
@@ -3610,6 +3648,8 @@ impl WaveModel {
                     || self.split_hover != prev_split
                     || self.lane_hover != prev_lane
                     || self.edge_hover != prev_edge
+                    || was_scope
+                    || self.layout.scopes.contains(p)
                     || reading
             }
         }

@@ -425,7 +425,7 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
     assert!(depth > 5);
 
     show(&mut app, waves, 0.0, (median * 6) as f64);
-    let scene = frame(&mut app, waves);
+    let scene = frame_w(&mut app, waves, 1560.0);
     let label = lane::label(&first);
     let caption = |t: &str| t.starts_with("800000") && t.contains(": ");
     assert!(

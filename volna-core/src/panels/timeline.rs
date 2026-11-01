@@ -73,7 +73,9 @@ impl Panels {
                     } else {
                         width = width.max(match &self.get(*id)?.kind {
                             PanelKind::Waves(w) => {
-                                w.names_width.max(MIN_COLUMN) + w.values_width.max(MIN_COLUMN)
+                                w.names_width.max(MIN_COLUMN)
+                                    + w.scopes_width.max(MIN_COLUMN)
+                                    + w.values_width.max(MIN_COLUMN)
                             }
                             PanelKind::Pipeline(p) => p.label_width.clamp(
                                 crate::pipeline::layout::LABEL_W_MIN,
@@ -114,7 +116,7 @@ impl Panels {
 
     fn timeline_minimum(&self, divider: &TimelineDivider) -> f32 {
         if divider.panels.iter().any(|id| self.waves(*id).is_some()) {
-            2.0 * MIN_COLUMN
+            3.0 * MIN_COLUMN
         } else {
             crate::pipeline::layout::LABEL_W_MIN
         }

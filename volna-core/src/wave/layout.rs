@@ -1,4 +1,4 @@
-//! Pixel layout of the wave panel for one frame: the three columns, the visible row range,
+//! Pixel layout of the wave panel for one frame: the columns, the visible row range,
 //! the scrollbar, and the small interactive rectangles (format badges, Markers lane chips,
 //! column dividers).
 
@@ -33,6 +33,7 @@ pub struct WaveLayout {
     pub rulers: Rect,
     pub names: Rect,
     pub name_left: f32,
+    pub scopes: Rect,
     pub values: Rect,
     pub waves: Rect,
     pub shared_metadata: bool,
@@ -48,6 +49,7 @@ pub struct WaveLayout {
     pub format_summaries: Vec<(usize, Rect)>,
     pub marker_lane: MarkerLane,
     pub names_split: Rect,
+    pub scopes_split: Rect,
     pub values_split: Rect,
 }
 
@@ -59,6 +61,7 @@ pub struct LayoutInput<'a> {
     pub ruler_h: f32,
     pub zoom: f32,
     pub names_width: f32,
+    pub scopes_width: f32,
     pub values_width: f32,
     pub trace_gutter: bool,
     pub row_tops: Arc<[u32]>,
@@ -104,18 +107,18 @@ impl WaveLayout {
         let z = |v: f32| v * zoom;
         let min_column = z(MIN_COLUMN);
         let total_w = bounds.width();
-        let (names_w, values_w) = if let Some(metadata_w) = input.metadata_width {
-            let min = min_column.min(metadata_w / 2.0);
-            let names_w = z(input.names_width).clamp(min, metadata_w - min);
-            (names_w, metadata_w - names_w)
+        let available = (total_w - z(160.0)).max((2.0 * min_column).min(total_w));
+        let metadata_w = input.metadata_width.map(|w| w.max(0.0).min(total_w));
+        let budget = metadata_w.unwrap_or(available);
+        let min = min_column.min(budget / 2.0);
+        let scope_min = min_column.min((budget - 2.0 * min).max(0.0));
+        let names_w = z(input.names_width).clamp(min, (budget - scope_min - min).max(min));
+        let scopes_w =
+            z(input.scopes_width).clamp(scope_min, (budget - names_w - min).max(scope_min));
+        let values_w = if let Some(metadata_w) = metadata_w {
+            (metadata_w - names_w - scopes_w).max(0.0)
         } else {
-            let names_w = z(input.names_width).clamp(
-                min_column,
-                (total_w - 2.0 * min_column - z(160.0)).max(min_column),
-            );
-            let values_w = z(input.values_width)
-                .clamp(min_column, (total_w - names_w - z(160.0)).max(min_column));
-            (names_w, values_w)
+            z(input.values_width).clamp(min, (budget - names_w - scopes_w).max(min))
         };
 
         let header = Rect::new(bounds.origin, size(bounds.width(), header_h));
@@ -126,7 +129,7 @@ impl WaveLayout {
             point(bounds.left(), header.bottom()),
             size(bounds.width(), ruler_h),
         );
-        let metadata_w = input.metadata_width.unwrap_or(names_w + values_w);
+        let metadata_w = names_w + scopes_w + values_w;
         let waves_left = bounds.left() + metadata_w;
         let waves_w = (bounds.width() - metadata_w).max(0.0);
         let marker_lane = marker_lane(
@@ -144,7 +147,8 @@ impl WaveLayout {
         );
         let rows_top = marker_lane.strip().bottom();
         let rows_h = (bounds.bottom() - rows_top).max(0.0);
-        let names = Rect::new(point(bounds.left(), rows_top), size(names_w, rows_h));
+        let scopes = Rect::new(point(bounds.left(), rows_top), size(scopes_w, rows_h));
+        let names = Rect::new(point(scopes.right(), rows_top), size(names_w, rows_h));
         let values = Rect::new(point(names.right(), rows_top), size(values_w, rows_h));
         let waves = Rect::new(point(waves_left, rows_top), size(waves_w, rows_h));
 
@@ -219,6 +223,7 @@ impl WaveLayout {
                     0.0
                 },
             values,
+            scopes,
             waves,
             rows,
             visible: input.visible,
@@ -232,6 +237,7 @@ impl WaveLayout {
             format_summaries: Vec::new(),
             marker_lane,
             names_split: split_zone(names.right()),
+            scopes_split: split_zone(scopes.right()),
             values_split: split_zone(values.right()),
         }
     }
@@ -306,7 +312,9 @@ impl WaveLayout {
 
     #[must_use]
     pub fn near_split(&self, p: Point) -> bool {
-        self.names_split.contains(p) || self.values_split.contains(p)
+        self.names_split.contains(p)
+            || self.scopes_split.contains(p)
+            || self.values_split.contains(p)
     }
 
     #[must_use]
@@ -360,6 +368,7 @@ mod tests {
             ruler_h: 0.0,
             zoom,
             names_width: 220.0,
+            scopes_width: 160.0,
             values_width: 120.0,
             trace_gutter: false,
             row_tops: row_tops(vec![RowHeight::DEFAULT; items]),
@@ -407,7 +416,11 @@ mod tests {
             assert_eq!(l.row_h, 24.0 * zoom);
             assert_eq!(l.header.height(), 32.0 * zoom);
             assert_eq!(l.names.width(), 220.0 * zoom);
+            assert_eq!(l.scopes.width(), 160.0 * zoom);
             assert_eq!(l.values.width(), 120.0 * zoom);
+            assert_eq!(l.scopes.left(), l.bounds.left());
+            assert_eq!(l.names.left(), l.scopes.right());
+            assert_eq!(l.values.left(), l.names.right());
             assert_eq!(l.names_split.width(), 8.0 * zoom);
             let (_, b) = l.badges[0];
             assert_eq!(b.width(), BADGE_W * zoom);
@@ -443,6 +456,7 @@ mod tests {
             ruler_h: 0.0,
             zoom: 1.0,
             names_width: 220.0,
+            scopes_width: 160.0,
             values_width: 120.0,
             trace_gutter: false,
             row_tops: row_tops(heights),

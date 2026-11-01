@@ -137,6 +137,13 @@ See [geometry and implementation](ISLANDS.md).
 
 ## Signal formatting
 
+Waveform rows place Scope before Name, Value, and the waveform. Names stay aligned
+when signals from different scopes share a name. Scope paths are right-aligned in secondary text;
+long paths retain their trailing portion, and hovering shows the full scope.
+Drag the column dividers to resize Scope, Name, and Value. Column widths are saved
+in the workspace. To compare repeated names, add `soc.cpu0.pc` and `soc.cpu1.pc`
+from `volna/examples/pipeline_showcase.vtr`.
+
 Right-click a signal and choose **Format signal…**, or click its value-format
 badge or analog status line. All three open the same menu. **Waveform** offers
 Digital, Analog steps (hold each sample), and Analog lines (interpolate between
@@ -303,7 +310,7 @@ document, navigation links, settings, and undo history, and support tabs and
 splits. A single-panel auxiliary window shows its title and panel controls in the
 window header; adding a tab or split restores the dock tab bar. Closing an auxiliary
 window returns its panels to the main window.
-Workspace version 8 stores the center tree, optional right dock (including its
+Workspace version 9 stores the center tree, optional right dock (including its
 width and visibility), and auxiliary pane trees. The native app restores those
 windows; the web app opens their panels in the main window.
 

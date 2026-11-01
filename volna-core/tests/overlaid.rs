@@ -721,7 +721,7 @@ fn overlay_workspace_round_trips_settings_and_visibility_at_version_eight() {
         Workspace::capture(&app, volna_core::testing::paths(TRACE), None).unwrap(),
     )
     .unwrap();
-    assert_eq!(saved["panels"][0]["version"], 8);
+    assert_eq!(saved["panels"][0]["version"], 9);
     assert_eq!(saved["panels"][0]["rows"][0]["style"], "overlaid");
     assert_eq!(saved["panels"][0]["rows"][0]["overlaid"]["draw"], "linear");
     let (_f2, mut restored, _) = fixture(101);
