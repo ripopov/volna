@@ -364,6 +364,8 @@ impl Render for TransactionPanelView {
         div()
             .id(("transaction-panel", self.id.0))
             .size_full()
+            .min_w_0()
+            .overflow_hidden()
             .flex()
             .flex_col()
             .bg(t.panel.bg)
@@ -415,24 +417,32 @@ impl TransactionPanelView {
         let t = *theme(cx);
         let muted = t.panel.text_muted;
         let identity = &view.identity;
-        let mut breadcrumb = div()
+        let path = format!(
+            "{}{}{} · row {}",
+            identity.scope.join("."),
+            if identity.scope.is_empty() {
+                ""
+            } else {
+                " › "
+            },
+            identity.generator,
+            identity.ordinal,
+        );
+        let breadcrumb = div()
             .debug_selector(|| "tx-record-path".into())
             .flex()
+            .min_w_0()
             .items_center()
             .gap_1()
             .text_size(px(t.ui_size_small))
             .text_color(muted)
-            .child(Icon::new(IconName::Workflow).size(t.px(12.0)).color(muted));
-        if !identity.scope.is_empty() {
-            breadcrumb = breadcrumb.child(SharedString::from(identity.scope.join(".")));
-            breadcrumb = breadcrumb.child("›");
-        }
-        breadcrumb = breadcrumb
-            .child(SharedString::from(identity.generator.clone()))
-            .child(SharedString::from(format!("· row {}", identity.ordinal)));
+            .child(Icon::new(IconName::Workflow).size(t.px(12.0)).color(muted))
+            .child(detail_text("tx-path", path).flex_1());
 
-        let mut title = div().flex().items_center().gap_2().child(
+        let mut title = div().flex().min_w_0().items_center().gap_2().child(
             div()
+                .flex_none()
+                .whitespace_nowrap()
                 .px_1p5()
                 .py_0p5()
                 .rounded_sm()
@@ -443,17 +453,16 @@ impl TransactionPanelView {
                 .child(SharedString::from(format!("#{}", identity.id.0))),
         );
         title = title.child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .font_family(t.mono_font)
-                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                .child(SharedString::from(
-                    identity
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| "(no label)".into()),
-                )),
+            detail_text(
+                "tx-label",
+                identity
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| "(no label)".into()),
+            )
+            .flex_1()
+            .font_family(t.mono_font)
+            .font_weight(gpui_kit::FontWeight::SEMIBOLD),
         );
         let mut point_metadata = div().flex().flex_wrap().items_center().gap_2();
         if let Some(kind) = view.point_kind {
@@ -478,8 +487,9 @@ impl TransactionPanelView {
             title = title.child(status_badge(&t, identity.status_text, identity.status));
         }
         if let Some(kind) = identity.kind.filter(|_| view.point_kind.is_none()) {
-            title = title.child(
+            point_metadata = point_metadata.child(
                 div()
+                    .whitespace_nowrap()
                     .text_size(px(t.ui_size_small))
                     .text_color(muted)
                     .child(kind),
@@ -490,15 +500,11 @@ impl TransactionPanelView {
                 .text_size(px(t.ui_size_small))
                 .text_color(muted)
                 .child(SharedString::from(format!("Owner #{}", parent.0)));
-            if view.point_kind.is_some() {
-                point_metadata = point_metadata.child(parent);
-            } else {
-                title = title.child(parent);
-            }
+            point_metadata = point_metadata.child(parent.whitespace_nowrap());
         }
 
         let timing = &view.timing;
-        let mut tiles = div().flex().gap_2();
+        let mut tiles = div().flex().min_w_0().gap_2();
         for (label, text, time) in [
             ("Begin", timing.begin_text.clone(), Some(timing.begin)),
             ("End", timing.end_text.clone(), timing.end),
@@ -564,6 +570,8 @@ impl TransactionPanelView {
 
         let mut body = div()
             .debug_selector(|| "tx-body".into())
+            .min_w_0()
+            .overflow_x_hidden()
             .flex_1()
             .min_h_0()
             .overflow_y_scrollbar()
@@ -575,7 +583,12 @@ impl TransactionPanelView {
                     .p_3()
                     .child(breadcrumb)
                     .child(title)
-                    .when(view.point_kind.is_some(), |body| body.child(point_metadata))
+                    .when(
+                        view.point_kind.is_some()
+                            || identity.kind.is_some()
+                            || identity.parent.is_some(),
+                        |body| body.child(point_metadata),
+                    )
                     .child(tiles)
                     .when(view.point_kind.is_none(), |body| {
                         body.child(Self::lifeline(&t, &view, cx))
@@ -610,11 +623,9 @@ impl TransactionPanelView {
                                 .child(SharedString::from(name.clone())),
                         )
                         .child(
-                            div()
+                            detail_text(format!("tx-source-{name}"), value.clone())
                                 .flex_1()
-                                .min_w_0()
-                                .font_family(t.mono_font)
-                                .child(SharedString::from(value.clone())),
+                                .font_family(t.mono_font),
                         ),
                 );
             }
@@ -1060,6 +1071,8 @@ impl TransactionPanelView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tile = div()
+            .flex_1()
+            .min_w_0()
             .flex()
             .flex_col()
             .gap_0p5()
@@ -1075,11 +1088,7 @@ impl TransactionPanelView {
                     .text_color(t.panel.text_muted)
                     .child(label),
             )
-            .child(
-                div()
-                    .font_family(t.mono_font)
-                    .child(SharedString::from(text)),
-            );
+            .child(detail_text(format!("tx-time-value-{label}"), text).font_family(t.mono_font));
         match time {
             Some(time) => tile
                 .id(SharedString::from(format!("tx-time-{label}")))
@@ -1124,7 +1133,16 @@ impl TransactionPanelView {
                         .text_size(px(t.ui_size_small))
                         .text_color(hsla(style.text))
                         .font_family(t.mono_font)
-                        .child(SharedString::from(cell.name.clone()))
+                        .tooltip({
+                            let name = cell.name.clone();
+                            move |w, cx| Tooltip::new(name.clone()).build(w, cx)
+                        })
+                        .child(
+                            div()
+                                .min_w_0()
+                                .text_ellipsis()
+                                .child(SharedString::from(cell.name.clone())),
+                        )
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.dispatch(TransactionCommand::Cursor(begin), window, cx);
                         })),
@@ -1290,20 +1308,25 @@ impl TransactionPanelView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let attribute = row.attribute;
+        let hint = match row.radix {
+            Some(radix) => format!("{}\n{} · click to cycle the radix", row.value, radix.name()),
+            None => row.value.clone(),
+        };
         let value = div()
+            .id(SharedString::from(format!("tx-attr-{attribute}")))
+            .debug_selector(move || format!("tx-attr-{attribute}"))
             .flex_1()
             .min_w_0()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_ellipsis()
             .font_family(t.mono_font)
+            .tooltip(move |w, cx| Tooltip::new(hint.clone()).build(w, cx))
             .child(SharedString::from(row.value.clone()));
         let value = match row.radix {
-            Some(radix) => value
-                .id(SharedString::from(format!("tx-attr-{attribute}")))
+            Some(_) => value
                 .cursor_pointer()
                 .hover(|style| style.bg(t.hover.bg))
-                .tooltip({
-                    let hint = format!("{} · click to cycle the radix", radix.name());
-                    move |w, cx| Tooltip::new(hint.clone()).build(w, cx)
-                })
                 .on_click(cx.listener(move |view, _, window, cx| {
                     let key = view.ws.upgrade().and_then(|owner| {
                         let ws = owner.read(cx);
@@ -1330,13 +1353,19 @@ impl TransactionPanelView {
             .py_0p5()
             .child(
                 div()
-                    .w(t.px(150.0))
+                    .w(relative(0.46))
+                    .min_w_0()
                     .flex_none()
                     .flex()
                     .items_center()
                     .gap_1()
                     .text_color(t.panel.text_muted)
-                    .child(SharedString::from(row.key.clone()))
+                    .child(
+                        detail_text(format!("tx-attr-key-{attribute}"), row.key.clone())
+                            .text_ellipsis_start()
+                            .debug_selector(move || format!("tx-attr-key-{attribute}"))
+                            .flex_1(),
+                    )
                     .when_some(row.phase, |element, phase| element.child(tag(t, phase))),
             )
             .child(value)
@@ -1432,8 +1461,9 @@ impl TransactionPanelView {
             })
             .child(
                 div()
-                    .w(t.px(52.0))
+                    .w(t.px(82.0))
                     .flex_none()
+                    .text_ellipsis()
                     .font_family(t.mono_font)
                     .text_color(color)
                     .child(SharedString::from(format!("#{}", id.0))),
@@ -1444,13 +1474,16 @@ impl TransactionPanelView {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(SharedString::from(subtitle))
+                    .child(detail_text(format!("tx-related-label-{index}"), subtitle))
                     .when_some(row.track.clone(), |element, path| {
                         element.child(
                             div()
                                 .text_size(px(t.ui_size_small))
                                 .text_color(t.panel.text_muted)
-                                .child(SharedString::from(path.join("."))),
+                                .child(detail_text(
+                                    format!("tx-related-path-{index}"),
+                                    path.join("."),
+                                )),
                         )
                     })
                     .when_some(row.relation_label.clone(), |element, label| {
@@ -1458,13 +1491,31 @@ impl TransactionPanelView {
                             div()
                                 .text_size(px(t.ui_size_small))
                                 .text_color(t.panel.text_muted)
-                                .child(SharedString::from(label)),
+                                .child(detail_text(format!("tx-related-relation-{index}"), label)),
                         )
                     }),
             )
             .child(div().text_color(t.panel.text_muted).child("›"))
             .into_any_element()
     }
+}
+
+fn detail_text(
+    id: impl Into<gpui_kit::ElementId>,
+    text: impl Into<SharedString>,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let text = text.into();
+    div()
+        .id(id)
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .tooltip({
+            let text = text.clone();
+            move |window, cx| Tooltip::new(text.clone()).build(window, cx)
+        })
+        .child(text)
 }
 
 fn notice(t: &crate::theme::Theme, title: &str, detail: &str) -> AnyElement {
@@ -1494,6 +1545,8 @@ fn notice(t: &crate::theme::Theme, title: &str, detail: &str) -> AnyElement {
 
 fn tag(t: &crate::theme::Theme, text: &str) -> AnyElement {
     div()
+        .flex_none()
+        .whitespace_nowrap()
         .px_1()
         .rounded_sm()
         .bg(t.badge.bg)
@@ -1517,6 +1570,8 @@ fn status_badge(
     let raw = volna_core::data::text::status_name(status);
     div()
         .id("tx-status")
+        .flex_none()
+        .whitespace_nowrap()
         .px_1p5()
         .py_0p5()
         .rounded_sm()
@@ -1541,7 +1596,11 @@ fn chips(t: &crate::theme::Theme, items: &[Chip], total: usize) -> AnyElement {
                 .font_family(t.mono_font)
                 .text_size(px(t.ui_size_small))
                 .text_color(t.badge.text)
-                .child(SharedString::from(format!("{} {}", chip.key, chip.value))),
+                .max_w_full()
+                .child(detail_text(
+                    format!("tx-chip-{}", chip.key),
+                    format!("{} {}", chip.key, chip.value),
+                )),
         );
     }
     if items.len() < total {
@@ -1586,13 +1645,14 @@ fn stage_row(
         )
         .child(
             div()
-                .w(t.px(140.0))
+                .w(relative(0.38))
+                .min_w_0()
                 .flex_none()
                 .flex()
                 .items_center()
                 .gap_1()
                 .font_family(t.mono_font)
-                .child(SharedString::from(row.name.clone()))
+                .child(detail_text(format!("tx-stage-name-{index}"), row.name.clone()).flex_1())
                 .when(!row.primary, |element| element.child(tag(t, &row.lane))),
         )
         .child(
@@ -1625,6 +1685,7 @@ fn stage_row(
                 .font_family(t.mono_font)
                 .text_size(px(t.ui_size_small))
                 .text_color(t.panel.text_muted)
+                .text_ellipsis()
                 .child(SharedString::from(row.duration_text.clone())),
         )
         .into_any_element()
@@ -1651,14 +1712,20 @@ fn event_row(
         }))
         .child(
             div()
-                .w(t.px(150.0))
+                .w(relative(0.38))
+                .min_w_0()
                 .flex_none()
                 .font_family(t.mono_font)
-                .child(SharedString::from(row.name.clone())),
+                .child(detail_text(
+                    format!("tx-event-name-{index}"),
+                    row.name.clone(),
+                )),
         )
         .child(
             div()
-                .w(t.px(100.0))
+                .w(relative(0.3))
+                .min_w_0()
+                .text_ellipsis()
                 .flex_none()
                 .font_family(t.mono_font)
                 .text_size(px(t.ui_size_small))

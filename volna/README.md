@@ -264,6 +264,14 @@ presentation, and workspace edits stay in the viewer.
 
 ### Docking and transaction details
 
+Record details keeps attribute names and values in separate, single-line columns.
+Long names truncate from the left to keep their suffix visible; values truncate
+from the right. Hover to read the complete text, or use **Copy** for the record
+as TSV. Timing tiles and record labels also truncate within the panel.
+The right sidebar stops shrinking at 280 logical pixels (scaled by interface
+zoom). Drag its divider past half that width and release to hide it; reopening
+restores its width from before the drag.
+
 Double-clicking a hierarchy member or pressing Enter adds it to Waves. Signals,
 clocks, transactions, logs, and events share the focused Waves panel; when another
 panel has focus, an existing Waves panel is reused before creating one. Adding

@@ -5735,6 +5735,114 @@ fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut T
 }
 
 #[gpui_kit::test]
+fn record_details_long_attributes_stay_in_separate_single_line_columns(cx: &mut TestAppContext) {
+    use gpui_kit::base::dock::DockPlacement;
+    use gpui_kit::{VisualTestContext, size};
+    use volna_core::testing::a;
+    use vtr::Recorder;
+    init(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-details.vtr");
+    let key = "attributes.parent_unavailability_reason with whitespace and a_long_name";
+    let value = "pm4_queue_not_traced · 未追跡 ".repeat(12);
+    let mut writer = vtr::Writer::create(&path).unwrap();
+    let generator = writer
+        .transactions::<()>(
+            vtr::SourceOptions::new("commands_with_a_long_generator_name", None),
+            "PM4",
+        )
+        .unwrap();
+    let record = writer.begin_at(generator, 14_415_788, &(), None).unwrap();
+    let attr_key = writer.intern(key).unwrap();
+    let attr_value = writer.intern(&value).unwrap();
+    writer
+        .attribute(record.owner(), attr_key, vtr::Value::Str(attr_value))
+        .unwrap();
+    let label_key = writer.intern("vtr.label").unwrap();
+    let label = writer.intern(&"PM4_MAP_QUEUES ".repeat(10)).unwrap();
+    writer
+        .attribute(record.owner(), label_key, vtr::Value::Str(label))
+        .unwrap();
+    writer.end_at(record, 14_416_056, vtr::Status::Ok).unwrap();
+    writer.close().unwrap();
+    let session = OpenSpec::Path(path).open().unwrap();
+    let track = session.tracks()[0].id;
+    let id = session.load_track(track).unwrap().generators[0].transactions()[0].id;
+    let window = cx.add_window(Workspace::new);
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_resize(size(px(1400.), px(1000.)));
+    let panel = window
+        .update(&mut vcx, |ws, window, cx| {
+            ws.set_session(session, cx);
+            ws.app.sidebar_visible = false;
+            let origin = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::SelectTransaction {
+                    panel: origin,
+                    track: a(track),
+                    id,
+                    cursor: None,
+                },
+                Some(window),
+                cx,
+            );
+            ws.dispatch(Command::ShowTransaction { from: origin }, Some(window), cx);
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    let attribute = window
+        .update(&mut vcx, |ws, _, _| {
+            let model = ws.app.panels.transaction(panel).unwrap();
+            let volna_core::transaction::TxPanelState::Ready(view) = model.state(&ws.app.doc)
+            else {
+                panic!("loaded record")
+            };
+            assert!(model.copy_tsv(&ws.app.doc).unwrap().contains(&value));
+            view.attributes
+                .rows
+                .iter()
+                .find(|row| row.key.ends_with(key))
+                .unwrap()
+                .attribute
+        })
+        .unwrap();
+    let key_selector = &*Box::leak(format!("tx-attr-key-{attribute}").into_boxed_str());
+    let value_selector = &*Box::leak(format!("tx-attr-{attribute}").into_boxed_str());
+    for dark in [true, false] {
+        for zoom in [1., 1.5] {
+            for width in [280., 360., 520.] {
+                window
+                    .update(&mut vcx, |ws, window, cx| {
+                        crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                        crate::theme::set_zoom(zoom, cx);
+                        let area = ws.dock.as_ref().unwrap().read(cx).area.clone();
+                        area.update(cx, |area, cx| {
+                            area.set_dock_size(DockPlacement::Right, px(width * zoom), window, cx);
+                        });
+                    })
+                    .unwrap();
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                let name = vcx.debug_bounds(key_selector).unwrap();
+                let value = vcx.debug_bounds(value_selector).unwrap();
+                let body = vcx.debug_bounds("tx-body").unwrap();
+                assert!(
+                    name.right() < value.left(),
+                    "attribute columns must never overlap"
+                );
+                assert!(name.left() >= body.left() && value.right() <= body.right());
+                assert!(name.size.width > px(40. * zoom) && value.size.width > px(40. * zoom));
+                assert!(
+                    name.size.height <= px(24. * zoom) && value.size.height <= px(24. * zoom),
+                    "long text must remain on a single line"
+                );
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn transaction_right_dock_tracks_native_moves_resize_visibility_and_undo(cx: &mut TestAppContext) {
     check_dock_interactions(cx, None);
 }
@@ -6021,6 +6129,86 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
                 );
             })
             .unwrap();
+    }
+    {
+        use gpui_kit::{Modifiers, MouseButton, point};
+        for zoom in [1., 1.5] {
+            vcx.update(|_, cx| crate::theme::set_zoom(zoom, cx));
+            let (start, right, saved_width) = window
+                .update(&mut vcx, |ws, window, cx| {
+                    let area = ws.dock.as_ref().unwrap().read(cx).area.clone();
+                    let width = px(420. * zoom);
+                    area.update(cx, |area, cx| {
+                        area.set_dock_size(DockPlacement::Right, width, window, cx);
+                    });
+                    let bounds = area.read(cx).bounds();
+                    (
+                        point(bounds.right() - width + px(1.), bounds.center().y),
+                        bounds.right(),
+                        width,
+                    )
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let modifiers = Modifiers::default();
+            vcx.simulate_mouse_down(start, MouseButton::Left, modifiers);
+            for width in [350., 220., 100.] {
+                vcx.simulate_mouse_move(
+                    point(right - px(width * zoom), start.y),
+                    Some(MouseButton::Left),
+                    modifiers,
+                );
+                vcx.run_until_parked();
+                window
+                    .update(&mut vcx, |ws, _, cx| {
+                        let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
+                        assert!(area.dock_size(DockPlacement::Right).unwrap() >= px(280. * zoom));
+                    })
+                    .unwrap();
+            }
+            vcx.simulate_mouse_up(
+                point(right - px(100. * zoom), start.y),
+                MouseButton::Left,
+                modifiers,
+            );
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, window, cx| {
+                    let dock = ws.app.panels.layout().right.as_ref().unwrap();
+                    assert!(
+                        !dock.open,
+                        "dragging past the collapse threshold must hide the sidebar"
+                    );
+                    assert_eq!(dock.width, 420.);
+                    ws.dispatch(
+                        Command::Panels(PanelsCommand::ToggleRightDock),
+                        Some(window),
+                        cx,
+                    );
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, _, cx| {
+                    let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
+                    assert!(area.is_dock_open(DockPlacement::Right));
+                    assert_eq!(area.dock_size(DockPlacement::Right), Some(saved_width));
+                    assert_eq!(
+                        ws.app
+                            .panels
+                            .transaction(detail)
+                            .unwrap()
+                            .shown()
+                            .unwrap()
+                            .id,
+                        TransactionRef(33)
+                    );
+                })
+                .unwrap();
+        }
+        vcx.update(|_, cx| crate::theme::set_zoom(1., cx));
+        vcx.run_until_parked();
     }
     let resized_node = window
         .update(&mut vcx, |ws, window, cx| {

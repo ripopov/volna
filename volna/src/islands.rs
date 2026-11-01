@@ -113,6 +113,8 @@ pub(crate) fn resize_handle(handle: &gpui_kit::base::ResizeHandleContext, cx: &A
 #[derive(Default)]
 pub(crate) struct DockResize {
     active: Rc<Cell<Option<base::DockPlacement>>>,
+    restore_width: Rc<Cell<Option<Pixels>>>,
+    collapse: Rc<Cell<bool>>,
 }
 
 impl DockResize {
@@ -121,6 +123,7 @@ impl DockResize {
         dock: &base::DockContext,
         content: AnyElement,
         area: WeakEntity<base::DockArea>,
+        cx: &App,
     ) -> AnyElement {
         use gpui_kit::base::HandleEdge;
         let placement = dock.placement();
@@ -136,19 +139,30 @@ impl DockResize {
             }
             base::DockPlacement::Center => return content,
         };
+        let min_width = theme(cx).px(280.);
         let handle = gpui_kit::base::resize_handle(id, axis)
             .inside(edge)
             .with_appearance(Rc::new(|handle, _, cx| Some(resize_handle(handle, cx))))
             .on_drag(ResizeDrag, {
                 let active = self.active.clone();
+                let restore_width = self.restore_width.clone();
+                let collapse = self.collapse.clone();
+                let area = area.clone();
                 move |_, _, _, cx| {
                     cx.stop_propagation();
+                    restore_width.set(
+                        area.upgrade()
+                            .and_then(|area| area.read(cx).dock_size(placement)),
+                    );
+                    collapse.set(false);
                     active.set(Some(placement));
                     cx.new(|_| ResizeDrag)
                 }
             });
         let dock = dock.clone();
         let active = self.active.clone();
+        let restore_width = self.restore_width.clone();
+        let collapse = self.collapse.clone();
         let tracker = canvas(
             |_, _, _| (),
             move |_, (), window, _| {
@@ -156,9 +170,20 @@ impl DockResize {
                 window.on_mouse_event({
                     let dock = dock.clone();
                     let active = active.clone();
+                    let area = area.clone();
+                    let collapse = collapse.clone();
                     move |event: &MouseMoveEvent, phase, window, cx| {
                         if phase.bubble() && active.get() == Some(placement) {
-                            dock.resize_to(event.position, window, cx);
+                            let mut position = event.position;
+                            if placement == base::DockPlacement::Right
+                                && let Some(area) = area.upgrade()
+                            {
+                                let right = area.read(cx).bounds().right();
+                                let width = right - position.x;
+                                collapse.set(width < min_width / 2.);
+                                position.x = position.x.min(right - min_width);
+                            }
+                            dock.resize_to(position, window, cx);
                         }
                     }
                 });
@@ -166,11 +191,26 @@ impl DockResize {
                     let dock = dock.clone();
                     let active = active.clone();
                     let area = area.clone();
+                    let collapse = collapse.clone();
+                    let restore_width = restore_width.clone();
                     move |_: &MouseUpEvent, phase, window, cx| {
                         if phase.bubble() && active.get() == Some(placement) {
                             active.set(None);
                             dock.end_resize(window, cx);
-                            drop(area.update(cx, |_, cx| cx.emit(base::DockEvent::LayoutChanged)));
+                            drop(area.update(cx, |area, cx| {
+                                if collapse.replace(false) {
+                                    area.set_dock_size(
+                                        placement,
+                                        restore_width.get().unwrap_or(min_width).max(min_width),
+                                        window,
+                                        cx,
+                                    );
+                                    if area.is_dock_open(placement) {
+                                        area.toggle_dock(placement, window, cx);
+                                    }
+                                }
+                                cx.emit(base::DockEvent::LayoutChanged);
+                            }));
                         }
                     }
                 });

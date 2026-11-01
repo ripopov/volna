@@ -1362,9 +1362,9 @@ impl base::DockAreaRenderer for DockRenderer {
                 .paddings(crate::islands::insets(t.scale(i.gap), w.scale_factor()))
                 .child(crate::islands::rounded(content, cx))
                 .into_any_element();
-            self.resize.render(dock, content, self.area.clone())
+            self.resize.render(dock, content, self.area.clone(), cx)
         } else {
-            self.skin.render_dock(dock, content, w, cx)
+            self.resize.render(dock, content, self.area.clone(), cx)
         }
     }
 
