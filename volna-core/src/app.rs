@@ -1430,6 +1430,24 @@ impl App {
                 }
             }
             Command::MenuSelect(panel, action) => {
+                if let MenuAction::OpenPipeline(track) = action {
+                    let valid = self
+                        .panels
+                        .waves(panel)
+                        .and_then(|waves| waves.menu.as_ref())
+                        .is_some_and(|menu| {
+                            menu.kind == WaveMenuKind::Signal
+                                && menu.items().any(|item| item.action == action)
+                        });
+                    if valid {
+                        if let Some(waves) = self.panels.waves_mut(panel) {
+                            waves.menu_dismiss();
+                        }
+                        self.open_pipeline(track);
+                        self.changed();
+                    }
+                    return;
+                }
                 if matches!(action, MenuAction::OpenTable) {
                     let row = self
                         .panels

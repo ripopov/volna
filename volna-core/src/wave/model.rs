@@ -627,6 +627,7 @@ pub enum MenuAction {
     Format(String),
     RetryLoad,
     OpenTable,
+    OpenPipeline(Traced<TrackRef>),
     CopySignals,
     CutSignals,
     PasteSignals,
@@ -2164,6 +2165,13 @@ impl WaveModel {
             self.select_row(row, Modifiers::default());
         }
         let targets = self.menu_rows(row);
+        let pipeline_track = self.items[row].row.lane_track().filter(|&track| {
+            !doc.clocks.is_clock_track(track)
+                && doc.session(track.trace).is_some_and(|session| {
+                    session.capabilities().transactions
+                        && session.tracks().iter().any(|t| t.id == track.item)
+                })
+        });
         self.menu = Some(WaveMenu {
             kind: WaveMenuKind::Signal,
             row,
@@ -2183,6 +2191,15 @@ impl WaveModel {
             ],
         });
         let menu = self.menu.as_mut().expect("just opened");
+        if let Some(track) = pipeline_track {
+            menu.entries.insert(
+                1,
+                MenuEntry::Item(MenuItem::plain(
+                    MenuAction::OpenPipeline(track),
+                    "Open in Pipeline view",
+                )),
+            );
+        }
         if !doc.copied_rows.is_empty() {
             menu.entries.push(MenuEntry::Item(MenuItem::plain(
                 MenuAction::PasteSignals,
@@ -2452,6 +2469,7 @@ impl WaveModel {
         if matches!(
             action,
             MenuAction::OpenTable
+                | MenuAction::OpenPipeline(_)
                 | MenuAction::CopySignals
                 | MenuAction::CutSignals
                 | MenuAction::PasteSignals

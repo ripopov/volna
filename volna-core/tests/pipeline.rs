@@ -210,6 +210,72 @@ fn opened(n: u64) -> (App, Arc<dyn Session>, PanelId, PanelId) {
     (app, session, waves, pipeline)
 }
 
+#[test]
+fn waveform_menu_opens_the_clicked_generator_in_pipeline_view() {
+    use volna_core::wave::model::MenuAction;
+
+    let session = fixture(10);
+    let mut app = App::new();
+    app.set_session(session.clone());
+    app.handle(Command::AddVars(a_all(vec![0])));
+    let members = ["thread0", "bus"].map(|name| {
+        a(Member::Generator(
+            session
+                .hierarchy()
+                .scope(scope(session.as_ref(), &["cpu", name]))
+                .generators
+                .iter()
+                .next()
+                .unwrap(),
+        ))
+    });
+    app.handle(Command::AddToWaves(members.to_vec()));
+    let waves = app.panels.focused_id();
+    pump(&mut app);
+    app.panels.waves_mut(waves).unwrap().select_all();
+
+    for name in ["thread0", "bus", "thread0"] {
+        let track = a(generator_track(session.as_ref(), &["cpu", name]));
+        let panel = app.panels.waves_mut(waves).unwrap();
+        let row = panel
+            .items()
+            .iter()
+            .position(|entry| entry.row.lane_track() == Some(track))
+            .unwrap();
+        panel.open_signal_menu(&app.doc, row, point(10.0, 10.0));
+        let item = panel
+            .menu
+            .as_ref()
+            .unwrap()
+            .items()
+            .find(|item| matches!(item.action, MenuAction::OpenPipeline(_)))
+            .expect("generator offers pipeline view");
+        assert_eq!(item.label, "Open in Pipeline view");
+        assert_eq!(item.action, MenuAction::OpenPipeline(track));
+        let action = item.action.clone();
+        app.handle(Command::MenuSelect(waves, action));
+        let pipeline = app.panels.focused_id();
+        assert_eq!(
+            app.panels.pipeline(pipeline).unwrap().track.track(),
+            Some(track)
+        );
+        assert!(app.panels.waves(waves).unwrap().menu.is_none());
+        assert_eq!(app.panels.pipeline_for_track(track), Some(pipeline));
+    }
+    assert_eq!(app.panels.pipelines_mut().count(), 2);
+
+    let panel = app.panels.waves_mut(waves).unwrap();
+    panel.open_signal_menu(&app.doc, 0, point(10.0, 10.0));
+    assert!(
+        panel
+            .menu
+            .as_ref()
+            .unwrap()
+            .items()
+            .all(|item| { !matches!(item.action, MenuAction::OpenPipeline(_)) })
+    );
+}
+
 fn delayed_pipeline_fixture(duration: u64, stages: bool) -> Arc<dyn Session> {
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut options = vtr::WriterOptions::default();
