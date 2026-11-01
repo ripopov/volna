@@ -1431,8 +1431,8 @@ fn paint_event_counts(
     let gap = 3.0 * t.zoom;
     for &(x, n, room) in counts {
         let label = format!("×{n}");
-        let w = p.width(&label, FontRole::Mono, t.ui_size_small);
-        if w + 2.0 * gap <= room {
+        let room = room.min(clip.right() - x) - 2.0 * gap;
+        if p.width(&label, FontRole::Mono, t.ui_size_small) <= room {
             p.scene.clipped(clip, |scene| {
                 scene.text(
                     point(snap(x + gap), area.top()),
@@ -1722,6 +1722,11 @@ pub(crate) fn fit_label(text: &str, max_chars: usize, number: bool) -> Option<St
             .chain(std::iter::once('…'))
             .collect()
     })
+}
+
+fn fit_mono_prefix(p: &mut TextPainter<'_>, text: &str, size: f32, max_w: f32) -> Option<String> {
+    let char_w = p.width("0", FontRole::Mono, size).max(1.0);
+    fit_label(text, (max_w / char_w).floor().max(0.0) as usize, false)
 }
 
 fn label_runs(label: &str, t: &Theme, text: Color) -> Vec<(usize, String, Color)> {
@@ -2182,7 +2187,6 @@ fn paint_clock_row(
 }
 
 const CLOCK_BAND_HALF_PX: f64 = 3.0;
-const GATED_LABEL_PX: f32 = 52.0;
 
 fn paint_clock_wave(
     timeline: &std::sync::Arc<crate::clock::ClockTimeline>,
@@ -2294,9 +2298,7 @@ fn paint_clock_wave(
                 area.left(),
                 scaled(marks::DASHED, t),
             );
-            if xb - xa > z(GATED_LABEL_PX) {
-                labels.push((xa, xb, "gated".to_owned(), t.editor.text_placeholder));
-            }
+            labels.push((xa, xb, "gated".to_owned(), t.editor.text_placeholder));
         }
         scene.lines(
             std::mem::take(&mut dashed),
@@ -2305,9 +2307,9 @@ fn paint_clock_wave(
         );
     });
     for (xa, xb, label, color) in labels {
-        let w = p.width(&label, FontRole::Mono, t.ui_size_small);
         let left = xa.max(clip.left()) + z(6.0);
-        if left + w + z(6.0) <= xb.min(clip.right()) {
+        let room = xb.min(clip.right()) - left - z(6.0);
+        if let Some(label) = fit_mono_prefix(p, &label, t.ui_size_small, room) {
             p.scene.clipped(clip, |scene| {
                 scene.text(
                     point(snap(left), area.top()),
@@ -3505,8 +3507,8 @@ fn paint_lane_bars(
             .then(|| {
                 let text = lane::label(tx);
                 let lx = xa.max(waves.left()) + z(4.0);
-                let w = p.width(&text, FontRole::Mono, font);
-                (xb - lx >= w + z(4.0)).then(|| (point(lx, rect.top()), text))
+                let room = xb.min(waves.right()) - lx - z(4.0);
+                fit_mono_prefix(p, &text, font, room).map(|text| (point(lx, rect.top()), text))
             })
             .flatten();
         bars.push(Bar {
@@ -3618,6 +3620,100 @@ mod tests {
     use super::*;
     use crate::scene::{MonoMeasure, Prim};
     use volna_trace::data::history::VecHistory;
+
+    #[test]
+    fn record_bars_keep_label_prefixes_within_visible_bounds() {
+        use crate::data::loaded_tracks::LoadedGenerator;
+        use crate::wave::model::RowHeight;
+        use volna_trace::data::transactions::{
+            AttributeValue, SpanKind, TrackRef, Transaction, TransactionAttribute, TransactionRef,
+        };
+
+        for dark in [false, true] {
+            for zoom in [0.75, 1.0, 2.0] {
+                let mut t = Theme::volna(dark);
+                t.zoom = zoom;
+                let height = 24.0 * zoom;
+                let lane = TxLane::unresolved(TraceId::default(), vec![], RowHeight::DEFAULT);
+                let geometry = LaneGeometry::new(0.0, height, height, lane.height);
+                let font = ((geometry.sub_h - 4.0 * zoom) * 0.9).min(t.mono_size);
+                let char_w = MonoMeasure.text_width("0", FontRole::Mono, font);
+                let draw = |label: &str, width: f32, viewport: Viewport| {
+                    let generator = LoadedGenerator::new(
+                        TrackRef(1),
+                        vec![Transaction {
+                            id: TransactionRef(1),
+                            generator: TrackRef(1),
+                            begin: 0,
+                            end: 1000,
+                            status: Status::Ok,
+                            kind: SpanKind::Producer,
+                            parent: None,
+                            attributes: vec![TransactionAttribute {
+                                key: "vtr.label".into(),
+                                value: AttributeValue::Text(label.into()),
+                            }],
+                            events: vec![],
+                            stages: vec![],
+                        }],
+                        Default::default(),
+                        vec![],
+                    )
+                    .unwrap();
+                    let mut scene = Scene::default();
+                    paint_lane_bars(
+                        &lane,
+                        &generator,
+                        &Document::new(),
+                        &viewport,
+                        Rect::from_xywh(37.0, 0.0, width, height),
+                        &geometry,
+                        &mut TextPainter {
+                            theme: &t,
+                            text: &mut TextCache::default(),
+                            measure: &mut MonoMeasure,
+                            scene: &mut scene,
+                        },
+                    );
+                    for prim in &scene.prims {
+                        if let Prim::Text { origin, text, .. } = prim {
+                            assert!(origin.x >= 37.0 + 4.0 * zoom);
+                            assert!(
+                                origin.x + text.chars().count() as f32 * char_w
+                                    <= 37.0 + width - 4.0 * zoom
+                            );
+                        }
+                    }
+                    scene.texts().map(str::to_owned).collect::<Vec<_>>()
+                };
+                let viewport = Viewport {
+                    start: 0.0,
+                    end: 1000.0,
+                };
+                let width = 8.0 * zoom + 6.25 * char_w;
+                assert_eq!(draw("AQL_BARRIER_AND", width, viewport), ["AQL_B…"]);
+                assert_eq!(draw("αβγδεζηθ", width, viewport), ["αβγδε…"]);
+                assert_eq!(draw("AND", width, viewport), ["AND"]);
+                assert!(draw("AQL_BARRIER_AND", 8.0 * zoom + 2.5 * char_w, viewport).is_empty());
+                for viewport in [
+                    Viewport {
+                        start: 0.0,
+                        end: 500.0,
+                    },
+                    Viewport {
+                        start: 500.0,
+                        end: 1000.0,
+                    },
+                    Viewport {
+                        start: 250.0,
+                        end: 750.0,
+                    },
+                ] {
+                    assert_eq!(draw("AQL_BARRIER_AND", width, viewport), ["AQL_B…"]);
+                }
+            }
+        }
+    }
 
     #[test]
     fn labels_keep_a_numbers_last_digits_and_texts_beginning() {
@@ -3980,6 +4076,17 @@ mod tests {
         });
         let texts: Vec<_> = whole.texts().collect();
         assert_eq!(texts, ["500.00 MHz · 2 ns", "250.00 MHz · 4 ns", "gated"]);
+        let narrow = draw(Viewport {
+            start: 0.0,
+            end: 4000.0,
+        });
+        let labels: Vec<_> = narrow.texts().collect();
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.starts_with("500") && label.ends_with('…'))
+        );
+        assert!(!labels.contains(&"500.00 MHz · 2 ns"));
         assert!(whole.quads().all(|(_, c)| c != t.wave_high_fill));
         assert!(
             whole
@@ -4031,6 +4138,26 @@ mod tests {
             ["×3"],
             "no room beside the second"
         );
+    }
+
+    #[test]
+    fn event_counts_hide_incomplete_counts_at_the_canvas_edge() {
+        let t = Theme::volna(true);
+        let char_w = MonoMeasure.text_width("0", FontRole::Mono, t.ui_size_small);
+        let area = Rect::from_xywh(0.0, 0.0, 6.0 + 4.25 * char_w, 24.0);
+        let mut scene = Scene::default();
+        paint_event_counts(
+            &[(0.0, 123456, 1000.0)],
+            area,
+            area,
+            &mut TextPainter {
+                theme: &t,
+                text: &mut TextCache::default(),
+                measure: &mut MonoMeasure,
+                scene: &mut scene,
+            },
+        );
+        assert_eq!(scene.texts().count(), 0);
     }
 
     #[test]
