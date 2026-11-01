@@ -45,6 +45,20 @@ pub enum ValueKind {
     Weak,
 }
 
+impl ValueKind {
+    #[must_use]
+    pub fn combine(self, other: Self) -> Self {
+        use ValueKind::{DontCare, HighImp, Normal, Undef, Weak};
+        match (self, other) {
+            (Undef, _) | (_, Undef) => Undef,
+            (HighImp, _) | (_, HighImp) => HighImp,
+            (DontCare, _) | (_, DontCare) => DontCare,
+            (Weak, _) | (_, Weak) => Weak,
+            (Normal, Normal) => Normal,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SignalShape {
     Event,

@@ -27,6 +27,10 @@ pub trait SignalHistory: Send + Sync {
         false
     }
 
+    fn value_kind(&self, i: Option<usize>) -> super::ValueKind {
+        self.value_view(i).kind()
+    }
+
     fn bit(&self, i: Option<usize>) -> Bit;
 
     fn index_at(&self, t: u64) -> Option<usize> {

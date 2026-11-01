@@ -216,3 +216,131 @@ fn picorv32_axi_signals_are_stable_during_panning() {
         }
     }
 }
+
+#[test]
+fn cached_rendering_matches_uncached_across_pans_scales_and_histories() {
+    use crate::data::projection::{BitSlice, ProjectedHistory};
+    use std::sync::Arc;
+    use volna_trace::remote::{history::PackedHistory, memory::MemoryBudget};
+
+    let budget = MemoryBudget::new(16 << 20);
+    let translators = crate::data::Translators::builtin();
+    let mut cache = DigitalCache::default();
+    let mut saw_cached = false;
+    for origin in [0, 1_u64 << 60] {
+        let source: Arc<dyn SignalHistory> = Arc::new(VecHistory {
+            shape: SignalShape::Vector { width: 4 },
+            times: (0..8192).map(|i| origin + i / 2 * 3).collect(),
+            values: (0..8192)
+                .map(|i| {
+                    WaveValue::Bits(
+                        [
+                            "0000", "0001", "x-z1", "hl--", "zzzz", "uuuu", "10xz", "1010",
+                        ][i % 8]
+                            .into(),
+                    )
+                })
+                .collect(),
+            initial: WaveValue::Unavailable,
+        });
+        let packed: Arc<dyn SignalHistory> =
+            Arc::new(PackedHistory::from_history_with_limit(source.as_ref(), u64::MAX).unwrap());
+        let bit: Arc<dyn SignalHistory> = Arc::new(
+            ProjectedHistory::build(source.clone(), BitSlice { first: 2, last: 2 }, &budget)
+                .unwrap(),
+        );
+        let slice: Arc<dyn SignalHistory> = Arc::new(
+            ProjectedHistory::build(source.clone(), BitSlice { first: 3, last: 1 }, &budget)
+                .unwrap(),
+        );
+        for h in [source, packed, bit, slice] {
+            for span in [400.5, 1602.0, 12_345.67, 100_000.0] {
+                for pan in [-1500.0, -0.3, 0.0, 0.7, 257.0, 1600.0, 0.0] {
+                    let vp = Viewport {
+                        start: origin as f64 + pan,
+                        end: origin as f64 + pan + span,
+                    };
+                    for zoom in [0.75, 1.0, 1.5] {
+                        let theme = Theme::volna(true).zoomed(zoom);
+                        let area = Rect::from_xywh(37.25, 24.0, 400.5, 24.0 * zoom);
+                        let mut expected = Scene::default();
+                        let mut actual = Scene::default();
+                        if h.shape() == SignalShape::Bit {
+                            paint_bit_row(h.as_ref(), &vp, area, &theme, &mut expected);
+                            let grid = SamplingGrid::new(&vp, f64::from(area.width()));
+                            let samples = cache.sample(&h, &grid, true, &budget);
+                            saw_cached |= samples.is_some();
+                            paint_bits_sampled(
+                                DigitalRow {
+                                    history: h.as_ref(),
+                                    samples: samples.as_ref(),
+                                },
+                                &vp,
+                                area,
+                                &theme,
+                                &mut actual,
+                                true,
+                                0..401,
+                            );
+                        } else {
+                            for format in ["hex", "bin"] {
+                                expected.clear();
+                                actual.clear();
+                                let translator = translators.get(format).unwrap();
+                                let mut text = TextCache::default();
+                                let mut p = TextPainter {
+                                    theme: &theme,
+                                    text: &mut text,
+                                    measure: &mut MonoMeasure,
+                                    scene: &mut expected,
+                                };
+                                paint_bus_row(
+                                    h.as_ref(),
+                                    translator.as_ref(),
+                                    &vp,
+                                    area,
+                                    area,
+                                    8.0,
+                                    &mut p,
+                                );
+                                let grid = bus_grid(&vp, f64::from(area.width()), &theme);
+                                let samples = cache.sample(&h, &grid, false, &budget);
+                                saw_cached |= samples.is_some();
+                                let mut p = TextPainter {
+                                    theme: &theme,
+                                    text: &mut text,
+                                    measure: &mut MonoMeasure,
+                                    scene: &mut actual,
+                                };
+                                paint_bus_row_sampled(
+                                    DigitalRow {
+                                        history: h.as_ref(),
+                                        samples: samples.as_ref(),
+                                    },
+                                    translator.as_ref(),
+                                    &vp,
+                                    area,
+                                    area,
+                                    8.0,
+                                    &mut p,
+                                );
+                                assert_eq!(
+                                    actual.prims, expected.prims,
+                                    "{origin}, {span}, {pan}, {zoom}, {format}"
+                                );
+                            }
+                        }
+                        assert_eq!(
+                            actual.prims, expected.prims,
+                            "{origin}, {span}, {pan}, {zoom}"
+                        );
+                    }
+                }
+            }
+        }
+        cache.prune();
+    }
+    assert!(saw_cached);
+    drop(cache);
+    assert_eq!(budget.used(), 0);
+}

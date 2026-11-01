@@ -1,7 +1,7 @@
 //! Immutable packed signal payload shared by the remote receiver and renderer.
 
 use crate::data::value_view::ValueView;
-use crate::data::{Bit, SignalHistory, SignalShape, WaveValue};
+use crate::data::{Bit, SignalHistory, SignalShape, ValueKind, WaveValue};
 use serde::{Deserialize, Serialize};
 
 const LOGIC: &[u8; 9] = b"01xzuwlh-";
@@ -16,6 +16,10 @@ pub struct PackedHistory {
     data: Vec<u8>,
     #[serde(skip)]
     reservation: Option<super::memory::Reservation>,
+    #[serde(skip)]
+    kinds: Vec<ValueKind>,
+    #[serde(skip)]
+    normal: bool,
 }
 
 impl<'de> Deserialize<'de> for PackedHistory {
@@ -33,14 +37,17 @@ impl<'de> Deserialize<'de> for PackedHistory {
             offsets,
             data,
         } = Storage::deserialize(deserializer)?;
-        let result = Self {
+        let mut result = Self {
             shape,
             times,
             offsets,
             data,
             reservation: None,
+            kinds: vec![],
+            normal: false,
         };
         result.validate().map_err(serde::de::Error::custom)?;
+        result.prepare_kinds();
         Ok(result)
     }
 }
@@ -94,6 +101,8 @@ impl PackedHistory {
         let data_limit = limit - overhead;
         let mut result = Self {
             reservation: None,
+            kinds: vec![],
+            normal: false,
             shape: history.shape(),
             times: Vec::with_capacity(history.len()),
             offsets: Vec::with_capacity(if history.shape() == SignalShape::Text {
@@ -112,6 +121,7 @@ impl PackedHistory {
             result.offsets.push(result.data.len() as u64);
         }
         result.validate()?;
+        result.prepare_kinds();
         Ok(result)
     }
 
@@ -251,6 +261,15 @@ impl PackedHistory {
         Ok(())
     }
 
+    fn prepare_kinds(&mut self) {
+        if matches!(self.shape, SignalShape::Vector { .. }) {
+            self.kinds = (0..=self.len())
+                .map(|i| self.value_view(i.checked_sub(1)).kind())
+                .collect();
+            self.normal = self.kinds.iter().all(|&kind| kind == ValueKind::Normal);
+        }
+    }
+
     fn raw(&self, i: Option<usize>) -> &[u8] {
         let value = i.map_or(0, |i| i + 1);
         if let Some(stride) = stride(self.shape) {
@@ -261,6 +280,16 @@ impl PackedHistory {
 }
 
 impl SignalHistory for PackedHistory {
+    fn value_kind(&self, i: Option<usize>) -> ValueKind {
+        if self.kinds.is_empty() {
+            self.value_view(i).kind()
+        } else {
+            self.kinds[i.map_or(0, |i| i + 1)]
+        }
+    }
+    fn always_normal(&self) -> bool {
+        self.normal
+    }
     fn value_view(&self, i: Option<usize>) -> crate::data::value_view::ValueView<'_> {
         use crate::data::value_view::{LogicView, ValueView};
         let data = self.raw(i);
@@ -378,6 +407,59 @@ mod tests {
                     assert_eq!(packed.bit(Some(i)), source.bit(Some(i)));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn prepared_kinds_match_decoded_values_after_serde_and_preserve_initial_state() {
+        for initial in ["000", "xxx"] {
+            let values = LOGIC
+                .iter()
+                .flat_map(|&a| {
+                    LOGIC.iter().flat_map(move |&b| {
+                        LOGIC.iter().map(move |&c| {
+                            WaveValue::Bits(String::from_utf8(vec![a, b, c]).unwrap())
+                        })
+                    })
+                })
+                .collect::<Vec<_>>();
+            let source = VecHistory {
+                shape: SignalShape::Vector { width: 3 },
+                times: vec![7; values.len()],
+                values,
+                initial: WaveValue::Bits(initial.into()),
+            };
+            let packed = PackedHistory::from_history(&source).unwrap();
+            let bytes = bincode::serialize(&packed).unwrap();
+            let decoded: PackedHistory = bincode::deserialize(&bytes).unwrap();
+            let budget = crate::remote::memory::MemoryBudget::new(1 << 20);
+            let mut decoder =
+                stream::HistoryDecoder::with_budget(bytes.len() as u64, u64::MAX, &budget).unwrap();
+            for chunk in bytes.chunks(crate::remote::transport::DATA_BYTES) {
+                decoder.feed(chunk).unwrap();
+            }
+            while !decoder.step().unwrap() {}
+            let streamed = decoder.finish().unwrap();
+            for history in [&packed, &decoded, &streamed] {
+                for i in 0..=source.len() {
+                    let index = i.checked_sub(1);
+                    assert_eq!(history.value_kind(index), source.value_view(index).kind());
+                }
+                assert!(!history.always_normal());
+            }
+        }
+        for initial in [WaveValue::Unavailable, WaveValue::Bits("000".into())] {
+            let source = VecHistory {
+                shape: SignalShape::Vector { width: 3 },
+                times: vec![1],
+                values: vec![WaveValue::Bits("010".into())],
+                initial,
+            };
+            let packed = PackedHistory::from_history(&source).unwrap();
+            assert_eq!(
+                packed.always_normal(),
+                source.value_view(None).kind() == ValueKind::Normal
+            );
         }
     }
 

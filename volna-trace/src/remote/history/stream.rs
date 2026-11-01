@@ -1,7 +1,7 @@
 //! Incremental decoder for `PackedHistory`'s fixed bincode layout.
 
 use super::{PackedHistory, stride};
-use crate::data::SignalShape;
+use crate::data::{SignalShape, ValueKind};
 use crate::remote::transport::DATA_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +30,7 @@ pub struct HistoryDecoder {
     value: usize,
     position: usize,
     utf8: Utf8,
+    kind: ValueKind,
 }
 
 impl HistoryDecoder {
@@ -45,6 +46,8 @@ impl HistoryDecoder {
                 offsets: vec![],
                 data: vec![],
                 reservation: None,
+                kinds: vec![],
+                normal: true,
             },
             stage: Stage::Shape,
             scalar: [0; 8],
@@ -55,6 +58,7 @@ impl HistoryDecoder {
             value: 0,
             position: 0,
             utf8: Utf8::default(),
+            kind: ValueKind::Normal,
         })
     }
 
@@ -191,6 +195,20 @@ impl HistoryDecoder {
                         minimum.is_some_and(|size| size <= self.declared),
                         "history arrays exceed declared size"
                     );
+                    if matches!(self.history.shape, SignalShape::Vector { .. }) {
+                        let kinds = count
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow::anyhow!("kind count overflow"))?;
+                        if let Some(held) = &mut self.history.reservation {
+                            let bytes = (kinds as u64)
+                                .checked_mul(std::mem::size_of::<ValueKind>() as u64)
+                                .ok_or_else(|| anyhow::anyhow!("kind storage size overflow"))?;
+                            held.grow_object("the signal history", bytes)?;
+                        }
+                        self.history.kinds.try_reserve_exact(kinds)?;
+                    } else {
+                        self.history.normal = false;
+                    }
                     self.history.times.try_reserve_exact(count)?;
                     self.stage = if count == 0 {
                         Stage::OffsetsLen
@@ -316,6 +334,11 @@ impl HistoryDecoder {
                     ),
                     _ => anyhow::bail!("unknown signal value tag"),
                 }
+                self.kind = if tag == 0 {
+                    ValueKind::Undef
+                } else {
+                    ValueKind::Normal
+                };
                 self.position = 1;
                 budget -= 1;
             }
@@ -330,6 +353,10 @@ impl HistoryDecoder {
                         } else {
                             anyhow::ensure!(byte >> 4 < 9, "invalid logic state");
                         }
+                        self.kind = self.kind.combine(crate::data::value::kind_of_codes([
+                            super::LOGIC[(byte & 15) as usize],
+                            super::LOGIC[(byte >> 4) as usize],
+                        ]));
                     }
                     3 => self.utf8.byte(byte)?,
                     _ => {}
@@ -339,6 +366,10 @@ impl HistoryDecoder {
             self.position = stop;
             if stop == data.len() {
                 anyhow::ensure!(self.utf8.remaining == 0, "truncated UTF-8 value");
+                if matches!(self.history.shape, SignalShape::Vector { .. }) {
+                    self.history.kinds.push(self.kind);
+                    self.history.normal &= self.kind == ValueKind::Normal;
+                }
                 self.value += 1;
                 self.position = 0;
             }
@@ -408,6 +439,12 @@ mod tests {
                 SignalShape::Vector { width: 9 },
                 WaveValue::Bits("01xzuwlh-".into()),
             ),
+            (
+                SignalShape::Vector {
+                    width: (DATA_BYTES * 4 + 1) as u32,
+                },
+                WaveValue::Bits(format!("{}z", "1".repeat(DATA_BYTES * 4))),
+            ),
             (SignalShape::Real, WaveValue::Real(f64::INFINITY)),
             (SignalShape::Event, WaveValue::Bits("1".into())),
             (
@@ -443,12 +480,55 @@ mod tests {
                 let result = decoder.finish().unwrap();
                 result.validate().unwrap();
                 assert_eq!(result.value(None), source.value(None));
+                assert_eq!(result.value_kind(None), source.value_view(None).kind());
                 for i in 0..source.len() {
                     assert_eq!(result.value(Some(i)), source.value(Some(i)));
+                    assert_eq!(
+                        result.value_kind(Some(i)),
+                        source.value_view(Some(i)).kind()
+                    );
                 }
             }
         }
     }
+    #[test]
+    fn classification_storage_is_admitted_and_released_with_the_history() {
+        use crate::remote::memory::MemoryBudget;
+        let source = VecHistory {
+            shape: SignalShape::Vector { width: 3 },
+            times: vec![7, 7, 9],
+            values: ["001", "z01", "01x"]
+                .map(|s| WaveValue::Bits(s.into()))
+                .into(),
+            initial: WaveValue::Bits("000".into()),
+        };
+        let bytes = bincode::serialize(&PackedHistory::from_history(&source).unwrap()).unwrap();
+        let base = bytes.len() as u64
+            + std::mem::size_of::<PackedHistory>() as u64
+            + 2 * std::mem::size_of::<usize>() as u64;
+        let budget = MemoryBudget::new(base);
+        let mut decoder =
+            HistoryDecoder::with_budget(bytes.len() as u64, u64::MAX, &budget).unwrap();
+        assert!(decoder.feed(&bytes).is_err());
+        drop(decoder);
+        assert_eq!(budget.used(), 0);
+        let resident = base + 4 * std::mem::size_of::<ValueKind>() as u64;
+        budget.set_limit(resident);
+        let mut decoder =
+            HistoryDecoder::with_budget(bytes.len() as u64, u64::MAX, &budget).unwrap();
+        decoder.feed(&bytes).unwrap();
+        while !decoder.step().unwrap() {}
+        let history = decoder.finish().unwrap();
+        assert_eq!(budget.used(), resident);
+        for i in 0..=source.len() {
+            let index = i.checked_sub(1);
+            assert_eq!(history.value_kind(index), source.value_view(index).kind());
+        }
+        assert!(!history.always_normal());
+        drop(history);
+        assert_eq!(budget.used(), 0);
+    }
+
     #[test]
     fn utf8_rejects_overlong_surrogates_and_out_of_range() {
         for bytes in [

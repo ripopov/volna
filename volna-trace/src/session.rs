@@ -253,6 +253,9 @@ impl SignalHistory for AccountedHistory {
     fn always_normal(&self) -> bool {
         self.inner.always_normal()
     }
+    fn value_kind(&self, index: Option<usize>) -> crate::data::ValueKind {
+        self.inner.value_kind(index)
+    }
     fn bit(&self, index: Option<usize>) -> crate::data::Bit {
         self.inner.bit(index)
     }

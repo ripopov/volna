@@ -371,7 +371,7 @@ impl Workspace {
         let mut context = RestoreContext {
             doc: &app.doc,
             traces: &open,
-            budget: app.table_memory_budget(),
+            budget: app.viewer_memory_budget(),
             detail_items: app.settings.resolved().transaction.detail_items,
             report: &mut report,
             row_count: 0,

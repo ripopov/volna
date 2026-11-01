@@ -72,7 +72,7 @@ impl<'a> KindReader<'a> {
         let kind = if self.bit {
             self.h.bit(i).kind()
         } else {
-            self.h.value_view(i).kind()
+            self.h.value_kind(i)
         };
         self.last = Some((i, kind));
         kind

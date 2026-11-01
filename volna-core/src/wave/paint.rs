@@ -5,9 +5,12 @@ mod overlaid;
 #[cfg(test)]
 mod pan_tests;
 mod points;
+#[cfg(test)]
+mod profiling;
 mod sampling;
 
-use sampling::SamplingGrid;
+pub(crate) use sampling::DigitalCache;
+use sampling::{Samples, SamplingGrid};
 
 use crate::analysis::AnalysisLoad;
 use crate::color::Color;
@@ -17,7 +20,9 @@ use crate::geometry::CursorIcon;
 use crate::geometry::{Point, Rect, point, size, snap};
 use crate::icons::IconName;
 use crate::pipeline::PipelineModel;
-use crate::scene::{FontRole, Scene, TextCache, TextMeasure};
+use crate::scene::{FontRole, Scene};
+#[cfg(test)]
+use crate::scene::{TextCache, TextMeasure};
 use crate::theme::Theme;
 use crate::trace::TraceId;
 use crate::wave::analog::{self, Analog, AnalogDraw, Plot, Readout, Series};
@@ -170,26 +175,21 @@ fn changes_between(a: Option<usize>, b: Option<usize>) -> usize {
     }
 }
 
-pub fn paint(
+pub(crate) fn paint(
     model: &WaveModel,
     doc: &Document,
-    theme: &Theme,
-    text: &mut TextCache,
-    measure: &mut dyn TextMeasure,
-    scene: &mut Scene,
+    mut p: TextPainter<'_>,
     focused: bool,
+    cache: &mut DigitalCache,
+    budget: &volna_trace::remote::memory::MemoryBudget,
 ) {
+    let theme = p.theme;
+    cache.begin_paint_pass();
     let layout = model.last_layout().clone();
     let bounds = layout.bounds;
     let t = theme;
     let z = |v: f32| v * t.zoom;
-    let char_w = text.width(measure, "0", FontRole::Mono, t.mono_size);
-    let mut p = TextPainter {
-        theme,
-        text,
-        measure,
-        scene,
-    };
+    let char_w = p.width("0", FontRole::Mono, t.mono_size);
     let viewport = model.viewport(doc);
     let cursor = model.cursor(doc);
     let base = doc.time_base();
@@ -598,6 +598,7 @@ pub fn paint(
                 let series = Series::of(doc, item.source.signal(), h, kind);
                 paint_analog_row(item, a, &series, &viewport, wave_row, waves, row_h, &mut p);
             }
+            (Some(_), _) if wave_row.width() <= 0.0 || viewport.width() <= 0.0 => {}
             (Some(h), _) => match item.shape {
                 SignalShape::Event => {
                     let mut counts = Vec::new();
@@ -607,17 +608,38 @@ pub fn paint(
                     paint_event_counts(&counts, wave_row, waves, &mut p);
                 }
                 SignalShape::Bit => p.scene.clipped(waves, |scene| {
-                    paint_bit_row(h.as_ref(), &viewport, wave_row, t, scene);
+                    let grid = SamplingGrid::new(&viewport, f64::from(wave_row.width()));
+                    let samples = cache.sample(h, &grid, true, budget);
+                    let columns = 0..wave_row.width().ceil().max(0.0) as usize;
+                    paint_bits_sampled(
+                        DigitalRow {
+                            history: h.as_ref(),
+                            samples: samples.as_ref(),
+                        },
+                        &viewport,
+                        wave_row,
+                        t,
+                        scene,
+                        true,
+                        columns,
+                    );
                 }),
-                _ => paint_bus_row(
-                    h.as_ref(),
-                    item.translator.as_ref(),
-                    &viewport,
-                    wave_row,
-                    waves,
-                    char_w,
-                    &mut p,
-                ),
+                _ => {
+                    let grid = bus_grid(&viewport, f64::from(wave_row.width()), t);
+                    let samples = cache.sample(h, &grid, false, budget);
+                    paint_bus_row_sampled(
+                        DigitalRow {
+                            history: h.as_ref(),
+                            samples: samples.as_ref(),
+                        },
+                        item.translator.as_ref(),
+                        &viewport,
+                        wave_row,
+                        waves,
+                        char_w,
+                        &mut p,
+                    );
+                }
             },
             (None, Some(err)) => {
                 let err = err.clone();
@@ -1494,6 +1516,38 @@ fn paint_bits(
     high_fill: bool,
     columns: std::ops::Range<usize>,
 ) {
+    paint_bits_sampled(
+        DigitalRow {
+            history: h,
+            samples: None,
+        },
+        vp,
+        area,
+        t,
+        scene,
+        high_fill,
+        columns,
+    );
+}
+
+struct DigitalRow<'a> {
+    history: &'a dyn SignalHistory,
+    samples: Option<&'a Samples>,
+}
+
+fn paint_bits_sampled(
+    row: DigitalRow<'_>,
+    vp: &Viewport,
+    area: Rect,
+    t: &Theme,
+    scene: &mut Scene,
+    high_fill: bool,
+    columns: std::ops::Range<usize>,
+) {
+    let DigitalRow {
+        history: h,
+        samples,
+    } = row;
     let wf = f64::from(area.width());
     if wf <= 0.0 || area.height() <= 0.0 || vp.width() <= 0.0 || columns.is_empty() {
         return;
@@ -1520,7 +1574,16 @@ fn paint_bits(
             _ => mid,
         }
     };
-    let mut idx = grid.index_before(h, columns.start, None);
+    let mut idx = samples.map_or_else(
+        || grid.index_before(h, columns.start, None),
+        |s| {
+            if columns.start == 0 {
+                s.before
+            } else {
+                s.columns[columns.start - 1].end
+            }
+        },
+    );
     let mut bit = h.bit(idx);
     let mut hint = idx.unwrap_or(0);
     let mut run_start = columns.start as f32 * grid.pixel;
@@ -1587,7 +1650,10 @@ fn paint_bits(
     };
 
     for x in columns {
-        let idx1 = grid.index_before(h, x + 1, Some(hint));
+        let idx1 = samples.map_or_else(
+            || grid.index_before(h, x + 1, Some(hint)),
+            |s| s.columns[x].end,
+        );
         let n = changes_between(idx, idx1);
         if n < 2 && !dense.is_empty() {
             marks::paint_aliased(scene, t, &dense, &raster, top, bottom);
@@ -1623,7 +1689,7 @@ fn paint_bits(
             dense.push(marks::Aliased {
                 x,
                 changes: n,
-                kinds: kinds.column(idx, last),
+                kinds: samples.map_or_else(|| kinds.column(idx, last), |s| s.columns[x].kinds),
             });
         }
         run_start = if n == 1 {
@@ -1759,6 +1825,7 @@ fn fill_hexagon(
     }
 }
 
+#[cfg(test)]
 fn paint_bus_row(
     h: &dyn SignalHistory,
     translator: &dyn Translator,
@@ -1768,13 +1835,43 @@ fn paint_bus_row(
     char_w: f32,
     p: &mut TextPainter<'_>,
 ) {
+    paint_bus_row_sampled(
+        DigitalRow {
+            history: h,
+            samples: None,
+        },
+        translator,
+        vp,
+        area,
+        clip,
+        char_w,
+        p,
+    );
+}
+
+fn bus_grid(vp: &Viewport, width: f64, t: &Theme) -> SamplingGrid {
+    SamplingGrid::new(vp, width).with_padding((2.0 * SLANT_PX * t.zoom).max(MIN_SEGMENT_PX as f32))
+}
+
+fn paint_bus_row_sampled(
+    row: DigitalRow<'_>,
+    translator: &dyn Translator,
+    vp: &Viewport,
+    area: Rect,
+    clip: Rect,
+    char_w: f32,
+    p: &mut TextPainter<'_>,
+) {
+    let DigitalRow {
+        history: h,
+        samples,
+    } = row;
     let t = p.theme;
     let wf = f64::from(area.width());
     if wf <= 0.0 || area.height() <= 0.0 || vp.width() <= 0.0 {
         return;
     }
-    let grid = SamplingGrid::new(vp, wf)
-        .with_padding((2.0 * SLANT_PX * t.zoom).max(MIN_SEGMENT_PX as f32));
+    let grid = bus_grid(vp, wf, t);
     let w_px = grid.len;
     let x0 = area.left() + grid.left;
     let raster = marks::ColumnGrid {
@@ -1796,19 +1893,22 @@ fn paint_bus_row(
         })
         .collect();
     let mut kinds = marks::KindReader::new(h, false);
-    let mut idx = grid.index_before(h, 0, None);
+    let mut idx = samples.map_or_else(|| grid.index_before(h, 0, None), |s| s.before);
     let mut hint = idx.unwrap_or(0);
     let mut cur_start = 0usize;
     for (x, column) in columns.iter_mut().enumerate() {
-        let idx1 = grid.index_before(h, x + 1, Some(hint));
+        let idx1 = samples.map_or_else(
+            || grid.index_before(h, x + 1, Some(hint)),
+            |s| s.columns[x].end,
+        );
         let n = changes_between(idx, idx1);
         if n == 0 {
-            column.kinds = kinds.state(idx);
+            column.kinds = samples.map_or_else(|| kinds.state(idx), |s| s.columns[x].kinds);
             continue;
         }
         let last = idx1.expect("a column with changes ends on one");
         column.changes = n;
-        column.kinds = kinds.column(idx, last);
+        column.kinds = samples.map_or_else(|| kinds.column(idx, last), |s| s.columns[x].kinds);
         if x > cur_start {
             segments.push(Segment {
                 x_start: cur_start,

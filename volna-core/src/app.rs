@@ -545,8 +545,9 @@ pub struct App {
     pub(crate) events: Vec<Event>,
     text: TextCache,
     scene: Scene,
+    digital_cache: crate::wave::paint::DigitalCache,
     projections: crate::data::projection::Projections,
-    table_budget: volna_trace::remote::memory::MemoryBudget,
+    viewer_budget: volna_trace::remote::memory::MemoryBudget,
     lane_tracks: (u64, std::collections::HashSet<Traced<TrackRef>>),
 }
 
@@ -581,8 +582,9 @@ impl App {
             events: Vec::new(),
             text: TextCache::default(),
             scene: Scene::default(),
+            digital_cache: crate::wave::paint::DigitalCache::default(),
             projections: crate::data::projection::Projections::default(),
-            table_budget: {
+            viewer_budget: {
                 let (limit, object_limit) = settings::Settings::default()
                     .limits()
                     .bytes()
@@ -665,7 +667,7 @@ impl App {
     }
 
     pub fn take_requests(&mut self) -> Vec<LoadRequest> {
-        let budget = self.table_memory_budget();
+        let budget = self.viewer_memory_budget();
         let wanted = self
             .panels
             .iter()
@@ -697,7 +699,7 @@ impl App {
         }
         requests.extend(self.doc.take_requests());
         {
-            let budget = self.table_memory_budget();
+            let budget = self.viewer_memory_budget();
             requests.extend(self.activity.sync(
                 self.doc.traces(),
                 self.activity_viewport(),
@@ -1134,6 +1136,9 @@ impl App {
         }
         self.cancel_pipeline_opening(&command);
         self.dispatch(command, now);
+        if !pointer {
+            self.digital_cache.prune();
+        }
         for waves in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
             if let Some(notice) = waves.bus_notice.take() {
                 self.events.push(Event::Notice(notice));
@@ -1581,7 +1586,7 @@ impl App {
             return;
         }
         let model = TransactionModel::new(
-            self.table_memory_budget(),
+            self.viewer_memory_budget(),
             self.settings.resolved().transaction.detail_items,
         );
         let label = Some("Open transaction panel".to_owned());
@@ -1637,7 +1642,7 @@ impl App {
     }
 
     fn account_local_session(&self, session: Arc<dyn Session>) -> anyhow::Result<Arc<dyn Session>> {
-        volna_trace::session::account_local_session(session, self.table_budget.clone())
+        volna_trace::session::account_local_session(session, self.viewer_budget.clone())
     }
 
     #[must_use]
@@ -1665,18 +1670,18 @@ impl App {
         let Ok((limit, object_limit)) = self.settings.resolved().limits().bytes() else {
             return;
         };
-        for budget in [self.table_budget.clone(), self.table_memory_budget()] {
+        for budget in [self.viewer_budget.clone(), self.viewer_memory_budget()] {
             budget.set_limit(limit);
             budget.set_object_limit(object_limit);
         }
     }
 
-    pub(crate) fn table_memory_budget(&self) -> volna_trace::remote::memory::MemoryBudget {
+    pub(crate) fn viewer_memory_budget(&self) -> volna_trace::remote::memory::MemoryBudget {
         self.doc
             .traces()
             .first_loaded()
             .and_then(|(_, session)| session.memory_budget())
-            .unwrap_or_else(|| self.table_budget.clone())
+            .unwrap_or_else(|| self.viewer_budget.clone())
     }
 
     fn open_table(&mut self, selected: &[Traced<Member>], clicked: Option<Traced<Member>>) {
@@ -1832,7 +1837,7 @@ impl App {
         let mut table = crate::table::TableModel::for_document(
             source,
             self.settings.resolved().link_by_default(),
-            self.table_memory_budget(),
+            self.viewer_memory_budget(),
             &self.doc,
         );
         table.nav.reset(Some(self.doc.limits()));
@@ -1875,7 +1880,7 @@ impl App {
             &self.doc,
         );
         let inspector = TransactionModel::new(
-            self.table_memory_budget(),
+            self.viewer_memory_budget(),
             self.settings.resolved().transaction.detail_items,
         );
         let focused = self.panels.focused_id();
@@ -2053,7 +2058,7 @@ impl App {
                 }
             }
         }
-        let budget = self.table_memory_budget();
+        let budget = self.viewer_memory_budget();
         self.doc.sync_summaries(wanted, &budget);
         self.sync_group_summaries();
     }
@@ -2072,7 +2077,7 @@ impl App {
                 }
             }
         }
-        let budget = self.table_memory_budget();
+        let budget = self.viewer_memory_budget();
         self.doc.sync_group_summaries(wanted, &budget);
         self.sync_stack_totals();
     }
@@ -2099,7 +2104,7 @@ impl App {
                 }
             }
         }
-        let budget = self.table_memory_budget();
+        let budget = self.viewer_memory_budget();
         self.doc.sync_stack_totals(wanted, &budget);
         self.doc.sync_integrals(integrals, &budget);
     }
@@ -2635,6 +2640,7 @@ impl App {
         scene: &mut Scene,
     ) {
         scene.clear();
+        let budget = self.viewer_memory_budget();
         let Some(panel) = self.panels.get(id) else {
             return;
         };
@@ -2649,11 +2655,15 @@ impl App {
                 crate::wave::paint::paint(
                     w,
                     &self.doc,
-                    &theme,
-                    &mut self.text,
-                    measure,
-                    scene,
+                    crate::wave::overlay::TextPainter {
+                        theme: &theme,
+                        text: &mut self.text,
+                        measure,
+                        scene,
+                    },
                     focused,
+                    &mut self.digital_cache,
+                    &budget,
                 );
                 w.last_layout().bounds
             }
@@ -3101,7 +3111,7 @@ impl App {
             ..Default::default()
         };
         if self.doc.is_loaded() {
-            let budget = self.table_memory_budget();
+            let budget = self.viewer_memory_budget();
             s.memory = Some(MemoryStatus {
                 used: budget.used(),
                 limit: budget.limit(),
