@@ -704,6 +704,138 @@ fn clocks_load_through_the_remote_protocol_like_any_track() {
 }
 
 #[test]
+fn added_lanes_share_rulers_without_changing_clock_navigation() {
+    use volna_core::trace::Traced;
+    use vtr::SourceOptions;
+
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let clock = writer.clock(SourceOptions::new("clk", None)).unwrap();
+    for name in ["first", "second", "unclocked"] {
+        let generator = writer
+            .transactions::<()>(SourceOptions::new(name, None), "TX")
+            .unwrap();
+        if name != "unclocked" {
+            writer.associate_clock(generator, clock).unwrap();
+        }
+        let tx = writer.begin_at(generator, 0, &(), None).unwrap();
+        writer.end_at(tx, 10, vtr::Status::Ok).unwrap();
+    }
+    writer.clock_run(clock, 0, 2).unwrap();
+    writer.advance_time(20).unwrap();
+    writer.close().unwrap();
+
+    let mut app = App::new();
+    app.handle(Command::Open(OpenSpec::Path(file.path().into())));
+    pump(&mut app);
+    app.handle(Command::AddTrace(OpenSpec::Path(file.path().into())));
+    pump(&mut app);
+    let traces = [TraceId::A, TraceId::from_letter('B').unwrap()];
+    let members = |name: &str| {
+        traces
+            .iter()
+            .map(|&trace| {
+                let Lookup::Found(id) = app.doc.hierarchy(trace).unwrap().find_generator(&[name])
+                else {
+                    panic!("missing generator {name}");
+                };
+                Traced::new(trace, Member::Generator(id))
+            })
+            .collect::<Vec<_>>()
+    };
+    let unclocked = members("unclocked");
+    let first = members("first");
+    let second = members("second");
+    app.handle(Command::AddToWaves(unclocked));
+    let panel = app.panels.focused_id();
+    assert!(app.panels.waves(panel).unwrap().nav.clocks().is_default());
+    let keys: Vec<_> = traces
+        .iter()
+        .map(|&trace| Traced::new(trace, "clk".to_owned()))
+        .collect();
+    app.handle(Command::Clocks(ClockCommand::ToggleRuler(keys[1].clone())));
+    app.handle(Command::Clocks(ClockCommand::Select(keys[1].clone())));
+    app.doc.shared.cursor = Some(6);
+    app.handle(Command::Action(Action::ToggleCycleOrigin));
+    let before = app.panels.waves(panel).unwrap().nav.clocks().clone();
+
+    app.handle(Command::AddToWaves(
+        first.into_iter().chain(second).collect(),
+    ));
+    let after = app.panels.waves(panel).unwrap().nav.clocks().clone();
+    assert_eq!(after.rulers, Some(vec![keys[1].clone(), keys[0].clone()]));
+    assert_eq!(after.selected, before.selected);
+    assert_eq!(after.origin, Some(6));
+    assert_eq!(app.panels.waves(panel).unwrap().items().len(), 6);
+
+    app.handle(Command::Undo);
+    assert_eq!(app.panels.waves(panel).unwrap().nav.clocks(), &before);
+    assert_eq!(app.panels.waves(panel).unwrap().items().len(), 2);
+    app.handle(Command::Redo);
+    assert_eq!(app.panels.waves(panel).unwrap().nav.clocks(), &after);
+    assert_eq!(app.panels.waves(panel).unwrap().items().len(), 6);
+}
+
+#[test]
+fn reselecting_a_lane_respects_hidden_rulers_and_removal_keeps_them() {
+    let (mut app, session, panel) = waves();
+    let Lookup::Found(id) = session.hierarchy().find_generator(&["top", "pipe", "insn"]) else {
+        panic!("missing pipeline generator");
+    };
+    let member = a(Member::Generator(id));
+    let key = a("top.core_clk".to_owned());
+    app.handle(Command::AddToWaves(vec![member]));
+    assert_eq!(
+        app.panels.waves(panel).unwrap().nav.clocks().rulers,
+        Some(vec![key.clone()])
+    );
+    app.handle(Command::Clocks(ClockCommand::ToggleRuler(key.clone())));
+    app.handle(Command::AddToWaves(vec![member]));
+    assert_eq!(
+        app.panels.waves(panel).unwrap().nav.clocks().rulers,
+        Some(vec![])
+    );
+    app.handle(Command::Undo);
+    assert_eq!(
+        app.panels.waves(panel).unwrap().nav.clocks().rulers,
+        Some(vec![key.clone()]),
+        "reselecting the lane creates no undo step"
+    );
+    app.handle(Command::Action(Action::RemoveSelected));
+    assert_eq!(app.panels.waves(panel).unwrap().items().len(), 1);
+    assert_eq!(
+        app.panels.waves(panel).unwrap().nav.clocks().rulers,
+        Some(vec![key])
+    );
+}
+
+#[test]
+fn grouped_and_pasted_lanes_add_rulers_in_the_same_undo_step() {
+    let (mut app, session, panel) = waves();
+    let before = app.panels.waves(panel).unwrap().nav.clocks().clone();
+    app.handle(Command::AddScopeAsGroup {
+        scope: a(scope(session.as_ref(), &["top", "pipe"])),
+        recursive: true,
+    });
+    let after = app.panels.waves(panel).unwrap().nav.clocks().clone();
+    assert_eq!(after.rulers, Some(vec![a("top.core_clk".to_owned())]));
+    app.handle(Command::Action(Action::CopySignals));
+    app.handle(Command::Undo);
+    assert_eq!(app.panels.waves(panel).unwrap().nav.clocks(), &before);
+    assert_eq!(app.panels.waves(panel).unwrap().items().len(), 1);
+
+    app.handle(Command::Action(Action::PasteSignals));
+    assert_eq!(app.panels.waves(panel).unwrap().nav.clocks(), &after);
+    assert_eq!(app.panels.waves(panel).unwrap().items().len(), 3);
+    app.handle(Command::Undo);
+    assert_eq!(app.panels.waves(panel).unwrap().nav.clocks(), &before);
+    assert_eq!(app.panels.waves(panel).unwrap().items().len(), 1);
+    app.handle(Command::Redo);
+    assert_eq!(app.panels.waves(panel).unwrap().nav.clocks(), &after);
+    assert_eq!(app.panels.waves(panel).unwrap().items().len(), 3);
+}
+
+#[test]
 fn a_clock_generator_adds_as_a_ruler_or_as_a_waveform() {
     let (mut app, session, panel) = waves();
     let theme = Theme::one_dark();

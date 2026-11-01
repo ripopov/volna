@@ -1246,6 +1246,7 @@ impl WaveModel {
         if insert.is_empty() {
             self.set_row_selection(selection);
         } else {
+            self.show_lane_rulers(doc, &insert);
             let label = format!("Add {}", count(insert.len(), "row", "rows"));
             self.edit_rows(
                 label,
@@ -1258,6 +1259,19 @@ impl WaveModel {
             );
         }
         self.reveal_row = Some(anchor);
+    }
+
+    fn show_lane_rulers(&mut self, doc: &Document, entries: &[Entry]) {
+        for entry in entries {
+            if let Some(track) = entry.lane().and_then(TxLane::track)
+                && let Some(clock) = doc.clocks.linked(track)
+            {
+                let key = clock.key();
+                if !self.nav.clocks().ruler_keys(&doc.clocks).contains(&key) {
+                    self.nav.show_ruler(&doc.clocks, &key);
+                }
+            }
+        }
     }
 
     pub fn add_scope_group(
@@ -1292,6 +1306,7 @@ impl WaveModel {
         if entries.is_empty() {
             return false;
         }
+        self.show_lane_rulers(doc, &entries);
         let first = self.items.len();
         let label = format!("Add group {}", entries[0].name());
         let selection = RowSelection {
@@ -1472,6 +1487,7 @@ impl WaveModel {
         if tree::validate_splices(&self.items, std::slice::from_ref(&splice)).is_err() {
             return;
         }
+        self.show_lane_rulers(doc, &splice.insert);
         let label = format!("Paste {}", count(roots.len(), "row", "rows"));
         let anchor = roots.first().copied();
         self.edit_rows(
