@@ -1352,8 +1352,8 @@ impl App {
                 self.changed();
             }
             Command::AddAllVars => {
-                let vars = self.variables.listed_vars();
-                self.add_vars(&vars);
+                let members = self.variables.rows.clone();
+                self.add_to_waves(&members);
             }
             Command::AddSelectedOrAllVars => {
                 let vars = self.variables.selected_or_all();

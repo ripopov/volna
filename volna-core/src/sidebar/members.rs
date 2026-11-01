@@ -8,7 +8,7 @@ use crate::geometry::Modifiers;
 use crate::icons::IconName;
 use crate::selection;
 use crate::trace::{TraceId, TraceSet, Traced};
-use volna_trace::data::{Direction, Hierarchy, Member, ScopeId, SignalShape, VarId};
+use volna_trace::data::{Direction, Hierarchy, Member, ScopeId, SignalShape};
 
 const MAX_SEARCH_ROWS: usize = 5000;
 
@@ -205,22 +205,10 @@ impl MemberListModel {
     #[must_use]
     pub fn selected_or_all(&self) -> Vec<Traced<Member>> {
         if self.selected.is_empty() {
-            self.rows
-                .iter()
-                .copied()
-                .filter(|m| matches!(m.item, Member::Var(_)))
-                .collect()
+            self.rows.clone()
         } else {
             self.selected.iter().map(|&i| self.rows[i]).collect()
         }
-    }
-
-    #[must_use]
-    pub fn listed_vars(&self) -> Vec<Traced<VarId>> {
-        self.rows
-            .iter()
-            .filter_map(|m| Some(m.with(m.item.var()?)))
-            .collect()
     }
 
     fn scope_of<'a>(&self, traces: &'a TraceSet) -> Option<(&'a Hierarchy, ScopeId)> {

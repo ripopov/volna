@@ -182,6 +182,10 @@ fn search_order_activation_and_keyboard() {
         [Member::Var(_), Member::Generator(_), Member::Generator(_)]
     ));
     assert!(app.variables.show_scope());
+    app.handle(Command::SelectVar {
+        ix: 0,
+        modifiers: Modifiers::default(),
+    });
     app.handle(Command::AddSelectedOrAllVars);
     assert_eq!(app.panels.focused_waves().unwrap().items().len(), 1);
     app.take_requests();
@@ -229,6 +233,61 @@ fn search_order_activation_and_keyboard() {
     app.handle(Command::SetFilter("read_".into()));
     app.handle(Command::VariablesKey(Key::Escape, Modifiers::default()));
     assert!(app.variables.filter.is_empty());
+}
+
+#[test]
+fn bulk_add_includes_generators_in_scopes_and_filtered_results() {
+    let session = fixture();
+    for search in [false, true] {
+        for command in [
+            Command::AddAllVars,
+            Command::AddSelectedOrAllVars,
+            Command::VariablesKey(Key::Enter, Modifiers::default()),
+        ] {
+            let mut app = App::new();
+            app.set_session(session.clone());
+            if search {
+                app.handle(Command::SetSearchEverywhere(true));
+                app.handle(Command::SetFilter("read_".into()));
+            } else {
+                app.handle(Command::SelectScope(TreeNode::scope(a(scope(
+                    session.hierarchy(),
+                    &["soc", "read_bus"],
+                )))));
+            }
+            let expected: Vec<_> = app
+                .variables
+                .rows
+                .iter()
+                .map(|m| session.hierarchy().member_name(m.item).to_owned())
+                .collect();
+            assert_eq!(expected.len(), if search { 3 } else { 2 });
+            if matches!(command, Command::AddAllVars) {
+                app.handle(Command::SelectVar {
+                    ix: 0,
+                    modifiers: Modifiers::default(),
+                });
+            }
+            app.handle(command);
+            let waves = app.panels.focused_waves().unwrap();
+            let names: Vec<_> = waves.items().iter().map(|row| row.name()).collect();
+            assert_eq!(names, expected);
+            assert_eq!(
+                waves
+                    .items()
+                    .iter()
+                    .filter(|row| row.lane().is_some())
+                    .count(),
+                2
+            );
+            assert_eq!(app.panels.len(), 1);
+            let revision = app.history.revision();
+            app.handle(Command::AddAllVars);
+            assert_eq!(app.history.revision(), revision);
+            app.handle(Command::Undo);
+            assert!(app.panels.focused().kind.is_start());
+        }
+    }
 }
 
 #[test]

@@ -139,8 +139,8 @@ impl Workspace {
                 )
                 .child(
                     icon_button("add-all", IconName::Plus, t.panel, t.hover, cx)
-                        .disabled(!vars.rows.iter().any(|m| m.item.var().is_some()))
-                        .tooltip("Add all listed variables (⏎)")
+                        .disabled(vars.rows.is_empty())
+                        .tooltip("Add all listed members (⏎)")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.dispatch(Command::AddAllVars, Some(window), cx);
                         })),
