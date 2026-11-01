@@ -189,16 +189,16 @@ class PackageTests(unittest.TestCase):
                 archive.writestr("extension/media/volna_bg.wasm", b"wasm")
                 archive.writestr(
                     "extension/media/volna.js",
-                    "import { copyTableText } from './snippets/generated/src/table_clipboard.mjs';",
+                    "import { copyText } from './snippets/generated/src/clipboard.mjs';",
                 )
             with self.assertRaisesRegex(
-                ValueError, "missing media/snippets/generated/src/table_clipboard.mjs"
+                ValueError, "missing media/snippets/generated/src/clipboard.mjs"
             ):
                 packager.verify_vsix(vsix, "linux-x64", binaries)
             with zipfile.ZipFile(vsix, "a") as archive:
                 archive.writestr(
-                    "extension/media/snippets/generated/src/table_clipboard.mjs",
-                    "export { copyTableText } from '../copy.mjs';",
+                    "extension/media/snippets/generated/src/clipboard.mjs",
+                    "export { copyText } from '../copy.mjs';",
                 )
             with self.assertRaisesRegex(
                 ValueError, "missing media/snippets/generated/copy.mjs"
@@ -207,7 +207,7 @@ class PackageTests(unittest.TestCase):
             with zipfile.ZipFile(vsix, "a") as archive:
                 archive.writestr(
                     "extension/media/snippets/generated/copy.mjs",
-                    "export function copyTableText() {}",
+                    "export function copyText() {}",
                 )
             packager.verify_vsix(vsix, "linux-x64", binaries)
 

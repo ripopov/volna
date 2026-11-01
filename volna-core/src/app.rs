@@ -1477,11 +1477,15 @@ impl App {
                         return;
                     };
                     waves.menu_dismiss();
-                    match clipboard {
+                    let text = match clipboard {
                         Action::CopySignals => waves.copy_selected(&mut self.doc),
                         Action::CutSignals => waves.cut_selected(&mut self.doc),
-                        _ => self.paste_signals(panel),
-                    }
+                        _ => {
+                            self.paste_signals(panel);
+                            Ok(None)
+                        }
+                    };
+                    self.wave_copy_result(text);
                     self.changed();
                     return;
                 }
@@ -2228,6 +2232,16 @@ impl App {
         keys
     }
 
+    fn wave_copy_result(&mut self, result: anyhow::Result<Option<String>>) {
+        match result {
+            Ok(Some(text)) => self.events.push(Event::CopyText(text)),
+            Ok(None) => {}
+            Err(error) => self.events.push(Event::Notice(format!(
+                "Rows copied within Volna. Text export unavailable: {error}"
+            ))),
+        }
+    }
+
     fn action(&mut self, action: Action, now: Instant) {
         use crate::panels::Axis;
         use crate::wave::model::LinkDim;
@@ -2494,8 +2508,14 @@ impl App {
                 Action::NextEdge => w.next_edge(doc, now),
                 Action::PrevEdge => w.prev_edge(doc, now),
                 Action::RemoveSelected => w.remove_selected(),
-                Action::CopySignals => w.copy_selected(doc),
-                Action::CutSignals => w.cut_selected(doc),
+                Action::CopySignals | Action::CutSignals => {
+                    let text = if action == Action::CopySignals {
+                        w.copy_selected(doc)
+                    } else {
+                        w.cut_selected(doc)
+                    };
+                    self.wave_copy_result(text);
+                }
                 Action::SelectAll => w.select_all(),
                 Action::ClearSelection => w.clear_selection(doc),
                 Action::CycleFormat => w.cycle_format(doc),

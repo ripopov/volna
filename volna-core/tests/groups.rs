@@ -675,6 +675,56 @@ fn dragging_names_picks_the_level_from_x_and_drops_into_folded_groups() {
 }
 
 #[test]
+fn copying_rows_exports_cursor_time_and_values_without_changing_row_paste() {
+    let (_f, mut app, id) = app();
+    grouped(&mut app, id);
+    app.doc.shared.cursor = Some(125);
+    select(&mut app, id, &[0, 6]);
+    app.take_events();
+    app.handle(Command::Action(Action::CopySignals));
+    assert!(app.take_events().contains(&volna_core::Event::CopyText(
+        "Time\t125 ns\ntop.clk\t0\nRead\t\ntop.axi.read.rvalid\t0\ntop.axi.read.rdata\t000a".into()
+    )));
+    app.doc.shared.cursor = Some(200);
+    select(&mut app, id, &[9]);
+    app.handle(Command::Action(Action::PasteSignals));
+    pump(&mut app);
+    assert_eq!(
+        outline(&app, id)[10..],
+        ["clk", "-Read", "  rvalid", "  rdata"]
+    );
+
+    select(&mut app, id, &[0]);
+    app.panels.waves_mut(id).unwrap().nav.link.cursor = false;
+    app.panels.waves_mut(id).unwrap().nav.local_cursor = Some(5);
+    app.panels
+        .waves_mut(id)
+        .unwrap()
+        .open_selected_signal_menu(&app.doc);
+    app.take_events();
+    app.handle(Command::MenuSelect(id, MenuAction::CutSignals));
+    assert!(app.take_events().contains(&volna_core::Event::CopyText(
+        "Time\t5 ns\ntop.clk\t0".into()
+    )));
+    assert_eq!(outline(&app, id)[0], "rst_n");
+
+    app.panels.waves_mut(id).unwrap().nav.local_cursor = None;
+    select(&mut app, id, &[0]);
+    app.handle(Command::Action(Action::CopySignals));
+    assert!(
+        app.take_events()
+            .contains(&volna_core::Event::CopyText("Time\t–\ntop.rst_n\t–".into()))
+    );
+    select(&mut app, id, &[]);
+    app.handle(Command::Action(Action::CopySignals));
+    assert!(
+        !app.take_events()
+            .iter()
+            .any(|e| matches!(e, volna_core::Event::CopyText(_)))
+    );
+}
+
+#[test]
 fn the_clipboard_keeps_structure_and_pastes_under_the_last_selected_row() {
     let (_f, mut app, id) = app();
     grouped(&mut app, id);

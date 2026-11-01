@@ -447,7 +447,7 @@ impl CanvasPanelView {
         {
             Some(Ok(text)) => {
                 #[cfg(target_arch = "wasm32")]
-                crate::table_clipboard::copy(&text);
+                crate::clipboard::copy(&text);
                 #[cfg(not(target_arch = "wasm32"))]
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }

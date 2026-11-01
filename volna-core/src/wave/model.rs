@@ -166,6 +166,42 @@ pub struct DisplayedSignal {
 }
 
 impl DisplayedSignal {
+    pub(super) fn cursor_value(
+        &self,
+        cursor: Option<u64>,
+        limit: usize,
+    ) -> crate::data::Translated {
+        use crate::data::Translated;
+        use volna_trace::data::value_view::ValueView;
+        use volna_trace::data::{ValueKind, WaveValue};
+
+        match (&self.history, cursor) {
+            (Some(history), Some(time)) => {
+                let index = history.index_at(time);
+                let value = if self.shape == SignalShape::Event {
+                    ValueView::owned(WaveValue::Bits(
+                        if index.is_some_and(|i| history.time(i) == time) {
+                            "1"
+                        } else {
+                            "0"
+                        }
+                        .into(),
+                    ))
+                } else {
+                    history.value_view(index)
+                };
+                self.translator.translate_view(&value, limit)
+            }
+            (None, _) if self.source.signal().is_none() => {
+                Translated::bounded("not in trace", ValueKind::Normal, limit)
+            }
+            (None, _) if self.error.is_none() => {
+                Translated::bounded("loading…", ValueKind::Normal, limit)
+            }
+            _ => Translated::bounded("–", ValueKind::Normal, limit),
+        }
+    }
+
     pub(crate) fn attach(&mut self, raw: Option<Arc<dyn SignalHistory>>) {
         if self.projection.is_some() {
             self.history = None;
@@ -1400,24 +1436,25 @@ impl WaveModel {
         attach_rows(&mut self.items, doc, &Resident::new());
     }
 
-    pub fn copy_selected(&self, doc: &mut Document) {
+    pub fn copy_selected(&self, doc: &mut Document) -> anyhow::Result<Option<String>> {
         if self.selected.is_empty() {
-            return;
+            return Ok(None);
         }
         let roots = tree::roots(&self.items, &self.selected);
-        let mut rows: Vec<Entry> = tree::extract(&self.items, &self.selected)
-            .iter()
-            .map(Entry::detached)
-            .collect();
+        let selected = tree::extract(&self.items, &self.selected);
+        let text = self.rows_tsv(&selected, doc);
+        let mut rows: Vec<Entry> = selected.iter().map(Entry::detached).collect();
         for (row, root) in rows.iter_mut().filter(|e| e.depth == 0).zip(roots) {
             row.row.set_tint(self.ink(root));
         }
         doc.copied_rows = rows;
+        text.map(Some)
     }
 
-    pub fn cut_selected(&mut self, doc: &mut Document) {
-        self.copy_selected(doc);
+    pub fn cut_selected(&mut self, doc: &mut Document) -> anyhow::Result<Option<String>> {
+        let text = self.copy_selected(doc);
         self.remove_selected_as("Cut");
+        text
     }
 
     pub fn move_selected_to(&mut self, to: Place) -> bool {

@@ -2277,6 +2277,14 @@ fn wave_copy_paste_keys_duplicate_rows(cx: &mut TestAppContext) {
         ("ctrl-c", "ctrl-x", "ctrl-v")
     };
     vcx.simulate_keystrokes(copy);
+    window
+        .update(&mut vcx, |_, _, cx| {
+            let text = cx.read_from_clipboard().unwrap().text().unwrap();
+            assert!(text.starts_with("Time\t"));
+            assert_eq!(text.lines().count(), 2);
+            assert!(text.lines().all(|line| line.split('\t').count() == 2));
+        })
+        .unwrap();
     vcx.simulate_keystrokes(paste);
     vcx.simulate_keystrokes(paste);
     vcx.run_until_parked();

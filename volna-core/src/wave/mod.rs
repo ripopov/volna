@@ -3,6 +3,7 @@
 
 pub mod analog;
 pub mod bus;
+mod clipboard;
 mod format;
 pub mod group;
 pub mod lane;

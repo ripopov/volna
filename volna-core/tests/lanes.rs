@@ -457,7 +457,7 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
             .unwrap()
             .generator(&app.doc)
             .unwrap();
-        lane::value_text(g, first.begin).0
+        lane::value_text(g, first.begin, 256).text
     };
     assert!(expected.contains(&label));
     let scene = frame(&mut app, waves);

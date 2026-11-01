@@ -341,22 +341,33 @@ pub fn label(tx: &Transaction) -> String {
     if label.is_empty() {
         format!("#{}", tx.id.0)
     } else {
-        label
+        label.to_owned()
     }
 }
 
+pub struct LaneReadout {
+    pub text: String,
+    pub failed: bool,
+    pub truncated: bool,
+}
+
 #[must_use]
-pub fn value_text(generator: &LoadedGenerator, cursor: u64) -> (String, bool) {
+pub fn value_text(generator: &LoadedGenerator, cursor: u64, limit: usize) -> LaneReadout {
+    use crate::data::text::{attribute_value_min_bytes, format_attribute, push_limited, truncate};
     if let Some(index) = generator.points() {
         let records = generator.transactions();
         let first = records.partition_point(|r| r.begin < cursor);
         let end = records.partition_point(|r| r.begin <= cursor);
         let counts = index.counts(first..end);
+        let mut truncated = false;
         let text = match end - first {
             0 => "–".into(),
             1 => index.kind.label(&records[first]).map_or_else(
                 || format!("#{}", records[first].id.0),
-                |value| crate::data::text::format_attribute(value, 256),
+                |value| {
+                    truncated = attribute_value_min_bytes(value) > limit;
+                    format_attribute(value, limit)
+                },
             ),
             count => format!(
                 "{count} {}",
@@ -367,23 +378,57 @@ pub fn value_text(generator: &LoadedGenerator, cursor: u64) -> (String, bool) {
                 }
             ),
         };
-        return (text, counts[4] + counts[5] > 0);
+        return LaneReadout {
+            truncated: truncated || text.len() > limit,
+            text: truncate(text, limit),
+            failed: counts[4] + counts[5] > 0,
+        };
     }
-    let open = open_at(generator, cursor);
-    let failed = open.iter().any(|tx| tx.status == Status::Error);
-    let text = match open.as_slice() {
-        [] => "–".to_owned(),
-        [tx] => label(tx),
-        many => format!(
-            "{} open: {}",
-            many.len(),
-            many.iter()
-                .map(|tx| label(tx))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
+    let mut labels = String::new();
+    let mut count = 0usize;
+    let mut failed = false;
+    let mut truncated = false;
+    drop(generator.visit_window(cursor, cursor, |tx| {
+        if cursor >= tx.end && tx.begin != tx.end {
+            return true;
+        }
+        count += 1;
+        failed |= tx.status == Status::Error;
+        if !truncated {
+            let fallback;
+            let label = PipelineModel::label(tx);
+            let label = if label.is_empty() {
+                fallback = format!("#{}", tx.id.0);
+                &fallback
+            } else {
+                label
+            };
+            if count > 1 {
+                truncated |= labels.len().saturating_add(1) > limit;
+                push_limited(&mut labels, " ", limit);
+            }
+            truncated |= labels.len().saturating_add(label.len()) > limit;
+            push_limited(&mut labels, label, limit);
+        }
+        true
+    }));
+    let mut text = match count {
+        0 => "–".into(),
+        1 => labels,
+        _ => {
+            let mut text = format!("{count} open: ");
+            truncated |= text.len().saturating_add(labels.len()) > limit;
+            push_limited(&mut text, &labels, limit);
+            text
+        }
     };
-    (text, failed)
+    truncated |= text.len() > limit;
+    text = truncate(text, limit);
+    LaneReadout {
+        text,
+        failed,
+        truncated,
+    }
 }
 
 #[cfg(test)]
@@ -464,10 +509,38 @@ mod tests {
         assert_eq!(hit(&g, three, 0, 21.0, 1.5), Some(0));
         assert_eq!(nearest_boundary(&g, 21.2, 2.0), Some(22));
         assert_eq!(nearest_boundary(&g, 50.0, 2.0), None);
-        assert_eq!(value_text(&g, 5), ("#0".into(), false));
-        assert_eq!(value_text(&g, 36), ("#2".into(), true));
-        assert_eq!(value_text(&g, 45).0, "–");
-        assert!(value_text(&g, 19).0.starts_with("3 open"));
+        let value = value_text(&g, 5, 256);
+        assert_eq!((value.text, value.failed), ("#0".into(), false));
+        assert!(!value.truncated);
+        let value = value_text(&g, 36, 256);
+        assert_eq!((value.text, value.failed), ("#2".into(), true));
+        assert_eq!(value_text(&g, 45, 256).text, "–");
+        assert!(value_text(&g, 19, 256).text.starts_with("3 open"));
+        let bounded = value_text(&g, 19, 4);
+        assert!(bounded.truncated && bounded.failed);
+        assert!(bounded.text.len() <= 4);
         assert!(is_density(&g, 0.1) && !is_density(&g, 1.0));
+    }
+
+    #[test]
+    fn bounded_labels_preserve_total_count_and_errors_after_truncation() {
+        let mut first = tx(0, 0, 10, Status::Ok);
+        first
+            .attributes
+            .push(volna_trace::data::transactions::TransactionAttribute {
+                key: "vtr.label".into(),
+                value: volna_trace::data::transactions::AttributeValue::Text("λ".repeat(100_000)),
+            });
+        let g = LoadedGenerator::new(
+            TrackRef(1),
+            vec![first, tx(1, 0, 10, Status::Error)],
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let readout = value_text(&g, 5, 32);
+        assert!(readout.truncated && readout.failed);
+        assert!(readout.text.len() <= 32);
+        assert!(readout.text.starts_with("2 open: "));
     }
 }

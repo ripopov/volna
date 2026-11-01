@@ -295,11 +295,11 @@ impl PipelineModel {
     }
 
     #[must_use]
-    pub fn label(tx: &Transaction) -> String {
+    pub fn label(tx: &Transaction) -> &str {
         tx.attributes
             .iter()
             .find_map(|attribute| match (&*attribute.key, &attribute.value) {
-                (LABEL_ATTRIBUTE, AttributeValue::Text(text)) => Some(text.clone()),
+                (LABEL_ATTRIBUTE, AttributeValue::Text(text)) => Some(text.as_str()),
                 _ => None,
             })
             .unwrap_or_default()
@@ -512,7 +512,7 @@ impl PipelineModel {
         let label = Self::label(tx);
         if !label.is_empty() {
             text.push_str(" · ");
-            text.push_str(&label);
+            text.push_str(label);
         }
         Some(text)
     }

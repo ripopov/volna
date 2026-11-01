@@ -16,7 +16,7 @@ pub struct Translated {
 }
 
 impl Translated {
-    fn bounded(text: &str, kind: ValueKind, limit: usize) -> Self {
+    pub(crate) fn bounded(text: &str, kind: ValueKind, limit: usize) -> Self {
         Self {
             text: truncate_ref(text, limit),
             kind,

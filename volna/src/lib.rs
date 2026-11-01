@@ -3,6 +3,8 @@
 pub mod app;
 pub mod assets;
 mod canvas;
+#[cfg(target_arch = "wasm32")]
+mod clipboard;
 #[cfg(not(target_family = "wasm"))]
 pub mod desktop;
 mod dock;
@@ -21,8 +23,6 @@ mod settings_json;
 mod settings_panel;
 mod sidebar;
 mod start_panel;
-#[cfg(target_arch = "wasm32")]
-mod table_clipboard;
 mod table_columns;
 mod table_filters;
 mod table_panel;

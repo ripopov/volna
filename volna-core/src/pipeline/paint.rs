@@ -385,7 +385,7 @@ pub fn paint(
                         index,
                         t.panel.text_placeholder,
                     ));
-                    let label = PipelineModel::label(tx);
+                    let label = PipelineModel::label(tx).to_owned();
                     let (label, color) = match tx.status {
                         Status::Aborted => {
                             fills.push((

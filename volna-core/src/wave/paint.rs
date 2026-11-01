@@ -479,39 +479,18 @@ pub(crate) fn paint(
                 .map(|(_, b)| *b);
             let text_right = badge.map_or(layout.values.right() - pad, |b| b.left() - pad);
             let avail = text_right - layout.values.left() - pad;
-            let (value_text, color) = match (&item.history, cursor) {
-                _ if cells.left_out.is_some() => {
-                    (cells.left_out.unwrap().to_string(), colors.text_placeholder)
-                }
-                (Some(h), Some(c)) => {
-                    let index = h.index_at(c);
-                    let value = if item.shape == SignalShape::Event {
-                        WaveValue::Bits(
-                            if index.is_some_and(|i| h.time(i) == c) {
-                                "1"
-                            } else {
-                                "0"
-                            }
-                            .into(),
-                        )
-                    } else {
-                        h.value(index)
-                    };
-                    let tr = item.translator.translate(&value);
-                    let color = if tr.kind == ValueKind::Normal {
-                        colors.text
-                    } else {
-                        colors.value_color(tr.kind)
-                    };
-                    (tr.text, color)
-                }
-                (None, _) if item.source.signal().is_none() => {
-                    ("not in trace".to_string(), colors.text_placeholder)
-                }
-                (None, _) if item.error.is_none() => {
-                    ("loading…".to_string(), colors.text_placeholder)
-                }
-                _ => ("–".to_string(), colors.text_placeholder),
+            let (value_text, color) = if let Some(label) = cells.left_out {
+                (label.to_owned(), colors.text_placeholder)
+            } else {
+                let value = item.cursor_value(cursor, crate::data::text::PREVIEW_BYTES);
+                let color = if item.history.is_none() || cursor.is_none() {
+                    colors.text_placeholder
+                } else if value.kind == ValueKind::Normal {
+                    colors.text
+                } else {
+                    colors.value_color(value.kind)
+                };
+                (value.text, color)
             };
             let max_chars = (avail / char_w).floor().max(0.0) as usize;
             let values_rect = layout.values;
@@ -3391,8 +3370,15 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
         _ if cells.left_out.is_some() => (cells.left_out.unwrap().into(), cells.muted),
         LaneData::Ready(g) => match cells.cursor {
             Some(c) => {
-                let (text, failed) = lane::value_text(g, c);
-                (text, if failed { t.editor.error } else { cells.text })
+                let value = lane::value_text(g, c, crate::data::text::PREVIEW_BYTES);
+                (
+                    value.text,
+                    if value.failed {
+                        t.editor.error
+                    } else {
+                        cells.text
+                    },
+                )
             }
             None => (String::new(), cells.text),
         },

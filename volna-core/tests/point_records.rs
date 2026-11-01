@@ -71,7 +71,7 @@ fn point_generators_open_on_waves_and_group_details_preserve_record_identity() {
         let time = burst[0].begin;
         let selected_label = generator.points().unwrap().kind.label(&burst[0]).unwrap();
         let expected_label = volna_core::data::text::format_attribute(selected_label, 1024);
-        let (value, _) = volna_core::wave::lane::value_text(generator, time);
+        let value = volna_core::wave::lane::value_text(generator, time, 1024).text;
         assert_eq!(
             value,
             format!(
