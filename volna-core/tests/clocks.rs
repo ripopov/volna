@@ -290,6 +290,68 @@ fn each_ruler_has_a_cursor_chip_with_its_cycle_and_go_to_counts_the_selected_clo
 }
 
 #[test]
+fn ruler_value_cells_show_cursor_frequency_and_cycles_even_outside_the_view() {
+    use volna_core::scene::{FontRole, Prim};
+
+    let (mut app, _, panel) = waves();
+    for name in ["top.core_clk", "top.bus_clk"] {
+        app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(name.into()))));
+    }
+    app.doc.shared.viewport.set(Viewport {
+        start: 0.0,
+        end: 10_000.0,
+    });
+    for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
+        for width in [1200.0, 360.0] {
+            for (cursor, expected) in [
+                (None, ["–", "–"]),
+                (Some(0), ["–", "–"]),
+                (Some(4575), ["2.99 GHz · #12", "500.00 MHz · #1"]),
+                (Some(20272), ["2.00 GHz · #59", "500.00 MHz · #9"]),
+                (Some(35000), ["2.00 GHz · #88", "stopped · #14"]),
+            ] {
+                app.doc.shared.cursor = cursor;
+                app.layout_panel(
+                    panel,
+                    Rect::from_xywh(25.0, 0.0, width, 600.0),
+                    &theme,
+                    1.0,
+                    &mut MonoMeasure,
+                )
+                .unwrap();
+                let layout = app.panels.waves(panel).unwrap().last_layout().clone();
+                let scene = app.render_panel(panel, &theme, &mut MonoMeasure);
+                let mut clips = Vec::new();
+                let mut readouts = Vec::new();
+                for prim in &scene.prims {
+                    match prim {
+                        Prim::PushClip(rect) => clips.push(*rect),
+                        Prim::PopClip => {
+                            clips.pop();
+                        }
+                        Prim::Text {
+                            origin, text, font, ..
+                        } if origin.x == layout.values.left() + 8.0 * theme.zoom
+                            && origin.y >= layout.rulers.top()
+                            && origin.y < layout.rulers.bottom() =>
+                        {
+                            assert_eq!(*font, FontRole::Mono);
+                            let clip = clips.last().unwrap();
+                            assert_eq!(clip.left(), layout.values.left());
+                            assert_eq!(clip.right(), layout.values.right());
+                            assert_eq!(clip.top(), origin.y);
+                            readouts.push(text.as_str());
+                        }
+                        _ => {}
+                    }
+                }
+                assert_eq!(readouts, expected, "cursor {cursor:?}, width {width}");
+            }
+        }
+    }
+}
+
+#[test]
 fn clicks_snap_to_the_selected_clock_and_brackets_step_cycles() {
     let (mut app, _, panel) = waves();
     let theme = Theme::one_dark();

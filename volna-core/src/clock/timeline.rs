@@ -154,6 +154,13 @@ impl ClockTimeline {
     }
 
     #[must_use]
+    pub fn period_at(&self, t: u64) -> Option<u64> {
+        let at = self.cycle_at(t)?;
+        let period = self.stretches[self.stretch_at(t)?].period;
+        (!at.stopped && period > 0).then_some(period)
+    }
+
+    #[must_use]
     pub fn edge(&self, cycle: u64) -> Option<u64> {
         let i = self
             .stretches

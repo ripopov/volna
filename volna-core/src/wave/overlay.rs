@@ -81,15 +81,21 @@ impl TimeColumn {
     }
 }
 
+pub struct RulerCells {
+    pub names: Rect,
+    pub values: Option<Rect>,
+}
+
 pub fn clock_rulers(
     p: &mut TextPainter<'_>,
     column: &TimeColumn,
-    names: Rect,
+    cells: RulerCells,
     view: &ClockView,
     clocks: &Clocks,
     base: TimeBase<'_>,
     cursor: Option<u64>,
 ) {
+    let names = cells.names;
     let rows = view.rulers(clocks);
     if rows.is_empty() || column.rulers.height() <= 0.0 {
         return;
@@ -112,7 +118,10 @@ pub fn clock_rulers(
         let cell = Rect::new(point(names.left(), y), size(names.width(), row_h));
         let is_selected = selected == Some(c.track);
         if is_selected {
-            p.scene.fill(cell, t.selection.bg);
+            p.scene.fill(
+                Rect::new(cell.origin, size(band.left() - cell.left(), row_h)),
+                t.selection.bg,
+            );
         }
         let name = c.name.clone();
         let color = if is_selected {
@@ -154,6 +163,20 @@ pub fn clock_rulers(
             });
             continue;
         };
+        if let Some(values) = cells.values {
+            let cell = Rect::new(point(values.left(), y), size(values.width(), row_h));
+            let text = clock::ruler_value(view, timeline, cursor, base);
+            p.scene.clipped(cell, |scene| {
+                scene.text(
+                    point(cell.left() + z(8.0), y),
+                    row_h,
+                    text,
+                    FontRole::Mono,
+                    t.ui_size_small,
+                    color,
+                );
+            });
+        }
         let marks = clock::ruler_marks(
             view,
             timeline,

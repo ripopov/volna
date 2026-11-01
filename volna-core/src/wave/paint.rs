@@ -872,13 +872,16 @@ pub(crate) fn paint(
     overlay::clock_rulers(
         &mut p,
         &column,
-        Rect::new(
-            point(bounds.left(), layout.rulers.top()),
-            size(
-                layout.names.width() + layout.scopes.width() + layout.values.width(),
-                layout.rulers.height(),
+        overlay::RulerCells {
+            names: Rect::new(
+                point(bounds.left(), layout.rulers.top()),
+                size(
+                    layout.names.width() + layout.scopes.width(),
+                    layout.rulers.height(),
+                ),
             ),
-        ),
+            values: Some(layout.values),
+        },
         clocks,
         &doc.clocks,
         base,

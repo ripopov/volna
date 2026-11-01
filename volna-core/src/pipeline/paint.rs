@@ -573,10 +573,13 @@ pub fn paint(
     overlay::clock_rulers(
         &mut p,
         &column,
-        Rect::new(
-            point(bounds.left(), layout.rulers.top()),
-            size(labels.width(), layout.rulers.height()),
-        ),
+        overlay::RulerCells {
+            names: Rect::new(
+                point(bounds.left(), layout.rulers.top()),
+                size(labels.width(), layout.rulers.height()),
+            ),
+            values: None,
+        },
         clocks,
         &doc.clocks,
         base,

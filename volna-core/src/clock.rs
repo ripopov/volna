@@ -377,6 +377,30 @@ pub fn position_at(view: &ClockView, clock: &Clock, time: u64) -> String {
 }
 
 #[must_use]
+pub fn ruler_value(
+    view: &ClockView,
+    timeline: &ClockTimeline,
+    cursor: Option<u64>,
+    base: TimeBase<'_>,
+) -> String {
+    let Some((time, at)) = cursor.and_then(|time| Some((time, timeline.cycle_at(time)?))) else {
+        return "–".to_owned();
+    };
+    let cycle = view.display_cycle(timeline, at.cycle);
+    let speed = if at.stopped {
+        Some("stopped".to_owned())
+    } else {
+        timeline
+            .period_at(time)
+            .and_then(|period| frequency(period as f64, base))
+    };
+    speed.map_or_else(
+        || format!("#{cycle}"),
+        |speed| format!("{speed} · #{cycle}"),
+    )
+}
+
+#[must_use]
 pub fn speed_label(period: u64, base: TimeBase<'_>) -> String {
     match frequency(period as f64, base) {
         Some(f) => format!("→ {f}"),
@@ -529,6 +553,50 @@ mod tests {
             true,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn ruler_values_follow_frequency_changes_stops_and_cycle_origins() {
+        let timeline =
+            ClockTimeline::new(vec![(10, 30, 10), (40, 60, 20), (200, 240, 20)], false).unwrap();
+        let view = ClockView::default();
+        let base = TimeBase::si(-9);
+        for (cursor, expected) in [
+            (None, "–"),
+            (Some(0), "–"),
+            (Some(15), "100.00 MHz · #0"),
+            (Some(35), "100.00 MHz · #2"),
+            (Some(40), "50.00 MHz · #3"),
+            (Some(100), "stopped · #4"),
+            (Some(200), "50.00 MHz · #5"),
+            (Some(300), "stopped · #7"),
+        ] {
+            assert_eq!(ruler_value(&view, &timeline, cursor, base), expected);
+        }
+        let relative = ClockView {
+            origin: Some(40),
+            ..Default::default()
+        };
+        assert_eq!(
+            ruler_value(&relative, &timeline, Some(20), base),
+            "100.00 MHz · #-2"
+        );
+        let cycles = TimeBase {
+            timescale: 0,
+            unit: Some("cycle"),
+        };
+        assert_eq!(ruler_value(&view, &timeline, Some(40), cycles), "#3");
+        let open = ClockTimeline::new(vec![(10, 30, 10)], true).unwrap();
+        assert_eq!(
+            ruler_value(&view, &open, Some(100), base),
+            "100.00 MHz · #2"
+        );
+        let unknown = ClockTimeline::new(vec![(10, 10, 0)], true).unwrap();
+        assert_eq!(ruler_value(&view, &unknown, Some(10), base), "#0");
+        assert_eq!(
+            ruler_value(&view, &ClockTimeline::default(), Some(10), base),
+            "–"
+        );
     }
 
     #[test]
