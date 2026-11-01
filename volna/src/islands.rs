@@ -3,6 +3,7 @@
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::base::{ElementExt as _, Tab, Tabs as TabList, dock as base};
 use gpui_kit::component::{
     button::ButtonVariants,
@@ -12,7 +13,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, AppContext, Axis, Context, Empty, IntoElement, MouseMoveEvent, MouseUpEvent,
-    Pixels, Render, ScrollHandle, WeakEntity, Window, canvas, deferred, div, px,
+    Pixels, Render, ScrollHandle, TestSupportExt, WeakEntity, Window, canvas, deferred, div, px,
 };
 
 use crate::theme::{ThemePx, theme};
@@ -80,10 +81,18 @@ pub(crate) fn resize_thickness(active: bool, cx: &App) -> Pixels {
 }
 
 pub(crate) fn resize_handle(handle: &gpui_kit::base::ResizeHandleContext, cx: &App) -> AnyElement {
+    if handle.edge().is_some() && handle.state() == gpui_kit::base::ResizeHandleState::Idle {
+        return div().into_any_element();
+    }
     let thickness = resize_thickness(handle.is_active(), cx);
+    let color = if handle.state() == gpui_kit::base::ResizeHandleState::Idle {
+        theme(cx).border_variant
+    } else {
+        theme(cx).border_focused
+    };
     let line = div()
         .absolute()
-        .bg(theme(cx).border_focused)
+        .bg(color)
         .rounded(thickness / 2.)
         .map(|line| match handle.axis() {
             Axis::Horizontal => line.left((px(1.) - thickness) / 2.).w(thickness).h_full(),
@@ -92,17 +101,12 @@ pub(crate) fn resize_handle(handle: &gpui_kit::base::ResizeHandleContext, cx: &A
     div()
         .relative()
         .size_full()
-        .when(
-            handle.state() != gpui_kit::base::ResizeHandleState::Idle,
-            |el| {
-                // Dock frames clip at the seam; only the active highlight may overhang it.
-                el.child(if handle.edge().is_some() {
-                    deferred(line).into_any_element()
-                } else {
-                    line.into_any_element()
-                })
-            },
-        )
+        // Dock frames clip at the seam; the resize highlight may overhang it.
+        .child(if handle.edge().is_some() {
+            deferred(line).into_any_element()
+        } else {
+            line.into_any_element()
+        })
         .into_any_element()
 }
 
@@ -207,6 +211,21 @@ pub(crate) fn insets(gap: f32, display_scale: f32) -> gpui_kit::Edges<gpui_kit::
     }
 }
 
+// Frame hooks receive their children later, so defer the corner masks until
+// the region's panels have painted.
+pub(crate) fn frame_corners(insets: gpui_kit::Edges<Pixels>, cx: &App) -> AnyElement {
+    deferred(
+        div().absolute().inset_0().paddings(insets).child(
+            div()
+                .relative()
+                .size_full()
+                .child(corners(true, cx))
+                .child(corners(false, cx)),
+        ),
+    )
+    .into_any_element()
+}
+
 pub(crate) fn rounded(content: AnyElement, cx: &App) -> AnyElement {
     let t = theme(cx);
     let Some(i) = t.islands else { return content };
@@ -263,6 +282,38 @@ pub(crate) fn corners(top: bool, cx: &App) -> AnyElement {
     .into_any_element()
 }
 
+fn tab_shoulders(radius: Pixels, color: gpui_kit::Hsla, leading: bool) -> AnyElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            use gpui_kit::{PathBuilder, point};
+            for (x, dx) in [(bounds.left(), -1.), (bounds.right(), 1.)] {
+                if dx < 0. && !leading {
+                    continue;
+                }
+                let bottom = bounds.bottom();
+                let mut path = PathBuilder::fill();
+                path.move_to(point(x, bottom - radius));
+                path.arc_to(
+                    point(radius, radius),
+                    px(0.),
+                    false,
+                    dx < 0.,
+                    point(x + radius * dx, bottom),
+                );
+                path.line_to(point(x, bottom));
+                path.close();
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, color);
+                }
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+    .into_any_element()
+}
+
 #[derive(Default)]
 pub(crate) struct Tabs {
     scroll: ScrollHandle,
@@ -278,7 +329,9 @@ impl Tabs {
         cx: &mut App,
     ) -> AnyElement {
         let t = *theme(cx);
-        let radius = t.px(t.islands.expect("island tabs").radius);
+        let islands = t.islands.expect("island tabs");
+        let radius = t.px(islands.radius);
+        let chrome = islands.background;
         let focused = window.is_window_active()
             && group
                 .active_panel()
@@ -339,20 +392,21 @@ impl Tabs {
                             }
                         }
                     })
+                    .relative()
                     .child(title)
+                    .when(active, |tab| {
+                        tab.child(tab_shoulders(radius, t.panel.bg, position > 0))
+                    })
                     .selected(active)
                     .rounded_t(radius)
-                    .border_1()
-                    .border_t_0()
-                    .when(position == 0, gpui_kit::Styled::border_l_0)
-                    .border_color(t.border_variant)
-                    .when(active, gpui_kit::Styled::border_b_0)
+                    // The region mask supplies the outer curve; lower rows meet a straight edge.
+                    .when(position == 0, gpui_kit::Styled::rounded_tl_none)
+                    .border_0()
+                    // Later tabs must not cover the selected tab's curved shoulders.
                     .bg(if active {
                         t.panel.bg
-                    } else if t.appearance.is_dark() {
-                        t.panel.bg.blend(gpui_kit::black().opacity(0.12))
                     } else {
-                        t.bar_hover.bg
+                        gpui_kit::transparent_black()
                     })
                     .text_color(if active && focused {
                         t.panel.text
@@ -514,20 +568,27 @@ impl Tabs {
                         }),
                 )
             });
-        let header = div().relative().flex_none().bg(t.panel.bg).on_prepaint({
-            let narrow = self.narrow.clone();
-            move |bounds, window, _| {
-                let next = bounds.size.width < t.px(640.);
-                if narrow.replace(next) != next && dense_toolbar {
-                    window.refresh();
+        let header = div()
+            .id(format!("island-header-{}", group.node().as_u64()))
+            .test_support()
+            .relative()
+            .flex_none()
+            .bg(chrome)
+            .on_prepaint({
+                let narrow = self.narrow.clone();
+                move |bounds, window, _| {
+                    let next = bounds.size.width < t.px(640.);
+                    if narrow.replace(next) != next && dense_toolbar {
+                        window.refresh();
+                    }
                 }
-            }
-        });
+            });
         let header = if stacked {
             header.child(row).child(
                 div()
                     .id("island-toolbar")
-                    .mt(t.px(3.))
+                    .bg(t.panel.bg)
+                    .pt(t.px(3.))
                     .w_full()
                     .overflow_x_scroll()
                     .child(toolbar),
@@ -535,7 +596,7 @@ impl Tabs {
         } else {
             header.child(row.child(toolbar))
         };
-        header.child(corners(true, cx)).into_any_element()
+        header.into_any_element()
     }
 }
 

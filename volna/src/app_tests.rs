@@ -5740,6 +5740,86 @@ fn transaction_right_dock_tracks_native_moves_resize_visibility_and_undo(cx: &mu
 }
 
 #[gpui_kit::test]
+fn islands_split_headers_fill_their_slots_without_gutters(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{VisualTestContext, size};
+    init(cx);
+    let window = cx.add_window(Workspace::new);
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    vcx.simulate_resize(size(px(1200.), px(800.)));
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            ws.app.sidebar_visible = false;
+            ws.dispatch(Command::Action(Action::SplitDown), Some(window), cx);
+            ws.dispatch(Command::Action(Action::SplitRight), Some(window), cx);
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    for dark in [true, false] {
+        for zoom in [0.75, 1., 1.25, 1.5, 2.] {
+            vcx.update(|_, cx| {
+                crate::theme::set(
+                    if dark {
+                        crate::theme::CoreTheme::islands_dark()
+                    } else {
+                        crate::theme::CoreTheme::islands_light()
+                    },
+                    cx,
+                );
+                crate::theme::set_zoom(zoom, cx);
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let nodes = window
+                .update(&mut vcx, |ws, _, cx| {
+                    ws.dock
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .area
+                        .read(cx)
+                        .layout(gpui_kit::base::dock::DockPlacement::Center)
+                        .unwrap()
+                        .node_ids()
+                })
+                .unwrap();
+            let selectors: Vec<_> = nodes
+                .into_iter()
+                .map(|node| format!("island-header-{}", node.as_u64()))
+                .collect();
+            let groups: Vec<_> = vcx.update(|window, _| {
+                selectors
+                    .iter()
+                    .filter_map(|header| window.try_find(header.clone()).map(|h| h.bounds()))
+                    .collect()
+            });
+            assert_eq!(groups.len(), 3);
+            let top = groups.iter().min_by_key(|b| b.top()).unwrap();
+            let mut bottom: Vec<_> = groups.iter().filter(|b| b.top() > top.top()).collect();
+            bottom.sort_by_key(|b| b.left());
+            assert_eq!(bottom.len(), 2);
+            let area = window
+                .update(&mut vcx, |ws, _, cx| {
+                    ws.dock.as_ref().unwrap().read(cx).area.read(cx).bounds()
+                })
+                .unwrap();
+            let insets = vcx.update(|window, cx| {
+                let t = crate::theme::theme(cx);
+                crate::islands::insets(t.scale(t.islands.unwrap().gap), window.scale_factor())
+            });
+            assert_eq!(top.top(), area.top() + insets.top);
+            assert_eq!(top.left(), area.left() + insets.left);
+            assert_eq!(top.right(), area.right() - insets.right);
+            assert!((bottom[1].left() - bottom[0].right()).abs() <= px(1.));
+            assert_eq!(top.left(), bottom[0].left());
+            assert_eq!(top.right(), bottom[1].right());
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn islands_docking_and_live_switching_preserve_panel_identity(cx: &mut TestAppContext) {
     check_dock_interactions(cx, Some("volna-islands-dark"));
 }
@@ -5845,7 +5925,44 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
         }
     }
     if islands {
+        use gpui_kit::test::TestWindowExt as _;
         use gpui_kit::{Modifiers, MouseButton, point};
+        for zoom in [0.75, 1., 1.25, 1.5, 2.] {
+            vcx.update(|_, cx| crate::theme::set_zoom(zoom, cx));
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let nodes = window
+                .update(&mut vcx, |ws, _, cx| {
+                    let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
+                    [DockPlacement::Center, DockPlacement::Right]
+                        .map(|placement| area.layout(placement).unwrap().node_ids())
+                })
+                .unwrap();
+            vcx.update(|window, cx| {
+                let headers = nodes.map(|nodes| {
+                    nodes
+                        .into_iter()
+                        .filter_map(|node| {
+                            window
+                                .try_find(format!("island-header-{}", node.as_u64()))
+                                .map(|header| header.bounds())
+                        })
+                        .collect::<Vec<_>>()
+                });
+                assert_eq!(headers[0].len(), 1);
+                assert_eq!(headers[1].len(), 1);
+                let gap = headers[1][0].left() - headers[0][0].right();
+                let t = crate::theme::theme(cx);
+                let insets =
+                    crate::islands::insets(t.scale(t.islands.unwrap().gap), window.scale_factor());
+                assert_eq!(gap, insets.right + insets.left);
+                assert!(gap > px(0.));
+                assert_eq!(headers[0][0].top(), headers[1][0].top());
+            });
+        }
+        vcx.update(|_, cx| crate::theme::set_zoom(1., cx));
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
         let (start, width) = window
             .update(&mut vcx, |ws, _, cx| {
                 let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);

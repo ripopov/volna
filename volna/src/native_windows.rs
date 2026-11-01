@@ -454,10 +454,15 @@ impl Render for AuxiliaryWindow {
                 .text_size(px(t.ui_size)),
             self.owner.clone(),
         );
-        root.child(header)
-            .child(div().flex_1().min_h_0().child(dock.read(cx).area.clone()))
-            .children(overlays)
-            .into_any_element()
+        root.when_some(t.islands, |el, i| {
+            el.relative()
+                .bg(i.background)
+                .child(crate::islands::background())
+        })
+        .child(header)
+        .child(div().flex_1().min_h_0().child(dock.read(cx).area.clone()))
+        .children(overlays)
+        .into_any_element()
     }
 }
 
