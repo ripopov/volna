@@ -64,6 +64,7 @@ enum Row {
         #[serde(default, skip_serializing_if = "RowHeight::is_default")]
         height: RowHeight,
         first_sub_row: usize,
+        occupancy: bool,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
@@ -252,7 +253,7 @@ struct SavedAnalog {
     range: AnalogRange,
 }
 
-pub(crate) const VERSION: u32 = 10;
+pub(crate) const VERSION: u32 = 11;
 
 #[derive(Serialize, Deserialize)]
 struct WavePanel {
@@ -309,6 +310,7 @@ pub(crate) fn save(
             generator: lane.source.path().to_vec(),
             height: lane.height,
             first_sub_row: lane.first_sub_row,
+            occupancy: lane.occupancy,
             tint: lane.tint,
         },
         WaveRow::Clock(clock) => Row::Clock {
@@ -432,6 +434,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 generator,
                 height,
                 first_sub_row,
+                occupancy,
                 tint,
             } => {
                 ensure!(!generator.is_empty(), "empty lane generator path");
@@ -465,7 +468,11 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                         ..TxLane::unresolved(trace, generator, height)
                     }
                 };
-                let lane = TxLane { tint, ..lane };
+                let lane = TxLane {
+                    occupancy,
+                    tint,
+                    ..lane
+                };
                 items.push(Entry::new(depth, WaveRow::Lane(lane)));
                 continue;
             }

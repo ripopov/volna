@@ -124,7 +124,11 @@ pub(super) fn paint(
                 let color = if failed { error.text } else { normal.text };
                 scene.text(origin, bar_h, label, FontRole::Mono, font, color);
             }
-            occupancy(scene, &index.occupancy, viewport, area, t);
+            if lane.occupancy {
+                occupancy(scene, &index.occupancy, viewport, area, t);
+            } else if area.height() > 0.0 {
+                occupancy_ribbon(scene, &index.occupancy, viewport, area, t);
+            }
             if let Some(selected) = doc.selection().filter(|s| Some(s.track) == lane.track())
                 && let Some(ordinal) = generator.transaction_ordinal(selected.id)
             {
@@ -299,4 +303,64 @@ fn occupancy(
             t.panel.text_muted,
         );
     }
+}
+
+fn occupancy_ribbon(
+    scene: &mut Scene,
+    summary: &crate::data::occupancy::Occupancy,
+    viewport: &Viewport,
+    area: Rect,
+    theme: &Theme,
+) {
+    let columns = (area.width().ceil().max(1.0) as usize).min(PIXELS);
+    let width = area.width() / columns as f32;
+    let scale = summary.maximum().max(1) as f64;
+    let mut fills: [Vec<Rect>; 16] = std::array::from_fn(|_| Vec::new());
+    let mut errors = Vec::new();
+    let mut points = Vec::new();
+    scene.fill(area, theme.panel.bg);
+    for (x, sample) in summary
+        .bins(viewport.start, viewport.end, columns)
+        .enumerate()
+    {
+        let rect = Rect::from_xywh(
+            area.left() + x as f32 * width,
+            area.top() + theme.zoom,
+            width,
+            (area.height() - theme.zoom).max(1.0),
+        );
+        if sample.average > 0.0 {
+            let density = ((sample.average - 1.0).max(0.0) / (scale - 1.0).max(1.0)).sqrt();
+            let level = 1 + (density.clamp(0.0, 1.0) * 14.0).round() as usize;
+            append(&mut fills[level], rect);
+        }
+        if sample.failed {
+            append(&mut errors, rect);
+        }
+        if sample.has_points {
+            append(
+                &mut points,
+                Rect::from_xywh(
+                    rect.left(),
+                    rect.top(),
+                    width.max(theme.zoom),
+                    rect.height(),
+                ),
+            );
+        }
+    }
+    for (level, rects) in fills.into_iter().enumerate().skip(1) {
+        scene.rects(
+            rects,
+            theme
+                .wave_signal
+                .with_alpha(0.20 + 0.80 * (level - 1) as f32 / 14.0),
+        );
+    }
+    scene.rects(points, theme.wave_event_coalesced);
+    scene.rects(errors, theme.editor.error);
+    scene.fill(
+        Rect::from_xywh(area.left(), area.top(), area.width(), theme.zoom),
+        theme.border_variant,
+    );
 }

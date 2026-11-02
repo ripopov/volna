@@ -47,16 +47,24 @@ fn frame(app: &mut App, id: PanelId) -> &volna_core::scene::Scene {
 }
 
 fn frame_w(app: &mut App, id: PanelId, width: f32) -> &volna_core::scene::Scene {
-    let theme = Theme::one_dark();
+    frame_theme(app, id, width, &Theme::one_dark())
+}
+
+fn frame_theme<'a>(
+    app: &'a mut App,
+    id: PanelId,
+    width: f32,
+    theme: &Theme,
+) -> &'a volna_core::scene::Scene {
     app.layout_panel(
         id,
         Rect::from_xywh(0.0, 0.0, width, 600.0),
-        &theme,
+        theme,
         1.0,
         &mut MonoMeasure,
     )
     .unwrap();
-    app.render_panel(id, &theme, &mut MonoMeasure)
+    app.render_panel(id, theme, &mut MonoMeasure)
 }
 
 fn track(session: &dyn Session, path: &str) -> TrackRef {
@@ -141,6 +149,424 @@ fn click(app: &mut App, waves: PanelId, p: Point) {
 }
 
 #[test]
+fn mixed_tx_and_signal_heights_step_in_the_correct_direction_between_presets() {
+    let (mut app, _, waves, _) = with_lanes(&[CPU0]);
+    app.handle(Command::AddVars(a_all(vec![0])));
+    pump(&mut app);
+    for multiple in [5, 6, 7] {
+        let model = app.panels.waves_mut(waves).unwrap();
+        model.selected = [0, 1].into();
+        model.anchor = Some(0);
+        app.handle(Command::OpenSignalMenu(waves));
+        app.handle(Command::MenuSelect(
+            waves,
+            MenuAction::RowHeight(RowHeight::try_from(multiple).unwrap()),
+        ));
+        let heights = |app: &App| {
+            app.panels
+                .waves(waves)
+                .unwrap()
+                .items()
+                .iter()
+                .map(|entry| entry.height().multiple())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(heights(&app), [multiple, multiple]);
+        app.handle(Command::Action(Action::IncreaseRowHeight));
+        assert_eq!(heights(&app), [multiple + 1, 8]);
+        app.handle(Command::Action(Action::DecreaseRowHeight));
+        assert_eq!(heights(&app), [multiple, 4]);
+
+        app.handle(Command::OpenSignalMenu(waves));
+        app.handle(Command::MenuSelect(
+            waves,
+            MenuAction::RowHeight(RowHeight::try_from(multiple).unwrap()),
+        ));
+        app.handle(Command::Action(Action::DecreaseRowHeight));
+        assert_eq!(heights(&app), [multiple - 1, 4]);
+    }
+}
+
+#[test]
+fn transaction_scrollbars_page_drag_and_clamp_without_moving_time_or_selection() {
+    let (mut app, _, waves, _) = with_lanes(&[CPU1, CPU0]);
+    app.panels.waves_mut(waves).unwrap().selected = [0].into();
+    for theme in [Theme::one_dark(), Theme::islands_light().zoomed(1.5)] {
+        for width in [1400.0, 360.0] {
+            for expanded in [false, true] {
+                app.handle(Command::OpenSignalMenu(waves));
+                app.handle(Command::MenuSelect(waves, MenuAction::Occupancy(expanded)));
+                frame_theme(&mut app, waves, width, &theme);
+                let model = app.panels.waves(waves).unwrap();
+                let layout = model.last_layout().clone();
+                let bar = model.transaction_scrollbar(&app.doc, 0).unwrap();
+                let viewport = model.viewport(&app.doc);
+                let cursor = model.cursor(&app.doc);
+                let selection = app.doc.selection();
+                assert!(bar.track.left() >= layout.values.left());
+                assert!(bar.track.right() <= layout.values_split.left());
+                assert!(bar.track.right() < layout.waves.left());
+                assert!(bar.track.top() >= layout.row_y(0));
+                assert!(bar.track.bottom() < layout.row_y(0) + 4.0 * layout.row_h);
+                assert!(bar.thumb.height() < bar.track.height());
+                assert!(
+                    model
+                        .lane_hit(
+                            &app.doc,
+                            0,
+                            point(bar.thumb.left() + 1.0, bar.thumb.top() + 1.0)
+                        )
+                        .is_none()
+                );
+                let scene = app.render_panel(waves, &theme, &mut MonoMeasure);
+                assert!(
+                    scene
+                        .quads()
+                        .any(|(rect, color)| rect == bar.thumb && color == theme.scrollbar_thumb)
+                );
+
+                click(
+                    &mut app,
+                    waves,
+                    point(
+                        bar.track.left() + bar.track.width() / 2.0,
+                        bar.track.bottom() - 1.0,
+                    ),
+                );
+                assert_eq!(
+                    app.panels.waves(waves).unwrap().items()[0]
+                        .lane()
+                        .unwrap()
+                        .first_sub_row,
+                    4
+                );
+                frame_theme(&mut app, waves, width, &theme);
+                let bar = app
+                    .panels
+                    .waves(waves)
+                    .unwrap()
+                    .transaction_scrollbar(&app.doc, 0)
+                    .unwrap();
+                let grab = point(
+                    bar.thumb.left() + bar.thumb.width() / 2.0,
+                    bar.thumb.top() + bar.thumb.height() / 2.0,
+                );
+                app.handle(Command::Pointer(
+                    waves,
+                    PointerEvent::Down {
+                        position: grab,
+                        button: MouseButton::Left,
+                        modifiers: Modifiers::default(),
+                    },
+                ));
+                app.handle(Command::Pointer(
+                    waves,
+                    PointerEvent::Move {
+                        position: point(grab.x, bar.track.bottom() + 100.0),
+                    },
+                ));
+                assert_eq!(
+                    app.panels.waves(waves).unwrap().items()[0]
+                        .lane()
+                        .unwrap()
+                        .first_sub_row,
+                    bar.maximum
+                );
+                let scene = frame_theme(&mut app, waves, width, &theme);
+                assert_eq!(
+                    scene.window_cursor,
+                    Some(volna_core::geometry::CursorIcon::Grabbing)
+                );
+                app.handle(Command::Pointer(
+                    waves,
+                    PointerEvent::Move {
+                        position: point(grab.x, bar.track.top() - 100.0),
+                    },
+                ));
+                app.handle(Command::Pointer(waves, PointerEvent::Up));
+                frame_theme(&mut app, waves, width, &theme);
+                let model = app.panels.waves(waves).unwrap();
+                assert_eq!(model.items()[0].lane().unwrap().first_sub_row, 0);
+                assert_eq!(model.viewport(&app.doc), viewport);
+                assert_eq!(model.cursor(&app.doc), cursor);
+                assert_eq!(model.scroll_y, layout.scroll_y);
+                assert_eq!(app.doc.selection(), selection);
+                assert!(!model.pressed_record);
+                for (dy, precise, expected) in [
+                    (-layout.row_h, false, 1),
+                    (layout.row_h, false, 0),
+                    (-layout.row_h / 2.0, true, 0),
+                    (-layout.row_h / 2.0, true, 1),
+                    (layout.row_h, false, 0),
+                ] {
+                    app.handle(Command::Pointer(
+                        waves,
+                        PointerEvent::Wheel {
+                            position: grab,
+                            dx: 0.0,
+                            dy,
+                            precise,
+                            modifiers: Modifiers::default(),
+                        },
+                    ));
+                    let model = app.panels.waves(waves).unwrap();
+                    assert_eq!(model.items()[0].lane().unwrap().first_sub_row, expected);
+                    assert_eq!(model.viewport(&app.doc), viewport);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn transaction_scrollbar_disappears_when_rows_fit_and_leaves_panel_scrollbar_separate() {
+    let (mut app, _, waves, _) = with_lanes(&[CPU1, CPU0]);
+    let theme = Theme::one_dark();
+    app.layout_panel(
+        waves,
+        Rect::from_xywh(0.0, 0.0, 1400.0, 160.0),
+        &theme,
+        1.0,
+        &mut MonoMeasure,
+    )
+    .unwrap();
+    let model = app.panels.waves(waves).unwrap();
+    let layout = model.last_layout();
+    let outer = layout.scrollbar.unwrap().0;
+    let bar = model.transaction_scrollbar(&app.doc, 0).unwrap();
+    assert!(bar.track.right() <= outer.left());
+    app.panels.waves_mut(waves).unwrap().selected = [1].into();
+    app.handle(Command::OpenSignalMenu(waves));
+    app.handle(Command::MenuSelect(
+        waves,
+        MenuAction::RowHeight(RowHeight::PRESETS[4]),
+    ));
+    frame(&mut app, waves);
+    assert!(
+        app.panels
+            .waves(waves)
+            .unwrap()
+            .transaction_scrollbar(&app.doc, 1)
+            .is_none()
+    );
+
+    app.panels.waves_mut(waves).unwrap().selected = [0].into();
+    app.handle(Command::OpenSignalMenu(waves));
+    app.handle(Command::MenuSelect(
+        waves,
+        MenuAction::RowHeight(RowHeight::DEFAULT),
+    ));
+    frame(&mut app, waves);
+    let bar = app
+        .panels
+        .waves(waves)
+        .unwrap()
+        .transaction_scrollbar(&app.doc, 0)
+        .unwrap();
+    assert!(bar.thumb.height() <= bar.track.height() / 2.0);
+}
+
+#[test]
+fn overflow_controls_scroll_resize_reveal_and_restore_without_repacking() {
+    let (mut app, _, waves, tracks) = with_lanes(&[CPU1, CPU0]);
+    let layout = app.panels.waves(waves).unwrap().last_layout().clone();
+    let original_height = layout.row_height(0);
+    assert_eq!(original_height, 4.0 * layout.row_h + lane::RIBBON_H);
+    {
+        let App { panels, doc, .. } = &mut app;
+        let model = panels.waves_mut(waves).unwrap();
+        let now = volna_core::Instant::now();
+        let ribbon = point(
+            layout.waves.left() + 50.0,
+            layout.row_y(0) + original_height - 3.0,
+        );
+        model.pointer(
+            doc,
+            waves,
+            PointerEvent::Move {
+                position: point(ribbon.x, layout.row_y(0) + 12.0),
+            },
+            now,
+        );
+        assert!(model.pointer(doc, waves, PointerEvent::Move { position: ribbon }, now));
+        assert!(model.pointer(
+            doc,
+            waves,
+            PointerEvent::Move {
+                position: point(ribbon.x + 10.0, ribbon.y)
+            },
+            now
+        ));
+        assert!(model.pointer(
+            doc,
+            waves,
+            PointerEvent::Move {
+                position: point(ribbon.x, layout.row_y(0) + 12.0)
+            },
+            now
+        ));
+    }
+    let control = app
+        .panels
+        .waves(waves)
+        .unwrap()
+        .occupancy_control(&app.doc, 0)
+        .unwrap();
+    click(
+        &mut app,
+        waves,
+        point(control.left() + 10.0, control.top() + 5.0),
+    );
+    frame(&mut app, waves);
+    let model = app.panels.waves(waves).unwrap();
+    assert!(model.items()[0].lane().unwrap().occupancy);
+    assert_eq!(model.items()[0].height().multiple(), 4);
+    assert_eq!(model.last_layout().row_y(0), layout.row_y(0));
+    assert_eq!(model.last_layout().row_height(0), 6.0 * layout.row_h);
+    assert_eq!(
+        model.last_layout().row_y(1) - layout.row_y(1),
+        2.0 * layout.row_h - lane::RIBBON_H
+    );
+    click(
+        &mut app,
+        waves,
+        point(control.left() + 10.0, control.top() + 5.0),
+    );
+    frame(&mut app, waves);
+    assert_eq!(
+        app.panels.waves(waves).unwrap().last_layout().row_height(0),
+        original_height
+    );
+
+    let model = app.panels.waves(waves).unwrap();
+    let pointer = point(layout.waves.left() + 100.0, layout.row_y(0) + 12.0);
+    let viewport = model.viewport(&app.doc);
+    app.handle(Command::Pointer(
+        waves,
+        PointerEvent::Wheel {
+            precise: false,
+            position: pointer,
+            dx: 0.0,
+            dy: -3.0 * layout.row_h,
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+        },
+    ));
+    frame(&mut app, waves);
+    let model = app.panels.waves(waves).unwrap();
+    assert_eq!(model.items()[0].lane().unwrap().first_sub_row, 3);
+    assert_eq!(model.viewport(&app.doc), viewport);
+    assert_eq!(model.last_layout().row_height(0), original_height);
+    for expected in [3, 4] {
+        app.handle(Command::Pointer(
+            waves,
+            PointerEvent::Wheel {
+                position: pointer,
+                dx: 0.0,
+                dy: -layout.row_h / 2.0,
+                precise: true,
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Modifiers::default()
+                },
+            },
+        ));
+        assert_eq!(
+            app.panels.waves(waves).unwrap().items()[0]
+                .lane()
+                .unwrap()
+                .first_sub_row,
+            expected
+        );
+        assert_eq!(
+            app.panels.waves(waves).unwrap().viewport(&app.doc),
+            viewport
+        );
+    }
+
+    app.panels.waves_mut(waves).unwrap().selected = [0].into();
+    for height in 5..=8 {
+        app.handle(Command::Action(Action::IncreaseRowHeight));
+        assert_eq!(
+            app.panels.waves(waves).unwrap().items()[0]
+                .height()
+                .multiple(),
+            height
+        );
+    }
+    app.handle(Command::OpenSignalMenu(waves));
+    app.handle(Command::MenuSelect(waves, MenuAction::FitHeight));
+    assert_eq!(
+        app.panels.waves(waves).unwrap().items()[0]
+            .height()
+            .multiple(),
+        4
+    );
+    frame(&mut app, waves);
+
+    let generator = app.doc.resident_generator(a(tracks[0])).unwrap();
+    let selected = generator
+        .transactions()
+        .iter()
+        .enumerate()
+        .find(|(i, _)| generator.sub_row(*i) >= 10)
+        .map(|(_, tx)| tx.clone())
+        .unwrap();
+    app.handle(Command::SelectTransaction {
+        panel: waves,
+        track: a(tracks[0]),
+        id: selected.id,
+        cursor: Some(selected.begin),
+    });
+    frame(&mut app, waves);
+    let lane = app.panels.waves(waves).unwrap().items()[0].lane().unwrap();
+    assert_eq!(lane.height.multiple(), 4);
+    assert!(
+        lane.visible_rows()
+            .contains(&generator.sub_row(generator.transaction_ordinal(selected.id).unwrap()))
+    );
+
+    let layout = app.panels.waves(waves).unwrap().last_layout().clone();
+    let viewport = app.panels.waves(waves).unwrap().viewport(&app.doc);
+    let time = selected.begin;
+    let x = layout.waves.left() + viewport.x_of(time as f64, layout.wave_width_f64()) as f32;
+    click(
+        &mut app,
+        waves,
+        point(x, layout.row_y(0) + layout.row_height(0) - 3.0),
+    );
+    let details = app.panels.first_free_transaction().unwrap();
+    let query = app.cursor_records(details).ready().unwrap();
+    let visible = app.panels.waves(waves).unwrap().items()[0]
+        .lane()
+        .unwrap()
+        .visible_rows();
+    assert!(query.count > 0);
+    for record in query.page(0..128) {
+        assert_eq!(record.hidden, !visible.contains(&record.sub_row));
+    }
+    app.handle(Command::OpenSignalMenu(waves));
+    app.handle(Command::MenuSelect(waves, MenuAction::Occupancy(true)));
+    let snapshot = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None)
+        .unwrap()
+        .to_bytes()
+        .unwrap();
+    Workspace::parse(&snapshot)
+        .unwrap()
+        .prepare(&app, TRACE, LOCATION)
+        .unwrap()
+        .commit(&mut app)
+        .unwrap();
+    pump(&mut app);
+    let lane = app.panels.waves(waves).unwrap().items()[0].lane().unwrap();
+    assert!(lane.occupancy);
+    assert_eq!(lane.visible_rows(), visible);
+    assert_eq!(lane.height.multiple(), 4);
+}
+
+#[test]
 fn add_to_waves_loads_shares_and_releases_generator_records() {
     let (mut app, _session, waves, tracks) = with_lanes(&[CPU0, CPU1]);
     let w = app.panels.waves(waves).unwrap();
@@ -150,7 +576,7 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
     assert_eq!(heights, [4, 4]);
     let cpu1 = w.items()[1].lane().unwrap();
     assert_eq!(cpu1.generator(&app.doc).unwrap().depth(), 16);
-    assert_eq!(lane::hidden_rows(16, cpu1.height), 14);
+    assert_eq!(lane::hidden_rows(16, cpu1.height), 12);
 
     app.handle(Command::OpenPipeline {
         track: a(tracks[0]),
@@ -354,7 +780,7 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
     assert_eq!(lane.height, RowHeight::DEFAULT);
     assert!(!lane.auto_height);
     let scene = frame(&mut app, other);
-    assert!(scene.texts().any(|t| t == "+5"));
+    assert!(scene.texts().any(|t| t == "Occupancy"));
 
     let saved = serde_json::to_value(
         Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap(),
@@ -480,7 +906,7 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
                 lane.first_sub_row,
                 256,
             );
-            assert_eq!(expected.len(), 2);
+            assert_eq!(expected.len(), 4);
             let scene = app.render_panel(waves, &theme, &mut MonoMeasure);
             let texts: Vec<_> = scene
                 .prims
@@ -499,7 +925,7 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
                 .collect();
             assert_eq!(
                 texts.len(),
-                expected.iter().filter(|row| !row.text.is_empty()).count() + 1
+                expected.iter().filter(|row| !row.text.is_empty()).count()
             );
             for (sub, row) in expected
                 .iter()
@@ -514,6 +940,16 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
                 assert_eq!(**height, geometry.sub_h - 4.0 * zoom);
                 assert_eq!(**size, (0.9 * **height).min(theme.mono_size));
                 assert!(row.text.starts_with(text.trim_end_matches('…')));
+                let label_width = volna_core::scene::TextMeasure::text_width(
+                    &mut MonoMeasure,
+                    text,
+                    volna_core::scene::FontRole::Mono,
+                    **size,
+                );
+                assert!(
+                    origin.x + label_width <= values.right() - 14.0 * zoom,
+                    "row label leaves room for the scrollbar and column divider"
+                );
                 if row.failed {
                     assert_eq!(**color, theme.editor.error);
                 }
@@ -523,7 +959,7 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
 }
 
 #[test]
-fn bars_keep_separate_rows_and_always_show_total_occupancy() {
+fn bars_keep_separate_rows_and_occupancy_expands_only_on_request() {
     let (mut app, _session, waves, _tracks) = with_lanes(&[CPU1]);
     let theme = Theme::one_dark();
     let (median, depth, first) = {
@@ -544,8 +980,8 @@ fn bars_keep_separate_rows_and_always_show_total_occupancy() {
         scene.texts().filter(|t| caption(t)).count() > 5,
         "bar captions"
     );
-    assert!(scene.texts().any(|t| t == format!("+{}", depth - 2)));
-    assert!(scene.texts().any(|t| t.ends_with("records")));
+    assert!(scene.texts().any(|t| t == format!("Rows 1–4 of {depth}")));
+    assert!(!scene.texts().any(|t| t.starts_with("occupancy ·")));
     let style = theme.transaction_style(false);
     let mut bar_rows: Vec<_> = scene
         .quads()
@@ -554,7 +990,7 @@ fn bars_keep_separate_rows_and_always_show_total_occupancy() {
         .collect();
     bar_rows.sort_by(f32::total_cmp);
     bar_rows.dedup();
-    assert_eq!(bar_rows.len(), 2);
+    assert_eq!(bar_rows.len(), 4);
     assert!(
         scene
             .prims
@@ -581,9 +1017,13 @@ fn bars_keep_separate_rows_and_always_show_total_occupancy() {
     show(&mut app, waves, 0.0, end);
     frame_w(&mut app, waves, 520.0);
     let scene = frame_w(&mut app, waves, 520.0);
+    assert!(!scene.texts().any(|text| text.starts_with("occupancy ·")));
+    app.handle(Command::OpenSignalMenu(waves));
+    app.handle(Command::MenuSelect(waves, MenuAction::Occupancy(true)));
+    let scene = frame_w(&mut app, waves, 520.0);
     assert!(scene.texts().any(|text| text.starts_with("occupancy ·")));
     let columns = scene.quads().filter(|(_, c)| *c == style.fill).count();
-    assert!(columns > 0 && columns <= 2 * 4096, "{columns} density runs");
+    assert!(columns > 0 && columns <= 4 * 4096, "{columns} density runs");
     assert!(scene.prims.iter().any(|prim| matches!(
         prim, Prim::Polygon { color, points }
             if *color == theme.wave_signal.with_alpha(0.35) && !points.is_empty()
@@ -821,6 +1261,28 @@ fn revealed_sub_rows_autosave_round_trip_and_follow_undo() {
     });
     app.handle(Command::ShowTransaction { from: waves });
     let details = app.panels.focused_id();
+    frame(&mut app, waves);
+    let layout = app.panels.waves(waves).unwrap().last_layout().clone();
+    app.handle(Command::Pointer(
+        waves,
+        PointerEvent::Wheel {
+            position: point(layout.waves.left() + 50.0, layout.row_y(0) + 12.0),
+            dx: 0.0,
+            dy: 10000.0,
+            precise: false,
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+        },
+    ));
+    assert_eq!(
+        app.panels.waves(waves).unwrap().items()[0]
+            .lane()
+            .unwrap()
+            .first_sub_row,
+        0
+    );
     app.configure_persistence(volna_core::workspace::persistence::Persistence::Auto);
     let revision = app.workspace.scheduler.revision();
     app.handle(Command::RevealWaveTransaction { panel: details });

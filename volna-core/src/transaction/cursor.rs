@@ -29,6 +29,7 @@ pub struct CursorRecords {
     pub selected_rank: Option<usize>,
     pub selected: Option<TransactionRef>,
     index: Arc<TransactionIndex>,
+    visible_rows: Option<Range<usize>>,
 }
 
 pub struct CursorRecord {
@@ -37,6 +38,8 @@ pub struct CursorRecord {
     pub begin: u64,
     pub end: u64,
     pub failed: bool,
+    pub sub_row: usize,
+    pub hidden: bool,
 }
 
 impl CursorRecords {
@@ -58,7 +61,14 @@ impl CursorRecords {
                 .and_then(|i| index.active_rank(time, i)),
             selected,
             index,
+            visible_rows: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_visible_rows(mut self, rows: Option<Range<usize>>) -> Self {
+        self.visible_rows = rows;
+        self
     }
 
     #[must_use]
@@ -76,6 +86,11 @@ impl CursorRecords {
                     begin: tx.begin,
                     end: tx.end,
                     failed: tx.status == Status::Error,
+                    sub_row: self.index.source().sub_row(i),
+                    hidden: self
+                        .visible_rows
+                        .as_ref()
+                        .is_some_and(|rows| !rows.contains(&self.index.source().sub_row(i))),
                 }
             })
             .collect()

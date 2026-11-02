@@ -27,6 +27,7 @@ pub(crate) struct Stamp {
     unresolved_expanded: Option<Vec<Traced<Vec<String>>>>,
     filter: String,
     wave: Option<WaveStamp>,
+    wave_revisions: Vec<(PanelId, u64)>,
     pipeline: Option<PipelineStamp>,
     table: Option<TableStamp>,
     transactions: Vec<(PanelId, Option<crate::transaction::ShownRecord>)>,
@@ -129,6 +130,11 @@ impl Stamp {
             unresolved_selected: app.scopes.unresolved_selected.clone(),
             unresolved_expanded: scope.then(|| app.scopes.unresolved_expanded.clone()),
             filter: app.variables.filter.clone(),
+            wave_revisions: app
+                .panels
+                .iter()
+                .filter_map(|panel| Some((panel.id, panel.kind.waves()?.revision())))
+                .collect(),
             wave: app.panels.waves(panel).map(|w| WaveStamp {
                 clocks: w.nav.clocks().clone(),
                 link: w.nav.link,

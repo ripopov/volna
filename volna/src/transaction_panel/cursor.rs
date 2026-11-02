@@ -173,10 +173,15 @@ impl TransactionPanelView {
                     .id(("tx-active-record", id.0))
                     .role(gpui_kit::accesskit::Role::Button)
                     .aria_label(format!(
-                        "Transaction #{}: {}{}",
+                        "Transaction #{}: {}{}{}",
                         id.0,
                         record.label,
-                        if is_selected { ", selected" } else { "" }
+                        if is_selected { ", selected" } else { "" },
+                        if record.hidden {
+                            ", hidden in waveform"
+                        } else {
+                            ""
+                        }
                     ))
                     .debug_selector(move || format!("tx-active-record-{}", id.0))
                     .h(t.px(34.0))
@@ -226,6 +231,18 @@ impl TransactionPanelView {
                             .text_ellipsis()
                             .child(SharedString::from(format!("#{}", id.0))),
                     )
+                    .when(record.hidden, |row| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_size(px(t.ui_size_small))
+                                .text_color(t.panel.text_muted)
+                                .child(SharedString::from(format!(
+                                    "Hidden · row {}",
+                                    record.sub_row + 1
+                                ))),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()

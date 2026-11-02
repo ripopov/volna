@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use crate::geometry::{Point, Rect, point, size};
 use crate::marker::Marker;
-use crate::wave::model::RowHeight;
 use crate::wave::overlay::{MarkerLane, Measuring, SpanClocks, marker_lane};
 use crate::wave::viewport::Viewport;
 
@@ -40,7 +39,7 @@ pub struct WaveLayout {
     pub rows: Range<usize>,
     pub visible: Arc<[u32]>,
     pub row_h: f32,
-    tops: Arc<[u32]>,
+    tops: Arc<[f64]>,
     pub zoom: f32,
     pub scroll_y: f32,
     pub max_scroll: f32,
@@ -64,7 +63,7 @@ pub struct LayoutInput<'a> {
     pub scopes_width: f32,
     pub values_width: f32,
     pub trace_gutter: bool,
-    pub row_tops: Arc<[u32]>,
+    pub row_tops: Arc<[f64]>,
     pub visible: Arc<[u32]>,
     pub scroll_y: f32,
     pub markers: &'a [Marker],
@@ -73,24 +72,23 @@ pub struct LayoutInput<'a> {
     pub viewport: Viewport,
 }
 
-pub fn row_tops(heights: impl IntoIterator<Item = RowHeight>) -> Arc<[u32]> {
-    let mut top = 0u32;
-    std::iter::once(0)
-        .chain(heights.into_iter().map(|h| {
-            top += u32::from(h.multiple());
+pub fn row_tops(heights: impl IntoIterator<Item = f64>) -> Arc<[f64]> {
+    let mut top = 0.0;
+    std::iter::once(0.0)
+        .chain(heights.into_iter().map(|height| {
+            top += height;
             top
         }))
         .collect()
 }
 
-fn row_at_unit(tops: &[u32], unit: f32) -> usize {
+fn row_at_offset(tops: &[f64], offset: f64, row_h: f32) -> usize {
     let count = tops.len().saturating_sub(1);
-    let total = tops.last().copied().unwrap_or(0);
-    if unit >= total as f32 {
-        return count + (unit - total as f32) as usize;
+    let total = tops.last().copied().unwrap_or(0.0);
+    if offset >= total {
+        return count + ((offset - total) / f64::from(row_h)) as usize;
     }
-    tops.partition_point(|top| *top as f32 <= unit)
-        .saturating_sub(1)
+    tops.partition_point(|top| *top <= offset).saturating_sub(1)
 }
 
 impl WaveLayout {
@@ -154,7 +152,7 @@ impl WaveLayout {
 
         let tops = input.row_tops;
         let item_count = tops.len().saturating_sub(1);
-        let content_h = row_h * tops.last().copied().unwrap_or(0) as f32;
+        let content_h = tops.last().copied().unwrap_or(0.0) as f32;
         let max_scroll = (content_h - rows_h).max(0.0);
         let scroll_y = if input.scroll_y.is_finite() {
             input.scroll_y.clamp(0.0, max_scroll)
@@ -163,10 +161,10 @@ impl WaveLayout {
         };
 
         let (first, last) = if row_h > 0.0 && item_count > 0 {
-            let bottom = (scroll_y + rows_h) / row_h;
+            let bottom = f64::from(scroll_y) + f64::from(rows_h);
             (
-                row_at_unit(&tops, scroll_y / row_h),
-                tops[..item_count].partition_point(|top| (*top as f32) < bottom),
+                row_at_offset(&tops, f64::from(scroll_y), row_h),
+                tops[..item_count].partition_point(|top| *top < bottom),
             )
         } else {
             (0, 0)
@@ -175,7 +173,7 @@ impl WaveLayout {
 
         let mut badges = Vec::new();
         for ix in rows.clone() {
-            let y = rows_top + row_h * tops[ix] as f32 - scroll_y;
+            let y = rows_top + (tops[ix] - f64::from(scroll_y)) as f32;
             let b = Rect::new(
                 point(values.right() - z(BADGE_W + 6.0), y + z(4.0)),
                 size(z(BADGE_W), row_h - z(8.0)),
@@ -250,28 +248,27 @@ impl WaveLayout {
         if self.row_h <= 0.0 {
             return None;
         }
-        let unit = (y - self.names.top() + self.scroll_y) / self.row_h;
-        (unit >= 0.0).then(|| row_at_unit(&self.tops, unit))
+        let offset = f64::from(y) - f64::from(self.names.top()) + f64::from(self.scroll_y);
+        (offset >= 0.0).then(|| row_at_offset(&self.tops, offset, self.row_h))
     }
 
     #[must_use]
     pub fn row_y(&self, ix: usize) -> f32 {
         let count = self.tops.len().saturating_sub(1);
-        let total = self.tops.last().copied().unwrap_or(0);
-        let unit = match self.tops.get(ix) {
-            Some(top) => *top as f32,
-            None => (total as usize + ix - count) as f32,
+        let total = self.tops.last().copied().unwrap_or(0.0);
+        let offset = match self.tops.get(ix) {
+            Some(top) => *top,
+            None => total + (ix - count) as f64 * f64::from(self.row_h),
         };
-        self.names.top() + self.row_h * unit - self.scroll_y
+        self.names.top() + (offset - f64::from(self.scroll_y)) as f32
     }
 
     #[must_use]
     pub fn row_height(&self, ix: usize) -> f32 {
-        let units = match (self.tops.get(ix), self.tops.get(ix + 1)) {
-            (Some(top), Some(bottom)) => bottom - top,
-            _ => 1,
-        };
-        self.row_h * units as f32
+        match (self.tops.get(ix), self.tops.get(ix + 1)) {
+            (Some(top), Some(bottom)) => (bottom - top) as f32,
+            _ => self.row_h,
+        }
     }
 
     #[must_use]
@@ -339,6 +336,7 @@ pub fn ruler_row(band: Rect, p: Point, count: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wave::model::RowHeight;
     use crate::wave::overlay::{CHIP_H, LANE_H};
     use crate::wave::timeline::TimeBase;
 
@@ -371,7 +369,7 @@ mod tests {
             scopes_width: 160.0,
             values_width: 120.0,
             trace_gutter: false,
-            row_tops: row_tops(vec![RowHeight::DEFAULT; items]),
+            row_tops: row_tops(std::iter::repeat_n(f64::from(24.0 * zoom), items)),
             visible: (0..items as u32).collect(),
             scroll_y: 0.0,
             markers,
@@ -446,6 +444,52 @@ mod tests {
     }
 
     #[test]
+    fn large_scrolled_layouts_keep_fractional_heights_and_row_hits_aligned() {
+        const COUNT: usize = 100_000;
+        const FIRST: usize = 90_000;
+        for row_h in [24.0f32, 33.6] {
+            let height = f64::from(row_h) * 4.0 + 8.0;
+            let tops = row_tops(std::iter::repeat_n(height, COUNT));
+            assert!((tops[COUNT] - height * COUNT as f64).abs() < 1e-6);
+            let scroll = (height * FIRST as f64) as f32;
+            let layout = WaveLayout::compute(LayoutInput {
+                metadata_width: None,
+                bounds: Rect::from_xywh(0.0, 0.0, 1400.0, 600.0),
+                row_h,
+                header_h: 32.0,
+                ruler_h: 0.0,
+                zoom: 1.0,
+                names_width: 220.0,
+                scopes_width: 160.0,
+                values_width: 120.0,
+                trace_gutter: false,
+                row_tops: tops,
+                visible: (0..COUNT as u32).collect(),
+                scroll_y: scroll,
+                markers: &[],
+                spans: SpanClocks::time_only(TimeBase::si(-9)),
+                measuring: None,
+                viewport: Viewport {
+                    start: 0.0,
+                    end: 100.0,
+                },
+            });
+            for row in FIRST..FIRST + 4 {
+                let top = layout.row_y(row);
+                let expected =
+                    layout.names.top() + (height * row as f64 - f64::from(scroll)) as f32;
+                assert!((top - expected).abs() < 1e-4);
+                assert!((f64::from(layout.row_height(row)) - height).abs() < 1e-5);
+                assert_eq!(layout.row_at(top + 0.25), Some(row));
+                assert_eq!(
+                    layout.row_at(top + layout.row_height(row) - 0.25),
+                    Some(row)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn tall_rows_shift_every_row_below_and_hit_test_to_their_full_height() {
         let heights = [1, 4, 1, 8, 2].map(|h| RowHeight::try_from(h).unwrap());
         let input = |scroll_y| LayoutInput {
@@ -459,7 +503,7 @@ mod tests {
             scopes_width: 160.0,
             values_width: 120.0,
             trace_gutter: false,
-            row_tops: row_tops(heights),
+            row_tops: row_tops(heights.map(|h| f64::from(h.multiple()) * 24.0)),
             visible: (0..5).collect(),
             scroll_y,
             markers: &[],

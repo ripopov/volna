@@ -301,6 +301,8 @@ pub(crate) fn paint(
         let cells = LaneCells {
             layout: &layout,
             pos,
+            pointer: model.pointer,
+            drag: model.drag,
             name_x,
             viewport,
             cursor,
@@ -975,7 +977,10 @@ pub(crate) fn paint(
         Some(Drag::NamesSplit | Drag::ScopesSplit | Drag::ValuesSplit)
     ) {
         p.scene.window_cursor = Some(CursorIcon::ResizeLeftRight);
-    } else if matches!(drag, Some(Drag::Rows { started: true, .. })) {
+    } else if matches!(
+        drag,
+        Some(Drag::Rows { started: true, .. } | Drag::TransactionScroll { .. })
+    ) {
         p.scene.window_cursor = Some(CursorIcon::Grabbing);
     } else {
         p.scene
@@ -1021,7 +1026,11 @@ pub(crate) fn paint(
             let scope = model.items().get(layout.entry_at(pointer.y)?)?.scope();
             (!scope.is_empty()).then_some((scope, pointer))
         });
-    if let Some((hint, pointer)) = format_hint
+    let transaction_hint = model.transaction_hint(doc);
+    if let Some((hint, pointer)) = transaction_hint
+        .as_ref()
+        .map(|(hint, pointer)| (hint.as_str(), *pointer))
+        .or(format_hint)
         .or_else(|| model.disclosure_hint())
         .or(scope_hint)
         && let Some(label) = fit_width(
@@ -2115,6 +2124,8 @@ fn paint_bus_row_sampled(
 struct LaneCells<'a> {
     layout: &'a WaveLayout,
     pos: usize,
+    pointer: Option<Point>,
+    drag: Option<Drag>,
     name_x: f32,
     viewport: Viewport,
     cursor: Option<u64>,
@@ -3299,63 +3310,100 @@ fn paint_lane_row(
         .map_or(0, |g| lane::hidden_rows(g.depth(), lane.height));
 
     let pad = cells.name_x - names.left();
-    let name_w = p.width(&lane.name, FontRole::Ui, t.ui_size);
     let name_color = if lane.track().is_some() {
         cells.text
     } else {
         cells.muted
     };
-    let name = lane.name.clone();
-    p.scene.clipped(names, |scene| {
-        scene.text(
-            point(names.left() + pad, y),
-            row_h,
-            name,
-            FontRole::Ui,
-            t.ui_size,
-            name_color,
-        );
-    });
-    if hidden > 0 {
-        let chip = format!("+{hidden}");
-        let chip_w = p.width(&chip, FontRole::UiMedium, t.ui_size_small) + z(8.0);
-        let rect = Rect::from_xywh(
-            names.left() + pad + name_w + z(6.0),
-            y + z(5.0),
-            chip_w,
-            row_h - z(10.0),
-        );
-        p.scene.clipped(names, |scene| {
-            scene.quad(rect, t.badge.bg, z(3.0), 1.0, t.border_variant);
+    let control = generator
+        .filter(|g| g.points().is_none())
+        .map(|_| lane::occupancy_control(names, y, row_h, t.zoom));
+    let name_right = control.map_or(names.right(), |rect| rect.left() - z(4.0));
+    let name_area = Rect::from_xywh(names.left(), y, (name_right - names.left()).max(0.0), row_h);
+    let name = fit_width(
+        p,
+        &lane.name,
+        FontRole::Ui,
+        t.ui_size,
+        (name_right - names.left() - pad).max(0.0),
+    );
+    p.scene.clipped(intersect(name_area, names), |scene| {
+        if let Some(name) = name {
             scene.text(
-                point(rect.left() + z(4.0), rect.top()),
-                rect.height(),
-                chip,
-                FontRole::UiMedium,
-                t.ui_size_small,
-                t.badge.text_muted,
+                point(names.left() + pad, y),
+                row_h,
+                name,
+                FontRole::Ui,
+                t.ui_size,
+                name_color,
             );
+        }
+    });
+    if let Some(rect) = control {
+        p.scene.clipped(names, |scene| {
+            scene.quad(
+                rect,
+                if lane.occupancy {
+                    t.selection.bg
+                } else {
+                    t.badge.bg
+                },
+                z(3.0),
+                1.0,
+                if lane.occupancy {
+                    t.border_focused
+                } else {
+                    t.border_variant
+                },
+            );
+            let color = if lane.occupancy {
+                t.editor.text
+            } else {
+                t.badge.text_muted
+            };
+            if rect.width() >= z(80.0) {
+                scene.text(
+                    point(rect.left() + z(5.0), rect.top()),
+                    rect.height(),
+                    "Occupancy",
+                    FontRole::Ui,
+                    t.ui_size_small,
+                    color,
+                );
+            } else {
+                let side = z(14.0).min(rect.height());
+                scene.icon(
+                    IconName::Activity,
+                    Rect::from_xywh(
+                        rect.left() + (rect.width() - side) / 2.0,
+                        rect.top() + (rect.height() - side) / 2.0,
+                        side,
+                        side,
+                    ),
+                    color,
+                );
+            }
         });
+        p.scene.cursors.push((rect, CursorIcon::PointingHand));
     }
     if let Some(g) = generator {
         let mut lines = Vec::new();
         if full_h >= 2.0 * row_h {
             let n = g.transactions().len();
-            lines.push(format!("{n} record{}", if n == 1 { "" } else { "s" }));
-        }
-        if full_h >= 3.0 * row_h && g.points().is_none() {
             lines.push(if hidden > 0 {
-                format!(
-                    "{hidden} sub-row{} hidden",
-                    if hidden == 1 { "" } else { "s" }
-                )
+                let first = lane.first_sub_row + 1;
+                let last = lane.visible_rows().end.min(g.depth());
+                if names.width() < z(160.0) {
+                    format!("{first}–{last} / {}", g.depth())
+                } else {
+                    format!("Rows {first}–{last} of {}", g.depth())
+                }
             } else {
-                format!(
-                    "{} sub-row{}",
-                    g.depth(),
-                    if g.depth() == 1 { "" } else { "s" }
-                )
+                format!("{n} record{}", if n == 1 { "" } else { "s" })
             });
+        }
+        if full_h >= 3.0 * row_h && g.points().is_none() && hidden > 0 {
+            lines.push(format!("{} records", g.transactions().len()));
         }
         for (k, line) in lines.into_iter().enumerate() {
             let origin = point(names.left() + pad, y + row_h * (k + 1) as f32);
@@ -3381,7 +3429,10 @@ fn paint_lane_row(
     if let (Some(index), Some(cursor), None) = (index, cells.cursor, cells.left_out) {
         let bar_h = (geometry.sub_h - z(4.0)).max(1.0);
         let font = (bar_h * 0.9).min(t.mono_size);
-        let room = values.width() - z(16.0);
+        let right = lane
+            .scrollbar(doc, layout, cells.pos)
+            .map_or(values.right(), |bar| bar.track.left());
+        let room = right - values.left() - z(16.0);
         for (sub, value) in lane::row_values(
             index,
             cursor,
@@ -3418,20 +3469,22 @@ fn paint_lane_row(
             cursor,
             crate::data::text::PREVIEW_BYTES,
         );
-        p.scene.clipped(values, |scene| {
-            scene.text(
-                point(values.left() + z(8.0), geometry.occupancy_top()),
-                row_h.min(full_h),
-                value.text,
-                FontRole::Mono,
-                t.mono_size,
-                if value.failed {
-                    t.editor.error
-                } else {
-                    cells.text
-                },
-            );
-        });
+        if lane.occupancy {
+            p.scene.clipped(values, |scene| {
+                scene.text(
+                    point(values.left() + z(8.0), geometry.occupancy_top()),
+                    row_h.min(full_h),
+                    value.text,
+                    FontRole::Mono,
+                    t.mono_size,
+                    if value.failed {
+                        t.editor.error
+                    } else {
+                        cells.text
+                    },
+                );
+            });
+        }
     } else {
         let (value, value_color) = match data {
             _ if cells.left_out.is_some() => (cells.left_out.unwrap().into(), cells.muted),
@@ -3478,6 +3531,36 @@ fn paint_lane_row(
             if let Some(index) = index {
                 let plan = lane::RenderPlan::new(lane, index, &cells.viewport, detail);
                 transactions::paint(lane, &plan, doc, &cells.viewport, waves, &geometry, p);
+                if let Some(bar) = lane.scrollbar(doc, layout, cells.pos) {
+                    let hovered = cells.pointer.is_some_and(|p| bar.track.contains(p))
+                        || matches!(cells.drag, Some(Drag::TransactionScroll { row, .. }) if Some(row) == layout.entry(cells.pos));
+                    p.scene.clipped(values, |scene| {
+                        scene.fill(bar.track, t.panel.bg);
+                        scene.fill(
+                            Rect::from_xywh(
+                                bar.track.left(),
+                                bar.track.top(),
+                                z(1.0),
+                                bar.track.height(),
+                            ),
+                            t.border_variant,
+                        );
+                        scene.quad(
+                            bar.thumb,
+                            if hovered {
+                                t.scrollbar_thumb_hover
+                            } else {
+                                t.scrollbar_thumb
+                            },
+                            z(3.0),
+                            0.0,
+                            Color::TRANSPARENT,
+                        );
+                    });
+                    p.scene
+                        .cursors
+                        .push((intersect(bar.track, values), CursorIcon::PointingHand));
+                }
                 return;
             }
             Some((

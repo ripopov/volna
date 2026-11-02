@@ -1125,6 +1125,14 @@ impl App {
         let before = crate::workspace::Stamp::capture(self, &command);
         let tracked = before.as_ref().map(|_| command.clone());
         let selection = (self.doc.selection(), self.doc.selection_range());
+        let reveal_selection = matches!(
+            command,
+            Command::SelectTransaction { .. }
+                | Command::Transaction(
+                    _,
+                    crate::transaction::TransactionCommand::CursorSelect { .. }
+                )
+        );
         let pointer = matches!(command, Command::Pointer(..));
         let press = matches!(
             command,
@@ -1159,7 +1167,34 @@ impl App {
         } else if press {
             self.sync_group_summaries();
         }
-        if (self.doc.selection(), self.doc.selection_range()) != selection {
+        if reveal_selection || (self.doc.selection(), self.doc.selection_range()) != selection {
+            if let Some(selected) = self
+                .doc
+                .selection()
+                .filter(|selected| !pointer || self.panels.waves(selected.origin).is_none())
+            {
+                let target = self
+                    .panels
+                    .waves(selected.origin)
+                    .filter(|waves| {
+                        waves.items().iter().any(|entry| {
+                            entry
+                                .lane()
+                                .is_some_and(|lane| lane.track() == Some(selected.track))
+                        })
+                    })
+                    .map(|_| selected.origin)
+                    .or_else(|| {
+                        self.doc
+                            .record_cursor()
+                            .map(|cursor| cursor.origin)
+                            .filter(|&origin| self.panels.waves(origin).is_some())
+                    })
+                    .or_else(|| self.panels.waves_for_track(selected.track));
+                if let Some(waves) = target.and_then(|panel| self.panels.waves_mut(panel)) {
+                    waves.reveal_transaction(&self.doc, selected.track, selected.id);
+                }
+            }
             self.sync_selection();
         }
         if press {
@@ -1685,7 +1720,21 @@ impl App {
         }
         match self.doc.transaction_index(track) {
             Some(AnalysisLoad::Ready(index)) => {
-                CursorRecordsState::Ready(CursorRecords::new(index.clone(), track, time, selected))
+                let rows = self
+                    .transaction_wave_panel(panel)
+                    .and_then(|waves| self.panels.waves(waves))
+                    .and_then(|waves| {
+                        waves
+                            .items()
+                            .iter()
+                            .filter_map(|entry| entry.lane())
+                            .find(|lane| lane.track() == Some(track))
+                    })
+                    .map(crate::wave::lane::TxLane::visible_rows);
+                CursorRecordsState::Ready(
+                    CursorRecords::new(index.clone(), track, time, selected)
+                        .with_visible_rows(rows),
+                )
             }
             Some(AnalysisLoad::Failed) => CursorRecordsState::Unavailable,
             _ => CursorRecordsState::Preparing,
@@ -2665,9 +2714,9 @@ impl App {
                 Action::ToggleStack => _ = w.toggle_stack(),
                 Action::ToggleOverlaid => _ = w.toggle_overlaid(),
                 Action::SetTint(tint) => _ = w.tint_selected(tint),
-                Action::IncreaseRowHeight => w.step_row_height(1),
-                Action::DecreaseRowHeight => w.step_row_height(-1),
-                Action::ResetRowHeight => w.step_row_height(0),
+                Action::IncreaseRowHeight => w.step_row_height(doc, 1),
+                Action::DecreaseRowHeight => w.step_row_height(doc, -1),
+                Action::ResetRowHeight => w.step_row_height(doc, 0),
                 Action::MoveSelectionUp => w.move_selection(-1),
                 Action::MoveSelectionDown => w.move_selection(1),
                 Action::PasteSignals

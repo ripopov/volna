@@ -175,19 +175,24 @@ impl WaveModel {
                 } else {
                     "Height".into()
                 },
-                items: RowHeight::PRESETS
-                    .into_iter()
-                    .map(|h| MenuItem {
-                        action: MenuAction::RowHeight(h),
-                        label: if h.is_default() {
-                            "1× (Default)".into()
-                        } else {
-                            format!("{}×", h.multiple())
-                        },
-                        badge: None,
-                        checked: height == Some(h),
-                    })
-                    .collect(),
+                items: (if rows.iter().any(|&r| self.items()[r].lane().is_some()) {
+                    RowHeight::ALL.as_slice()
+                } else {
+                    RowHeight::PRESETS.as_slice()
+                })
+                .iter()
+                .copied()
+                .map(|h| MenuItem {
+                    action: MenuAction::RowHeight(h),
+                    label: if h.is_default() {
+                        "1× (Default)".into()
+                    } else {
+                        format!("{}×", h.multiple())
+                    },
+                    badge: None,
+                    checked: height == Some(h),
+                })
+                .collect(),
             },
         ]
     }

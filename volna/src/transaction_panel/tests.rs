@@ -104,6 +104,12 @@ fn cursor_list_reveals_deep_selection_and_keeps_details_after_cursor_moves(
                     let query = ws.app.cursor_records(details).ready().unwrap();
                     assert_eq!(query.count, 5000);
                     assert!(query.selected_rank.is_some());
+                    assert!(query.page(0..1)[0].hidden);
+                    assert!(
+                        !query.page(query.selected_rank.unwrap()..query.selected_rank.unwrap() + 1)
+                            [0]
+                        .hidden
+                    );
                     assert_eq!(
                         ws.app
                             .panels

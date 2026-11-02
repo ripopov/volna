@@ -343,7 +343,7 @@ impl App {
             if let Some(waves) = self.panels.waves_mut(*id) {
                 waves.set_row_selection(selection.clone());
                 if let Some(&first) = waves.selected.first() {
-                    waves.reveal_entry(first);
+                    waves.reveal_entry(&self.doc, first);
                 }
             }
         }

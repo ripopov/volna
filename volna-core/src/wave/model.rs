@@ -98,6 +98,16 @@ impl RowHeight {
         RowHeight(4),
         RowHeight(8),
     ];
+    pub const ALL: [RowHeight; 8] = [
+        Self(1),
+        Self(2),
+        Self(3),
+        Self(4),
+        Self(5),
+        Self(6),
+        Self(7),
+        Self(8),
+    ];
     pub const DEFAULT: RowHeight = RowHeight(1);
     pub const ANALOG: RowHeight = RowHeight(3);
 
@@ -111,14 +121,18 @@ impl RowHeight {
         *self == Self::DEFAULT
     }
 
-    fn preset_index(self) -> usize {
-        Self::PRESETS.iter().position(|p| *p == self).unwrap_or(0)
-    }
-
     #[must_use]
     pub fn step(self, delta: isize) -> Self {
-        let ix = self.preset_index() as isize + delta;
-        Self::PRESETS[ix.clamp(0, Self::PRESETS.len() as isize - 1) as usize]
+        if delta == 0 {
+            return self;
+        }
+        let index = match Self::PRESETS.binary_search_by_key(&self.0, |h| h.0) {
+            Ok(index) => index as isize,
+            Err(next) => next as isize - isize::from(delta > 0),
+        };
+        Self::PRESETS[index
+            .saturating_add(delta)
+            .clamp(0, Self::PRESETS.len() as isize - 1) as usize]
     }
 }
 
@@ -131,7 +145,7 @@ impl Default for RowHeight {
 impl TryFrom<u8> for RowHeight {
     type Error = String;
     fn try_from(multiple: u8) -> Result<Self, Self::Error> {
-        Self::PRESETS
+        Self::ALL
             .into_iter()
             .find(|p| p.0 == multiple)
             .ok_or_else(|| format!("unsupported row height {multiple}"))
@@ -430,6 +444,13 @@ impl WaveRow {
         }
     }
 
+    fn layout_height(&self, doc: &Document, row_h: f32, zoom: f32) -> f64 {
+        match self {
+            Self::Lane(lane) => lane.layout_height(doc, row_h, zoom),
+            _ => f64::from(self.height().multiple()) * f64::from(row_h),
+        }
+    }
+
     pub fn set_height(&mut self, height: RowHeight) {
         match self {
             Self::Signal(s) => {
@@ -585,7 +606,11 @@ impl WaveRow {
                     && a.overlay_hidden == b.overlay_hidden
             }
             (Self::Lane(a), Self::Lane(b)) => {
-                a.source == b.source && a.height == b.height && a.first_sub_row == b.first_sub_row
+                a.source == b.source
+                    && a.height == b.height
+                    && a.first_sub_row == b.first_sub_row
+                    && a.occupancy == b.occupancy
+                    && a.auto_height == b.auto_height
             }
             (Self::Clock(a), Self::Clock(b)) => a == b,
             (Self::Group(a), Self::Group(b)) => {
@@ -643,6 +668,10 @@ pub enum Drag {
     Scroll {
         grab: f32,
     },
+    TransactionScroll {
+        row: usize,
+        grab: f32,
+    },
     RowHeight {
         row: usize,
         top: f32,
@@ -670,6 +699,8 @@ pub enum MenuAction {
     PasteSignals,
     RemoveSignals,
     RowHeight(RowHeight),
+    FitHeight,
+    Occupancy(bool),
     Draw(Option<AnalogDraw>),
     Range(AnalogRange),
     HideRuler(ClockKey),
@@ -814,6 +845,7 @@ impl RowEdit {
 
 pub struct WaveModel {
     pub(super) transaction_detail: std::cell::RefCell<lane::DetailCache>,
+    transaction_scroll: Option<(usize, f32)>,
     pub(super) items: Vec<Entry>,
     journal: RowJournal,
     pub selected: BTreeSet<usize>,
@@ -891,6 +923,7 @@ impl WaveModel {
     pub fn new() -> Self {
         WaveModel {
             transaction_detail: Default::default(),
+            transaction_scroll: None,
             items: Vec::new(),
             journal: RowJournal::default(),
             selected: BTreeSet::new(),
@@ -1208,7 +1241,7 @@ impl WaveModel {
         }
     }
 
-    pub(crate) fn reveal_entry(&mut self, entry: usize) {
+    pub(crate) fn reveal_entry(&mut self, doc: &Document, entry: usize) {
         let row_h = self.layout.row_h;
         let height = self.layout.names.height();
         if row_h <= 0.0 || height <= 0.0 || entry >= self.items.len() {
@@ -1222,12 +1255,15 @@ impl WaveModel {
                 None => return,
             }
         }
-        let top = self.row_units_before(shown) as f32 * row_h;
-        let bottom = top + (f32::from(self.items[shown].height().multiple()) * row_h).min(height);
-        if top < self.scroll_y {
-            self.scroll_y = top;
-        } else if bottom > self.scroll_y + height {
-            self.scroll_y = (bottom - height).max(0.0);
+        let top = self.row_top(doc, shown);
+        let full_h = self.items[shown]
+            .row
+            .layout_height(doc, row_h, self.layout.zoom);
+        let bottom = top + full_h.min(f64::from(height));
+        if top < f64::from(self.scroll_y) {
+            self.scroll_y = top as f32;
+        } else if bottom > f64::from(self.scroll_y) + f64::from(height) {
+            self.scroll_y = (bottom - f64::from(height)).max(0.0) as f32;
         }
     }
 
@@ -1366,6 +1402,11 @@ impl WaveModel {
         for row in &mut self.items {
             if let WaveRow::Lane(lane) = &mut row.row {
                 lane.fit_height(doc);
+                if let Some(g) = lane.generator(doc) {
+                    lane.first_sub_row = lane
+                        .first_sub_row
+                        .min(g.depth().saturating_sub(lane::capacity(lane.height)));
+                }
             }
         }
     }
@@ -1755,14 +1796,14 @@ impl WaveModel {
             if open && i + 1 < tree::subtree_end(&self.items, i) {
                 self.selected = BTreeSet::from([i + 1]);
                 self.anchor = Some(i + 1);
-                self.reveal_entry(i + 1);
+                self.reveal_entry(doc, i + 1);
                 return true;
             }
         }
         if !open && let Some(parent) = tree::parent(&self.items, i) {
             self.selected = BTreeSet::from([parent]);
             self.anchor = Some(parent);
-            self.reveal_entry(parent);
+            self.reveal_entry(doc, parent);
             return true;
         }
         entry.collapsed().is_some()
@@ -2252,6 +2293,18 @@ impl WaveModel {
             ],
         });
         let menu = self.menu.as_mut().expect("just opened");
+        if let Some(lane) = self.items[row]
+            .lane()
+            .filter(|lane| lane.generator(doc).is_some_and(|g| g.points().is_none()))
+        {
+            menu.entries.extend([
+                MenuEntry::Item(MenuItem {
+                    checked: lane.occupancy,
+                    ..MenuItem::plain(MenuAction::Occupancy(!lane.occupancy), "Occupancy")
+                }),
+                MenuEntry::Item(MenuItem::plain(MenuAction::FitHeight, "Fit height")),
+            ]);
+        }
         if let Some(track) = pipeline_track {
             menu.entries.insert(
                 1,
@@ -2550,7 +2603,22 @@ impl WaveModel {
         let leaves = self.leaves_of(&rows);
         match action {
             MenuAction::Format(id) => self.set_translator(doc, &leaves, id),
-            MenuAction::RowHeight(height) => self.resize_rows(&rows, menu.row, |_| *height),
+            MenuAction::RowHeight(height) => self.resize_rows(doc, &rows, menu.row, |_, _| *height),
+            MenuAction::FitHeight => self.fit_row_heights(doc, &rows),
+            MenuAction::Occupancy(show) => {
+                self.rewrite_rows("Occupancy".into(), None, rows.iter().copied(), |entry| {
+                    let WaveRow::Lane(lane) = &mut entry.row else {
+                        return false;
+                    };
+                    if lane.generator(doc).is_some_and(|g| g.points().is_some())
+                        || lane.occupancy == *show
+                    {
+                        return false;
+                    }
+                    lane.occupancy = *show;
+                    true
+                });
+            }
             MenuAction::Tint(tint) => _ = self.set_tint(&rows, *tint),
             MenuAction::Draw(draw) => self.set_analog(&leaves, *draw),
             MenuAction::Range(range) => self.set_analog_range(&leaves, *range),
@@ -2614,19 +2682,27 @@ impl WaveModel {
 
     fn resize_rows(
         &mut self,
+        doc: &Document,
         rows: &[usize],
         anchor: usize,
-        height: impl Fn(RowHeight) -> RowHeight,
+        height: impl Fn(RowHeight, bool) -> RowHeight,
     ) {
-        let before = self.row_units_before(anchor);
+        let before = self.row_top(doc, anchor);
         let mut heights: Vec<RowHeight> = Vec::new();
         let merge = MergeKey::of("height", &rows);
         let changed = self.rewrite_rows(String::new(), Some(merge), rows.iter().copied(), |e| {
-            let h = height(e.height());
-            if h == e.height() {
+            let h = height(e.height(), e.lane().is_some());
+            if h == e.height() && e.lane().is_none_or(|lane| !lane.auto_height) {
                 return false;
             }
             e.set_height(h);
+            if let WaveRow::Lane(lane) = &mut e.row
+                && let Some(g) = lane.generator(doc)
+            {
+                lane.first_sub_row = lane
+                    .first_sub_row
+                    .min(g.depth().saturating_sub(lane::capacity(h)));
+            }
             if !heights.contains(&h) {
                 heights.push(h);
             }
@@ -2641,11 +2717,11 @@ impl WaveModel {
                 _ => "Row height".into(),
             };
         }
-        let shift = self.row_units_before(anchor) as f32 - before as f32;
-        self.scroll_y = (self.scroll_y + shift * self.layout.row_h).max(0.0);
+        let shift = self.row_top(doc, anchor) - before;
+        self.scroll_y = (f64::from(self.scroll_y) + shift).max(0.0) as f32;
     }
 
-    pub fn step_row_height(&mut self, delta: isize) {
+    pub fn step_row_height(&mut self, doc: &Document, delta: isize) {
         let Some(anchor) = self
             .anchor
             .filter(|row| self.selected.contains(row))
@@ -2654,13 +2730,174 @@ impl WaveModel {
             return;
         };
         let rows: Vec<usize> = self.selected.iter().copied().collect();
-        self.resize_rows(&rows, anchor, |h| {
-            if delta == 0 {
-                RowHeight::DEFAULT
+        if delta == 0 {
+            self.fit_row_heights(doc, &rows);
+        } else {
+            self.resize_rows(doc, &rows, anchor, |h, tx| {
+                if tx {
+                    RowHeight::try_from((isize::from(h.multiple()) + delta).clamp(1, 8) as u8)
+                        .unwrap()
+                } else {
+                    h.step(delta)
+                }
+            });
+        }
+    }
+
+    fn fit_row_heights(&mut self, doc: &Document, rows: &[usize]) {
+        let anchor = self
+            .anchor
+            .filter(|row| rows.contains(row))
+            .or_else(|| rows.first().copied());
+        let before = anchor.map(|row| self.row_top(doc, row));
+        self.rewrite_rows("Fit height".into(), None, rows.iter().copied(), |entry| {
+            if let WaveRow::Lane(lane) = &mut entry.row {
+                let before = lane.clone();
+                lane.auto_height = true;
+                lane.fit_height(doc);
+                if let Some(g) = lane.generator(doc) {
+                    lane.first_sub_row = lane
+                        .first_sub_row
+                        .min(g.depth().saturating_sub(lane::capacity(lane.height)));
+                }
+                *lane != before
             } else {
-                h.step(delta)
+                let changed = entry.height() != RowHeight::DEFAULT;
+                if changed {
+                    entry.set_height(RowHeight::DEFAULT);
+                }
+                changed
             }
         });
+        if let (Some(anchor), Some(before)) = (anchor, before) {
+            let shift = self.row_top(doc, anchor) - before;
+            self.scroll_y = (f64::from(self.scroll_y) + shift).max(0.0) as f32;
+        }
+    }
+
+    fn row_top(&self, doc: &Document, row: usize) -> f64 {
+        self.visible()
+            .iter()
+            .take_while(|&&i| (i as usize) < row)
+            .map(|&i| {
+                self.items[i as usize]
+                    .row
+                    .layout_height(doc, self.layout.row_h, self.layout.zoom)
+            })
+            .sum()
+    }
+
+    #[must_use]
+    pub fn occupancy_control(&self, doc: &Document, row: usize) -> Option<crate::geometry::Rect> {
+        let lane = self.items.get(row)?.lane()?;
+        if lane.generator(doc).is_none_or(|g| g.points().is_some()) {
+            return None;
+        }
+        let layout = &self.layout;
+        let (y, _) = layout.entry_span(row)?;
+        Some(lane::occupancy_control(
+            layout.names,
+            y,
+            layout.row_h,
+            layout.zoom,
+        ))
+    }
+
+    #[must_use]
+    pub fn transaction_scrollbar(&self, doc: &Document, row: usize) -> Option<lane::RowScrollbar> {
+        self.items
+            .get(row)?
+            .lane()?
+            .scrollbar(doc, &self.layout, self.layout.position(row)?)
+    }
+
+    #[must_use]
+    pub fn overflow_at(&self, doc: &Document, row: usize, p: Point) -> bool {
+        let Some(lane) = self.items.get(row).and_then(|e| e.lane()) else {
+            return false;
+        };
+        let Some((top, height)) = self.layout.entry_span(row) else {
+            return false;
+        };
+        let summary = lane.summary_height(doc, self.layout.row_h, self.layout.zoom);
+        summary > 0.0
+            && self.layout.waves.contains(p)
+            && p.y >= top + height - summary
+            && p.y < top + height
+    }
+
+    fn transaction_hover_at(&self, doc: &Document, p: Point) -> bool {
+        self.layout.entry_at(p.y).is_some_and(|row| {
+            self.overflow_at(doc, row, p)
+                || self
+                    .transaction_scrollbar(doc, row)
+                    .is_some_and(|bar| bar.track.contains(p))
+                || self
+                    .occupancy_control(doc, row)
+                    .is_some_and(|rect| rect.contains(p))
+        })
+    }
+
+    pub(super) fn transaction_hint(&self, doc: &Document) -> Option<(String, Point)> {
+        let p = self
+            .pointer
+            .filter(|_| self.drag.is_none() && self.menu.is_none())?;
+        let row = self.layout.entry_at(p.y)?;
+        let lane = self.items.get(row)?.lane()?;
+        if self
+            .occupancy_control(doc, row)
+            .is_some_and(|r| r.contains(p))
+        {
+            return Some((
+                if lane.occupancy {
+                    "Hide occupancy"
+                } else {
+                    "Show occupancy · average / peak"
+                }
+                .into(),
+                p,
+            ));
+        }
+        if self
+            .transaction_scrollbar(doc, row)
+            .is_some_and(|bar| bar.track.contains(p))
+        {
+            let depth = lane.generator(doc)?.depth();
+            return Some((
+                format!(
+                    "Rows {}–{} of {depth} · drag to scroll · click track to page",
+                    lane.first_sub_row + 1,
+                    lane.visible_rows().end.min(depth)
+                ),
+                p,
+            ));
+        }
+        if !self.overflow_at(doc, row, p) {
+            return None;
+        }
+        let crate::analysis::AnalysisLoad::Ready(index) = doc.transaction_index(lane.track()?)?
+        else {
+            return None;
+        };
+        let viewport = self.viewport(doc);
+        let time = viewport.time_at(
+            f64::from(p.x - self.layout.waves.left()),
+            self.layout.wave_width_f64(),
+        );
+        let hidden = index.hidden_count(time.max(0.0).floor() as u64, lane.visible_rows());
+        let count = index.active_count(time.max(0.0).floor() as u64);
+        let hint = if lane.occupancy {
+            format!("{count} active · {hidden} hidden · click to inspect")
+        } else {
+            let depth = index.source().depth();
+            format!(
+                "{count} active · {hidden} hidden at {} · Rows {}–{} of {depth} · shade: average occupancy · Shift+scroll rows · click to inspect",
+                super::timeline::format_time(time, doc.time_base()),
+                lane.first_sub_row + 1,
+                lane.visible_rows().end.min(depth)
+            )
+        };
+        Some((hint, p))
     }
 
     pub fn menu_dismiss(&mut self) {
@@ -2821,7 +3058,11 @@ impl WaveModel {
             scopes_width: self.scopes_width,
             values_width: self.values_width,
             trace_gutter: doc.traces().is_combined(),
-            row_tops: super::layout::row_tops(visible.iter().map(|&i| items[i as usize].height())),
+            row_tops: super::layout::row_tops(visible.iter().map(|&i| {
+                items[i as usize]
+                    .row
+                    .layout_height(doc, theme.row_height, theme.zoom)
+            })),
             visible,
             scroll_y: self.scroll_y,
             markers: doc.markers(),
@@ -2865,7 +3106,7 @@ impl WaveModel {
         }
         if let Some(row) = self.reveal_row.take() {
             let scroll = self.scroll_y;
-            self.reveal_entry(row);
+            self.reveal_entry(doc, row);
             if self.scroll_y != scroll {
                 return self.layout(bounds, doc, theme, metadata_width);
             }
@@ -3160,17 +3401,13 @@ impl WaveModel {
                 return false;
             };
             let before = (lane.height, lane.first_sub_row);
-            if lane::capacity(lane.height) == 0 {
-                lane.height = RowHeight::PRESETS[3];
-                lane.auto_height = false;
-            }
             let capacity = lane::capacity(lane.height);
             if sub < lane.first_sub_row || sub >= lane.first_sub_row + capacity {
                 lane.first_sub_row = sub.saturating_sub(capacity - 1);
             }
             before != (lane.height, lane.first_sub_row)
         });
-        self.reveal_entry(row);
+        self.reveal_entry(doc, row);
         true
     }
 
@@ -3186,6 +3423,12 @@ impl WaveModel {
     )> {
         let lane = self.items.get(row)?.lane()?;
         let generator = lane.generator(doc)?;
+        if self
+            .transaction_scrollbar(doc, row)
+            .is_some_and(|bar| bar.track.contains(p))
+        {
+            return None;
+        }
         let layout = &self.layout;
         let viewport = self.viewport(doc);
         let width = layout.wave_width_f64();
@@ -3372,9 +3615,9 @@ impl WaveModel {
                 dx,
                 dy,
                 modifiers,
-                ..
+                precise,
             } => {
-                self.wheel(doc, position, dx, dy, modifiers, now);
+                self.wheel(doc, position, (dx, dy, precise), modifiers, now);
                 true
             }
             PointerEvent::Pinch { position, delta } => {
@@ -3457,6 +3700,30 @@ impl WaveModel {
                     });
                     return;
                 }
+            }
+            if let Some(row) = layout.entry_at(p.y).filter(|_| layout.values.contains(p))
+                && let Some(bar) = self.transaction_scrollbar(doc, row)
+                && bar.track.contains(p)
+            {
+                self.transaction_scroll = None;
+                if bar.thumb.contains(p) {
+                    self.drag = Some(Drag::TransactionScroll {
+                        row,
+                        grab: p.y - bar.thumb.top(),
+                    });
+                } else {
+                    let lane = self.items[row].lane().unwrap();
+                    let first = if p.y < bar.thumb.top() {
+                        lane.first_sub_row
+                            .saturating_sub(lane::capacity(lane.height))
+                    } else {
+                        lane.first_sub_row
+                            .saturating_add(lane::capacity(lane.height))
+                            .min(bar.maximum)
+                    };
+                    self.set_transaction_first(row, first);
+                }
+                return;
             }
             match layout.marker_lane.hit(p) {
                 Some(crate::marker::LaneHit::Chip(ix)) => {
@@ -3554,6 +3821,9 @@ impl WaveModel {
                         snap_px,
                     );
                     if let Some(r) = row.filter(|r| self.items[*r].lane().is_some()) {
+                        if self.overflow_at(doc, r, p) {
+                            t = self.viewport(doc).time_at(x, wave_wf).max(0.0).floor() as u64;
+                        }
                         let hit = self.lane_pick(doc, r, p);
                         if let Some((track, id, _)) = hit
                             && let Some(generator) = doc.resident_generator(track)
@@ -3620,6 +3890,19 @@ impl WaveModel {
         if button != MouseButton::Left {
             return;
         }
+        if let Some(row) = row.filter(|&r| {
+            self.occupancy_control(doc, r)
+                .is_some_and(|rect| rect.contains(p))
+        }) {
+            let show = !self.items[row].lane().unwrap().occupancy;
+            self.rewrite_rows("Occupancy".into(), None, [row], |entry| {
+                if let WaveRow::Lane(lane) = &mut entry.row {
+                    lane.occupancy = show;
+                }
+                true
+            });
+            return;
+        }
         if let Some(row) = self.row_edge_at(p)
             && let Some((top, _)) = layout.entry_span(row)
         {
@@ -3663,6 +3946,10 @@ impl WaveModel {
 
     fn pointer_move(&mut self, doc: &mut Document, p: Point) -> bool {
         let was_scope = self.pointer.is_some_and(|p| self.layout.scopes.contains(p));
+        let was_transaction = self.drag.is_none()
+            && self
+                .pointer
+                .is_some_and(|p| self.transaction_hover_at(doc, p));
         self.pointer = Some(p);
         let layout = &self.layout;
         let wave_wf = layout.wave_width_f64();
@@ -3760,8 +4047,18 @@ impl WaveModel {
             }
             Some(Drag::RowHeight { row, top }) => {
                 let want = (p.y - top) / layout.row_h.max(1.0);
-                let height = RowHeight::PRESETS
-                    .into_iter()
+                let extra = self.items[row].lane().map_or(0.0, |lane| {
+                    lane.summary_height(doc, layout.row_h, layout.zoom) / layout.row_h.max(1.0)
+                });
+                let want = want - extra;
+                let presets = if self.items[row].lane().is_some() {
+                    RowHeight::ALL.as_slice()
+                } else {
+                    RowHeight::PRESETS.as_slice()
+                };
+                let height = presets
+                    .iter()
+                    .copied()
                     .min_by(|a, b| {
                         (f32::from(a.multiple()) - want)
                             .abs()
@@ -3772,9 +4069,12 @@ impl WaveModel {
                 if rows.iter().all(|&r| self.items[r].height() == height) {
                     return false;
                 }
-                self.resize_rows(&rows, row, |_| height);
+                self.resize_rows(doc, &rows, row, |_, _| height);
                 true
             }
+            Some(Drag::TransactionScroll { row, grab }) => self
+                .transaction_scrollbar(doc, row)
+                .is_some_and(|bar| self.set_transaction_first(row, bar.first_at(p.y, grab))),
             Some(Drag::Scroll { grab }) => {
                 if let Some((track, thumb)) = layout.scrollbar {
                     let travel = track.height() - thumb.height();
@@ -3812,25 +4112,109 @@ impl WaveModel {
                     || self.lane_hover != prev_lane
                     || self.edge_hover != prev_edge
                     || was_scope
+                    || was_transaction
+                    || self.transaction_hover_at(doc, p)
                     || self.layout.scopes.contains(p)
                     || reading
             }
         }
     }
 
+    fn scroll_transaction_rows(
+        &mut self,
+        doc: &Document,
+        p: Point,
+        delta: f32,
+        precise: bool,
+    ) -> bool {
+        if !(self.layout.waves.contains(p) || self.layout.values.contains(p)) || delta == 0.0 {
+            return false;
+        }
+        let Some(row) = self.layout.entry_at(p.y) else {
+            return false;
+        };
+        let Some(lane) = self.items[row].lane() else {
+            return false;
+        };
+        let Some(g) = lane.generator(doc).filter(|g| g.points().is_none()) else {
+            return false;
+        };
+        let limit = g.depth().saturating_sub(lane::capacity(lane.height));
+        if delta > 0.0 && lane.first_sub_row == 0 || delta < 0.0 && lane.first_sub_row >= limit {
+            self.transaction_scroll = None;
+            return false;
+        }
+        let height = self.layout.row_h.max(1.0);
+        let distance = if precise {
+            let remainder = self
+                .transaction_scroll
+                .filter(|&(previous, _)| previous == row)
+                .map_or(0.0, |(_, delta)| delta);
+            let distance = delta + remainder;
+            let whole = (distance / height).trunc();
+            self.transaction_scroll = Some((row, distance - whole * height));
+            if whole == 0.0 {
+                return true;
+            }
+            whole
+        } else {
+            self.transaction_scroll = None;
+            (delta / height).abs().ceil().max(1.0).copysign(delta)
+        };
+        let step = distance.abs() as usize;
+        let target = if distance > 0.0 {
+            lane.first_sub_row.saturating_sub(step)
+        } else {
+            lane.first_sub_row.saturating_add(step).min(limit)
+        };
+        if target == lane.first_sub_row {
+            return false;
+        }
+        self.set_transaction_first(row, target)
+    }
+
+    fn set_transaction_first(&mut self, row: usize, target: usize) -> bool {
+        self.rewrite_rows(
+            "Scroll transaction rows".into(),
+            Some(MergeKey::of("tx-scroll", &[row])),
+            [row],
+            |entry| {
+                let WaveRow::Lane(lane) = &mut entry.row else {
+                    return false;
+                };
+                if lane.first_sub_row == target {
+                    return false;
+                }
+                lane.first_sub_row = target;
+                true
+            },
+        )
+    }
+
     fn wheel(
         &mut self,
         doc: &mut Document,
         p: Point,
-        dx: f32,
-        dy: f32,
+        delta: (f32, f32, bool),
         modifiers: Modifiers,
         now: Instant,
     ) {
+        let (dx, dy, precise) = delta;
+        let over_transaction_scrollbar = self.layout.values.contains(p)
+            && self.layout.entry_at(p.y).is_some_and(|row| {
+                self.transaction_scrollbar(doc, row)
+                    .is_some_and(|bar| bar.track.contains(p))
+            });
+        if !modifiers.shift && !over_transaction_scrollbar {
+            self.transaction_scroll = None;
+        }
         if modifiers.control || modifiers.platform {
             let factor = 2f64.powf(f64::from(dy) / 120.0);
             let x = (p.x - self.layout.waves.left()).max(0.0);
             self.zoom_at(doc, x, factor);
+        } else if over_transaction_scrollbar {
+            self.scroll_transaction_rows(doc, p, dy + dx, precise);
+        } else if modifiers.shift && self.scroll_transaction_rows(doc, p, dy + dx, precise) {
         } else if modifiers.shift {
             self.scroll_y = (self.scroll_y - dy - dx).clamp(0.0, self.layout.max_scroll);
         } else if p.x >= self.layout.waves.left() {

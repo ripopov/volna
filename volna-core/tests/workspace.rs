@@ -830,7 +830,7 @@ fn row_heights_round_trip_and_restore_tall_row_geometry() {
 #[test]
 fn unsupported_row_heights_reject_the_whole_restore() {
     let app = app();
-    for height in [json!(0), json!(5), json!(9), json!("2"), json!(2.5)] {
+    for height in [json!(0), json!(9), json!("2"), json!(2.5)] {
         let mut saved = value(&app);
         saved["panels"][0]["rows"][0]["height"] = height.clone();
         assert!(prepare(&saved, &app).is_err(), "{height}");

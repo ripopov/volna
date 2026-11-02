@@ -148,6 +148,14 @@ impl TransactionIndex {
     }
 
     #[must_use]
+    pub fn hidden_count(&self, time: u64, visible: Range<usize>) -> usize {
+        self.active_count(time)
+            - visible
+                .filter(|&sub| self.row(sub).is_some_and(|row| row.at(time).is_some()))
+                .count()
+    }
+
+    #[must_use]
     pub fn row(&self, row: usize) -> Option<TransactionRow<'_>> {
         self.rows.get(row).map(|data| TransactionRow {
             data,
@@ -214,4 +222,73 @@ fn union(spans: &mut Vec<Span>) {
         }
     }
     spans.truncate(len);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use volna_trace::data::transactions::{SpanKind, TrackRef, TransactionRef};
+
+    fn record(id: u64, begin: u64, end: u64) -> Transaction {
+        Transaction {
+            id: TransactionRef(id),
+            generator: TrackRef(1),
+            begin,
+            end,
+            status: if id.is_multiple_of(7) {
+                Status::Error
+            } else {
+                Status::Ok
+            },
+            kind: SpanKind::Unspecified,
+            parent: None,
+            attributes: vec![],
+            events: vec![],
+            stages: vec![],
+        }
+    }
+
+    fn index(records: Vec<Transaction>) -> TransactionIndex {
+        TransactionIndex::build(
+            Arc::new(
+                LoadedGenerator::new(TrackRef(1), records, Default::default(), vec![]).unwrap(),
+            ),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn hidden_counts_match_lifetimes_and_points_after_scrolling() {
+        let index = index(
+            (0..501)
+                .map(|id| {
+                    let begin = (id * 37) % 600;
+                    record(id, begin, begin + (id * 17) % 93)
+                })
+                .collect(),
+        );
+        for first in 0..index.source().depth() {
+            let visible = first..first + 4;
+            for start in [-10.5f64, 100.25, 0.0, 21.0, 600.0, 740.0, 11.3] {
+                let hidden: Vec<_> = index
+                    .source()
+                    .transactions()
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !visible.contains(&index.source().sub_row(*i)))
+                    .map(|(_, tx)| tx)
+                    .collect();
+                let time = start.max(0.0).floor() as u64;
+                assert_eq!(
+                    index.hidden_count(time, visible.clone()),
+                    hidden
+                        .iter()
+                        .filter(|tx| tx.begin <= time
+                            && (time < tx.end || tx.begin == time && tx.begin == tx.end))
+                        .count()
+                );
+            }
+        }
+    }
 }

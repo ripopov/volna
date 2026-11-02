@@ -33,6 +33,118 @@ fn loaded(records: Vec<Transaction>) -> TransactionIndex {
 }
 
 #[test]
+fn binned_activity_matches_lifetimes_errors_and_points_at_fractional_boundaries() {
+    let index = loaded(
+        (0..501)
+            .map(|id| {
+                let begin = (id * 37) % 600;
+                record(id, begin, begin + (id * 17) % 93)
+            })
+            .collect(),
+    );
+    let records = index.source().transactions();
+    for (start, end) in [
+        (-10.5f64, 750.0f64),
+        (100.25, 101.75),
+        (0.0, 1.0),
+        (21.0, 22.0),
+        (600.0, 693.0),
+        (740.0, 750.0),
+    ] {
+        for count in [1, 7, 512] {
+            let mut a = start;
+            let samples: Vec<_> = index.occupancy.bins(start, end, count).collect();
+            assert_eq!(samples.len(), count);
+            for skip in [0, count / 2, count - 1] {
+                assert_eq!(
+                    index.occupancy.bins(start, end, count).nth(skip),
+                    Some(samples[skip])
+                );
+                assert_eq!(
+                    index
+                        .occupancy
+                        .bins(start, end, count)
+                        .skip(skip)
+                        .collect::<Vec<_>>(),
+                    samples[skip..]
+                );
+            }
+            for (i, sample) in samples.into_iter().enumerate() {
+                let b = if i + 1 == count {
+                    end
+                } else {
+                    start + (i + 1) as f64 * (end - start) / count as f64
+                };
+                let average = records
+                    .iter()
+                    .map(|tx| (b.min(tx.end as f64) - a.max(tx.begin as f64)).max(0.0))
+                    .sum::<f64>()
+                    / (b - a);
+                let points = records
+                    .iter()
+                    .any(|tx| tx.begin == tx.end && tx.begin as f64 >= a && (tx.begin as f64) < b);
+                let failed = records.iter().any(|tx| {
+                    tx.status == Status::Error
+                        && (tx.begin as f64) < b
+                        && (tx.end as f64 > a || tx.begin == tx.end && tx.begin as f64 >= a)
+                });
+                assert!(
+                    (sample.average - average).abs() < 1e-9,
+                    "{a}..{b}: {sample:?}, {average}"
+                );
+                assert_eq!((sample.failed, sample.has_points), (failed, points));
+                a = b;
+            }
+        }
+    }
+    for (start, end, count) in [
+        (0.0, 100.0, 0),
+        (1.0, 1.0, 100),
+        (10.0, 0.0, 100),
+        (f64::NAN, 10.0, 100),
+        (0.0, f64::INFINITY, 100),
+    ] {
+        assert_eq!(index.occupancy.bins(start, end, count).count(), 0);
+    }
+}
+
+#[test]
+fn binned_activity_preserves_short_late_spans_and_handles_coincident_boundaries() {
+    let base = 1u64 << 60;
+    let index = loaded(vec![
+        record(1, 0, base + 512),
+        record(2, 0, base + 512),
+        record(7, base + 511, base + 512),
+        record(14, base + 511, base + 511),
+    ]);
+    let sample = index
+        .occupancy
+        .bins(base as f64, (base + 512) as f64, 1)
+        .next()
+        .unwrap();
+    assert_eq!(sample.average, 2.0 + 1.0 / 512.0);
+    assert!(sample.failed && sample.has_points);
+    let after = index
+        .occupancy
+        .bins((base + 512) as f64, (base + 1024) as f64, 1)
+        .next()
+        .unwrap();
+    assert_eq!(after, Default::default());
+
+    let constant = loaded((1..=3).map(|id| record(id, base, base + 4096)).collect());
+    let samples: Vec<_> = constant
+        .occupancy
+        .bins(base as f64, (base + 512) as f64, 1000)
+        .collect();
+    assert_eq!(samples.len(), 1000);
+    assert!(
+        samples
+            .iter()
+            .all(|sample| sample.average == 3.0 && !sample.failed && !sample.has_points)
+    );
+}
+
+#[test]
 fn row_activity_preserves_gaps_and_point_errors_at_boundaries() {
     let index = loaded(vec![
         record(7, 0, 10),

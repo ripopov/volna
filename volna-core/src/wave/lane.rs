@@ -10,7 +10,28 @@ use crate::wave::model::RowHeight;
 use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{Status, TrackRef, Transaction};
 
-const DEFAULT_MAX: RowHeight = RowHeight::PRESETS[3];
+pub const RIBBON_H: f32 = 8.0;
+pub const OCCUPANCY_ROWS: f32 = 2.0;
+
+#[must_use]
+pub fn occupancy_control(
+    names: crate::geometry::Rect,
+    top: f32,
+    row_h: f32,
+    zoom: f32,
+) -> crate::geometry::Rect {
+    let width = if names.width() >= 160.0 * zoom {
+        88.0
+    } else {
+        24.0
+    } * zoom;
+    crate::geometry::Rect::from_xywh(
+        names.right() - width - 6.0 * zoom,
+        top + 3.0 * zoom,
+        width,
+        row_h - 6.0 * zoom,
+    )
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TxLane {
@@ -19,6 +40,7 @@ pub struct TxLane {
     pub scope: String,
     pub height: RowHeight,
     pub auto_height: bool,
+    pub occupancy: bool,
     pub first_sub_row: usize,
     pub tint: Option<super::Tint>,
 }
@@ -29,6 +51,21 @@ pub enum LaneData<'a> {
     Failed(&'a str),
     Unresolved,
     Unavailable,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RowScrollbar {
+    pub track: crate::geometry::Rect,
+    pub thumb: crate::geometry::Rect,
+    pub maximum: usize,
+}
+
+impl RowScrollbar {
+    pub(crate) fn first_at(&self, y: f32, grab: f32) -> usize {
+        let travel = self.track.height() - self.thumb.height();
+        let fraction = ((y - grab - self.track.top()) / travel).clamp(0.0, 1.0);
+        (fraction * self.maximum as f32).round() as usize
+    }
 }
 
 impl TxLane {
@@ -51,6 +88,7 @@ impl TxLane {
             },
             height: RowHeight::DEFAULT,
             auto_height: true,
+            occupancy: false,
             first_sub_row: 0,
             tint: None,
         };
@@ -68,6 +106,7 @@ impl TxLane {
             scope,
             height,
             auto_height: false,
+            occupancy: false,
             first_sub_row: 0,
             tint: None,
         }
@@ -102,6 +141,74 @@ impl TxLane {
         }
     }
 
+    #[must_use]
+    pub fn summary_height(&self, doc: &Document, row_h: f32, zoom: f32) -> f32 {
+        if self.generator(doc).is_some_and(|g| g.points().is_some()) {
+            return 0.0;
+        }
+        if self.occupancy {
+            OCCUPANCY_ROWS * row_h
+        } else if self
+            .generator(doc)
+            .is_some_and(|g| g.depth() > capacity(self.height))
+        {
+            RIBBON_H * zoom
+        } else {
+            0.0
+        }
+    }
+
+    #[must_use]
+    pub fn layout_height(&self, doc: &Document, row_h: f32, zoom: f32) -> f64 {
+        f64::from(self.height.multiple()) * f64::from(row_h)
+            + f64::from(self.summary_height(doc, row_h, zoom))
+    }
+
+    #[must_use]
+    pub fn visible_rows(&self) -> std::ops::Range<usize> {
+        self.first_sub_row..self.first_sub_row + capacity(self.height)
+    }
+
+    #[must_use]
+    pub fn scrollbar(
+        &self,
+        doc: &Document,
+        layout: &super::layout::WaveLayout,
+        position: usize,
+    ) -> Option<RowScrollbar> {
+        use crate::geometry::Rect;
+        let generator = self.generator(doc).filter(|g| g.points().is_none())?;
+        let rows = capacity(self.height);
+        let maximum = generator.depth().saturating_sub(rows);
+        let width = super::layout::SCROLLBAR_W * layout.zoom;
+        if maximum == 0 || layout.values.width() < 2.0 * width {
+            return None;
+        }
+        let track = Rect::from_xywh(
+            layout.values_split.left() - width,
+            layout.row_y(position) + 2.0 * layout.zoom,
+            width,
+            rows as f32 * layout.row_h - 4.0 * layout.zoom,
+        );
+        if track.height() <= 0.0 {
+            return None;
+        }
+        let minimum = (18.0 * layout.zoom).min(track.height() / 2.0);
+        let height = (track.height() * rows as f32 / generator.depth() as f32).max(minimum);
+        let offset = self.first_sub_row.min(maximum) as f32 / maximum as f32;
+        let thumb = Rect::from_xywh(
+            track.left() + 2.0 * layout.zoom,
+            track.top() + (track.height() - height) * offset,
+            track.width() - 4.0 * layout.zoom,
+            height,
+        );
+        Some(RowScrollbar {
+            track,
+            thumb,
+            maximum,
+        })
+    }
+
     pub fn fit_height(&mut self, doc: &Document) -> bool {
         if !self.auto_height {
             return false;
@@ -123,17 +230,12 @@ impl TxLane {
 
 #[must_use]
 pub fn capacity(height: RowHeight) -> usize {
-    usize::from(height.multiple().saturating_sub(2))
+    usize::from(height.multiple())
 }
 
 #[must_use]
 pub fn default_height(depth: usize) -> RowHeight {
-    RowHeight::PRESETS
-        .into_iter()
-        .take_while(|h| *h != DEFAULT_MAX)
-        .chain([DEFAULT_MAX])
-        .find(|h| capacity(*h) >= depth.max(1))
-        .unwrap_or(DEFAULT_MAX)
+    RowHeight::try_from(depth.clamp(1, 4) as u8).unwrap()
 }
 
 #[must_use]
