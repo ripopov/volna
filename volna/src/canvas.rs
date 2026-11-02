@@ -10,7 +10,7 @@ use gpui_kit::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, CursorStyle, DispatchPhase, Element,
     ElementId, Entity, Font, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
     InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PathBuilder, PinchEvent, Pixels, ScrollDelta, ScrollWheelEvent, ShapedLine,
+    MouseUpEvent, PathBuilder, PinchEvent, Pixels, ScrollDelta, ScrollEvent, ShapedLine,
     SharedString, Style, TextAlign, TextRun, Window, div, fill, point, px, quad, size,
 };
 use volna_core::FontRole;
@@ -1505,7 +1505,7 @@ impl PanelCanvas {
         });
 
         window.on_mouse_event({
-            move |ev: &ScrollWheelEvent, phase, window, cx| {
+            move |ev: &ScrollEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || !hitbox.should_handle_scroll(window) {
                     return;
                 }

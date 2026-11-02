@@ -569,7 +569,7 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
             let record = vcx.debug_bounds("tx-record-path").unwrap();
             let scroll_at = gpui_kit::point(body.center().x, before.bottom() + px(60.0));
             vcx.simulate_mouse_move(scroll_at, None, Modifiers::default());
-            vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+            vcx.simulate_event(gpui_kit::ScrollEvent {
                 position: scroll_at,
                 delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.0), px(-300.0))),
                 ..Default::default()
@@ -5609,7 +5609,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
         vcx.update(|window, cx| window.draw(cx).clear(cx));
         let (x, y) = edge(&mut vcx, 0, true);
         vcx.simulate_mouse_move(at(x, y), None, Modifiers::default());
-        vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+        vcx.simulate_event(gpui_kit::ScrollEvent {
             position: at(x, y),
             delta: gpui_kit::ScrollDelta::Pixels(at(0.0, 48.0)),
             ..Default::default()

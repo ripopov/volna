@@ -359,10 +359,20 @@ pub fn init(cx: &mut App) {
             KeyBinding::new("ctrl-y", InputRedo, Some("Input")),
         ]);
     }
-    for n in 1..=9 {
-        for key in [n.to_string(), format!("ctrl-{n}")] {
+    for keys in [
+        ["1", "ctrl-1"],
+        ["2", "ctrl-2"],
+        ["3", "ctrl-3"],
+        ["4", "ctrl-4"],
+        ["5", "ctrl-5"],
+        ["6", "ctrl-6"],
+        ["7", "ctrl-7"],
+        ["8", "ctrl-8"],
+        ["9", "ctrl-9"],
+    ] {
+        for key in keys {
             cx.bind_keys(vec![KeyBinding::new(
-                &key,
+                key,
                 gpui_kit::NoAction {},
                 Some("TextInput || Input || Command || Dialog || StartPage"),
             )]);
