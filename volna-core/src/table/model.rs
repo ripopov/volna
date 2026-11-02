@@ -179,6 +179,7 @@ pub struct TableModel {
     query_revision: u64,
     reveal_column: Option<usize>,
     drag: Option<TableDrag>,
+    pointer: Option<Point>,
     rows: Rows,
     axis_build: Option<SignalAxisBuild>,
     signal_results: HashMap<Traced<SignalRef>, Result<Arc<dyn SignalHistory>, String>>,
@@ -260,6 +261,7 @@ impl TableModel {
             query_revision: 0,
             reveal_column: None,
             drag: None,
+            pointer: None,
             rows: Rows::None,
             axis_build: None,
             signal_results: HashMap::new(),
@@ -1637,6 +1639,23 @@ impl TableModel {
         event: PointerEvent,
         now: Instant,
     ) -> bool {
+        let hovered = (
+            self.vertical_scrollbar_hovered(),
+            self.horizontal_scrollbar_hovered(),
+        );
+        match event {
+            PointerEvent::Down { position, .. }
+            | PointerEvent::Move { position }
+            | PointerEvent::Wheel { position, .. }
+            | PointerEvent::Pinch { position, .. } => self.pointer = Some(position),
+            PointerEvent::Leave => self.pointer = None,
+            PointerEvent::Up => {}
+        }
+        let hover_changed = hovered
+            != (
+                self.vertical_scrollbar_hovered(),
+                self.horizontal_scrollbar_hovered(),
+            );
         if let PointerEvent::Down {
             position,
             button: MouseButton::Left,
@@ -1651,7 +1670,7 @@ impl TableModel {
             });
             return true;
         }
-        match event {
+        let handled = match event {
             PointerEvent::Down {
                 position,
                 button: MouseButton::Left,
@@ -1735,7 +1754,20 @@ impl TableModel {
             },
             PointerEvent::Up | PointerEvent::Leave if self.drag.take().is_some() => true,
             _ => false,
-        }
+        };
+        handled || hover_changed
+    }
+
+    pub(super) fn vertical_scrollbar_hovered(&self) -> bool {
+        self.pointer
+            .is_some_and(|p| self.layout.vertical_bar.contains(p))
+            || matches!(self.drag, Some(TableDrag::Vertical { .. }))
+    }
+
+    pub(super) fn horizontal_scrollbar_hovered(&self) -> bool {
+        self.pointer
+            .is_some_and(|p| self.layout.horizontal_bar.contains(p))
+            || matches!(self.drag, Some(TableDrag::Horizontal { .. }))
     }
 
     #[must_use]
@@ -1923,9 +1955,9 @@ impl TableModel {
             self.viewport.top as f32 / max_top as f32
         };
         let vertical_thumb = Rect::from_xywh(
-            vertical_bar.left() + 2.0,
+            vertical_bar.left() + 2.0 * zoom,
             vertical_bar.top() + (vertical_bar.height() - thumb_h) * fraction,
-            (bar - 4.0).max(0.0),
+            (bar - 4.0 * zoom).max(0.0),
             thumb_h,
         );
         let thumb_w = (horizontal_bar.width() * horizontal_bar.width() / content_width.max(1.0))
@@ -1934,9 +1966,9 @@ impl TableModel {
         let hfrac = self.horizontal / (content_width - body.width()).max(1.0);
         let horizontal_thumb = Rect::from_xywh(
             horizontal_bar.left() + (horizontal_bar.width() - thumb_w) * hfrac,
-            horizontal_bar.top() + 2.0,
+            horizontal_bar.top() + 2.0 * zoom,
             thumb_w,
-            (bar - 4.0).max(0.0),
+            (bar - 4.0 * zoom).max(0.0),
         );
         self.layout = TableLayout {
             filter_row,

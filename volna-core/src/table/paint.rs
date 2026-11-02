@@ -2,6 +2,7 @@
 
 use super::layout::CELL_PADDING;
 use super::model::{RowIdentity, TableModel};
+use crate::color::Color;
 use crate::geometry::{Rect, point};
 use crate::icons::IconName;
 use crate::scene::{FontRole, Scene, TextCache, TextMeasure};
@@ -20,10 +21,27 @@ pub fn paint(
     scene.fill(layout.filter_row, theme.panel.bg);
     scene.fill(layout.gutter, theme.panel.bg);
     scene.fill(layout.status, theme.panel.bg);
-    scene.fill(layout.vertical_bar, theme.panel.bg);
-    scene.fill(layout.horizontal_bar, theme.panel.bg);
-    scene.fill(layout.vertical_thumb, theme.panel.text_muted);
-    scene.fill(layout.horizontal_thumb, theme.panel.text_muted);
+    for (thumb, hovered) in [
+        (layout.vertical_thumb, model.vertical_scrollbar_hovered()),
+        (
+            layout.horizontal_thumb,
+            model.horizontal_scrollbar_hovered(),
+        ),
+    ] {
+        if !thumb.is_empty() {
+            scene.quad(
+                thumb,
+                if hovered {
+                    theme.scrollbar_thumb_hover
+                } else {
+                    theme.scrollbar_thumb
+                },
+                3.0 * theme.zoom,
+                0.0,
+                Color::TRANSPARENT,
+            );
+        }
+    }
 
     let pad = CELL_PADDING * theme.zoom;
     let digit_width = cache.width(measure, "0", FontRole::Mono, theme.mono_size);
