@@ -15,6 +15,8 @@ const LABELS: usize = 384;
 struct Bars {
     solid: Vec<Rect>,
     failed: Vec<Rect>,
+    dense: Vec<Rect>,
+    failed_dense: Vec<Rect>,
     edges: Vec<[Point; 2]>,
     failed_edges: Vec<[Point; 2]>,
     labels: Vec<(Point, String, bool)>,
@@ -81,26 +83,32 @@ pub(super) fn paint(
                 let left = waves.left() + waves.width() * x as f32 / columns as f32;
                 let w = waves.width() / columns as f32;
                 let rect = Rect::from_xywh(left, top, w, bar_h);
+                let candidates = row.window(a, a + pixel_time);
                 if active {
-                    if failed {
-                        append(&mut bars.failed, rect);
+                    let fills = if failed {
+                        &mut bars.failed_dense
                     } else {
-                        append(&mut bars.solid, rect);
-                    }
+                        &mut bars.dense
+                    };
+                    append(fills, rect);
                 }
-                if let Some(&ordinal) = row.window(a, a + pixel_time).last()
+                if let Some(&ordinal) = candidates.last()
                     && outlined != Some(ordinal)
                 {
                     outlined = Some(ordinal);
                     let tx = &records[ordinal];
                     let xa = x_of(tx.begin);
                     let xb = x_of(tx.end);
-                    // Outlines must leave visible fill in densely packed transactions.
-                    if xb - xa >= z(3.0) {
-                        outline(
-                            bars.edges(tx.status == Status::Error),
-                            Rect::from_xywh(xa, top, xb - xa, bar_h),
-                        );
+                    if xb - xa > 2.0 {
+                        let rect = Rect::from_xywh(xa, top, xb - xa, bar_h);
+                        let failed = tx.status == Status::Error;
+                        let fills = if failed {
+                            &mut bars.failed
+                        } else {
+                            &mut bars.solid
+                        };
+                        append(fills, rect);
+                        outline(bars.edges(failed), rect);
                     }
                 }
             }
@@ -116,6 +124,8 @@ pub(super) fn paint(
     p.scene.clipped(
         Rect::from_xywh(waves.left(), geometry.top, waves.width(), geometry.height),
         |scene| {
+            scene.rects(bars.dense, normal.edge);
+            scene.rects(bars.failed_dense, error.edge);
             scene.rects(bars.solid, normal.fill);
             scene.rects(bars.failed, error.fill);
             scene.lines(bars.edges, normal.edge, 1.0);

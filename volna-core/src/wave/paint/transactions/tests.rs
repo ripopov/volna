@@ -448,6 +448,67 @@ fn touching_transactions_and_one_pixel_gaps_remain_distinct_in_every_theme() {
 }
 
 #[test]
+fn sampled_rows_keep_fill_until_transaction_borders_leave_no_interior() {
+    let mut begin = 0;
+    let records = (0..100)
+        .map(|id| {
+            let width = [2, 4, 5, 6, 20][id as usize % 5];
+            let mut tx = record(id, begin, begin + width, 0);
+            tx.status = if id % 2 == 0 {
+                Status::Ok
+            } else {
+                Status::Error
+            };
+            begin += width + 2;
+            tx
+        })
+        .collect();
+    let index = TransactionIndex::build(
+        Arc::new(LoadedGenerator::new(TrackRef(1), records, Default::default(), vec![]).unwrap()),
+        None,
+    )
+    .unwrap();
+    let lane = TxLane::unresolved(TraceId::A, vec![], RowHeight::PRESETS[3]);
+    for (id, _) in builtin::choices() {
+        for dark in [true, false] {
+            let mut theme = builtin::resolve(id, dark).unwrap().canvas;
+            for zoom in [0.75, 1.0, 1.5] {
+                theme.zoom = zoom;
+                for end in [1000.0, 2000.0] {
+                    let viewport = Viewport { start: 0.0, end };
+                    let mut cache = DetailCache::default();
+                    assert!(
+                        RenderPlan::new(&lane, &index, &viewport, &mut cache).details[0].is_none()
+                    );
+                    let mut scene = Scene::default();
+                    draw_with_theme(
+                        &index,
+                        &lane,
+                        viewport,
+                        &mut cache,
+                        &mut scene,
+                        &mut TextCache::default(),
+                        &theme,
+                    );
+                    for tx in index.source().transactions() {
+                        let width = (tx.end - tx.begin) as f64 * 1000.0 / end;
+                        let center =
+                            (tx.begin as f64 + (tx.end - tx.begin) as f64 / 2.0) * 1000.0 / end;
+                        let style = theme.transaction_style(tx.status == Status::Error);
+                        assert_eq!(
+                            bar_ink_at(&scene, point(center as f32, 12.0)),
+                            Some(if width > 2.0 { style.fill } else { style.edge }),
+                            "{id}: dark={dark}, zoom={zoom}, width={width}, tx={:?}",
+                            tx.id,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn hidden_density_and_stage_heavy_rows_keep_drawing_work_bounded() {
     let mut counts = Vec::new();
     for density in [1, 10, 100] {
