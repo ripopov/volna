@@ -3038,7 +3038,7 @@ impl WaveModel {
         bounds: crate::geometry::Rect,
         doc: &Document,
         theme: &Theme,
-        metadata_width: Option<f32>,
+        margins: crate::panels::TimelineMargins,
     ) -> &WaveLayout {
         if self.layout.row_h > 0.0 && self.layout.row_h != theme.row_height {
             self.scroll_y *= theme.row_height / self.layout.row_h;
@@ -3049,7 +3049,7 @@ impl WaveModel {
         let items = &self.items;
         let layout = WaveLayout::compute(LayoutInput {
             bounds,
-            metadata_width,
+            margins,
             row_h: theme.row_height,
             header_h: theme.timeline_height,
             ruler_h: rulers.len() as f32 * super::overlay::RULER_H * theme.zoom,
@@ -3108,7 +3108,7 @@ impl WaveModel {
             let scroll = self.scroll_y;
             self.reveal_entry(doc, row);
             if self.scroll_y != scroll {
-                return self.layout(bounds, doc, theme, metadata_width);
+                return self.layout(bounds, doc, theme, margins);
             }
         }
         self.update_hover();
@@ -3519,7 +3519,11 @@ impl WaveModel {
     fn update_hover(&mut self) {
         self.edge_hover = self.pointer.and_then(|p| self.row_edge_at(p));
         let (hover_row, format_hover) = match self.pointer {
-            Some(p) if self.layout.bounds.contains(p) && p.y >= self.layout.names.top() => {
+            Some(p)
+                if self.layout.bounds.contains(p)
+                    && !self.layout.gutter.contains(p)
+                    && p.y >= self.layout.names.top() =>
+            {
                 let row = self.entry_under(&self.layout, p.y);
                 let format_row = self.layout.format_at(p).map(|(ix, _)| ix);
                 (row, format_row)
@@ -3551,6 +3555,13 @@ impl WaveModel {
         event: PointerEvent,
         now: Instant,
     ) -> bool {
+        if let PointerEvent::Down { position, .. }
+        | PointerEvent::Wheel { position, .. }
+        | PointerEvent::Pinch { position, .. } = event
+            && self.layout.gutter.contains(position)
+        {
+            return false;
+        }
         match event {
             PointerEvent::Down {
                 position,

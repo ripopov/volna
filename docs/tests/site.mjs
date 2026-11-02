@@ -127,6 +127,93 @@ try {
   }
   report.behavior.push('Islands light and dark switching preserves the selected transaction at desktop, narrow width, and 125% zoom');
   report.behavior.push('Islands tab headers meet their content and match the untabbed sidebar without an outer border');
+  const pipelineState = () => page.evaluate(() => window.volnaCurrentState
+    .split('\n').find(line => line.startsWith('panel=38 pipeline ')));
+  const navigatorRect = state => state.match(/navigator_rect=\(([^)]+)\)/)[1].split(',').map(Number);
+  const waitForNavigator = visible => page.waitForFunction(async ({ base, visible }) => {
+    (await import(`${base}viewer/pkg/volna.js`)).debug_state();
+    const state = window.volnaCurrentState.split('\n').find(line => line.startsWith('panel=38 pipeline '));
+    const width = Number(state?.match(/navigator_rect=\([^,]+,[^,]+,([^,]+),/)?.[1]);
+    return state?.includes(`navigator=(${visible},104)`) && width === (visible ? 104 : 0);
+  }, { base, visible });
+  const rowTop = state => Number(state.match(/ top=([^ ]+)/)[1]);
+  const pipelineView = state => state.match(/viewport=\(([^)]+)\)/)[1].split(',').map(Number);
+  let pipelineBefore = await pipelineState();
+  let [navX, navY, navW, navH] = navigatorRect(pipelineBefore);
+  assert.ok(navW >= 32 && navH > 0);
+  await page.mouse.click(navX + navW / 2, navY + navH * 0.6);
+  await page.waitForFunction(before => window.volnaCurrentState
+    .split('\n').find(line => line.startsWith('panel=38 pipeline ')) !== before, pipelineBefore);
+  let pipelineAfter = await pipelineState();
+  assert.ok(rowTop(pipelineAfter) > rowTop(pipelineBefore), 'navigator click reveals a sampled instruction');
+  assert.equal(await selectedTransaction(), islandTransaction, 'navigator click preserves record selection');
+  assert.equal(pipelineAfter.match(/row_px=([^ ]+)/)[1], pipelineBefore.match(/row_px=([^ ]+)/)[1]);
+  pipelineBefore = pipelineAfter;
+  await page.mouse.move(navX - 40, navY + navH / 2);
+  await page.mouse.wheel(0, 36);
+  await page.waitForFunction(before => window.volnaCurrentState
+    .split('\n').find(line => line.startsWith('panel=38 pipeline ')).match(/ top=([^ ]+)/)[1] !== before,
+  pipelineBefore.match(/ top=([^ ]+)/)[1]);
+  pipelineAfter = await pipelineState();
+  assert.notEqual(pipelineView(pipelineAfter)[0], pipelineView(pipelineBefore)[0], 'wheel follows instruction time');
+  assert.equal(await selectedTransaction(), islandTransaction);
+  await page.mouse.move(navX, navY + navH / 2);
+  await page.mouse.down();
+  await page.mouse.move(navX - 40, navY + navH / 2, { steps: 5 });
+  await page.mouse.up();
+  await waitForNavigator(true);
+  [navX, navY, navW, navH] = navigatorRect(await pipelineState());
+  await page.screenshot({ path: `${results}/pipeline-navigator-dark.png` });
+  await page.mouse.click(navX, navY + navH / 2);
+  await waitForNavigator(false);
+  [navX, navY, , navH] = navigatorRect(await pipelineState());
+  await page.mouse.click(navX - 2, navY + navH / 2);
+  await waitForNavigator(true);
+  [navX, navY, navW, navH] = navigatorRect(await pipelineState());
+  await page.mouse.move(navX, navY + navH / 2);
+  await page.mouse.down();
+  await page.mouse.move(navX + navW - 32, navY + navH / 2, { steps: 5 });
+  await page.mouse.move(navX + navW + 10, navY + navH / 2, { steps: 5 });
+  await page.mouse.up();
+  await waitForNavigator(false);
+  [navX, navY, , navH] = navigatorRect(await pipelineState());
+  await page.mouse.click(navX - 2, navY + navH / 2);
+  await waitForNavigator(true);
+  report.behavior.push('pipeline navigator picking, stream-following wheel, resizing, collapse and restore preserve selection and zoom');
+  const navigatorThemes = [
+    'volna', 'volna-dark', 'volna-light', 'volna-mixed', 'volna-islands-dark',
+    'volna-islands-light', 'one-dark', 'dracula', 'catppuccin-mocha',
+    'catppuccin-latte', 'github-dark', 'github-light', 'vscode-dark', 'vscode-light',
+  ];
+  await page.mouse.move(600, 400);
+  for (const theme of navigatorThemes) {
+    await page.evaluate(async ({ base, theme }) => {
+      (await import(`${base}viewer/pkg/volna.js`)).set_settings(JSON.stringify({ 'appearance.theme': theme }));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }, { base, theme });
+    await waitForNavigator(true);
+    [navX, navY, navW, navH] = navigatorRect(await pipelineState());
+    assert.equal(await selectedTransaction(), islandTransaction, `${theme}: theme switch preserves selection`);
+    await page.screenshot({ path: `${results}/minimap-${theme}.png`, clip: {
+      x: navX - 120, y: navY - 20, width: navW + 120, height: navH + 20,
+    } });
+  }
+  for (const theme of ['dark-modern', 'light-modern', 'dark-high-contrast', 'light-high-contrast']) {
+    const snapshot = await readFile(new URL(`../../volna-core/tests/fixtures/vscode/${theme}.txt`, import.meta.url), 'utf8');
+    await page.evaluate(async ({ base, snapshot }) => {
+      (await import(`${base}viewer/pkg/volna.js`)).set_vscode_theme(snapshot);
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }, { base, snapshot });
+    await waitForNavigator(true);
+    [navX, navY, navW, navH] = navigatorRect(await pipelineState());
+    await page.screenshot({ path: `${results}/minimap-host-${theme}.png`, clip: {
+      x: navX - 120, y: navY - 20, width: navW + 120, height: navH + 20,
+    } });
+  }
+  await page.evaluate(async base => {
+    (await import(`${base}viewer/pkg/volna.js`)).set_settings(JSON.stringify({ 'appearance.theme': 'volna-islands-dark' }));
+  }, base);
+  report.behavior.push('minimap viewport, aborted status marks and grip rendered in every bundled theme and four host palettes');
   await page.mouse.move(550, 620);
   await page.mouse.down();
   await page.mouse.move(600, 620, { steps: 3 });

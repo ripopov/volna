@@ -706,6 +706,34 @@ pub(crate) fn panel_menu(
                 .item(item(label, PanelsCommand::ToggleLink { panel: id, dim }).checked(linked));
         }
     }
+    if let Some(settings) = ws
+        .upgrade()
+        .and_then(|owner| owner.read(cx).app.panels.pipeline(id).map(|p| p.navigator))
+    {
+        use volna_core::pipeline::NavigatorCommand;
+        menu = menu.separator();
+        for (label, command) in [
+            ("Instruction navigator", NavigatorCommand::Toggle),
+            ("Widen instruction navigator", NavigatorCommand::Widen),
+            ("Narrow instruction navigator", NavigatorCommand::Narrow),
+        ] {
+            let owner = ws.clone();
+            menu = menu.item(
+                PopupMenuItem::new(label)
+                    .checked(command == NavigatorCommand::Toggle && settings.visible)
+                    .on_click(move |_, window, cx| {
+                        drop(owner.update(cx, |ws, cx| {
+                            ws.dispatch_if_current(
+                                generation,
+                                Command::PipelineNavigator(id, command),
+                                Some(window),
+                                cx,
+                            );
+                        }));
+                    }),
+            );
+        }
+    }
     if let Some(pinned) = pinned {
         let ws = ws.clone();
         menu = menu
@@ -1069,12 +1097,42 @@ impl Panel for CanvasPanelView {
                     view.dispatch(PanelsCommand::NewTab { group_of: view.id }, window, cx);
                 })),
         ];
-        if let Some((follow, activity)) = self.ws.upgrade().and_then(|owner| {
+        if let Some((follow, activity, navigator_visible)) = self.ws.upgrade().and_then(|owner| {
             let ws = owner.read(cx);
             let pipeline = ws.app.panels.pipeline(self.id)?;
-            Some((pipeline.follow, pipeline.activity(&ws.app.doc)))
+            Some((
+                pipeline.follow,
+                pipeline.activity(&ws.app.doc),
+                pipeline.navigator.visible,
+            ))
         }) {
             use volna_core::pipeline::{ActivityCommand, FollowActivity};
+            let owner = self.ws.clone();
+            let generation = self.generation;
+            let panel = self.id;
+            buttons.insert(
+                0,
+                Button::new("instruction-navigator")
+                    .label("Navigator")
+                    .ghost()
+                    .xsmall()
+                    .selected(navigator_visible)
+                    .tooltip(if navigator_visible {
+                        "Hide instruction navigator; drag its left edge to resize; panel menu offers width controls"
+                    } else {
+                        "Show instruction navigator"
+                    })
+                    .on_click(move |_, window, cx| {
+                        drop(owner.update(cx, |ws, cx| {
+                            ws.dispatch_if_current(
+                                generation,
+                                Command::PipelineNavigator(panel, volna_core::pipeline::NavigatorCommand::Toggle),
+                                Some(window),
+                                cx,
+                            );
+                        }));
+                    }),
+            );
             let mut controls = vec![(
                 "follow-activity",
                 match follow {

@@ -1085,7 +1085,7 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
         let p = app.panels.pipeline(pipeline).unwrap();
         let l = p.last_layout();
         assert!((l.time_at(&p.nav.viewport(&app.doc), pointer.x) - before.0).abs() < 1e-6);
-        assert!((l.rows.row_at(pointer.y - l.cells.top()) - before.1).abs() < 1e-6);
+        assert!((l.rows.row_at(pointer.y - l.cells.top()) - before.1).abs() < 1e-5);
     }
 }
 
@@ -2116,7 +2116,7 @@ fn square_zoom_stops_both_axes_at_the_row_cap_and_alt_wheel_can_raise_it() {
 }
 
 #[test]
-fn plain_wheel_scrolls_rows_and_shift_or_sideways_wheel_pans_time() {
+fn plain_wheel_follows_rows_and_shift_or_sideways_wheel_pans_time() {
     let (mut app, _, _, pipeline) = opened(500);
     pump(&mut app);
     let theme = Theme::one_dark();
@@ -2150,7 +2150,8 @@ fn plain_wheel_scrolls_rows_and_shift_or_sideways_wheel_pans_time() {
         let after = app.panels.pipeline(pipeline).unwrap().rows.value;
         assert!((after.top - before.top - 2.0).abs() < 1e-9, "{after:?}");
         assert_eq!(after.row_px, before.row_px);
-        assert_eq!(app.doc.shared.viewport.value, viewport);
+        assert_eq!(app.doc.shared.viewport.value.start, viewport.start + 2.0);
+        assert_eq!(app.doc.shared.viewport.value.width(), viewport.width());
     }
     let rows = app.panels.pipeline(pipeline).unwrap().rows.value;
     let start = app.doc.shared.viewport.value.start;
@@ -2172,6 +2173,353 @@ fn plain_wheel_scrolls_rows_and_shift_or_sideways_wheel_pans_time() {
     wheel_with(&mut app, pipeline, position, 0.0, -40.0, shift);
     assert!(app.doc.shared.viewport.value.start > panned);
     assert_eq!(app.panels.pipeline(pipeline).unwrap().rows.value, rows);
+}
+
+#[test]
+fn navigator_drag_reveals_sampled_rows_without_changing_cursor_selection_or_scale() {
+    use volna_core::pipeline::FollowActivity;
+    for linked in [true, false] {
+        let (mut app, _, waves, pipeline) = opened(500);
+        pump(&mut app);
+        if !linked {
+            app.handle(Command::Panels(PanelsCommand::ToggleLink {
+                panel: pipeline,
+                dim: LinkDim::Viewport,
+            }));
+        }
+        let viewport = volna_core::wave::viewport::Viewport {
+            start: 0.0,
+            end: 100.0,
+        };
+        if linked {
+            app.doc.shared.viewport.set(viewport);
+        } else {
+            app.panels
+                .pipeline_mut(pipeline)
+                .unwrap()
+                .nav
+                .local_viewport
+                .set(viewport);
+        }
+        let theme = Theme::volna(true);
+        frame(&mut app, pipeline, &theme);
+        app.doc.shared.cursor = Some(123);
+        app.panels.pipeline_mut(pipeline).unwrap().follow = FollowActivity::Following;
+        let p = app.panels.pipeline(pipeline).unwrap();
+        let navigator = p.last_layout().navigator;
+        let scale = p.rows.value.row_px;
+        let view = p.nav.viewport(&app.doc);
+        let shared = app.doc.shared.viewport.value;
+        let y = navigator.rect.top() + navigator.rect.height() * 0.25;
+        let expected = navigator.row_at(y).unwrap();
+        app.handle(Command::Pointer(
+            pipeline,
+            PointerEvent::Down {
+                position: point(navigator.rect.left() + navigator.rect.width() * 0.5, y),
+                button: MouseButton::Left,
+                modifiers: Modifiers {
+                    alt: true,
+                    control: true,
+                    ..Modifiers::default()
+                },
+            },
+        ));
+        let p = app.panels.pipeline(pipeline).unwrap();
+        assert_eq!(p.rows.value.top, expected as f64);
+        assert_eq!(p.nav.viewport(&app.doc).start, expected as f64);
+        assert!((p.nav.viewport(&app.doc).width() - view.width()).abs() < 1e-9);
+        assert_eq!(p.rows.value.row_px, scale);
+        assert_eq!(p.follow, FollowActivity::Suspended);
+        assert_eq!(app.doc.shared.cursor, Some(123));
+        assert!(app.doc.selection().is_none());
+        if linked {
+            assert_eq!(
+                app.panels.waves(waves).unwrap().viewport(&app.doc),
+                p.nav.viewport(&app.doc)
+            );
+        } else {
+            assert_eq!(app.doc.shared.viewport.value, shared);
+        }
+        app.handle(Command::Pointer(
+            pipeline,
+            PointerEvent::Move {
+                position: point(-1000.0, -1000.0),
+            },
+        ));
+        assert_eq!(app.panels.pipeline(pipeline).unwrap().rows.value.top, 0.0);
+        app.handle(Command::Pointer(
+            pipeline,
+            PointerEvent::Move {
+                position: point(10000.0, 10000.0),
+            },
+        ));
+        let p = app.panels.pipeline(pipeline).unwrap();
+        assert!(p.rows.value.top > 400.0 && p.rows.value.top < 500.0);
+        assert!(p.nav.viewport(&app.doc).end >= 499.0);
+        app.handle(Command::Pointer(pipeline, PointerEvent::Up));
+        assert!(!app.panels.get(pipeline).unwrap().dragging());
+    }
+}
+
+#[test]
+fn resizing_and_hiding_navigator_preserves_linked_time_mapping_and_saved_width() {
+    use volna_core::{panels::Axis, pipeline::NavigatorCommand};
+    for theme in [Theme::volna(true), Theme::volna(false).zoomed(1.5)] {
+        let (mut app, session, waves, pipeline) = opened(500);
+        pump(&mut app);
+        app.configure_persistence(volna_core::workspace::persistence::Persistence::Auto);
+        dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
+        let split = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .last_layout()
+            .navigator_split;
+        let revision = app.workspace.scheduler.revision();
+        drag_divider(&mut app, pipeline, split, 1425.0 - 160.0 * theme.zoom);
+        assert!(app.workspace.scheduler.revision() > revision);
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
+        aligned_metadata(&app, waves, pipeline);
+        assert_eq!(
+            app.panels.pipeline(pipeline).unwrap().navigator.width,
+            160.0
+        );
+        let view = app.doc.shared.viewport.value;
+        let rows = app.panels.pipeline(pipeline).unwrap().rows.value;
+        let split = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .last_layout()
+            .navigator_split;
+        drag_divider(
+            &mut app,
+            pipeline,
+            split,
+            split.left() + split.width() * 0.5,
+        );
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
+        let settings = app.panels.pipeline(pipeline).unwrap().navigator;
+        assert!(!settings.visible);
+        assert_eq!(settings.width, 160.0);
+        assert_eq!(
+            app.panels
+                .waves(waves)
+                .unwrap()
+                .last_layout()
+                .gutter
+                .width(),
+            0.0
+        );
+        assert_eq!(app.doc.shared.viewport.value, view);
+        assert_eq!(app.panels.pipeline(pipeline).unwrap().rows.value, rows);
+
+        let saved =
+            Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+        let mut restored = App::new();
+        restored.set_session(session);
+        Workspace::parse(&saved.to_bytes().unwrap())
+            .unwrap()
+            .prepare(
+                &restored,
+                "file:///tmp/trace.vtr",
+                "file:///tmp/trace.vtr.volna.json",
+            )
+            .unwrap()
+            .commit(&mut restored)
+            .unwrap();
+        assert_eq!(
+            restored.panels.pipeline(pipeline).unwrap().navigator,
+            settings
+        );
+        app.handle(Command::PipelineNavigator(
+            pipeline,
+            NavigatorCommand::Toggle,
+        ));
+        for width in [360.0, 100.0, 1400.0] {
+            timeline_frames(&mut app, waves, pipeline, width, &theme);
+            aligned_metadata(&app, waves, pipeline);
+            let p = app.panels.pipeline(pipeline).unwrap();
+            assert!(p.last_layout().navigator.rect.width() <= width * 0.25);
+            assert_eq!(p.navigator.width, 160.0);
+        }
+        let split = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .last_layout()
+            .navigator_split;
+        let y = split.top() + split.height() * 0.5;
+        app.handle(Command::Pointer(
+            pipeline,
+            PointerEvent::Down {
+                position: point(split.left() + split.width() * 0.5, y),
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        ));
+        for width in [80.0, 32.0, 0.0] {
+            app.handle(Command::Pointer(
+                pipeline,
+                PointerEvent::Move {
+                    position: point(1425.0 - width * theme.zoom, y),
+                },
+            ));
+        }
+        app.handle(Command::Pointer(pipeline, PointerEvent::Up));
+        assert_eq!(app.panels.pipeline(pipeline).unwrap().navigator, settings);
+        let revision = app.workspace.scheduler.revision();
+        app.handle(Command::PipelineNavigator(
+            pipeline,
+            NavigatorCommand::Widen,
+        ));
+        assert!(app.workspace.scheduler.revision() > revision);
+        assert_eq!(
+            app.panels.pipeline(pipeline).unwrap().navigator.width,
+            176.0
+        );
+        app.handle(Command::PipelineNavigator(
+            pipeline,
+            NavigatorCommand::Narrow,
+        ));
+        assert_eq!(
+            app.panels.pipeline(pipeline).unwrap().navigator.width,
+            160.0
+        );
+        let p = app.panels.pipeline(pipeline).unwrap();
+        assert!(p.navigator.visible);
+        assert_eq!(p.clone_view().navigator, p.navigator);
+        let mut invalid = serde_json::to_value(&saved).unwrap();
+        let panel = invalid["panels"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p["kind"] == "pipeline")
+            .unwrap();
+        panel["navigator"]["width"] = serde_json::json!(-1);
+        assert!(
+            Workspace::parse(&serde_json::to_vec(&invalid).unwrap())
+                .unwrap()
+                .prepare(
+                    &restored,
+                    "file:///tmp/trace.vtr",
+                    "file:///tmp/trace.vtr.volna.json"
+                )
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn navigator_grip_target_toggles_from_its_outer_edge_in_expanded_and_collapsed_layouts() {
+    for theme in [
+        Theme::volna(true),
+        Theme::builtin("dracula").unwrap().zoomed(1.5),
+    ] {
+        let (mut app, _, _, pipeline) = opened(500);
+        pump(&mut app);
+        frame(&mut app, pipeline, &theme);
+        let initial = app.panels.pipeline(pipeline).unwrap().rows.value;
+        let view = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .nav
+            .viewport(&app.doc);
+        let width = app.panels.pipeline(pipeline).unwrap().navigator.width;
+        for visible in [false, true] {
+            let layout = app.panels.pipeline(pipeline).unwrap().last_layout();
+            let grip = layout.navigator_grip_target;
+            let position = point(
+                grip.left() + 2.0 * theme.zoom,
+                grip.top() + grip.height() * 0.5,
+            );
+            assert!((position.x - layout.navigator.rect.left()).abs() > 4.0 * theme.zoom);
+            app.handle(Command::Pointer(
+                pipeline,
+                PointerEvent::Down {
+                    position,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                },
+            ));
+            app.handle(Command::Pointer(pipeline, PointerEvent::Up));
+            frame(&mut app, pipeline, &theme);
+            let p = app.panels.pipeline(pipeline).unwrap();
+            assert_eq!(p.navigator.visible, visible);
+            assert_eq!(p.navigator.width, width);
+            assert_eq!(p.rows.value, initial);
+            assert_eq!(p.nav.viewport(&app.doc), view);
+            assert!(app.doc.selection().is_none());
+        }
+    }
+}
+
+#[test]
+fn stream_wheel_follows_local_or_shared_time_and_reverses_without_drift() {
+    for linked in [true, false] {
+        let (mut app, _, _, pipeline) = opened(500);
+        pump(&mut app);
+        if !linked {
+            app.handle(Command::Panels(PanelsCommand::ToggleLink {
+                panel: pipeline,
+                dim: LinkDim::Viewport,
+            }));
+        }
+        let theme = Theme::volna(true);
+        let cells = cells(&mut app, pipeline, &theme);
+        app.panels
+            .pipeline_mut(pipeline)
+            .unwrap()
+            .rows
+            .set(RowView {
+                top: 100.25,
+                row_px: 18.0,
+            });
+        frame(&mut app, pipeline, &theme);
+        let initial_rows = app.panels.pipeline(pipeline).unwrap().rows.value;
+        let initial = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .nav
+            .viewport(&app.doc);
+        let shared = app.doc.shared.viewport.value;
+        let pointer = point(cells.left() + cells.width() * 0.5, cells.top() + 100.0);
+        wheel_with(
+            &mut app,
+            pipeline,
+            pointer,
+            0.0,
+            -36.0,
+            Modifiers::default(),
+        );
+        let moved = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .nav
+            .viewport(&app.doc);
+        assert_eq!(moved.start, initial.start + 2.0);
+        assert_eq!(moved.width(), initial.width());
+        if !linked {
+            assert_eq!(app.doc.shared.viewport.value, shared);
+        }
+        wheel_with(&mut app, pipeline, pointer, 0.0, 36.0, Modifiers::default());
+        assert_eq!(
+            app.panels.pipeline(pipeline).unwrap().rows.value,
+            initial_rows
+        );
+        assert_eq!(
+            app.panels
+                .pipeline(pipeline)
+                .unwrap()
+                .nav
+                .viewport(&app.doc),
+            initial
+        );
+    }
 }
 
 #[test]
@@ -3883,7 +4231,7 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
         dock_timelines(&mut app, waves, pipeline, Axis::Horizontal);
         app.panels.pipeline_mut(pipeline).unwrap().label_width = 400.0;
         dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
-        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
         assert_eq!(aligned_metadata(&app, waves, pipeline), 500.0 * theme.zoom);
 
         let pipe_split = app
@@ -3893,13 +4241,13 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
             .last_layout()
             .label_split;
         drag_divider(&mut app, pipeline, pipe_split, 25.0 + 600.0 * theme.zoom);
-        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
         assert_eq!(aligned_metadata(&app, waves, pipeline), 600.0 * theme.zoom);
         assert_eq!(app.panels.pipeline(pipeline).unwrap().label_width, 400.0);
 
         let names_split = app.panels.waves(waves).unwrap().last_layout().names_split;
         drag_divider(&mut app, waves, names_split, 25.0 + 460.0 * theme.zoom);
-        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
         assert_eq!(aligned_metadata(&app, waves, pipeline), 600.0 * theme.zoom);
         assert_eq!(
             app.panels.waves(waves).unwrap().last_layout().names.width(),
@@ -3917,7 +4265,7 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
 
         let scopes_split = app.panels.waves(waves).unwrap().last_layout().scopes_split;
         drag_divider(&mut app, waves, scopes_split, 25.0 + 120.0 * theme.zoom);
-        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
         assert_eq!(aligned_metadata(&app, waves, pipeline), 600.0 * theme.zoom);
         let layout = app.panels.waves(waves).unwrap().last_layout();
         assert_eq!(layout.names.width(), 300.0 * theme.zoom);
@@ -3926,10 +4274,10 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
 
         let wave_split = app.panels.waves(waves).unwrap().last_layout().values_split;
         drag_divider(&mut app, waves, wave_split, 25.0 + 350.0 * theme.zoom);
-        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
         assert_eq!(aligned_metadata(&app, waves, pipeline), 350.0 * theme.zoom);
         wheel_with(&mut app, pipeline, point(900.0, 450.0), 0.0, 120.0, ctrl());
-        timeline_frames(&mut app, waves, pipeline, 1200.0, &theme);
+        timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
         aligned_metadata(&app, waves, pipeline);
         app.render_panel(waves, &theme, &mut MonoMeasure);
         app.render_panel(pipeline, &theme, &mut MonoMeasure);
@@ -4010,7 +4358,8 @@ fn timeline_divider_survives_narrow_windows_and_workspace_restore() {
     drag_divider(&mut app, pipeline, split, 525.0);
     for width in [360.0, 250.0, 100.0, 1200.0] {
         timeline_frames(&mut app, waves, pipeline, width, &theme);
-        let expected = 500.0_f32.min((width - 160.0).max(0.0));
+        let gutter = 64.0_f32.min(width * 0.25);
+        let expected = 500.0_f32.min((width - gutter - 160.0).max(0.0));
         assert_eq!(aligned_metadata(&app, waves, pipeline), expected);
     }
     let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();

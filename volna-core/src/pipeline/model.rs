@@ -70,6 +70,8 @@ impl TrackSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     Overview,
+    Navigator,
+    NavigatorSplit,
     Activity(super::ActivityCommand),
     Row(usize),
     Cell { row: usize, stage: usize },
@@ -98,6 +100,13 @@ pub enum Drag {
         zoom: f32,
     },
     Cursor,
+    Navigator,
+    NavigatorSplit {
+        start: f32,
+        width: f32,
+        saved_width: f32,
+        moved: bool,
+    },
     LabelSplit,
     Marker(crate::marker::MarkerDrag),
 }
@@ -119,6 +128,7 @@ pub struct PipelineModel {
     pub rows: Tween<RowView>,
     pub row_cap: f32,
     pub label_width: f32,
+    pub navigator: super::NavigatorSettings,
     pub hover: Option<Hit>,
     pub drag: Option<Drag>,
     pub pointer: Option<Point>,
@@ -141,6 +151,7 @@ impl PipelineModel {
             rows: Tween::new(RowView::default()),
             row_cap: ROW_PX_CAP,
             label_width: LABEL_W_DEFAULT,
+            navigator: super::NavigatorSettings::default(),
             hover: None,
             drag: None,
             pointer: None,
@@ -221,6 +232,7 @@ impl PipelineModel {
             rows: Tween::new(self.rows.target()),
             row_cap: self.row_cap,
             label_width: self.label_width,
+            navigator: self.navigator,
             palette: self.palette.clone(),
             ..Self::new(self.track.clone(), self.nav.link)
         }
@@ -522,7 +534,7 @@ impl PipelineModel {
         bounds: crate::geometry::Rect,
         doc: &Document,
         theme: &Theme,
-        metadata_width: Option<f32>,
+        margins: crate::panels::TimelineMargins,
         device_scale: f64,
     ) -> &PipelineLayout {
         let (row_count, failed) = match self.rows(doc) {
@@ -533,11 +545,12 @@ impl PipelineModel {
         let rulers = self.nav.clocks().rulers(&doc.clocks);
         let input = LayoutInput {
             bounds,
-            metadata_width,
+            margins,
             header_h: theme.timeline_height,
             ruler_h: rulers.len() as f32 * crate::wave::overlay::RULER_H * theme.zoom,
             zoom: theme.zoom,
             label_width: self.label_width,
+            navigator_width: self.navigator.width(),
             rows: self.rows.value,
             row_count,
             markers: doc.markers(),
@@ -619,12 +632,21 @@ impl PipelineModel {
         if !layout.bounds.contains(p) {
             return None;
         }
+        if layout.navigator_split.contains(p) || layout.navigator_grip_target.contains(p) {
+            return Some(Hit::NavigatorSplit);
+        }
         if let Some((command, _, _)) = layout
             .activity_controls
             .iter()
             .find(|(_, rect, _)| rect.contains(p))
         {
             return Some(Hit::Activity(*command));
+        }
+        if layout.navigator.rect.contains(p) {
+            return Some(Hit::Navigator);
+        }
+        if layout.gutter.contains(p) {
+            return None;
         }
         if layout.label_split.contains(p) {
             return Some(Hit::LabelSplit);
@@ -1018,12 +1040,87 @@ impl PipelineModel {
     }
 
     pub fn scroll_rows(&mut self, doc: &mut Document, rows: f64, now: Instant) {
-        if rows != 0.0 {
-            self.suspend_follow();
+        if rows == 0.0 {
+            return;
         }
         let mut target = self.rows_target();
         target.top += rows;
-        self.set_rows(doc, target, Some(now));
+        target.clamp(self.cells_h(), self.row_count(doc), self.layout.zoom);
+        self.move_stream(doc, target, Some(now));
+    }
+
+    pub fn navigator_command(&mut self, command: super::NavigatorCommand) {
+        use super::NavigatorCommand;
+        match command {
+            NavigatorCommand::Toggle => self.navigator.visible = !self.navigator.visible,
+            NavigatorCommand::Widen | NavigatorCommand::Narrow => {
+                let delta = if command == NavigatorCommand::Widen {
+                    16.0
+                } else {
+                    -16.0
+                };
+                self.navigator.visible = true;
+                self.navigator.width = (self.navigator.width + delta)
+                    .clamp(super::navigator::MIN_WIDTH, super::navigator::MAX_WIDTH);
+            }
+        }
+    }
+
+    fn navigate_at(&mut self, doc: &mut Document, y: f32) {
+        let Some(row) = self.layout.navigator.row_at(y) else {
+            return;
+        };
+        let begin = match self.rows(doc) {
+            Rows::Ready(set) => set.get(row).map(|(_, tx)| tx.begin),
+            _ => None,
+        };
+        let Some(begin) = begin else {
+            return;
+        };
+        self.suspend_follow();
+        let mut rows = self.rows.value.zoomed(self.layout.zoom);
+        rows.top = row as f64;
+        self.set_rows(doc, rows, None);
+        let mut viewport = self.nav.viewport(doc);
+        let width = viewport.width();
+        viewport.start = begin as f64;
+        viewport.end = viewport.start + width;
+        viewport.clamp_preserving_width(doc.limits());
+        self.nav.viewport_state_mut(doc).set(viewport);
+    }
+
+    fn move_stream(&mut self, doc: &mut Document, rows: RowView, now: Option<Instant>) {
+        self.suspend_follow();
+        let old = if now.is_some() {
+            self.rows_target()
+        } else {
+            self.rows.value.zoomed(self.layout.zoom)
+        };
+        let mut viewport = if now.is_some() {
+            self.nav.viewport_state(doc).target()
+        } else {
+            self.nav.viewport(doc)
+        };
+        let shift = match self.rows(doc) {
+            Rows::Ready(set) if !set.is_empty() => {
+                let row = |top: f64| top.floor().max(0.0).min((set.len() - 1) as f64) as usize;
+                match (set.get(row(old.top)), set.get(row(rows.top))) {
+                    (Some((_, from)), Some((_, to))) => {
+                        super::navigator::follow_shift(viewport, from, to)
+                    }
+                    _ => 0.0,
+                }
+            }
+            _ => 0.0,
+        };
+        viewport.start += shift;
+        viewport.end += shift;
+        viewport.clamp_preserving_width(doc.limits());
+        match now {
+            Some(now) => self.nav.animate_to(doc, viewport, now),
+            None => self.nav.viewport_state_mut(doc).set(viewport),
+        }
+        self.set_rows(doc, rows, now);
     }
 
     fn pan_px(&mut self, doc: &mut Document, dx: f32, dy: f32) {
@@ -1125,6 +1222,10 @@ impl PipelineModel {
                     }
                     return true;
                 }
+                if let Some(Drag::NavigatorSplit { moved: false, .. }) = drag {
+                    self.navigator.visible = !self.navigator.visible;
+                    return true;
+                }
                 if let Some(Drag::Marker(held)) = drag {
                     held.release(doc, &mut self.nav, now);
                     return true;
@@ -1215,6 +1316,28 @@ impl PipelineModel {
             && let Some(Hit::Activity(command)) = self.hit_at(p, doc)
         {
             self.activity_command(doc, command);
+            return;
+        }
+        if self.layout.navigator_split.contains(p) || self.layout.navigator_grip_target.contains(p)
+        {
+            if button == MouseButton::Left {
+                self.drag = Some(Drag::NavigatorSplit {
+                    start: p.x,
+                    width: self.layout.navigator.rect.width() / self.layout.zoom,
+                    saved_width: self.navigator.width,
+                    moved: false,
+                });
+            }
+            return;
+        }
+        if self.layout.navigator.rect.contains(p) {
+            if button == MouseButton::Left {
+                self.drag = Some(Drag::Navigator);
+                self.navigate_at(doc, p.y);
+            }
+            return;
+        }
+        if self.layout.gutter.contains(p) {
             return;
         }
         let lane_hit = self.layout.marker_lane.hit(p);
@@ -1360,6 +1483,36 @@ impl PipelineModel {
                 let cycle = self.cycle_at(doc, x);
                 self.nav.set_cursor(doc, Some(cycle))
             }
+            Some(Drag::Navigator) => {
+                self.navigate_at(doc, p.y);
+                true
+            }
+            Some(Drag::NavigatorSplit {
+                start,
+                width,
+                saved_width,
+                moved,
+            }) => {
+                let delta = (start - p.x) / self.layout.zoom;
+                let moved = moved || delta.abs() >= DRAG_THRESHOLD_PX;
+                self.drag = Some(Drag::NavigatorSplit {
+                    start,
+                    width,
+                    saved_width,
+                    moved,
+                });
+                if moved {
+                    let requested = width + delta;
+                    self.navigator.visible = requested >= super::navigator::MIN_WIDTH * 0.5;
+                    if self.navigator.visible {
+                        self.navigator.width = requested
+                            .clamp(super::navigator::MIN_WIDTH, super::navigator::MAX_WIDTH);
+                    } else {
+                        self.navigator.width = saved_width;
+                    }
+                }
+                true
+            }
             Some(Drag::LabelSplit) => {
                 self.label_width = ((p.x - self.layout.bounds.left()) / self.layout.zoom)
                     .clamp(LABEL_W_MIN, LABEL_W_MAX);
@@ -1374,6 +1527,12 @@ impl PipelineModel {
     }
 
     fn wheel(&mut self, doc: &mut Document, p: Point, dx: f32, dy: f32, modifiers: Modifiers) {
+        if self.layout.gutter.contains(p)
+            || self.layout.navigator_split.contains(p)
+            || self.layout.navigator_grip_target.contains(p)
+        {
+            return;
+        }
         let factor = 2f64.powf(f64::from(dy) / 120.0);
         if modifiers.control || modifiers.platform {
             self.zoom_about(doc, p, factor, None);
@@ -1383,7 +1542,12 @@ impl PipelineModel {
         } else if modifiers.shift {
             self.pan_px(doc, -(dx + dy), 0.0);
         } else {
-            self.pan_px(doc, -dx, -dy);
+            self.pan_px(doc, -dx, 0.0);
+            if dy != 0.0 {
+                let mut rows = self.rows.value.zoomed(self.layout.zoom);
+                rows.pan_px(-dy, self.cells_h(), self.row_count(doc), self.layout.zoom);
+                self.move_stream(doc, rows, None);
+            }
         }
     }
 }

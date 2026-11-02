@@ -261,6 +261,7 @@ pub enum Command {
         panel: PanelId,
     },
     PipelineActivity(PanelId, crate::pipeline::ActivityCommand),
+    PipelineNavigator(PanelId, crate::pipeline::NavigatorCommand),
     PipelineMeasured(PanelId, crate::pipeline::ViewportSize),
     SetSearchEverywhere(bool),
     SelectScope(TreeNode),
@@ -1309,6 +1310,12 @@ impl App {
                     pipeline.measure_viewport(size);
                 }
                 self.initialize_pipelines();
+            }
+            Command::PipelineNavigator(panel, command) => {
+                if let Some(pipeline) = self.panels.pipeline_mut(panel) {
+                    pipeline.navigator_command(command);
+                    self.changed();
+                }
             }
             Command::PipelineActivity(panel, command) => {
                 if let Some(pipeline) = self.panels.pipeline_mut(panel) {
@@ -2846,18 +2853,18 @@ impl App {
         };
         self.doc.clocks.defaults = self.pipeline_clocks();
         self.panels.sync_timeline_dividers();
-        let metadata = self.panels.timeline_metadata(id, bounds, theme.zoom);
+        let margins = self.panels.timeline_margins(id, bounds, theme.zoom);
         let tooltip_delay = self.settings.resolved().appearance.tooltip_delay;
         let doc = &self.doc;
         Some(match &mut self.panels.get_mut(id)?.kind {
             PanelKind::Waves(w) => {
-                let layout = w.layout(bounds, doc, theme, metadata);
+                let layout = w.layout(bounds, doc, theme, margins);
                 self.marker_tooltip
                     .relayout(id, &layout.marker_lane, tooltip_delay);
                 PanelLayout::Waves(layout)
             }
             PanelKind::Pipeline(p) => {
-                let layout = p.layout(bounds, doc, theme, metadata, device_scale);
+                let layout = p.layout(bounds, doc, theme, margins, device_scale);
                 self.marker_tooltip
                     .relayout(id, &layout.marker_lane, tooltip_delay);
                 PanelLayout::Pipeline(layout)
@@ -3431,6 +3438,7 @@ impl App {
         let panel = self.panels.get(id).unwrap();
         if let Some(p) = panel.kind.pipeline() {
             let rows = p.rows.target();
+            let navigator = p.last_layout().navigator.rect;
             let (state, count) = match p.rows(&self.doc) {
                 crate::pipeline::Rows::Ready(set) => ("ready", set.len()),
                 crate::pipeline::Rows::Loading => ("loading", 0),
@@ -3439,12 +3447,14 @@ impl App {
                 crate::pipeline::Rows::Unavailable => ("unavailable", 0),
             };
             return format!(
-                "panel={} pipeline track={} focused={} linked=({},{}) {state} rows={count} top={:.2} row_px={:.2} label_w={} cursor={:?} markers={} viewport=({:.0},{:.0}) hover={:?} drag={:?}",
+                "panel={} pipeline track={} focused={} linked=({},{}) {state} rows={count} top={:.2} row_px={:.2} label_w={} cursor={:?} markers={} viewport=({:.0},{:.0}) hover={:?} drag={:?} navigator=({},{:.0}) navigator_rect=({:.0},{:.0},{:.0},{:.0})",
                 id.0, p.track.path().join("."), id == self.panels.focused_id(), p.nav.link.viewport, p.nav.link.cursor,
                 rows.top, rows.row_px, p.label_width,
                 p.nav.cursor(&self.doc), self.doc.markers().len(),
                 p.nav.viewport(&self.doc).start, p.nav.viewport(&self.doc).end,
                 p.hover, p.drag,
+                p.navigator.visible, p.navigator.width,
+                navigator.left(), navigator.top(), navigator.width(), navigator.height(),
             );
         }
         if let Some(model) = panel.kind.transaction() {

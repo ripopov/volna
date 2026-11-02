@@ -10,6 +10,33 @@ use crate::wave::{layout::MIN_COLUMN, model::Drag as WaveDrag};
 
 const MIN_TIMELINE_WIDTH: f32 = 160.0;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TimelineMargins {
+    pub metadata_width: Option<f32>,
+    pub trailing_width: f32,
+}
+
+impl TimelineMargins {
+    pub(crate) fn content(self, bounds: Rect) -> Rect {
+        Rect::from_xywh(
+            bounds.left(),
+            bounds.top(),
+            (bounds.width() - self.trailing_width).max(0.0),
+            bounds.height(),
+        )
+    }
+
+    pub(crate) fn gutter(self, bounds: Rect) -> Rect {
+        let content = self.content(bounds);
+        Rect::from_xywh(
+            content.right(),
+            bounds.top(),
+            bounds.width() - content.width(),
+            bounds.height(),
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TimelineDivider {
@@ -97,9 +124,32 @@ impl Panels {
         }
     }
 
-    pub(crate) fn timeline_metadata(&self, id: PanelId, bounds: Rect, zoom: f32) -> Option<f32> {
-        let divider = self.timeline.iter().find(|d| d.panels.contains(&id))?;
-        Some(self.clamp_timeline_width(divider, divider.width, bounds, zoom) * zoom)
+    fn navigator_width(&self, id: PanelId) -> f32 {
+        self.pipeline(id).map_or(0.0, |p| p.navigator.width())
+    }
+
+    pub(crate) fn timeline_margins(&self, id: PanelId, bounds: Rect, zoom: f32) -> TimelineMargins {
+        let divider = self.timeline.iter().find(|d| d.panels.contains(&id));
+        let width = divider.map_or_else(
+            || self.navigator_width(id),
+            |d| {
+                d.panels
+                    .iter()
+                    .map(|&id| self.navigator_width(id))
+                    .fold(0.0, f32::max)
+            },
+        );
+        let trailing_width = (width * zoom).min(bounds.width() * 0.25);
+        let content = TimelineMargins {
+            trailing_width,
+            metadata_width: None,
+        }
+        .content(bounds);
+        TimelineMargins {
+            trailing_width,
+            metadata_width: divider
+                .map(|d| self.clamp_timeline_width(d, d.width, content, zoom) * zoom),
+        }
     }
 
     fn clamp_timeline_width(
@@ -138,6 +188,7 @@ impl Panels {
             }
             _ => return false,
         };
+        let bounds = self.timeline_margins(id, bounds, zoom).content(bounds);
         let width = (position.x - bounds.left()) / zoom;
         let min = self.timeline_minimum(&self.timeline[index]);
         self.timeline[index].width = self

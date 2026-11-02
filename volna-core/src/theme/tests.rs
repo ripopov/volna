@@ -4,6 +4,47 @@ include!("../../tests/fixtures/themes.rs");
 use crate::color::Color;
 
 #[test]
+fn navigator_ink_remains_legible_on_both_surfaces_in_every_theme() {
+    let bundled = builtin::choices().flat_map(|(id, _)| {
+        [false, true].map(move |dark| (id.to_string(), builtin::resolve(id, dark).unwrap().canvas))
+    });
+    let host = real_palettes()
+        .into_iter()
+        .map(|p| (format!("{:?}", p.appearance), Theme::from_host(&p)));
+    for (name, theme) in bundled.chain(host) {
+        let style = theme.navigator_style();
+        assert!(
+            contrast(style.viewport, style.background) >= 1.49,
+            "{name}: viewport fill"
+        );
+        assert!(
+            contrast(style.edge, style.background) >= 4.49,
+            "{name}: viewport outline"
+        );
+        let normal = style.stream.to_oklab();
+        let aborted = style.aborted.to_oklab();
+        let distance = normal
+            .into_iter()
+            .zip(aborted)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            distance >= 0.10,
+            "{name}: normal/aborted separation {distance}"
+        );
+        for background in [style.background, style.viewport] {
+            for ink in [style.stream, style.aborted] {
+                assert!(
+                    contrast(over(ink, background), background) >= 2.99,
+                    "{name}: {ink:?} on {background:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn transaction_borders_and_labels_contrast_in_every_theme() {
     let bundled = builtin::choices().flat_map(|(id, _)| {
         [false, true].map(move |dark| (id.to_string(), builtin::resolve(id, dark).unwrap().canvas))

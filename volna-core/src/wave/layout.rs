@@ -29,6 +29,7 @@ pub fn indent_x(left: f32, depth: u8, zoom: f32) -> f32 {
 pub struct WaveLayout {
     pub bounds: Rect,
     pub header: Rect,
+    pub gutter: Rect,
     pub rulers: Rect,
     pub names: Rect,
     pub name_left: f32,
@@ -54,7 +55,7 @@ pub struct WaveLayout {
 
 pub struct LayoutInput<'a> {
     pub bounds: Rect,
-    pub metadata_width: Option<f32>,
+    pub margins: crate::panels::TimelineMargins,
     pub row_h: f32,
     pub header_h: f32,
     pub ruler_h: f32,
@@ -94,7 +95,7 @@ fn row_at_offset(tops: &[f64], offset: f64, row_h: f32) -> usize {
 impl WaveLayout {
     #[must_use]
     pub fn compute(input: LayoutInput<'_>) -> WaveLayout {
-        let bounds = input.bounds;
+        let bounds = input.margins.content(input.bounds);
         let row_h = input.row_h;
         let header_h = input.header_h;
         let zoom = if input.zoom.is_finite() && input.zoom > 0.0 {
@@ -106,7 +107,10 @@ impl WaveLayout {
         let min_column = z(MIN_COLUMN);
         let total_w = bounds.width();
         let available = (total_w - z(160.0)).max((2.0 * min_column).min(total_w));
-        let metadata_w = input.metadata_width.map(|w| w.max(0.0).min(total_w));
+        let metadata_w = input
+            .margins
+            .metadata_width
+            .map(|w| w.max(0.0).min(total_w));
         let budget = metadata_w.unwrap_or(available);
         let min = min_column.min(budget / 2.0);
         let scope_min = min_column.min((budget - 2.0 * min).max(0.0));
@@ -209,9 +213,10 @@ impl WaveLayout {
         };
 
         WaveLayout {
-            shared_metadata: input.metadata_width.is_some(),
-            bounds,
+            shared_metadata: input.margins.metadata_width.is_some(),
+            bounds: input.bounds,
             header,
+            gutter: input.margins.gutter(input.bounds),
             rulers,
             names,
             name_left: names.left()
@@ -359,7 +364,7 @@ mod tests {
         items: usize,
     ) -> WaveLayout {
         WaveLayout::compute(LayoutInput {
-            metadata_width: None,
+            margins: Default::default(),
             bounds: Rect::from_xywh(0.0, 0.0, 2000.0, 300.0),
             row_h: 24.0 * zoom,
             header_h: 32.0 * zoom,
@@ -453,7 +458,7 @@ mod tests {
             assert!((tops[COUNT] - height * COUNT as f64).abs() < 1e-6);
             let scroll = (height * FIRST as f64) as f32;
             let layout = WaveLayout::compute(LayoutInput {
-                metadata_width: None,
+                margins: Default::default(),
                 bounds: Rect::from_xywh(0.0, 0.0, 1400.0, 600.0),
                 row_h,
                 header_h: 32.0,
@@ -493,7 +498,7 @@ mod tests {
     fn tall_rows_shift_every_row_below_and_hit_test_to_their_full_height() {
         let heights = [1, 4, 1, 8, 2].map(|h| RowHeight::try_from(h).unwrap());
         let input = |scroll_y| LayoutInput {
-            metadata_width: None,
+            margins: Default::default(),
             bounds: Rect::from_xywh(0.0, 0.0, 2000.0, 32.0 + 24.0 * 5.0),
             row_h: 24.0,
             header_h: 32.0,

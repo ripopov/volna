@@ -7,7 +7,7 @@ pub use dock::{DockLayout, Placement, SideDock, WindowId};
 mod timeline;
 pub(crate) mod workspace;
 pub use layout::{Axis, Layout, MAX_LAYOUT_DEPTH, MAX_PANELS};
-pub use timeline::TimelineDivider;
+pub use timeline::{TimelineDivider, TimelineMargins};
 
 use std::collections::{BTreeMap, BTreeSet};
 

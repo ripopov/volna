@@ -650,9 +650,93 @@ pub fn paint(
         ),
         t.border_variant,
     );
+    p.scene.fill(layout.gutter, t.panel.bg);
+    if let Rows::Ready(set) = &rows {
+        layout.navigator.paint(
+            set,
+            layout.rows,
+            viewport,
+            layout.cells_width_f64(),
+            t,
+            p.scene,
+        );
+    }
+    let resizing_navigator = matches!(model.drag, Some(Drag::NavigatorSplit { .. }));
+    let splitter = layout.navigator_split;
+    let highlight = model.hover == Some(Hit::NavigatorSplit) || resizing_navigator;
+    let x = layout
+        .navigator
+        .rect
+        .left()
+        .min(bounds.right() - z(2.0))
+        .max(bounds.left());
+    p.scene.fill(
+        Rect::from_xywh(
+            x,
+            splitter.top(),
+            if resizing_navigator { z(4.0) } else { 1.0 },
+            splitter.height(),
+        ),
+        if highlight {
+            t.border_focused
+        } else {
+            t.border_variant
+        },
+    );
+    let target = layout.navigator_grip_target;
+    let grip_width = z(12.0).min(target.width());
+    let grip_height = z(40.0).min(target.height());
+    let grip = Rect::from_xywh(
+        (layout.navigator.rect.left() - grip_width * 0.5)
+            .clamp(bounds.left(), bounds.right() - grip_width),
+        target.top() + (target.height() - grip_height) * 0.5,
+        grip_width,
+        grip_height,
+    );
+    p.scene.quad(
+        grip,
+        if highlight { t.hover.bg } else { t.elevated.bg },
+        z(4.0),
+        1.0,
+        if highlight {
+            t.border_focused
+        } else {
+            t.border
+        },
+    );
+    let icon_size = z(10.0).min(grip.width()).min(grip.height());
+    p.scene.icon(
+        if model.navigator.visible {
+            IconName::ChevronsRight
+        } else {
+            IconName::ChevronsLeft
+        },
+        Rect::from_xywh(
+            grip.left() + (grip.width() - icon_size) * 0.5,
+            grip.top() + (grip.height() - icon_size) * 0.5,
+            icon_size,
+            icon_size,
+        ),
+        if highlight {
+            t.border_focused
+        } else {
+            t.panel.text_muted
+        },
+    );
+    p.scene
+        .cursors
+        .push((layout.navigator.rect, CursorIcon::PointingHand));
+    p.scene
+        .cursors
+        .push((splitter, CursorIcon::ResizeLeftRight));
+    p.scene.cursors.push((target, CursorIcon::ResizeLeftRight));
     match model.drag {
-        Some(Drag::LabelSplit) => p.scene.window_cursor = Some(CursorIcon::ResizeLeftRight),
-        Some(Drag::Pan { moved: true, .. }) => p.scene.window_cursor = Some(CursorIcon::Grabbing),
+        Some(Drag::NavigatorSplit { .. } | Drag::LabelSplit) => {
+            p.scene.window_cursor = Some(CursorIcon::ResizeLeftRight);
+        }
+        Some(Drag::Navigator | Drag::Pan { moved: true, .. }) => {
+            p.scene.window_cursor = Some(CursorIcon::Grabbing);
+        }
         _ => p
             .scene
             .cursors

@@ -1072,6 +1072,7 @@ pub(crate) fn paint(
             p.scene.window_cursor = Some(CursorIcon::PointingHand);
         }
     }
+    p.scene.fill(layout.gutter, t.panel.bg);
 }
 
 fn analog_plot(a: &Analog, wave_row: Rect, t: &Theme) -> Option<Plot> {

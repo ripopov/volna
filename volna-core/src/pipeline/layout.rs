@@ -15,6 +15,9 @@ pub const LABEL_W_MIN: f32 = 60.0;
 pub const LABEL_W_MAX: f32 = 420.0;
 pub const LABEL_W_DEFAULT: f32 = 190.0;
 const SPLITTER_TOLERANCE: f32 = 4.0;
+const NAVIGATOR_SPLITTER_TOLERANCE: f32 = 8.0;
+const NAVIGATOR_GRIP_TARGET_WIDTH: f32 = 20.0;
+const NAVIGATOR_GRIP_TARGET_HEIGHT: f32 = 64.0;
 const RETRY_W: f32 = 72.0;
 const RETRY_H: f32 = 22.0;
 pub const OVERVIEW_PX: f64 = 2.0;
@@ -29,6 +32,10 @@ pub struct PipelineLayout {
     pub labels: Rect,
     pub cells: Rect,
     pub label_split: Rect,
+    pub navigator: super::navigator::Navigator,
+    pub navigator_split: Rect,
+    pub navigator_grip_target: Rect,
+    pub gutter: Rect,
     pub rows: RowView,
     pub row_range: Range<usize>,
     pub device_scale: f64,
@@ -41,11 +48,12 @@ pub struct PipelineLayout {
 #[derive(Clone, Copy)]
 pub struct LayoutInput<'a> {
     pub bounds: Rect,
-    pub metadata_width: Option<f32>,
+    pub margins: crate::panels::TimelineMargins,
     pub header_h: f32,
     pub ruler_h: f32,
     pub zoom: f32,
     pub label_width: f32,
+    pub navigator_width: f32,
     pub rows: RowView,
     pub row_count: usize,
     pub markers: &'a [Marker],
@@ -59,7 +67,7 @@ pub struct LayoutInput<'a> {
 impl PipelineLayout {
     #[must_use]
     pub fn compute(input: LayoutInput<'_>) -> Self {
-        let bounds = input.bounds;
+        let bounds = input.margins.content(input.bounds);
         let zoom = if input.zoom.is_finite() && input.zoom > 0.0 {
             input.zoom
         } else {
@@ -67,7 +75,7 @@ impl PipelineLayout {
         };
         let z = |v: f32| v * zoom;
         let header_h = input.header_h;
-        let labels_w = input.metadata_width.unwrap_or_else(|| {
+        let labels_w = input.margins.metadata_width.unwrap_or_else(|| {
             z(input.label_width.clamp(LABEL_W_MIN, LABEL_W_MAX))
                 .min((bounds.width() - z(LABEL_W_MIN)).max(0.0))
         });
@@ -117,15 +125,50 @@ impl PipelineLayout {
             point(labels.right() - z(SPLITTER_TOLERANCE), bounds.top()),
             size(z(2.0 * SPLITTER_TOLERANCE), bounds.height()),
         );
+        let gutter = input.margins.gutter(input.bounds);
+        let navigator_width = (input.navigator_width * zoom).min(gutter.width());
+        let navigator = super::navigator::Navigator::new(
+            Rect::from_xywh(
+                input.bounds.right() - navigator_width,
+                rows_top,
+                navigator_width,
+                rows_h,
+            ),
+            input.row_count,
+        );
+        let split_left =
+            (navigator.rect.left() - z(NAVIGATOR_SPLITTER_TOLERANCE)).max(input.bounds.left());
+        let split_right =
+            (navigator.rect.left() + z(NAVIGATOR_SPLITTER_TOLERANCE)).min(input.bounds.right());
+        let navigator_split = Rect::from_xywh(
+            split_left,
+            rows_top,
+            (split_right - split_left).max(0.0),
+            rows_h,
+        );
+        let grip_width = z(NAVIGATOR_GRIP_TARGET_WIDTH).min(input.bounds.width());
+        let grip_height = z(NAVIGATOR_GRIP_TARGET_HEIGHT).min(rows_h);
+        let grip_left = (navigator.rect.left() - grip_width * 0.5)
+            .clamp(input.bounds.left(), input.bounds.right() - grip_width);
+        let navigator_grip_target = Rect::from_xywh(
+            grip_left,
+            rows_top + (rows_h - grip_height) * 0.5,
+            grip_width,
+            grip_height,
+        );
         Self {
             activity_controls: Vec::new(),
             activity: Activity::default(),
-            bounds,
+            bounds: input.bounds,
             header,
             rulers,
             labels,
             cells,
             label_split,
+            navigator,
+            navigator_split,
+            navigator_grip_target,
+            gutter,
             rows,
             row_range,
             device_scale: input.device_scale,
@@ -197,12 +240,13 @@ mod tests {
         rows: usize,
     ) -> PipelineLayout {
         PipelineLayout::compute(LayoutInput {
-            metadata_width: None,
+            margins: Default::default(),
             bounds: Rect::from_xywh(0.0, 0.0, 1000.0, 332.0),
             header_h: 32.0 * zoom,
             ruler_h: 0.0,
             zoom,
             label_width: 190.0,
+            navigator_width: 0.0,
             rows: RowView { top: 3.0, row_px },
             row_count: rows,
             markers,

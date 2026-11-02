@@ -291,6 +291,25 @@ margin and a readable cycle width matching the default row height. Tracks withou
 a usable clock estimate the scale from the first transaction's stage durations
 or lifetime. Reusing a panel or restoring a workspace preserves its view;
 navigation during loading takes precedence over the automatic opening view.
+The right-hand instruction navigator shows sampled record lifetimes across the
+whole stream. Click or drag it to reveal a row at its beginning without changing
+zoom, cursor, or selection. Its accent-colored stream and tinted viewport follow
+the active theme; flushed samples use the error color and right-edge status
+ticks. A contrasting outline with a separating halo marks the visible rows.
+The compact open/close grip has a larger hit area. Drag its left edge
+to resize; click the edge or the **Navigator** toolbar button to hide or restore
+it. The panel menu also offers **Instruction navigator**, **Widen instruction
+navigator**, and **Narrow instruction navigator** for keyboard operation. Width
+and visibility are saved per panel; narrow windows limit the strip to a quarter
+of the panel while retaining the saved width.
+
+Ordinary vertical wheel scrolling follows the stream in time, preserving the
+execution phase at the viewport center as the top record changes. Horizontal
+and Shift+wheel gestures pan time; dragging the canvas pans freely. Manual row
+navigation suspends **Follow activity**. Time movement follows the panel's shared
+viewport setting. Stacked linked timelines reserve a common right gutter so
+their time axes stay aligned as the navigator is resized or hidden.
+
 With no selected record the inspector shows its empty state; selecting
 a record fills it immediately. An existing inspector retains its placement,
 including in the center. If all inspectors are pinned, a separate unpinned

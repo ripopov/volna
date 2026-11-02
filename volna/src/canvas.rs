@@ -678,7 +678,13 @@ impl Element for PanelCanvas {
                     rects
                 }
                 Some(PanelLayout::Pipeline(layout)) => {
-                    let mut rects = vec![layout.label_split];
+                    let mut rects = vec![
+                        layout.label_split,
+                        layout.navigator_split,
+                        layout.navigator_grip_target,
+                        layout.navigator.rect,
+                        layout.gutter,
+                    ];
                     rects.extend(layout.marker_lane.chips.iter().map(|c| c.rect));
                     rects.extend(layout.retry);
                     rects.extend(layout.activity_controls.iter().map(|(_, rect, _)| *rect));
@@ -1354,7 +1360,10 @@ impl PanelCanvas {
                         let layout = pipeline.last_layout();
                         !matches!(
                             pipeline.drag,
-                            Some(volna_core::pipeline::model::Drag::BoxZoom { .. })
+                            Some(
+                                volna_core::pipeline::model::Drag::BoxZoom { .. }
+                                    | volna_core::pipeline::model::Drag::NavigatorSplit { .. }
+                            )
                         ) && layout.cells.contains(cpoint(ev.position))
                             && !layout.is_overview()
                             && layout.row_at(cpoint(ev.position).y).is_some()

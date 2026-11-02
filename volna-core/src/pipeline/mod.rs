@@ -5,6 +5,8 @@ pub mod activity;
 pub use activity::{Activity, ActivityCommand, FollowActivity};
 pub mod layout;
 pub mod model;
+pub mod navigator;
+pub use navigator::{NavigatorCommand, NavigatorSettings};
 pub(crate) mod occupancy;
 mod opening;
 pub use opening::ViewportSize;

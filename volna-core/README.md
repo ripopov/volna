@@ -75,6 +75,22 @@ and physical phase. Output uses at most 4,096 occupied rectangle runs before
 switching to `Prim::Presence`, bounding the display list independently of gap
 count. Highly scattered stages can still require a source-sized query.
 
+The right-hand instruction navigator is a separate, representative overview. It
+draws at most one sampled record per logical pixel of height, using indexed row
+access and two rectangle batches for normal and aborted records. Picking inverts
+the same sample bands. Lifetime bars wrap horizontally and magnify duration by
+eight; their horizontal position is not a time-picking coordinate. Unsampled
+records can be absent from this strip; the main canvas presence view remains
+exact. No additional source index or full-record scan is required for the strip.
+
+Stream scrolling maps the viewport center between the old and new top records:
+it preserves distance before or after a lifetime, and fractional progress inside
+it. Instantaneous records use a virtual tick to preserve reversibility. Both
+axes use the existing navigation and animation settings. Manual row movement
+suspends time-to-row activity following. Navigator width and visibility belong
+to the pipeline panel's versioned workspace state; linked timeline groups derive
+a common trailing margin from their panels' requested widths.
+
 ## Persistence and edits
 
 Workspace files capture panel layout, views, markers, and row choices. The

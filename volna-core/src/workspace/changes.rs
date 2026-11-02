@@ -48,6 +48,7 @@ struct PipelineStamp {
     rows: RowView,
     row_cap: f32,
     label_width: f32,
+    navigator: crate::pipeline::NavigatorSettings,
 }
 #[derive(PartialEq)]
 struct WaveStamp {
@@ -104,6 +105,7 @@ impl Stamp {
             Command::Pointer(id, _)
             | Command::Table(id, _)
             | Command::PipelineActivity(id, _)
+            | Command::PipelineNavigator(id, _)
             | Command::MenuSelect(id, _)
             | Command::RenameMarker(id, _)
             | Command::ZoomToSpan(id, ..)
@@ -163,6 +165,7 @@ impl Stamp {
                 rows: p.rows.target(),
                 row_cap: p.row_cap,
                 label_width: p.label_width,
+                navigator: p.navigator,
             }),
             table: app
                 .panels
