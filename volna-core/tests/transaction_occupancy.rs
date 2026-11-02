@@ -33,6 +33,26 @@ fn loaded(records: Vec<Transaction>) -> TransactionIndex {
 }
 
 #[test]
+fn row_activity_preserves_gaps_and_point_errors_at_boundaries() {
+    let index = loaded(vec![
+        record(7, 0, 10),
+        record(8, 11, 20),
+        record(14, 21, 21),
+    ]);
+    let row = index.row(0).unwrap();
+    for (start, end, expected) in [
+        (9.0, 10.0, (true, true)),
+        (10.0, 11.0, (false, false)),
+        (11.0, 12.0, (true, false)),
+        (20.0, 21.0, (false, false)),
+        (21.0, 22.0, (true, true)),
+        (22.0, 23.0, (false, false)),
+    ] {
+        assert_eq!(row.activity(start, end), expected, "{start}..{end}");
+    }
+}
+
+#[test]
 fn late_summary_boundaries_keep_short_peaks_and_point_errors() {
     let base = 1u64 << 60;
     let generator = loaded(vec![

@@ -205,19 +205,8 @@ fn detail_records<'a>(
     viewport: &Viewport,
 ) -> Option<&'a [usize]> {
     let row = index.row(sub)?;
-    let records = index.source().transactions();
     let candidates = row.window(viewport.start, viewport.end);
-    if candidates.len() > 64 {
-        return None;
-    }
-    let mut stages = 0usize;
-    candidates
-        .iter()
-        .all(|&i| {
-            stages = stages.saturating_add(records[i].stages.len());
-            stages <= 256
-        })
-        .then_some(candidates)
+    (candidates.len() <= 64).then_some(candidates)
 }
 
 #[derive(Default)]
@@ -247,14 +236,7 @@ impl<'a> RenderPlan<'a> {
                     return candidates;
                 };
                 let exact = cache.exact.entry((track, sub)).or_insert(true);
-                let stages = candidates.map_or(usize::MAX, |records| {
-                    records
-                        .iter()
-                        .map(|&i| index.source().transactions()[i].stages.len())
-                        .sum()
-                });
-                *exact = candidates
-                    .is_some_and(|records| *exact || records.len() <= 48 && stages <= 192);
+                *exact = candidates.is_some_and(|records| *exact || records.len() <= 48);
                 exact.then_some(candidates).flatten()
             })
             .collect();

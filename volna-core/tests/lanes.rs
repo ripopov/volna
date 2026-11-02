@@ -546,16 +546,21 @@ fn bars_keep_separate_rows_and_always_show_total_occupancy() {
     );
     assert!(scene.texts().any(|t| t == format!("+{}", depth - 2)));
     assert!(scene.texts().any(|t| t.ends_with("records")));
-    let bar_quads = scene
+    let style = theme.transaction_style(false);
+    let mut bar_rows: Vec<_> = scene
         .quads()
-        .filter(|(_, c)| *c == theme.wave_signal)
-        .count();
-    assert!(bar_quads > 5);
+        .filter(|(_, c)| *c == style.fill)
+        .map(|(rect, _)| rect.top())
+        .collect();
+    bar_rows.sort_by(f32::total_cmp);
+    bar_rows.dedup();
+    assert_eq!(bar_rows.len(), 2);
     assert!(
         scene
             .prims
             .iter()
-            .any(|prim| matches!(prim, Prim::Lines { .. }))
+            .any(|prim| matches!(prim, Prim::Lines { color, segments, .. }
+                if *color == style.edge && segments.iter().filter(|[a, b]| a.x == b.x).count() > 5))
     );
 
     let volna_core::App { panels, doc, .. } = &mut app;
@@ -577,11 +582,12 @@ fn bars_keep_separate_rows_and_always_show_total_occupancy() {
     frame_w(&mut app, waves, 520.0);
     let scene = frame_w(&mut app, waves, 520.0);
     assert!(scene.texts().any(|text| text.starts_with("occupancy ·")));
-    let columns = scene
-        .quads()
-        .filter(|(_, c)| c.h == theme.wave_signal.h && c.s == theme.wave_signal.s && c.a < 1.0)
-        .count();
-    assert!(columns > 0 && columns <= 4096, "{columns} density runs");
+    let columns = scene.quads().filter(|(_, c)| *c == style.fill).count();
+    assert!(columns > 0 && columns <= 2 * 4096, "{columns} density runs");
+    assert!(scene.prims.iter().any(|prim| matches!(
+        prim, Prim::Polygon { color, points }
+            if *color == theme.wave_signal.with_alpha(0.35) && !points.is_empty()
+    )));
     let p = {
         let layout = app.panels.waves(waves).unwrap().last_layout();
         point(layout.waves.left() + 50.0, layout.row_y(0) + 10.0)
@@ -628,7 +634,9 @@ fn a_failed_record_is_red_in_bars_and_values() {
         .set_cursor(doc, Some(failed.begin + 1));
     let scene = frame(&mut app, waves);
     assert!(
-        scene.quads().any(|(_, c)| c == theme.editor.error),
+        scene
+            .quads()
+            .any(|(_, c)| c == theme.transaction_style(true).fill),
         "red bar"
     );
     assert!(scene.prims.iter().any(|prim| matches!(

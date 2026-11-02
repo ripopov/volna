@@ -1,11 +1,12 @@
 use super::paint;
 use crate::data::transaction_index::TransactionIndex;
 use crate::{
+    color::Color,
     data::loaded_tracks::LoadedGenerator,
     document::Document,
-    geometry::Rect,
+    geometry::{Point, Rect, point},
     scene::{MonoMeasure, Prim, Scene, TextCache},
-    theme::Theme,
+    theme::{Theme, builtin},
     trace::TraceId,
     wave::{
         RowHeight, Viewport,
@@ -56,6 +57,18 @@ fn draw(
     text: &mut TextCache,
 ) {
     let theme = Theme::volna(true);
+    draw_with_theme(index, lane, viewport, cache, scene, text, &theme);
+}
+
+fn draw_with_theme(
+    index: &TransactionIndex,
+    lane: &TxLane,
+    viewport: Viewport,
+    cache: &mut DetailCache,
+    scene: &mut Scene,
+    text: &mut TextCache,
+    theme: &Theme,
+) {
     let geometry = LaneGeometry::new(
         0.0,
         24.0 * f32::from(lane.height.multiple()),
@@ -71,12 +84,107 @@ fn draw(
         Rect::from_xywh(0.0, 0.0, 1000.0, geometry.height),
         &geometry,
         &mut TextPainter {
-            theme: &theme,
+            theme,
             text,
             measure: &mut MonoMeasure,
             scene,
         },
     );
+}
+
+fn bar_ink_at(scene: &Scene, position: Point) -> Option<Color> {
+    scene
+        .prims
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Rects { rects, color } if rects.iter().any(|r| r.contains(position)) => {
+                Some(*color)
+            }
+            Prim::Lines {
+                segments,
+                color,
+                width,
+            } if segments.iter().any(|[a, b]| {
+                let stroke = Rect::from_xywh(
+                    a.x.min(b.x) - width / 2.0,
+                    a.y.min(b.y) - width / 2.0,
+                    (a.x - b.x).abs() + width,
+                    (a.y - b.y).abs() + width,
+                );
+                stroke.contains(position)
+            }) =>
+            {
+                Some(*color)
+            }
+            _ => None,
+        })
+        .next_back()
+}
+
+#[test]
+fn touching_transactions_and_one_pixel_gaps_remain_distinct_in_every_theme() {
+    let lane = TxLane::unresolved(TraceId::A, vec![], RowHeight::PRESETS[3]);
+    for (id, _) in builtin::choices() {
+        for dark in [true, false] {
+            let theme = builtin::resolve(id, dark).unwrap().canvas;
+            for count in [2, 100] {
+                for status in [Status::Ok, Status::Error] {
+                    let style = theme.transaction_style(status == Status::Error);
+                    for gap in [0, 1] {
+                        let records = (0..count)
+                            .map(|id| {
+                                let end = (id + 1) * 10 - if id == 0 { gap } else { 0 };
+                                let mut tx = record(id, id * 10, end, 0);
+                                tx.status = status;
+                                tx
+                            })
+                            .collect();
+                        let generator =
+                            LoadedGenerator::new(TrackRef(1), records, Default::default(), vec![])
+                                .unwrap();
+                        let index = TransactionIndex::build(Arc::new(generator), None).unwrap();
+                        let mut scene = Scene::default();
+                        draw_with_theme(
+                            &index,
+                            &lane,
+                            Viewport {
+                                start: 0.0,
+                                end: 1000.0,
+                            },
+                            &mut DetailCache::default(),
+                            &mut scene,
+                            &mut TextCache::default(),
+                            &theme,
+                        );
+                        let boundary = 10.0 - gap as f32 - 0.5;
+                        assert!(scene.prims.iter().any(|prim| {
+                            matches!(prim, Prim::Lines { segments, color, width }
+                            if *color == style.edge && *width == 1.0
+                                && segments.contains(&[
+                                    point(boundary, 2.5), point(boundary, 21.5)
+                                ]))
+                        }));
+                        assert_eq!(
+                            bar_ink_at(&scene, point(4.5, 12.0)),
+                            Some(style.fill),
+                            "{id}"
+                        );
+                        assert_eq!(
+                            bar_ink_at(&scene, point(10.5, 12.0)),
+                            Some(style.edge),
+                            "{id}"
+                        );
+                        let expected = (gap == 0).then_some(style.edge);
+                        assert_eq!(
+                            bar_ink_at(&scene, point(9.5, 12.0)),
+                            expected,
+                            "{id}: {count}, {status:?}, gap={gap}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -136,6 +244,7 @@ fn hidden_density_and_stage_heavy_rows_keep_drawing_work_bounded() {
         &mut TextCache::default(),
     );
     assert!(scene.prims.len() <= 20);
+    assert!(scene.texts().any(|text| text == "instruction 0"));
     assert_eq!(
         generator
             .source()
@@ -145,6 +254,57 @@ fn hidden_density_and_stage_heavy_rows_keep_drawing_work_bounded() {
             .len(),
         65_536
     );
+}
+
+#[test]
+fn stage_gaps_and_overlapping_stalls_do_not_change_transaction_bars() {
+    let lane = TxLane::unresolved(TraceId::A, vec![], RowHeight::PRESETS[3]);
+    let viewport = Viewport {
+        start: 0.0,
+        end: 1000.0,
+    };
+    for count in [1, 100] {
+        for status in [Status::Ok, Status::Error] {
+            let mut baseline = None;
+            for stages in [0, 1, 2] {
+                let records = (0..count)
+                    .map(|id| {
+                        let begin = id * 10;
+                        let end = begin + 8;
+                        let mut tx = record(id, begin, end, stages);
+                        tx.status = status;
+                        if stages == 1 {
+                            tx.stages[0].begin = begin + 2;
+                            tx.stages[0].end = Some(end - 2);
+                        } else if stages == 2 {
+                            tx.stages[1].name = "stl".into();
+                            tx.stages[1].lane = "stall".into();
+                            tx.stages[1].begin = begin + 2;
+                            tx.stages[1].end = Some(end - 2);
+                        }
+                        tx
+                    })
+                    .collect();
+                let generator =
+                    LoadedGenerator::new(TrackRef(1), records, Default::default(), vec![]).unwrap();
+                let index = TransactionIndex::build(Arc::new(generator), None).unwrap();
+                let mut scene = Scene::default();
+                draw(
+                    &index,
+                    &lane,
+                    viewport,
+                    &mut DetailCache::default(),
+                    &mut scene,
+                    &mut TextCache::default(),
+                );
+                if let Some(expected) = &baseline {
+                    assert_eq!(&scene.prims, expected);
+                } else {
+                    baseline = Some(scene.prims);
+                }
+            }
+        }
+    }
 }
 
 #[test]

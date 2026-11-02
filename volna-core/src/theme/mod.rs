@@ -7,7 +7,9 @@ pub use builtin::{BUILTIN, Builtin};
 pub use palette::{Appearance, ColorPair, HostPalette};
 pub use volna::{SHEET_CSS, StageLadder};
 mod color;
+mod transaction;
 pub use color::parse_css_color;
+pub use transaction::TransactionStyle;
 pub mod vscode;
 
 use crate::color::Color;

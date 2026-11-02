@@ -20,7 +20,6 @@ use crate::document::Document;
 use crate::geometry::CursorIcon;
 use crate::geometry::{Point, Rect, point, size, snap};
 use crate::icons::IconName;
-use crate::pipeline::PipelineModel;
 use crate::scene::{FontRole, Scene};
 #[cfg(test)]
 use crate::scene::{TextCache, TextMeasure};

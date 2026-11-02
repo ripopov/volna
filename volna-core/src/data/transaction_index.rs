@@ -19,7 +19,6 @@ struct Span {
 #[derive(Debug, Default)]
 struct RowData {
     ordinals: Vec<usize>,
-    stages: Vec<Span>,
     errors: Vec<Span>,
 }
 
@@ -54,13 +53,16 @@ impl<'a> TransactionRow<'a> {
     }
 
     #[must_use]
-    pub fn activity(&self, start: f64, end: f64) -> (bool, bool, bool) {
-        let records = !self.window(start, end).is_empty();
-        (
-            records,
-            intersects(&self.data.stages, start, end),
-            intersects(&self.data.errors, start, end),
-        )
+    pub fn activity(&self, start: f64, end: f64) -> (bool, bool) {
+        let last = self
+            .data
+            .ordinals
+            .partition_point(|&i| (self.records[i].begin as f64) < end);
+        let records = last.checked_sub(1).is_some_and(|i| {
+            let tx = &self.records[self.data.ordinals[i]];
+            tx.end as f64 > start || tx.begin == tx.end && tx.begin as f64 >= start
+        });
+        (records, intersects(&self.data.errors, start, end))
     }
 }
 
@@ -99,21 +101,17 @@ impl TransactionIndex {
         let occupancy = Occupancy::build(records, &mut storage)?;
         let intervals = Intervals::build(records, &mut storage)?;
         let mut counts = storage.vec(source.depth())?;
-        counts.resize(source.depth(), [0usize; 3]);
+        counts.resize(source.depth(), [0usize; 2]);
         for (ordinal, tx) in records.iter().enumerate() {
             let count = &mut counts[source.sub_row(ordinal)];
             count[0] += 1;
-            count[1] = count[1]
-                .checked_add(tx.stages.len().max(1))
-                .ok_or_else(|| anyhow::anyhow!("stage index size overflow"))?;
-            count[2] += usize::from(tx.status == Status::Error);
+            count[1] += usize::from(tx.status == Status::Error);
         }
         let mut rows = storage.vec(source.depth())?;
         for count in &counts {
             rows.push(RowData {
                 ordinals: storage.vec(count[0])?,
-                stages: storage.vec(count[1])?,
-                errors: storage.vec(count[2])?,
+                errors: storage.vec(count[1])?,
             });
         }
         storage.release(counts)?;
@@ -133,22 +131,8 @@ impl TransactionIndex {
                     end: tx.end,
                 });
             }
-            for stage in &tx.stages {
-                let begin = stage.begin.max(tx.begin);
-                let end = stage.end.unwrap_or(tx.end).min(tx.end);
-                if begin <= end {
-                    row.stages.push(Span { begin, end });
-                }
-            }
-            if tx.stages.is_empty() {
-                row.stages.push(Span {
-                    begin: tx.begin,
-                    end: tx.end,
-                });
-            }
         }
         for row in &mut rows {
-            union(&mut row.stages);
             union(&mut row.errors);
         }
         boundaries.sort_unstable();
@@ -183,7 +167,7 @@ impl TransactionIndex {
                 .iter()
                 .map(|row| {
                     row.ordinals.capacity() * size_of::<usize>()
-                        + (row.stages.capacity() + row.errors.capacity()) * size_of::<Span>()
+                        + row.errors.capacity() * size_of::<Span>()
                 })
                 .sum::<usize>()) as u64
     }
@@ -209,7 +193,9 @@ impl TransactionIndex {
 }
 
 fn intersects(spans: &[Span], start: f64, end: f64) -> bool {
-    let first = spans.partition_point(|span| (span.end as f64) < start);
+    let first = spans.partition_point(|span| {
+        (span.end as f64) < start || span.begin < span.end && span.end as f64 == start
+    });
     spans
         .get(first)
         .is_some_and(|span| (span.begin as f64) < end)

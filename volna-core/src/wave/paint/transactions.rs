@@ -4,8 +4,8 @@
 mod tests;
 
 use super::{
-    Document, FontRole, LaneGeometry, PipelineModel, Point, Rect, Scene, Status, TextPainter,
-    Theme, TxLane, Viewport, fit_mono_prefix, lane, point,
+    Document, FontRole, LaneGeometry, Point, Rect, Scene, Status, TextPainter, Theme, TxLane,
+    Viewport, fit_mono_prefix, lane, point,
 };
 
 const PIXELS: usize = 4096;
@@ -13,12 +13,11 @@ const LABELS: usize = 384;
 
 #[derive(Default)]
 struct Bars {
-    background: Vec<Rect>,
     solid: Vec<Rect>,
     failed: Vec<Rect>,
     edges: Vec<[Point; 2]>,
     failed_edges: Vec<[Point; 2]>,
-    labels: Vec<(Point, String)>,
+    labels: Vec<(Point, String, bool)>,
 }
 
 pub(super) fn paint(
@@ -33,6 +32,8 @@ pub(super) fn paint(
     let index = plan.index;
     let generator = index.source();
     let t = p.theme;
+    let normal = t.transaction_style(false);
+    let error = t.transaction_style(true);
     let z = |v: f32| v * t.zoom;
     let width = f64::from(waves.width()).max(1.0);
     let x_of = |time: u64| {
@@ -58,57 +59,49 @@ pub(super) fn paint(
                 let xb = x_of(tx.end).max(xa + z(2.0)).min(waves.right());
                 let rect = Rect::from_xywh(xa, top, (xb - xa).max(0.0), bar_h);
                 let failed = tx.status == Status::Error;
-                append(&mut bars.background, rect);
                 let solids = if failed {
                     &mut bars.failed
                 } else {
                     &mut bars.solid
                 };
-                if tx.stages.is_empty() {
-                    append(solids, rect);
-                } else {
-                    for stage in &tx.stages {
-                        let a = x_of(stage.begin).max(xa);
-                        let b = x_of(PipelineModel::stage_end(tx, stage)).min(xb);
-                        if b >= a {
-                            append(
-                                solids,
-                                Rect::from_xywh(a, top, (b - a).max(1.0).min(xb - a), bar_h),
-                            );
-                        }
-                    }
-                }
-                let edges = if failed {
-                    &mut bars.failed_edges
-                } else {
-                    &mut bars.edges
-                };
-                outline(edges, rect);
+                append(solids, rect);
+                outline(bars.edges(failed), rect);
                 if bars.labels.len() < LABELS && bar_h >= z(8.0) && xb - xa > z(16.0) {
                     let text = lane::label(tx);
                     if let Some(label) = fit_mono_prefix(p, &text, font, xb - xa - z(8.0)) {
-                        bars.labels.push((point(xa + z(4.0), top), label));
+                        bars.labels.push((point(xa + z(4.0), top), label, failed));
                     }
                 }
             }
         } else {
+            let mut outlined = None;
             for x in 0..columns {
                 let a = viewport.start + x as f64 * pixel_time;
-                let (active, stage, failed) = row.activity(a, a + pixel_time);
+                let (active, failed) = row.activity(a, a + pixel_time);
                 let left = waves.left() + waves.width() * x as f32 / columns as f32;
                 let w = waves.width() / columns as f32;
                 let rect = Rect::from_xywh(left, top, w, bar_h);
                 if active {
-                    append(&mut bars.background, rect);
-                }
-                if stage {
                     if failed {
                         append(&mut bars.failed, rect);
                     } else {
                         append(&mut bars.solid, rect);
                     }
-                } else if failed {
-                    append(&mut bars.failed, Rect::from_xywh(left, top, w, z(2.0)));
+                }
+                if let Some(&ordinal) = row.window(a, a + pixel_time).last()
+                    && outlined != Some(ordinal)
+                {
+                    outlined = Some(ordinal);
+                    let tx = &records[ordinal];
+                    let xa = x_of(tx.begin);
+                    let xb = x_of(tx.end);
+                    // Outlines must leave visible fill in densely packed transactions.
+                    if xb - xa >= z(3.0) {
+                        outline(
+                            bars.edges(tx.status == Status::Error),
+                            Rect::from_xywh(xa, top, xb - xa, bar_h),
+                        );
+                    }
                 }
             }
         }
@@ -123,13 +116,13 @@ pub(super) fn paint(
     p.scene.clipped(
         Rect::from_xywh(waves.left(), geometry.top, waves.width(), geometry.height),
         |scene| {
-            scene.rects(bars.background, t.wave_signal.with_alpha(0.25));
-            scene.rects(bars.solid, t.wave_signal);
-            scene.rects(bars.failed, t.editor.error);
-            scene.lines(bars.edges, t.wave_signal, 1.0);
-            scene.lines(bars.failed_edges, t.editor.error, 1.0);
-            for (origin, label) in bars.labels {
-                scene.text(origin, bar_h, label, FontRole::Mono, font, t.editor.bg);
+            scene.rects(bars.solid, normal.fill);
+            scene.rects(bars.failed, error.fill);
+            scene.lines(bars.edges, normal.edge, 1.0);
+            scene.lines(bars.failed_edges, error.edge, 1.0);
+            for (origin, label, failed) in bars.labels {
+                let color = if failed { error.text } else { normal.text };
+                scene.text(origin, bar_h, label, FontRole::Mono, font, color);
             }
             occupancy(scene, &index.occupancy, viewport, area, t);
             if let Some(selected) = doc.selection().filter(|s| Some(s.track) == lane.track())
@@ -166,7 +159,24 @@ pub(super) fn paint(
     );
 }
 
+impl Bars {
+    fn edges(&mut self, failed: bool) -> &mut Vec<[Point; 2]> {
+        if failed {
+            &mut self.failed_edges
+        } else {
+            &mut self.edges
+        }
+    }
+}
+
 fn outline(edges: &mut Vec<[Point; 2]>, rect: Rect) {
+    // Keep the entire stroke inside the lifetime so one-pixel gaps stay empty.
+    let rect = Rect::from_xywh(
+        rect.left() + 0.5,
+        rect.top() + 0.5,
+        (rect.width() - 1.0).max(0.0),
+        (rect.height() - 1.0).max(0.0),
+    );
     let (a, b, c, d) = (
         rect.origin,
         point(rect.right(), rect.top()),

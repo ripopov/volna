@@ -4,6 +4,35 @@ include!("../../tests/fixtures/themes.rs");
 use crate::color::Color;
 
 #[test]
+fn transaction_borders_and_labels_contrast_in_every_theme() {
+    let bundled = builtin::choices().flat_map(|(id, _)| {
+        [false, true].map(move |dark| (id.to_string(), builtin::resolve(id, dark).unwrap().canvas))
+    });
+    let host = real_palettes()
+        .into_iter()
+        .map(|p| (format!("{:?}", p.appearance), Theme::from_host(&p)));
+    for (name, theme) in bundled.chain(host) {
+        for failed in [false, true] {
+            let style = theme.transaction_style(failed);
+            assert_eq!(style.fill.a, 1.0, "{name}");
+            assert_eq!(style.edge.a, 1.0, "{name}");
+            for background in [
+                theme.editor.bg,
+                over(theme.wave_row_selected, theme.editor.bg),
+                over(theme.wave_row_hover, theme.editor.bg),
+                style.fill,
+            ] {
+                assert!(contrast(style.edge, background) >= 2.99, "{name}: {failed}");
+            }
+            assert!(
+                contrast(over(style.text, style.fill), style.fill) >= 4.49,
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
 fn real_host_pairs_and_state_colors_are_preserved() {
     for p in real_palettes() {
         let t = Theme::from_host(&p);
