@@ -63,6 +63,7 @@ enum Row {
         generator: Vec<String>,
         #[serde(default, skip_serializing_if = "RowHeight::is_default")]
         height: RowHeight,
+        first_sub_row: usize,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
@@ -251,7 +252,7 @@ struct SavedAnalog {
     range: AnalogRange,
 }
 
-pub(crate) const VERSION: u32 = 9;
+pub(crate) const VERSION: u32 = 10;
 
 #[derive(Serialize, Deserialize)]
 struct WavePanel {
@@ -307,6 +308,7 @@ pub(crate) fn save(
             trace: lane.source.trace(),
             generator: lane.source.path().to_vec(),
             height: lane.height,
+            first_sub_row: lane.first_sub_row,
             tint: lane.tint,
         },
         WaveRow::Clock(clock) => Row::Clock {
@@ -429,9 +431,19 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 trace,
                 generator,
                 height,
+                first_sub_row,
                 tint,
             } => {
                 ensure!(!generator.is_empty(), "empty lane generator path");
+                let max_capacity = RowHeight::PRESETS
+                    .into_iter()
+                    .map(super::lane::capacity)
+                    .max()
+                    .unwrap_or(0);
+                ensure!(
+                    first_sub_row.checked_add(max_capacity).is_some(),
+                    "invalid transaction sub-row offset"
+                );
                 let track = ctx
                     .traces
                     .tracks(trace)
@@ -440,6 +452,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 let lane = if let Some(track) = track {
                     TxLane {
                         height,
+                        first_sub_row,
                         auto_height: false,
                         ..TxLane::new(ctx.doc, Traced::new(trace, track.id))
                             .context("lane generator vanished")?
@@ -447,7 +460,10 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 } else {
                     ctx.report
                         .push(format!("Missing lane generator: {generator:?}"));
-                    TxLane::unresolved(trace, generator, height)
+                    TxLane {
+                        first_sub_row,
+                        ..TxLane::unresolved(trace, generator, height)
+                    }
                 };
                 let lane = TxLane { tint, ..lane };
                 items.push(Entry::new(depth, WaveRow::Lane(lane)));

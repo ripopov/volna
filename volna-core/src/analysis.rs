@@ -31,6 +31,11 @@ impl<K: Eq + Hash, V, Owner> AnalysisCache<K, V, Owner> {
         self.entries.clear();
     }
 
+    pub fn retry_failed(&mut self) {
+        self.entries
+            .retain(|_, (_, load)| !matches!(load, AnalysisLoad::Failed));
+    }
+
     pub fn retain(&mut self, mut wanted: impl FnMut(&K) -> bool) {
         self.entries.retain(|key, _| wanted(key));
     }

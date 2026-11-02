@@ -243,6 +243,9 @@ pub enum Command {
     ShowTransaction {
         from: PanelId,
     },
+    RevealWaveTransaction {
+        panel: PanelId,
+    },
     ShowAttributeColumn {
         from: PanelId,
         key: String,
@@ -841,8 +844,12 @@ impl App {
             *opened = self.account_local_session(session);
         }
         match self.doc.deliver(result) {
-            Some(Delivered::Summary | Delivered::Sizes) => self.changed(),
+            Some(Delivered::Summary | Delivered::Sizes) => {
+                self.sync_transaction_indexes();
+                self.changed();
+            }
             Some(Delivered::Track) => {
+                self.sync_transaction_indexes();
                 self.initialize_pipelines();
                 for pipeline in self.panels.pipelines_mut() {
                     pipeline.refresh(&self.doc);
@@ -1155,6 +1162,9 @@ impl App {
         if (self.doc.selection(), self.doc.selection_range()) != selection {
             self.sync_selection();
         }
+        if press {
+            self.sync_transaction_indexes();
+        }
         self.end_step(now);
         if let Some(command) = tracked
             && before != crate::workspace::Stamp::capture(self, &command)
@@ -1234,11 +1244,6 @@ impl App {
                         ..
                     }
                 ) && self.panels.waves(id).is_some_and(|w| w.pressed_record)
-                    && self.doc.selection().is_some_and(|selection| {
-                        self.doc
-                            .resident_generator(selection.track)
-                            .is_some_and(|generator| generator.points().is_some())
-                    })
                     && self
                         .panels
                         .first_free_transaction()
@@ -1285,6 +1290,7 @@ impl App {
                 cursor,
             } => self.select_transaction(panel, track, id, cursor),
             Command::ShowTransaction { from } => self.show_transaction(from),
+            Command::RevealWaveTransaction { panel } => self.reveal_wave_transaction(panel),
             Command::ShowAttributeColumn { from, key } => {
                 self.show_attribute_column(from, key, now);
             }
@@ -1601,7 +1607,7 @@ impl App {
         if self.panels.get(from).is_none() {
             return;
         }
-        if self.doc.selection().is_none() {
+        if self.doc.selection().is_none() && self.doc.record_cursor().is_none() {
             self.events
                 .push(Event::Notice("Select a record first.".into()));
             self.changed();
@@ -1620,6 +1626,141 @@ impl App {
                 self.events.push(Event::Notice(error.to_string()));
                 self.changed();
             }
+        }
+    }
+
+    #[must_use]
+    fn cursor_record_context(
+        &self,
+        panel: PanelId,
+    ) -> Option<(Traced<TrackRef>, u64, Option<TransactionRef>)> {
+        let model = self.panels.transaction(panel)?;
+        if !model.cursor_records_enabled() {
+            return None;
+        }
+        let shown = model
+            .shown()
+            .and_then(|shown| Some((shown.track.track()?, shown.id)));
+        let context = self
+            .doc
+            .record_cursor()
+            .or_else(|| {
+                self.doc.selection().map(|s| crate::document::RecordCursor {
+                    track: s.track,
+                    origin: s.origin,
+                })
+            })
+            .or_else(|| {
+                shown.map(|(track, _)| crate::document::RecordCursor {
+                    track,
+                    origin: self.panels.waves_for_track(track).unwrap_or(panel),
+                })
+            })?;
+        let track = if model.pinned() {
+            shown?.0
+        } else {
+            context.track
+        };
+        let time = self
+            .panels
+            .get(context.origin)
+            .and_then(|panel| panel.kind.nav())
+            .and_then(|nav| nav.cursor(&self.doc))
+            .or(self.doc.shared.cursor)?;
+        Some((track, time, shown.filter(|s| s.0 == track).map(|s| s.1)))
+    }
+
+    #[must_use]
+    pub fn cursor_records(&self, panel: PanelId) -> crate::transaction::cursor::CursorRecordsState {
+        use crate::analysis::AnalysisLoad;
+        use crate::transaction::cursor::{CursorRecords, CursorRecordsState};
+        let Some((track, time, selected)) = self.cursor_record_context(panel) else {
+            return CursorRecordsState::Hidden;
+        };
+        let Some(source) = self.doc.resident_generator(track) else {
+            return CursorRecordsState::Preparing;
+        };
+        if source.points().is_some() {
+            return CursorRecordsState::Hidden;
+        }
+        match self.doc.transaction_index(track) {
+            Some(AnalysisLoad::Ready(index)) => {
+                CursorRecordsState::Ready(CursorRecords::new(index.clone(), track, time, selected))
+            }
+            Some(AnalysisLoad::Failed) => CursorRecordsState::Unavailable,
+            _ => CursorRecordsState::Preparing,
+        }
+    }
+
+    pub(crate) fn sync_transaction_indexes(&mut self) {
+        let mut wanted = std::collections::HashMap::new();
+        for waves in self.panels.iter().filter_map(|panel| panel.kind.waves()) {
+            for entry in waves.items() {
+                if let Some(track) = entry.lane().and_then(crate::wave::lane::TxLane::track)
+                    && let Some(source) = self
+                        .doc
+                        .resident_generator(track)
+                        .filter(|source| source.points().is_none())
+                {
+                    wanted.insert(track, source);
+                }
+            }
+        }
+        for panel in self
+            .panels
+            .iter()
+            .filter(|panel| panel.kind.transaction().is_some())
+        {
+            if let Some((track, _, _)) = self.cursor_record_context(panel.id)
+                && let Some(source) = self
+                    .doc
+                    .resident_generator(track)
+                    .filter(|source| source.points().is_none())
+            {
+                wanted.insert(track, source);
+            }
+        }
+        let budget = self.viewer_memory_budget();
+        self.doc.sync_transaction_indexes(wanted, &budget);
+    }
+
+    pub(crate) fn transaction_wave_panel(&self, panel: PanelId) -> Option<PanelId> {
+        let track = self.panels.transaction(panel)?.shown()?.track.track()?;
+        let preferred = self
+            .doc
+            .record_cursor()
+            .filter(|cursor| cursor.track == track)
+            .map(|cursor| cursor.origin);
+        preferred
+            .filter(|&id| {
+                self.panels.waves(id).is_some_and(|waves| {
+                    waves
+                        .items()
+                        .iter()
+                        .any(|entry| entry.lane().is_some_and(|lane| lane.track() == Some(track)))
+                })
+            })
+            .or_else(|| self.panels.waves_for_track(track))
+    }
+
+    fn reveal_wave_transaction(&mut self, panel: PanelId) {
+        let Some(shown) = self
+            .panels
+            .transaction(panel)
+            .and_then(|model| model.shown())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(track) = shown.track.track() else {
+            return;
+        };
+        let target = self.transaction_wave_panel(panel);
+        if let Some(target) = target
+            && let Some(waves) = self.panels.waves_mut(target)
+            && waves.reveal_transaction(&self.doc, track, shown.id)
+        {
+            self.changed();
         }
     }
 
@@ -2083,6 +2224,7 @@ impl App {
         let budget = self.viewer_memory_budget();
         self.doc.sync_summaries(wanted, &budget);
         self.sync_group_summaries();
+        self.sync_transaction_indexes();
     }
 
     pub(crate) fn sync_group_summaries(&mut self) {

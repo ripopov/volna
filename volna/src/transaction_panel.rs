@@ -1,5 +1,7 @@
 //! The Transaction panel: everything recorded about one selected record.
 
+mod cursor;
+
 #[cfg(not(target_arch = "wasm32"))]
 use gpui_kit::ClipboardItem;
 use gpui_kit::base::dock as base;
@@ -58,6 +60,7 @@ pub(crate) struct TransactionPanelView {
     synced_filter: String,
     group_filter: Entity<InputState>,
     synced_group_filter: String,
+    cursor_list: cursor::CursorList,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -102,6 +105,7 @@ impl TransactionPanelView {
             synced_filter: String::new(),
             group_filter,
             synced_group_filter: String::new(),
+            cursor_list: cursor::CursorList::default(),
             _subscriptions: vec![subscription, group_subscription],
         }
     }
@@ -249,6 +253,7 @@ impl Render for TransactionPanelView {
                 .update(cx, |input, cx| input.set_value(group_search, window, cx));
         }
         let t = *theme(cx);
+        let cursor_list = self.render_cursor_records(cx);
         let Some(owner) = self.ws.upgrade() else {
             return div().into_any_element();
         };
@@ -397,10 +402,14 @@ impl Render for TransactionPanelView {
                             view.panels(PanelsCommand::Focus(origin), window, cx);
                         }
                         cx.stop_propagation();
+                    } else if view.focus.is_focused(window) && (key == "up" || key == "down") {
+                        view.move_cursor_record(if key == "up" { -1 } else { 1 }, window, cx);
+                        cx.stop_propagation();
                     }
                 }),
             )
             .child(header)
+            .child(cursor_list)
             .child(body)
             .into_any_element()
     }
@@ -526,24 +535,47 @@ impl TransactionPanelView {
         }
 
         let mut actions = div().flex().items_center().gap_1().flex_wrap();
+        let in_waves = self.ws.upgrade().is_some_and(|ws| {
+            ws.read(cx)
+                .app
+                .panels
+                .waves_for_track(identity.track)
+                .is_some()
+        });
         let reveal_label = match revealable {
             Some(true) => "Reveal in Pipeline",
             _ => "Open in Pipeline",
         };
         actions = actions
             .when(view.point_kind.is_none(), |actions| {
-                actions.child(
-                    action_button(
-                        "tx-reveal",
-                        gpui_kit::component::Icon::empty().path(IconName::Locate.path()),
-                        cx,
+                actions
+                    .child(
+                        Button::new("tx-reveal-selected")
+                            .label("Reveal selected")
+                            .ghost()
+                            .small()
+                            .disabled(!in_waves)
+                            .tooltip("Show this transaction’s sub-row in waveforms")
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.send(
+                                    Command::RevealWaveTransaction { panel: view.id },
+                                    window,
+                                    cx,
+                                );
+                            })),
                     )
-                    .label(reveal_label)
-                    .ghost()
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.send(Command::RevealTransaction { panel: view.id }, window, cx);
-                    })),
-                )
+                    .child(
+                        action_button(
+                            "tx-reveal",
+                            gpui_kit::component::Icon::empty().path(IconName::Locate.path()),
+                            cx,
+                        )
+                        .label(reveal_label)
+                        .ghost()
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.send(Command::RevealTransaction { panel: view.id }, window, cx);
+                        })),
+                    )
             })
             .child(
                 Button::new("tx-fit")

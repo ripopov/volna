@@ -2,6 +2,7 @@
 //! over its lifetime.
 
 use crate::data::loaded_tracks::LoadedGenerator;
+use crate::data::transaction_index::TransactionIndex;
 use crate::document::{Document, TrackLoadState};
 use crate::pipeline::{PipelineModel, TrackSource};
 use crate::trace::{TraceId, Traced};
@@ -9,9 +10,6 @@ use crate::wave::model::RowHeight;
 use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{Status, TrackRef, Transaction};
 
-pub const DENSITY_PX: f64 = 4.0;
-const SUB_ROW: f32 = 2.0 / 3.0;
-const LANE_PAD: f32 = 1.0 / 8.0;
 const DEFAULT_MAX: RowHeight = RowHeight::PRESETS[3];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +19,7 @@ pub struct TxLane {
     pub scope: String,
     pub height: RowHeight,
     pub auto_height: bool,
+    pub first_sub_row: usize,
     pub tint: Option<super::Tint>,
 }
 
@@ -52,6 +51,7 @@ impl TxLane {
             },
             height: RowHeight::DEFAULT,
             auto_height: true,
+            first_sub_row: 0,
             tint: None,
         };
         lane.fit_height(doc);
@@ -68,6 +68,7 @@ impl TxLane {
             scope,
             height,
             auto_height: false,
+            first_sub_row: 0,
             tint: None,
         }
     }
@@ -121,29 +122,23 @@ impl TxLane {
 }
 
 #[must_use]
-pub fn capacity(height: RowHeight) -> u16 {
-    let units = f32::from(height.multiple());
-    (((units - 2.0 * LANE_PAD) / SUB_ROW).floor() as u16).max(1)
+pub fn capacity(height: RowHeight) -> usize {
+    usize::from(height.multiple().saturating_sub(2))
 }
 
 #[must_use]
-pub fn default_height(depth: u16) -> RowHeight {
+pub fn default_height(depth: usize) -> RowHeight {
     RowHeight::PRESETS
         .into_iter()
         .take_while(|h| *h != DEFAULT_MAX)
         .chain([DEFAULT_MAX])
-        .find(|h| capacity(*h) >= depth)
+        .find(|h| capacity(*h) >= depth.max(1))
         .unwrap_or(DEFAULT_MAX)
 }
 
 #[must_use]
-pub fn folded(depth: u16, height: RowHeight) -> u16 {
+pub fn hidden_rows(depth: usize, height: RowHeight) -> usize {
     depth.saturating_sub(capacity(height))
-}
-
-#[must_use]
-pub fn shown_sub_row(sub_row: u16, height: RowHeight) -> u16 {
-    sub_row.min(capacity(height) - 1)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -151,8 +146,7 @@ pub struct LaneGeometry {
     pub top: f32,
     pub height: f32,
     pub sub_h: f32,
-    pub pad: f32,
-    pub capacity: u16,
+    pub capacity: usize,
 }
 
 impl LaneGeometry {
@@ -161,178 +155,158 @@ impl LaneGeometry {
         Self {
             top,
             height,
-            sub_h: row_h * SUB_ROW,
-            pad: row_h * LANE_PAD,
+            sub_h: row_h,
             capacity: capacity(rows),
         }
     }
-
     #[must_use]
-    pub fn sub_top(&self, sub: u16) -> f32 {
-        self.top + self.pad + self.sub_h * f32::from(sub)
+    pub fn sub_top(&self, sub: usize) -> f32 {
+        self.top + self.sub_h * sub as f32
     }
-
     #[must_use]
-    pub fn sub_at(&self, y: f32) -> Option<u16> {
-        let offset = y - self.top - self.pad;
+    pub fn sub_at(&self, y: f32) -> Option<usize> {
+        let offset = y - self.top;
         if offset < 0.0 || self.sub_h <= 0.0 {
             return None;
         }
-        let sub = (offset / self.sub_h) as u16;
+        let sub = (offset / self.sub_h) as usize;
         (sub < self.capacity).then_some(sub)
     }
-}
-
-#[must_use]
-pub fn is_density(generator: &LoadedGenerator, px_per_unit: f64) -> bool {
-    generator.median_lifetime() as f64 * px_per_unit < DENSITY_PX
-}
-
-#[must_use]
-pub fn window(viewport: &Viewport) -> (u64, u64) {
-    let start = viewport.start.max(0.0).floor() as u64;
-    let end = viewport.end.max(0.0).ceil() as u64;
-    (start, end.max(start))
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct DensityColumn {
-    pub open: u32,
-    pub failed: bool,
-}
-
-#[must_use]
-pub fn density(
-    generator: &LoadedGenerator,
-    viewport: &Viewport,
-    columns: usize,
-) -> Vec<DensityColumn> {
-    if columns == 0 {
-        return Vec::new();
+    #[must_use]
+    pub fn occupancy_top(&self) -> f32 {
+        self.sub_top(self.capacity)
     }
-    let mut open = vec![0i32; columns + 1];
-    let mut failed = vec![0i32; columns + 1];
-    let last = (columns - 1) as f64;
-    let scale = viewport.px_per_unit(columns as f64);
-    let column = |t: u64| ((t as f64 - viewport.start) * scale).clamp(0.0, last) as usize;
-    let (start, end) = window(viewport);
-    drop(generator.visit_window(start, end, |tx| {
-        let (a, b) = (column(tx.begin), column(tx.end) + 1);
-        open[a] += 1;
-        open[b] -= 1;
-        if tx.status == Status::Error {
-            failed[a] += 1;
-            failed[b] -= 1;
-        }
-        true
-    }));
-    let (mut n, mut f) = (0i32, 0i32);
-    (0..columns)
-        .map(|x| {
-            n += open[x];
-            f += failed[x];
-            DensityColumn {
-                open: n.max(0) as u32,
-                failed: f > 0,
-            }
+}
+
+#[must_use]
+pub fn hit(index: &TransactionIndex, sub: usize, time: f64, tolerance: f64) -> Option<usize> {
+    let row = index.row(sub)?;
+    let records = index.source().transactions();
+    if let Some(i) = row.at(time.max(0.0).floor() as u64) {
+        return Some(i);
+    }
+    row.window(time - tolerance, time + tolerance)
+        .iter()
+        .copied()
+        .min_by(|&a, &b| {
+            let distance = |i: usize| {
+                (records[i].begin as f64 - time)
+                    .abs()
+                    .min((records[i].end as f64 - time).abs())
+            };
+            distance(a).total_cmp(&distance(b))
         })
-        .collect()
 }
 
 #[must_use]
-pub fn fold_overlaps(
-    generator: &LoadedGenerator,
+fn detail_records<'a>(
+    index: &'a TransactionIndex,
+    sub: usize,
     viewport: &Viewport,
-    height: RowHeight,
-) -> Vec<(u64, u64)> {
-    let last = capacity(height) - 1;
-    if generator.depth() <= capacity(height) {
-        return Vec::new();
+) -> Option<&'a [usize]> {
+    let row = index.row(sub)?;
+    let records = index.source().transactions();
+    let candidates = row.window(viewport.start, viewport.end);
+    if candidates.len() > 64 {
+        return None;
     }
-    let (start, end) = window(viewport);
-    let mut events = Vec::new();
-    drop(generator.visit_window_ordinals(start, end, |ordinal, tx| {
-        if generator.sub_row(ordinal) >= last && tx.end > tx.begin {
-            events.push((tx.begin, 1i32));
-            events.push((tx.end, -1));
+    let mut stages = 0usize;
+    candidates
+        .iter()
+        .all(|&i| {
+            stages = stages.saturating_add(records[i].stages.len());
+            stages <= 256
+        })
+        .then_some(candidates)
+}
+
+#[derive(Default)]
+pub(crate) struct DetailCache {
+    exact: std::collections::HashMap<(Traced<TrackRef>, usize), bool>,
+}
+
+pub(crate) struct RenderPlan<'a> {
+    pub index: &'a TransactionIndex,
+    pub details: Vec<Option<&'a [usize]>>,
+}
+
+impl<'a> RenderPlan<'a> {
+    pub fn new(
+        lane: &TxLane,
+        index: &'a TransactionIndex,
+        viewport: &Viewport,
+        cache: &mut DetailCache,
+    ) -> Self {
+        if cache.exact.len() > 512 {
+            cache.exact.clear();
         }
-        true
-    }));
-    events.sort_unstable();
-    let mut spans: Vec<(u64, u64)> = Vec::new();
-    let (mut open, mut from) = (0i32, 0u64);
-    for (time, delta) in events {
-        let next = open + delta;
-        if open < 2 && next >= 2 {
-            from = time;
-        } else if open >= 2 && next < 2 && time > from {
-            match spans.last_mut() {
-                Some(last) if last.1 >= from => last.1 = time,
-                _ => spans.push((from, time)),
-            }
-        }
-        open = next;
+        let details = (lane.first_sub_row..lane.first_sub_row + capacity(lane.height))
+            .map(|sub| {
+                let candidates = detail_records(index, sub, viewport);
+                let Some(track) = lane.track() else {
+                    return candidates;
+                };
+                let exact = cache.exact.entry((track, sub)).or_insert(true);
+                let stages = candidates.map_or(usize::MAX, |records| {
+                    records
+                        .iter()
+                        .map(|&i| index.source().transactions()[i].stages.len())
+                        .sum()
+                });
+                *exact = candidates
+                    .is_some_and(|records| *exact || records.len() <= 48 && stages <= 192);
+                exact.then_some(candidates).flatten()
+            })
+            .collect();
+        Self { index, details }
     }
-    spans
 }
 
-#[must_use]
-pub fn hit(
-    generator: &LoadedGenerator,
-    height: RowHeight,
-    sub: u16,
-    time: f64,
-    tolerance: f64,
-) -> Option<usize> {
-    let start = (time - tolerance).max(0.0).floor() as u64;
-    let end = (time + tolerance).max(0.0).ceil() as u64;
-    let mut inside = None;
-    let mut near: Option<(f64, usize)> = None;
-    drop(generator.visit_window_ordinals(start, end, |ordinal, tx| {
-        if shown_sub_row(generator.sub_row(ordinal), height) != sub {
-            return true;
-        }
-        if tx.begin as f64 <= time && time <= tx.end as f64 {
-            inside = Some(ordinal);
-        }
-        let d = (tx.begin as f64 - time)
-            .abs()
-            .min((tx.end as f64 - time).abs());
-        if d <= tolerance && near.is_none_or(|(best, _)| d < best) {
-            near = Some((d, ordinal));
-        }
-        true
-    }));
-    inside.or(near.map(|(_, ordinal)| ordinal))
+pub(crate) enum Edges<'a> {
+    Points(&'a [Transaction]),
+    Transactions(&'a TransactionIndex),
 }
 
-#[must_use]
-pub fn nearest_boundary(generator: &LoadedGenerator, time: f64, tolerance: f64) -> Option<u64> {
-    let start = (time - tolerance).max(0.0).floor() as u64;
-    let end = (time + tolerance).max(0.0).ceil() as u64;
-    let mut best: Option<(f64, u64)> = None;
-    drop(generator.visit_window(start, end, |tx| {
-        for edge in [tx.begin, tx.end] {
-            let d = (edge as f64 - time).abs();
-            if d <= tolerance && best.is_none_or(|(b, _)| d < b) {
-                best = Some((d, edge));
-            }
+impl Edges<'_> {
+    pub fn next_boundary(&self, time: u64) -> Option<u64> {
+        match self {
+            Self::Points(records) => records
+                .get(records.partition_point(|tx| tx.begin <= time))
+                .map(|tx| tx.begin),
+            Self::Transactions(index) => index.next_boundary(time),
         }
-        true
-    }));
-    best.map(|(_, edge)| edge)
+    }
+    pub fn prev_boundary(&self, time: u64) -> Option<u64> {
+        match self {
+            Self::Points(records) => records
+                .partition_point(|tx| tx.begin < time)
+                .checked_sub(1)
+                .map(|i| records[i].begin),
+            Self::Transactions(index) => index.prev_boundary(time),
+        }
+    }
+    pub fn nearest(&self, time: f64, tolerance: f64) -> Option<u64> {
+        let tick = time.max(0.0).floor() as u64;
+        [
+            self.prev_boundary(tick.saturating_add(1)),
+            self.next_boundary(tick.saturating_sub(1)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|&t| (t as f64 - time).abs() <= tolerance)
+        .min_by(|&a, &b| (a as f64 - time).abs().total_cmp(&(b as f64 - time).abs()))
+    }
 }
 
-#[must_use]
-pub fn open_at(generator: &LoadedGenerator, time: u64) -> Vec<&Transaction> {
-    let mut open = Vec::new();
-    drop(generator.visit_window(time, time, |tx| {
-        if time < tx.end || tx.begin == tx.end {
-            open.push(tx);
-        }
-        true
-    }));
-    open
+pub(crate) fn edges<'a>(lane: &TxLane, doc: &'a Document) -> Option<Edges<'a>> {
+    let source = lane.generator(doc)?;
+    if source.points().is_some() {
+        return Some(Edges::Points(source.transactions()));
+    }
+    match doc.transaction_index(lane.track()?)? {
+        crate::analysis::AnalysisLoad::Ready(index) => Some(Edges::Transactions(index)),
+        _ => None,
+    }
 }
 
 #[must_use]
@@ -341,7 +315,7 @@ pub fn label(tx: &Transaction) -> String {
     if label.is_empty() {
         format!("#{}", tx.id.0)
     } else {
-        label.to_owned()
+        crate::data::text::truncate_ref(label, crate::data::text::PREVIEW_BYTES)
     }
 }
 
@@ -354,58 +328,39 @@ pub struct LaneReadout {
 
 #[must_use]
 pub fn row_values(
-    generator: &LoadedGenerator,
+    index: &TransactionIndex,
     cursor: u64,
     height: RowHeight,
+    first: usize,
     limit: usize,
 ) -> Vec<LaneReadout> {
-    use crate::data::text::push_limited;
-
-    let capacity = capacity(height);
-    let last = capacity - 1;
-    let folded = generator.depth() > capacity;
-    let mut rows: Vec<LaneReadout> = (0..capacity).map(|_| LaneReadout::default()).collect();
-    let mut folded_count = 0usize;
-    drop(
-        generator.visit_window_ordinals(cursor, cursor, |ordinal, tx| {
-            if cursor >= tx.end && tx.begin != tx.end {
-                return true;
-            }
-            let sub = shown_sub_row(generator.sub_row(ordinal), height);
-            let row = &mut rows[usize::from(sub)];
-            row.failed |= tx.status == Status::Error;
-            if folded && sub == last {
-                folded_count += 1;
-            } else {
-                let fallback;
-                let label = PipelineModel::label(tx);
-                let label = if label.is_empty() {
-                    fallback = format!("#{}", tx.id.0);
-                    &fallback
-                } else {
-                    label
-                };
-                row.truncated = label.len() > limit;
-                push_limited(&mut row.text, label, limit);
-            }
-            true
-        }),
-    );
-    if folded_count > 0 {
-        let row = &mut rows[usize::from(last)];
-        let text = format!(
-            "{folded_count} transaction{}",
-            if folded_count == 1 { "" } else { "s" }
-        );
-        row.truncated = text.len() > limit;
-        push_limited(&mut row.text, &text, limit);
-    }
-    rows
+    use crate::data::text::truncate;
+    (first..first + capacity(height))
+        .map(|sub| {
+            let tx = index
+                .row(sub)
+                .and_then(|row| row.at(cursor))
+                .map(|i| &index.source().transactions()[i]);
+            tx.map_or_else(LaneReadout::default, |tx| {
+                let text = label(tx);
+                LaneReadout {
+                    truncated: text.len() > limit,
+                    text: truncate(text, limit),
+                    failed: tx.status == Status::Error,
+                }
+            })
+        })
+        .collect()
 }
 
 #[must_use]
-pub fn value_text(generator: &LoadedGenerator, cursor: u64, limit: usize) -> LaneReadout {
-    use crate::data::text::{attribute_value_min_bytes, format_attribute, push_limited, truncate};
+pub fn value_text(
+    generator: &LoadedGenerator,
+    index: Option<&TransactionIndex>,
+    cursor: u64,
+    limit: usize,
+) -> LaneReadout {
+    use crate::data::text::{attribute_value_min_bytes, format_attribute, truncate};
     if let Some(index) = generator.points() {
         let records = generator.transactions();
         let first = records.partition_point(|r| r.begin < cursor);
@@ -436,210 +391,14 @@ pub fn value_text(generator: &LoadedGenerator, cursor: u64, limit: usize) -> Lan
             failed: counts[4] + counts[5] > 0,
         };
     }
-    let mut labels = String::new();
-    let mut count = 0usize;
-    let mut failed = false;
-    let mut truncated = false;
-    drop(generator.visit_window(cursor, cursor, |tx| {
-        if cursor >= tx.end && tx.begin != tx.end {
-            return true;
-        }
-        count += 1;
-        failed |= tx.status == Status::Error;
-        if !truncated {
-            let fallback;
-            let label = PipelineModel::label(tx);
-            let label = if label.is_empty() {
-                fallback = format!("#{}", tx.id.0);
-                &fallback
-            } else {
-                label
-            };
-            if count > 1 {
-                truncated |= labels.len().saturating_add(1) > limit;
-                push_limited(&mut labels, " ", limit);
-            }
-            truncated |= labels.len().saturating_add(label.len()) > limit;
-            push_limited(&mut labels, label, limit);
-        }
-        true
-    }));
-    let mut text = match count {
-        0 => "–".into(),
-        1 => labels,
-        _ => {
-            let mut text = format!("{count} open: ");
-            truncated |= text.len().saturating_add(labels.len()) > limit;
-            push_limited(&mut text, &labels, limit);
-            text
-        }
+    let Some(index) = index else {
+        return LaneReadout::default();
     };
-    truncated |= text.len() > limit;
-    text = truncate(text, limit);
+    let (count, failed) = index.occupancy.at(cursor);
+    let text = format!("{count} active");
     LaneReadout {
-        text,
+        truncated: text.len() > limit,
+        text: truncate(text, limit),
         failed,
-        truncated,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-    use volna_trace::data::transactions::{SpanKind, TransactionRef};
-
-    fn tx(id: u64, begin: u64, end: u64, status: Status) -> Transaction {
-        Transaction {
-            id: TransactionRef(id),
-            generator: TrackRef(1),
-            begin,
-            end,
-            status,
-            kind: SpanKind::Producer,
-            parent: None,
-            attributes: vec![],
-            events: vec![],
-            stages: vec![],
-        }
-    }
-
-    fn episode() -> LoadedGenerator {
-        LoadedGenerator::new(
-            TrackRef(1),
-            vec![
-                tx(0, 2, 20, Status::Ok),
-                tx(1, 8, 26, Status::Ok),
-                tx(2, 14, 40, Status::Error),
-                tx(3, 22, 34, Status::Ok),
-            ],
-            HashMap::new(),
-            vec![],
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn heights_hold_whole_sub_rows_and_default_to_the_depth() {
-        let caps: Vec<_> = RowHeight::PRESETS.into_iter().map(capacity).collect();
-        assert_eq!(caps, [1, 2, 4, 5, 11]);
-        assert_eq!(default_height(0).multiple(), 1);
-        assert_eq!(default_height(1).multiple(), 1);
-        assert_eq!(default_height(3).multiple(), 3);
-        assert_eq!(default_height(5).multiple(), 4);
-        assert_eq!(default_height(40).multiple(), 4, "capped at 4×");
-        assert_eq!(folded(7, RowHeight::PRESETS[3]), 2);
-        assert_eq!(shown_sub_row(6, RowHeight::DEFAULT), 0);
-        let g = LaneGeometry::new(100.0, 24.0, 24.0, RowHeight::DEFAULT);
-        assert_eq!(g.sub_at(104.0), Some(0));
-        assert_eq!(g.sub_at(101.0), None);
-        assert_eq!(g.sub_at(121.0), None);
-    }
-
-    #[test]
-    fn density_fold_hit_and_value_queries() {
-        let g = episode();
-        assert_eq!(
-            (0..4).map(|i| g.sub_row(i)).collect::<Vec<_>>(),
-            [0, 1, 2, 0]
-        );
-        assert_eq!(g.depth(), 3);
-        let vp = Viewport {
-            start: 0.0,
-            end: 60.0,
-        };
-        let d = density(&g, &vp, 60);
-        assert_eq!(d[19].open, 3);
-        assert!(d[39].failed && !d[41].failed);
-        assert_eq!(d[50], DensityColumn::default());
-        assert_eq!(fold_overlaps(&g, &vp, RowHeight::DEFAULT), [(8, 34)]);
-        assert!(fold_overlaps(&g, &vp, RowHeight::PRESETS[2]).is_empty());
-        let three = RowHeight::PRESETS[2];
-        assert_eq!(hit(&g, three, 2, 19.0, 0.0), Some(2));
-        assert_eq!(hit(&g, RowHeight::DEFAULT, 0, 19.0, 0.0), Some(2));
-        assert_eq!(hit(&g, three, 0, 21.0, 0.0), None);
-        assert_eq!(hit(&g, three, 0, 21.0, 1.5), Some(0));
-        assert_eq!(nearest_boundary(&g, 21.2, 2.0), Some(22));
-        assert_eq!(nearest_boundary(&g, 50.0, 2.0), None);
-        let value = value_text(&g, 5, 256);
-        assert_eq!((value.text, value.failed), ("#0".into(), false));
-        assert!(!value.truncated);
-        let value = value_text(&g, 36, 256);
-        assert_eq!((value.text, value.failed), ("#2".into(), true));
-        assert_eq!(value_text(&g, 45, 256).text, "–");
-        assert!(value_text(&g, 19, 256).text.starts_with("3 open"));
-        let bounded = value_text(&g, 19, 4);
-        assert!(bounded.truncated && bounded.failed);
-        assert!(bounded.text.len() <= 4);
-        assert!(is_density(&g, 0.1) && !is_density(&g, 1.0));
-    }
-
-    #[test]
-    fn cursor_rows_follow_placement_folding_and_half_open_lifetimes() {
-        let g = episode();
-        let rows = row_values(&g, 19, RowHeight::PRESETS[2], 256);
-        assert_eq!(
-            rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
-            ["#0", "#1", "#2", ""]
-        );
-        assert!(!rows[0].failed && !rows[1].failed && rows[2].failed);
-
-        let rows = row_values(&g, 19, RowHeight::PRESETS[1], 256);
-        assert_eq!(rows[0].text, "#0");
-        assert_eq!(rows[1].text, "2 transactions");
-        assert!(rows[1].failed);
-        let rows = row_values(&g, 20, RowHeight::PRESETS[1], 256);
-        assert!(rows[0].text.is_empty(), "ended records leave an empty row");
-        assert_eq!(rows[1].text, "2 transactions");
-        let rows = row_values(&g, 26, RowHeight::PRESETS[1], 256);
-        assert_eq!(rows[0].text, "#3", "reused sub-row keeps its placement");
-        assert_eq!(rows[1].text, "1 transaction");
-        assert!(
-            row_values(&g, 45, RowHeight::PRESETS[1], 256)
-                .iter()
-                .all(|r| r.text.is_empty())
-        );
-        assert_eq!(
-            row_values(&g, 19, RowHeight::DEFAULT, 256)[0].text,
-            "3 transactions"
-        );
-    }
-
-    #[test]
-    fn cursor_rows_bound_unicode_labels_and_include_instant_records() {
-        let mut first = tx(0, 5, 5, Status::Error);
-        first
-            .attributes
-            .push(volna_trace::data::transactions::TransactionAttribute {
-                key: "vtr.label".into(),
-                value: volna_trace::data::transactions::AttributeValue::Text("λ".repeat(100_000)),
-            });
-        let g = LoadedGenerator::new(TrackRef(1), vec![first], HashMap::new(), vec![]).unwrap();
-        let rows = row_values(&g, 5, RowHeight::DEFAULT, 31);
-        assert!(rows[0].failed && rows[0].truncated);
-        assert!(!rows[0].text.is_empty() && rows[0].text.len() <= 31);
-        assert!(row_values(&g, 6, RowHeight::DEFAULT, 31)[0].text.is_empty());
-    }
-
-    #[test]
-    fn bounded_labels_preserve_total_count_and_errors_after_truncation() {
-        let mut first = tx(0, 0, 10, Status::Ok);
-        first
-            .attributes
-            .push(volna_trace::data::transactions::TransactionAttribute {
-                key: "vtr.label".into(),
-                value: volna_trace::data::transactions::AttributeValue::Text("λ".repeat(100_000)),
-            });
-        let g = LoadedGenerator::new(
-            TrackRef(1),
-            vec![first, tx(1, 0, 10, Status::Error)],
-            HashMap::new(),
-            vec![],
-        )
-        .unwrap();
-        let readout = value_text(&g, 5, 32);
-        assert!(readout.truncated && readout.failed);
-        assert!(readout.text.len() <= 32);
-        assert!(readout.text.starts_with("2 open: "));
     }
 }

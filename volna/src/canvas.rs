@@ -419,6 +419,26 @@ fn paint_prims(
         let prim = &prims[*i];
         *i += 1;
         match prim {
+            Prim::Polygon { points, color } => {
+                let mut builder = PathBuilder::fill();
+                builder.move_to(point(px(points[0].x), px(points[0].y)));
+                for p in &points[1..] {
+                    builder.line_to(point(px(p.x), px(p.y)));
+                }
+                builder.close();
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, hsla(*color));
+                }
+            }
+            Prim::Rects { rects, color } => {
+                let mut builder = PathBuilder::fill();
+                for rect in rects {
+                    append_rect(&mut builder, *rect);
+                }
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, hsla(*color));
+                }
+            }
             Prim::Presence { rect, mask, color } => {
                 let image = Arc::new(presence_image(
                     mask.width(),

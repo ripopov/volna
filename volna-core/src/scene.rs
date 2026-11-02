@@ -20,6 +20,15 @@ pub enum FontRole {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prim {
+    Polygon {
+        points: Vec<Point>,
+        color: Color,
+    },
+    /// Opaque or non-overlapping rectangles submitted as one filled path.
+    Rects {
+        rects: Vec<Rect>,
+        color: Color,
+    },
     Presence {
         rect: Rect,
         mask: Arc<PresenceMask>,
@@ -67,6 +76,16 @@ pub struct Scene {
 }
 
 impl Scene {
+    pub fn polygon(&mut self, points: Vec<Point>, color: Color) {
+        if points.len() >= 3 {
+            self.prims.push(Prim::Polygon { points, color });
+        }
+    }
+    pub fn rects(&mut self, rects: Vec<Rect>, color: Color) {
+        if !rects.is_empty() {
+            self.prims.push(Prim::Rects { rects, color });
+        }
+    }
     pub(crate) fn presence(&mut self, rect: Rect, mask: PresenceMask, color: Color) {
         const RUN_LIMIT: usize = 4096;
         let color = color.with_alpha(1.0);
@@ -164,11 +183,15 @@ impl Scene {
     }
 
     pub fn quads(&self) -> impl Iterator<Item = (Rect, Color)> + '_ {
-        self.prims.iter().filter_map(|p| match p {
-            Prim::Quad { rect, fill, .. } | Prim::SubpixelFill { rect, color: fill } => {
-                Some((*rect, *fill))
-            }
-            _ => None,
+        self.prims.iter().flat_map(|p| {
+            let (rects, color) = match p {
+                Prim::Quad { rect, fill, .. } | Prim::SubpixelFill { rect, color: fill } => {
+                    (std::slice::from_ref(rect), *fill)
+                }
+                Prim::Rects { rects, color } => (rects.as_slice(), *color),
+                _ => (&[][..], Color::TRANSPARENT),
+            };
+            rects.iter().map(move |rect| (*rect, color))
         })
     }
 

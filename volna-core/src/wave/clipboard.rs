@@ -40,7 +40,16 @@ impl WaveModel {
                 WaveRow::Lane(lane) => match lane.data(doc) {
                     LaneData::Ready(generator) => match cursor {
                         Some(t) => {
-                            let value = lane::value_text(generator, t, remaining);
+                            let index = lane
+                                .track()
+                                .and_then(|track| doc.transaction_index(track))
+                                .and_then(|state| match state {
+                                    crate::analysis::AnalysisLoad::Ready(index) => {
+                                        Some(index.as_ref())
+                                    }
+                                    _ => None,
+                                });
+                            let value = lane::value_text(generator, index, t, remaining);
                             anyhow::ensure!(
                                 !value.truncated,
                                 "Values exceed the 64 KiB clipboard limit."

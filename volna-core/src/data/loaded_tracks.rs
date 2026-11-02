@@ -116,9 +116,9 @@ impl StageCensus {
 #[derive(Debug)]
 pub struct LoadedGenerator {
     raw: Arc<RawGenerator>,
-    sub_rows: Vec<u16>,
+    sub_rows: Vec<usize>,
     points: Option<crate::data::points::PointIndex>,
-    depth: u16,
+    depth: usize,
     median_lifetime: u64,
     stage_census: StageCensus,
     palette: crate::pipeline::palette::StagePalette,
@@ -171,7 +171,7 @@ impl LoadedGenerator {
         sub_rows.try_reserve_exact(transactions.len())?;
         let mut open = std::collections::BinaryHeap::new();
         let mut free = std::collections::BinaryHeap::new();
-        let mut depth = 0u16;
+        let mut depth = 0usize;
         for tx in transactions {
             checkpoint().await;
             if points.is_some() {
@@ -179,8 +179,8 @@ impl LoadedGenerator {
                 depth = 1;
                 continue;
             }
-            while let Some(&std::cmp::Reverse((end, row))) = open.peek() {
-                if end > tx.begin {
+            while let Some(&std::cmp::Reverse((end, point, row))) = open.peek() {
+                if end > tx.begin || end == tx.begin && point {
                     break;
                 }
                 open.pop();
@@ -190,14 +190,11 @@ impl LoadedGenerator {
                 row
             } else {
                 let row = depth;
-                depth = depth.saturating_add(1);
-                row.min(u16::MAX - 1)
+                depth += 1;
+                row
             };
             sub_rows.push(row);
-            open.push(std::cmp::Reverse((
-                tx.end.max(tx.begin.saturating_add(1)),
-                row,
-            )));
+            open.push(std::cmp::Reverse((tx.end, tx.begin == tx.end, row)));
         }
         let mut stage_census = StageCensus::default();
         let mut index = StageIndex::default();
@@ -258,7 +255,7 @@ impl LoadedGenerator {
                 .iter()
                 .map(|o| (o.capacity() * std::mem::size_of::<usize>()) as u64)
                 .sum::<u64>()
-            + (sub_rows.capacity() * std::mem::size_of::<u16>()) as u64
+            + (sub_rows.capacity() * std::mem::size_of::<usize>()) as u64
             + stage_census.bytes();
         if let Some(r) = &mut reservation {
             anyhow::ensure!(
@@ -370,7 +367,7 @@ impl LoadedGenerator {
         )
     }
     #[must_use]
-    pub fn sub_row(&self, ordinal: usize) -> u16 {
+    pub fn sub_row(&self, ordinal: usize) -> usize {
         self.sub_rows.get(ordinal).copied().unwrap_or(0)
     }
 
@@ -380,7 +377,7 @@ impl LoadedGenerator {
     }
 
     #[must_use]
-    pub fn depth(&self) -> u16 {
+    pub fn depth(&self) -> usize {
         self.depth
     }
 
@@ -518,7 +515,7 @@ mod tests {
     fn records_at_one_instant_stack() {
         let records = vec![tx(1, 5, 5), tx(2, 5, 5), tx(3, 5, 9), tx(4, 6, 6)];
         let loaded = LoadedGenerator::new(TrackRef(1), records, HashMap::new(), vec![]).unwrap();
-        let rows: Vec<u16> = (0..4).map(|i| loaded.sub_row(i)).collect();
+        let rows: Vec<usize> = (0..4).map(|i| loaded.sub_row(i)).collect();
         assert_eq!(rows, [0, 1, 2, 0]);
     }
 
@@ -567,7 +564,7 @@ mod tests {
                 }
             }
         }
-        assert!(usize::from(loaded.depth()) <= deepest);
+        assert!(loaded.depth() <= deepest);
         assert!(
             txs.iter()
                 .enumerate()

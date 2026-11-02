@@ -1,6 +1,9 @@
 //! GPUI adapter tests: the load loop runs on the GPUI executor and theme changes leave core
 //! state alone.
 
+#[path = "transaction_panel/tests.rs"]
+mod transaction_occupancy;
+
 use super::*;
 use gpui_kit::TestAppContext;
 use std::sync::Arc;

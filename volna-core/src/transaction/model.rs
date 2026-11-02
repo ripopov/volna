@@ -57,6 +57,11 @@ pub enum TxPanelState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransactionCommand {
+    CursorSelect {
+        track: Traced<TrackRef>,
+        id: TransactionRef,
+        time: u64,
+    },
     Jump {
         track: Traced<TrackRef>,
         id: TransactionRef,
@@ -285,6 +290,10 @@ impl TransactionModel {
         };
     }
 
+    pub(crate) fn cursor_records_enabled(&self) -> bool {
+        self.attached && self.refused.is_none()
+    }
+
     #[must_use]
     pub fn is_attached(&self) -> bool {
         self.attached
@@ -484,6 +493,39 @@ impl TransactionModel {
         now: Instant,
     ) -> bool {
         match command {
+            TransactionCommand::CursorSelect { track, id, time } => {
+                let Some(generator) = doc.resident_generator(track) else {
+                    return false;
+                };
+                let Some(ordinal) = generator.transaction_ordinal(id) else {
+                    return false;
+                };
+                if !matches!(doc.transaction_index(track), Some(crate::analysis::AnalysisLoad::Ready(index)) if index.active_rank(time, ordinal).is_some())
+                {
+                    return false;
+                }
+                let Some(path) = track_path(doc, track) else {
+                    return false;
+                };
+                self.show(
+                    doc,
+                    ShownRecord {
+                        track: TrackSource::Resolved { track, path },
+                        id,
+                        range: None,
+                    },
+                );
+                let record_cursor = doc.record_cursor().filter(|cursor| cursor.track == track);
+                doc.select(Some(TxSelection {
+                    track,
+                    id,
+                    origin: panel,
+                }));
+                if let Some(cursor) = record_cursor {
+                    doc.set_record_cursor(cursor);
+                }
+                true
+            }
             TransactionCommand::TraceParents => {
                 if !self.attached
                     || self.refused.is_some()

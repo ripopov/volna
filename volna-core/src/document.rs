@@ -34,6 +34,12 @@ pub struct TxSelection {
     pub origin: crate::panels::PanelId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordCursor {
+    pub track: Traced<TrackRef>,
+    pub origin: crate::panels::PanelId,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RecordRange {
     pub begin: u64,
@@ -111,8 +117,15 @@ pub struct Document {
     tracks: HashMap<Traced<TrackRef>, TrackLoad>,
     next_track_request: u64,
     selection: Option<TxSelection>,
+    record_cursor: Option<RecordCursor>,
     selection_range: Option<RecordRange>,
     pub copied_rows: Vec<crate::wave::Entry>,
+    transaction_indexes: AnalysisCache<
+        (Traced<TrackRef>, usize),
+        crate::data::transaction_index::TransactionIndex,
+        std::sync::Weak<LoadedGenerator>,
+    >,
+    transaction_index_limits: Option<(u64, u64)>,
     summaries: AnalysisCache<(Traced<SignalRef>, NumericKind, usize), AnalogSummary>,
     group_summaries: AnalysisCache<Vec<usize>, crate::wave::group::GroupSummary>,
     stack_totals: AnalysisCache<crate::wave::stack::Key, crate::wave::stack::TotalSummary>,
@@ -161,8 +174,11 @@ impl Document {
             tracks: HashMap::new(),
             next_track_request: 1,
             selection: None,
+            record_cursor: None,
             selection_range: None,
             copied_rows: Vec::new(),
+            transaction_indexes: AnalysisCache::default(),
+            transaction_index_limits: None,
             summaries: AnalysisCache::default(),
             group_summaries: AnalysisCache::default(),
             stack_totals: AnalysisCache::default(),
@@ -174,6 +190,15 @@ impl Document {
     #[must_use]
     pub fn selection(&self) -> Option<TxSelection> {
         self.selection
+    }
+
+    #[must_use]
+    pub fn record_cursor(&self) -> Option<RecordCursor> {
+        self.record_cursor
+    }
+
+    pub fn set_record_cursor(&mut self, cursor: RecordCursor) {
+        self.record_cursor = Some(cursor);
     }
 
     pub fn select(&mut self, selection: Option<TxSelection>) -> bool {
@@ -194,6 +219,12 @@ impl Document {
         let changed = self.selection != selection || self.selection_range != range;
         self.selection_range = range;
         self.selection = selection;
+        if selection.is_some_and(|s| {
+            self.record_cursor
+                .is_some_and(|c| c.track != s.track || c.origin != s.origin)
+        }) {
+            self.record_cursor = None;
+        }
         changed
     }
 
@@ -402,6 +433,7 @@ impl Document {
         self.detached = None;
         self.trace_edits.clear();
         self.copied_rows.clear();
+        self.transaction_indexes.clear();
         self.summaries.clear();
         self.group_summaries.clear();
         self.stack_totals.clear();
@@ -478,6 +510,7 @@ impl Document {
         self.pending.retain(|s| !stale.contains(&s.trace));
         self.requests
             .retain(|r| !matches!(r, LoadRequest::Trace(TraceRequest::Signals { .. })));
+        self.transaction_indexes.clear();
         self.summaries.clear();
         self.group_summaries.clear();
         self.stack_totals.clear();
@@ -535,6 +568,12 @@ impl Document {
     }
 
     fn forget_trace(&mut self, trace: TraceId) {
+        if self
+            .record_cursor
+            .is_some_and(|cursor| cursor.track.trace == trace)
+        {
+            self.record_cursor = None;
+        }
         self.tracks.retain(|t, _| t.trace != trace);
         self.pending.retain(|s| s.trace != trace);
         self.requests.retain(|r| match r {
@@ -548,11 +587,13 @@ impl Document {
                 | TraceRequest::Track { tag: t, .. },
             ) => *t != trace,
             LoadRequest::Summary { signal, .. } => signal.trace != trace,
+            LoadRequest::TransactionIndex { track, .. } => track.trace != trace,
             LoadRequest::Projection { .. }
             | LoadRequest::GroupSummary { .. }
             | LoadRequest::Integral { .. }
             | LoadRequest::StackTotal { .. } => true,
         });
+        self.transaction_indexes.retain(|(t, _)| t.trace != trace);
         self.summaries.retain(|(s, _, _)| s.trace != trace);
         if self.selection.is_some_and(|s| s.track.trace == trace) {
             self.select(None);
@@ -612,6 +653,48 @@ impl Document {
             .get_mut(trace)
             .ok_or_else(|| anyhow::anyhow!("trace {trace} is not open"))?;
         Ok(std::mem::replace(&mut slot.rename, name))
+    }
+
+    #[must_use]
+    pub fn transaction_index(
+        &self,
+        track: Traced<TrackRef>,
+    ) -> Option<&AnalysisLoad<crate::data::transaction_index::TransactionIndex>> {
+        let source = self.resident_generator(track)?;
+        self.transaction_indexes
+            .get(&(track, Arc::as_ptr(&source) as usize))
+    }
+
+    pub(crate) fn sync_transaction_indexes(
+        &mut self,
+        wanted: HashMap<Traced<TrackRef>, Arc<LoadedGenerator>>,
+        budget: &volna_trace::remote::memory::MemoryBudget,
+    ) {
+        let limits = (budget.limit(), budget.object_limit());
+        if self.transaction_index_limits != Some(limits) {
+            self.transaction_indexes.retry_failed();
+            self.transaction_index_limits = Some(limits);
+        }
+        let wanted = wanted
+            .into_iter()
+            .map(|(track, source)| ((track, Arc::as_ptr(&source) as usize), source))
+            .collect();
+        self.transaction_indexes
+            .sync(wanted, |&(track, _), source, request| {
+                let owner = Arc::downgrade(&source);
+                self.requests.push(LoadRequest::TransactionIndex {
+                    generation: self.epoch,
+                    request,
+                    track,
+                    source,
+                    budget: budget.clone(),
+                });
+                (owner, AnalysisLoad::Building(request))
+            });
+        self.requests.retain(|request| match request {
+            LoadRequest::TransactionIndex { track, source, request, .. } => matches!(self.transaction_indexes.get(&(*track, Arc::as_ptr(source) as usize)), Some(AnalysisLoad::Building(current)) if current == request),
+            _ => true,
+        });
     }
 
     #[must_use]
@@ -1074,6 +1157,28 @@ impl Document {
                 }
                 self.traces.get_mut(trace)?.sizes = Some(result.ok()?);
                 Some(Delivered::Sizes)
+            }
+            LoadResult::TransactionIndex {
+                generation,
+                request,
+                track,
+                source,
+                limits,
+                result,
+            } => {
+                let outdated_refusal =
+                    result.is_err() && self.transaction_index_limits != Some(limits);
+                if let Err(error) = &result {
+                    log::warn!("Transaction index unavailable: {error:#}");
+                }
+                let changed = generation == self.epoch
+                    && self
+                        .transaction_indexes
+                        .deliver(&(track, source), request, result);
+                if changed && outdated_refusal {
+                    self.transaction_indexes.retry_failed();
+                }
+                changed.then_some(Delivered::Summary)
             }
             LoadResult::Summary {
                 generation,

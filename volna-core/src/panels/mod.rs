@@ -643,6 +643,21 @@ impl Panels {
     }
 
     #[must_use]
+    pub fn waves_for_track(
+        &self,
+        track: crate::trace::Traced<volna_trace::data::transactions::TrackRef>,
+    ) -> Option<PanelId> {
+        self.layout.panels().into_iter().find(|id| {
+            self.panels[id].kind.waves().is_some_and(|waves| {
+                waves
+                    .items()
+                    .iter()
+                    .any(|entry| entry.lane().is_some_and(|lane| lane.track() == Some(track)))
+            })
+        })
+    }
+
+    #[must_use]
     pub fn get(&self, id: PanelId) -> Option<&Panel> {
         self.panels.get(&id)
     }

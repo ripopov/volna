@@ -47,3 +47,64 @@ pub(crate) fn finish(mut held: Reservation, resident: u64) -> Result<Reservation
     )?;
     Ok(held)
 }
+
+pub(crate) struct Storage {
+    what: &'static str,
+    held: Option<Reservation>,
+}
+
+impl Storage {
+    pub(crate) fn new(
+        what: &'static str,
+        header: usize,
+        budget: Option<&volna_trace::remote::memory::MemoryBudget>,
+    ) -> Result<Self> {
+        Ok(Self {
+            what,
+            held: budget
+                .map(|b| b.reserve_object(what, header as u64))
+                .transpose()?,
+        })
+    }
+
+    fn grow(&mut self, bytes: u64) -> Result<()> {
+        if let Some(held) = &mut self.held {
+            held.grow_object(self.what, bytes)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn vec<T>(&mut self, count: usize) -> Result<Vec<T>> {
+        self.grow(bytes::<T>(count)?)?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(count)?;
+        Ok(out)
+    }
+
+    pub(crate) fn push<T>(&mut self, out: &mut Vec<T>, value: T) -> Result<()> {
+        if out.len() == out.capacity() {
+            let capacity = out
+                .capacity()
+                .max(1)
+                .checked_mul(2)
+                .context("analysis storage size overflow")?;
+            self.grow(bytes::<T>(capacity - out.capacity())?)?;
+            out.try_reserve_exact(capacity - out.len())?;
+        }
+        out.push(value);
+        Ok(())
+    }
+
+    pub(crate) fn release<T>(&mut self, scratch: Vec<T>) -> Result<()> {
+        let bytes = bytes::<T>(scratch.capacity())?;
+        drop(scratch);
+        if let Some(held) = &mut self.held {
+            held.shrink(bytes)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Option<Reservation> {
+        self.held
+    }
+}

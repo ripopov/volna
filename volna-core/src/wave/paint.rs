@@ -8,6 +8,7 @@ mod points;
 #[cfg(test)]
 mod profiling;
 mod sampling;
+mod transactions;
 
 pub(crate) use sampling::DigitalCache;
 use sampling::{Samples, SamplingGrid};
@@ -311,7 +312,13 @@ pub(crate) fn paint(
         let item = match row {
             WaveRow::Signal(item) => item,
             WaveRow::Lane(lane) => {
-                paint_lane_row(lane, doc, &cells, &mut p);
+                paint_lane_row(
+                    lane,
+                    doc,
+                    &cells,
+                    &mut p,
+                    &mut model.transaction_detail.borrow_mut(),
+                );
                 continue;
             }
             WaveRow::Clock(clock) => {
@@ -3269,15 +3276,13 @@ fn paint_stack_overlays(
     }
 }
 
-struct Bar {
-    rect: Rect,
-    color: Color,
-    solid: Vec<Rect>,
-    label: Option<(Point, String)>,
-    selected: bool,
-}
-
-fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut TextPainter<'_>) {
+fn paint_lane_row(
+    lane: &TxLane,
+    doc: &Document,
+    cells: &LaneCells<'_>,
+    p: &mut TextPainter<'_>,
+    detail: &mut lane::DetailCache,
+) {
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
     let layout = cells.layout;
@@ -3290,9 +3295,9 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
         LaneData::Ready(g) => Some(g),
         _ => None,
     };
-    let folded = generator
+    let hidden = generator
         .filter(|g| g.points().is_none())
-        .map_or(0, |g| lane::folded(g.depth(), lane.height));
+        .map_or(0, |g| lane::hidden_rows(g.depth(), lane.height));
 
     let pad = cells.name_x - names.left();
     let name_w = p.width(&lane.name, FontRole::Ui, t.ui_size);
@@ -3312,8 +3317,8 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
             name_color,
         );
     });
-    if folded > 0 {
-        let chip = format!("+{folded}");
+    if hidden > 0 {
+        let chip = format!("+{hidden}");
         let chip_w = p.width(&chip, FontRole::UiMedium, t.ui_size_small) + z(8.0);
         let rect = Rect::from_xywh(
             names.left() + pad + name_w + z(6.0),
@@ -3340,10 +3345,10 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
             lines.push(format!("{n} record{}", if n == 1 { "" } else { "s" }));
         }
         if full_h >= 3.0 * row_h && g.points().is_none() {
-            lines.push(if folded > 0 {
+            lines.push(if hidden > 0 {
                 format!(
-                    "{folded} sub-row{} folded",
-                    if folded == 1 { "" } else { "s" }
+                    "{hidden} sub-row{} hidden",
+                    if hidden == 1 { "" } else { "s" }
                 )
             } else {
                 format!(
@@ -3368,17 +3373,25 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
         }
     }
 
+    let analysis = lane.track().and_then(|track| doc.transaction_index(track));
+    let index = match analysis {
+        Some(AnalysisLoad::Ready(index)) => Some(index.as_ref()),
+        _ => None,
+    };
     let geometry = LaneGeometry::new(y, full_h, row_h, lane.height);
-    if let (Some(g), Some(cursor), None) = (generator, cells.cursor, cells.left_out)
-        && g.points().is_none()
-    {
+    if let (Some(index), Some(cursor), None) = (index, cells.cursor, cells.left_out) {
         let bar_h = (geometry.sub_h - z(4.0)).max(1.0);
         let font = (bar_h * 0.9).min(t.mono_size);
         let room = values.width() - z(16.0);
-        for (sub, value) in
-            lane::row_values(g, cursor, lane.height, crate::data::text::PREVIEW_BYTES)
-                .into_iter()
-                .enumerate()
+        for (sub, value) in lane::row_values(
+            index,
+            cursor,
+            lane.height,
+            lane.first_sub_row,
+            crate::data::text::PREVIEW_BYTES,
+        )
+        .into_iter()
+        .enumerate()
         {
             if value.text.is_empty() {
                 continue;
@@ -3386,10 +3399,7 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
             if let Some(text) = fit_mono_prefix(p, &value.text, font, room) {
                 p.scene.clipped(values, |scene| {
                     scene.text(
-                        point(
-                            values.left() + z(8.0),
-                            geometry.sub_top(sub as u16) + z(2.0),
-                        ),
+                        point(values.left() + z(8.0), geometry.sub_top(sub) + z(2.0)),
                         bar_h,
                         text,
                         FontRole::Mono,
@@ -3403,12 +3413,32 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
                 });
             }
         }
+        let value = lane::value_text(
+            index.source(),
+            Some(index),
+            cursor,
+            crate::data::text::PREVIEW_BYTES,
+        );
+        p.scene.clipped(values, |scene| {
+            scene.text(
+                point(values.left() + z(8.0), geometry.occupancy_top()),
+                row_h.min(full_h),
+                value.text,
+                FontRole::Mono,
+                t.mono_size,
+                if value.failed {
+                    t.editor.error
+                } else {
+                    cells.text
+                },
+            );
+        });
     } else {
         let (value, value_color) = match data {
             _ if cells.left_out.is_some() => (cells.left_out.unwrap().into(), cells.muted),
             LaneData::Ready(g) => match cells.cursor {
                 Some(c) => {
-                    let value = lane::value_text(g, c, crate::data::text::PREVIEW_BYTES);
+                    let value = lane::value_text(g, index, c, crate::data::text::PREVIEW_BYTES);
                     (
                         value.text,
                         if value.failed {
@@ -3446,18 +3476,20 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
                 points::paint(lane, g, index, doc, cells, p);
                 return;
             }
-            let width = f64::from(waves.width()).max(1.0);
-            if lane::is_density(g, cells.viewport.px_per_unit(width)) {
-                paint_lane_density(
-                    g,
-                    &cells.viewport,
-                    Rect::from_xywh(waves.left(), y, waves.width(), full_h),
-                    p,
-                );
-            } else {
-                paint_lane_bars(lane, g, doc, &cells.viewport, waves, &geometry, p);
+            if let Some(index) = index {
+                let plan = lane::RenderPlan::new(lane, index, &cells.viewport, detail);
+                transactions::paint(lane, &plan, doc, &cells.viewport, waves, &geometry, p);
+                return;
             }
-            return;
+            Some((
+                if matches!(analysis, Some(AnalysisLoad::Failed)) {
+                    "Transaction summary unavailable · adjust memory limits"
+                } else {
+                    "Preparing transaction summary…"
+                }
+                .to_owned(),
+                cells.muted,
+            ))
         }
         LaneData::Loading => None,
         LaneData::Failed(error) => Some((format!("Failed to load: {error}"), t.editor.error)),
@@ -3484,173 +3516,6 @@ fn paint_lane_row(lane: &TxLane, doc: &Document, cells: &LaneCells<'_>, p: &mut 
     }
 }
 
-fn paint_lane_bars(
-    lane: &TxLane,
-    generator: &crate::data::loaded_tracks::LoadedGenerator,
-    doc: &Document,
-    viewport: &Viewport,
-    waves: Rect,
-    geometry: &LaneGeometry,
-    p: &mut TextPainter<'_>,
-) {
-    let t = p.theme;
-    let z = |v: f32| v * t.zoom;
-    let width = f64::from(waves.width()).max(1.0);
-    let x_of = |time: u64| {
-        (waves.left() + viewport.x_of_tick(time, width) as f32)
-            .clamp(waves.left() - z(8.0), waves.right() + z(8.0))
-    };
-    let inset = z(2.0);
-    let bar_h = (geometry.sub_h - 2.0 * inset).max(1.0);
-    let font = (bar_h * 0.9).min(t.mono_size);
-    let last = geometry.capacity - 1;
-    let folds = generator.depth() > geometry.capacity;
-    let selected = doc
-        .selection()
-        .filter(|s| Some(s.track) == lane.track())
-        .map(|s| s.id);
-    let (start, end) = lane::window(viewport);
-    let mut raw = Vec::new();
-    drop(generator.visit_window_ordinals(start, end, |ordinal, tx| {
-        raw.push((ordinal, tx));
-        true
-    }));
-    let mut bars = Vec::with_capacity(raw.len());
-    for (ordinal, tx) in raw {
-        let sub = lane::shown_sub_row(generator.sub_row(ordinal), lane.height);
-        let xa = x_of(tx.begin);
-        let xb = x_of(tx.end).max(xa + z(2.0));
-        let rect = Rect::from_xywh(xa, geometry.sub_top(sub) + inset, xb - xa, bar_h);
-        let color = if tx.status == Status::Error {
-            t.editor.error
-        } else {
-            t.wave_signal
-        };
-        let solid = if tx.stages.is_empty() {
-            vec![rect]
-        } else {
-            tx.stages
-                .iter()
-                .map(|stage| {
-                    let a = x_of(stage.begin).max(xa);
-                    let b = x_of(PipelineModel::stage_end(tx, stage)).min(xb);
-                    Rect::from_xywh(a, rect.top(), (b - a).max(1.0), bar_h)
-                })
-                .collect()
-        };
-        let in_fold = folds && sub == last;
-        let label = (!in_fold && bar_h >= z(8.0))
-            .then(|| {
-                let text = lane::label(tx);
-                let lx = xa.max(waves.left()) + z(4.0);
-                let room = xb.min(waves.right()) - lx - z(4.0);
-                fit_mono_prefix(p, &text, font, room).map(|text| (point(lx, rect.top()), text))
-            })
-            .flatten();
-        bars.push(Bar {
-            rect,
-            color,
-            solid,
-            label,
-            selected: selected == Some(tx.id),
-        });
-    }
-    let hatch = lane::fold_overlaps(generator, viewport, lane.height);
-    let fold_top = geometry.sub_top(last) + inset;
-    let text_color = t.editor.bg;
-    p.scene.clipped(waves, |scene| {
-        for bar in &bars {
-            scene.fill(bar.rect, bar.color.with_alpha(0.4));
-            for solid in &bar.solid {
-                scene.fill(*solid, bar.color);
-            }
-            scene.quad(bar.rect, Color::TRANSPARENT, z(2.0), 1.0, bar.color);
-            if let Some((origin, text)) = &bar.label {
-                scene.text(
-                    *origin,
-                    bar_h,
-                    text.clone(),
-                    FontRole::Mono,
-                    font,
-                    text_color,
-                );
-            }
-        }
-        let step = z(4.0).max(3.0);
-        for (a, b) in hatch {
-            let (xa, xb) = (x_of(a), x_of(b));
-            let area = Rect::from_xywh(xa, fold_top, (xb - xa).max(1.0), bar_h);
-            let mut segments = Vec::new();
-            let mut x = area.left() - bar_h;
-            while x < area.right() {
-                segments.push([point(x, area.bottom()), point(x + bar_h, area.top())]);
-                x += step;
-            }
-            scene.clipped(area, |scene| {
-                scene.lines(segments, t.editor.bg.with_alpha(0.7), 1.0);
-            });
-        }
-        for bar in bars.iter().filter(|bar| bar.selected) {
-            let r = bar.rect;
-            scene.quad(
-                Rect::from_xywh(
-                    r.left() - 2.0,
-                    r.top() - 2.0,
-                    r.width() + 4.0,
-                    r.height() + 4.0,
-                ),
-                Color::TRANSPARENT,
-                z(3.0),
-                2.0,
-                t.border_focused,
-            );
-        }
-    });
-}
-
-fn paint_lane_density(
-    generator: &crate::data::loaded_tracks::LoadedGenerator,
-    viewport: &Viewport,
-    area: Rect,
-    p: &mut TextPainter<'_>,
-) {
-    let t = p.theme;
-    let z = |v: f32| v * t.zoom;
-    let columns = lane::density(generator, viewport, area.width().max(0.0).round() as usize);
-    let depth = f32::from(generator.depth().max(1));
-    let base = area.bottom() - z(3.0);
-    let full = (area.height() - z(6.0)).max(1.0);
-    let px = area.width() / columns.len().max(1) as f32;
-    p.scene.clipped(area, |scene| {
-        scene.fill(
-            Rect::from_xywh(area.left(), base, area.width(), 1.0),
-            t.border_variant,
-        );
-        let mut x = 0;
-        while x < columns.len() {
-            let column = columns[x];
-            let run = columns[x..].iter().take_while(|c| **c == column).count();
-            if column.open > 0 {
-                let share = (column.open as f32 / depth).min(1.0);
-                let h = (full * share).max(2.0);
-                let left = area.left() + x as f32 * px;
-                let w = run as f32 * px;
-                scene.fill(
-                    Rect::from_xywh(left, base - h, w, h),
-                    t.wave_signal.with_alpha(0.45 + 0.5 * share),
-                );
-                if column.failed {
-                    scene.fill(
-                        Rect::from_xywh(left, base - h - z(3.0), w.max(2.0), z(3.0)),
-                        t.editor.error,
-                    );
-                }
-            }
-            x += run;
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3670,8 +3535,8 @@ mod tests {
                 let mut t = Theme::volna(dark);
                 t.zoom = zoom;
                 let height = 24.0 * zoom;
-                let lane = TxLane::unresolved(TraceId::default(), vec![], RowHeight::DEFAULT);
-                let geometry = LaneGeometry::new(0.0, height, height, lane.height);
+                let lane = TxLane::unresolved(TraceId::default(), vec![], RowHeight::PRESETS[2]);
+                let geometry = LaneGeometry::new(0.0, height * 3.0, height, lane.height);
                 let font = ((geometry.sub_h - 4.0 * zoom) * 0.9).min(t.mono_size);
                 let char_w = MonoMeasure.text_width("0", FontRole::Mono, font);
                 let draw = |label: &str, width: f32, viewport: Viewport| {
@@ -3696,10 +3561,20 @@ mod tests {
                         vec![],
                     )
                     .unwrap();
+                    let generator = crate::data::transaction_index::TransactionIndex::build(
+                        std::sync::Arc::new(generator),
+                        None,
+                    )
+                    .unwrap();
                     let mut scene = Scene::default();
-                    paint_lane_bars(
+                    transactions::paint(
                         &lane,
-                        &generator,
+                        &lane::RenderPlan::new(
+                            &lane,
+                            &generator,
+                            &viewport,
+                            &mut lane::DetailCache::default(),
+                        ),
                         &Document::new(),
                         &viewport,
                         Rect::from_xywh(37.0, 0.0, width, height),
@@ -3712,7 +3587,13 @@ mod tests {
                         },
                     );
                     for prim in &scene.prims {
-                        if let Prim::Text { origin, text, .. } = prim {
+                        if let Prim::Text {
+                            origin,
+                            text,
+                            font: FontRole::Mono,
+                            ..
+                        } = prim
+                        {
                             assert!(origin.x >= 37.0 + 4.0 * zoom);
                             assert!(
                                 origin.x + text.chars().count() as f32 * char_w
@@ -3720,7 +3601,18 @@ mod tests {
                             );
                         }
                     }
-                    scene.texts().map(str::to_owned).collect::<Vec<_>>()
+                    scene
+                        .prims
+                        .iter()
+                        .filter_map(|p| match p {
+                            Prim::Text {
+                                text,
+                                font: FontRole::Mono,
+                                ..
+                            } => Some(text.to_owned()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
                 };
                 let viewport = Viewport {
                     start: 0.0,
@@ -4183,7 +4075,7 @@ mod tests {
         let area = Rect::from_xywh(0.0, 0.0, 6.0 + 4.25 * char_w, 24.0);
         let mut scene = Scene::default();
         paint_event_counts(
-            &[(0.0, 123456, 1000.0)],
+            &[(0.0, 123_456, 1000.0)],
             area,
             area,
             &mut TextPainter {

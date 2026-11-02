@@ -121,7 +121,7 @@ fn bar_point(app: &App, waves: PanelId, row: usize, ordinal: usize) -> Point {
         layout.row_h,
         lane.height,
     );
-    let sub = lane::shown_sub_row(g.sub_row(ordinal), lane.height);
+    let sub = g.sub_row(ordinal) - lane.first_sub_row;
     point(
         layout.waves.left() + vp.x_of(mid, width) as f32,
         geometry.sub_top(sub) + geometry.sub_h / 2.0,
@@ -150,7 +150,7 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
     assert_eq!(heights, [4, 4]);
     let cpu1 = w.items()[1].lane().unwrap();
     assert_eq!(cpu1.generator(&app.doc).unwrap().depth(), 16);
-    assert_eq!(lane::folded(16, cpu1.height), 11);
+    assert_eq!(lane::hidden_rows(16, cpu1.height), 14);
 
     app.handle(Command::OpenPipeline {
         track: a(tracks[0]),
@@ -213,7 +213,7 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
 }
 
 #[test]
-fn clicking_a_bar_selects_the_record_everywhere_and_empty_space_clears_it() {
+fn clicking_a_bar_selects_details_and_occupancy_retains_it() {
     let (mut app, _session, waves, tracks) = with_lanes(&[CPU0]);
     let g = app.panels.waves(waves).unwrap().items()[0]
         .lane()
@@ -268,8 +268,8 @@ fn clicking_a_bar_selects_the_record_everywhere_and_empty_space_clears_it() {
         layout.row_y(0) + layout.row_height(0) - 2.0,
     );
     click(&mut app, waves, empty);
-    assert!(app.doc.selection().is_none());
-    assert!(!app.panels.waves(waves).unwrap().pressed_record);
+    assert_eq!(app.doc.selection().unwrap().id, tx.id);
+    assert!(app.panels.waves(waves).unwrap().pressed_record);
 
     show(
         &mut app,
@@ -284,7 +284,7 @@ fn clicking_a_bar_selects_the_record_everywhere_and_empty_space_clears_it() {
     click(&mut app, waves, point(x, p.y));
     assert_eq!(
         app.panels.waves(waves).unwrap().cursor(&app.doc),
-        Some(tx.end)
+        Some(tx.end - 1)
     );
 }
 
@@ -354,7 +354,7 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
     assert_eq!(lane.height, RowHeight::DEFAULT);
     assert!(!lane.auto_height);
     let scene = frame(&mut app, other);
-    assert!(scene.texts().any(|t| t == "+4"));
+    assert!(scene.texts().any(|t| t == "+5"));
 
     let saved = serde_json::to_value(
         Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap(),
@@ -412,7 +412,7 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
 
 #[test]
 fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
-    let (mut app, _, waves, _) = with_lanes(&[CPU1]);
+    let (mut app, _, waves, tracks) = with_lanes(&[CPU1]);
     let cursor = {
         let g = app.panels.waves(waves).unwrap().items()[0]
             .lane()
@@ -422,7 +422,18 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
         g.transactions()
             .iter()
             .map(|tx| tx.begin)
-            .find(|&time| lane::open_at(g, time).len() > 5)
+            .find(|&time| {
+                app.doc
+                    .transaction_index(a(tracks[0]))
+                    .and_then(|state| match state {
+                        volna_core::analysis::AnalysisLoad::Ready(index) => {
+                            Some(index.active_count(time))
+                        }
+                        _ => None,
+                    })
+                    .unwrap()
+                    > 5
+            })
             .unwrap()
     };
     show(
@@ -459,9 +470,17 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
                 lane.height,
             );
             let values = layout.values;
-            let expected =
-                lane::row_values(lane.generator(&app.doc).unwrap(), cursor, lane.height, 256);
-            assert!(expected.last().unwrap().text.ends_with("transactions"));
+            let expected = lane::row_values(
+                match app.doc.transaction_index(a(tracks[0])).unwrap() {
+                    volna_core::analysis::AnalysisLoad::Ready(index) => index,
+                    _ => panic!("index ready"),
+                },
+                cursor,
+                lane.height,
+                lane.first_sub_row,
+                256,
+            );
+            assert_eq!(expected.len(), 2);
             let scene = app.render_panel(waves, &theme, &mut MonoMeasure);
             let texts: Vec<_> = scene
                 .prims
@@ -480,7 +499,7 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
                 .collect();
             assert_eq!(
                 texts.len(),
-                expected.iter().filter(|row| !row.text.is_empty()).count()
+                expected.iter().filter(|row| !row.text.is_empty()).count() + 1
             );
             for (sub, row) in expected
                 .iter()
@@ -489,7 +508,7 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
             {
                 let (origin, height, text, size, color) = texts
                     .iter()
-                    .find(|(origin, ..)| origin.y == geometry.sub_top(sub as u16) + 2.0 * zoom)
+                    .find(|(origin, ..)| origin.y == geometry.sub_top(sub) + 2.0 * zoom)
                     .unwrap();
                 assert_eq!(origin.x, values.left() + 8.0 * zoom);
                 assert_eq!(**height, geometry.sub_h - 4.0 * zoom);
@@ -504,7 +523,7 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
 }
 
 #[test]
-fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
+fn bars_keep_separate_rows_and_always_show_total_occupancy() {
     let (mut app, _session, waves, _tracks) = with_lanes(&[CPU1]);
     let theme = Theme::one_dark();
     let (median, depth, first) = {
@@ -525,7 +544,7 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
         scene.texts().filter(|t| caption(t)).count() > 5,
         "bar captions"
     );
-    assert!(scene.texts().any(|t| t == format!("+{}", depth - 5)));
+    assert!(scene.texts().any(|t| t == format!("+{}", depth - 2)));
     assert!(scene.texts().any(|t| t.ends_with("records")));
     let bar_quads = scene
         .quads()
@@ -556,32 +575,19 @@ fn bars_fold_into_hatching_and_zoom_out_to_a_density_strip() {
     let end = app.doc.limits().1 as f64;
     show(&mut app, waves, 0.0, end);
     frame_w(&mut app, waves, 520.0);
-    let (density, columns_w) = {
-        let w = app.panels.waves(waves).unwrap();
-        let g = w.items()[0].lane().unwrap().generator(&app.doc).unwrap();
-        let width = w.last_layout().wave_width_f64();
-        (
-            lane::is_density(g, w.viewport(&app.doc).px_per_unit(width)),
-            width,
-        )
-    };
-    assert!(density, "whole trace in {columns_w} px is a density strip");
     let scene = frame_w(&mut app, waves, 520.0);
-    assert!(!scene.texts().any(caption));
+    assert!(scene.texts().any(|text| text.starts_with("occupancy ·")));
     let columns = scene
         .quads()
         .filter(|(_, c)| c.h == theme.wave_signal.h && c.s == theme.wave_signal.s && c.a < 1.0)
         .count();
-    assert!(
-        columns > 10 && columns as f64 <= columns_w,
-        "{columns} density runs"
-    );
+    assert!(columns > 0 && columns <= 4096, "{columns} density runs");
     let p = {
         let layout = app.panels.waves(waves).unwrap().last_layout();
         point(layout.waves.left() + 50.0, layout.row_y(0) + 10.0)
     };
     click(&mut app, waves, p);
-    assert!(app.doc.selection().is_none());
+    assert!(app.doc.record_cursor().is_some());
 }
 
 #[test]
@@ -629,4 +635,238 @@ fn a_failed_record_is_red_in_bars_and_values() {
         prim,
         Prim::Text { text, color, .. } if *color == theme.editor.error && text.starts_with("DMA transfer")
     )));
+}
+
+#[test]
+fn cursor_records_keep_the_waveforms_local_cursor_when_selecting_from_the_list() {
+    use volna_core::document::RecordCursor;
+    use volna_core::transaction::TransactionCommand;
+    let (mut app, _, waves, tracks) = with_lanes(&[CPU0]);
+    let tx = app
+        .doc
+        .resident_generator(a(tracks[0]))
+        .unwrap()
+        .transactions()[0]
+        .clone();
+    let time = tx.begin;
+    {
+        let App { panels, doc, .. } = &mut app;
+        let model = panels.waves_mut(waves).unwrap();
+        model.nav.link.cursor = false;
+        model.set_cursor(doc, Some(time));
+        doc.shared.cursor = Some(time + 1000);
+        doc.set_record_cursor(RecordCursor {
+            track: a(tracks[0]),
+            origin: waves,
+        });
+    }
+    app.handle(Command::ShowTransaction { from: waves });
+    let details = app.panels.focused_id();
+    let query = app.cursor_records(details).ready().unwrap();
+    assert_eq!(query.time, time);
+    assert!(query.count > 0);
+    app.handle(Command::Transaction(
+        details,
+        TransactionCommand::CursorSelect {
+            track: a(tracks[0]),
+            id: tx.id,
+            time,
+        },
+    ));
+    assert_eq!(app.cursor_records(details).ready().unwrap().time, time);
+    assert_eq!(app.doc.shared.cursor, Some(time + 1000));
+    app.handle(Command::Panels(volna_core::panels::PanelsCommand::Focus(
+        waves,
+    )));
+    app.handle(Command::Action(Action::SplitRight));
+    let other = app.panels.focused_id();
+    app.handle(Command::SelectTransaction {
+        panel: other,
+        track: a(tracks[0]),
+        id: tx.id,
+        cursor: Some(time + 2),
+    });
+    assert_eq!(app.cursor_records(details).ready().unwrap().time, time + 2);
+}
+
+#[test]
+fn optional_index_refusal_keeps_records_available_retries_and_rejects_stale_results() {
+    use volna_core::panels::PanelsCommand;
+    use volna_core::{
+        analysis::AnalysisLoad,
+        session::{LoadRequest, LoadResult},
+    };
+    let session = example("pipeline_showcase.vtr");
+    let track = a(track(session.as_ref(), CPU0));
+    let member = a(generator(session.as_ref(), track.item));
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track });
+    let pipeline = app.panels.focused_id();
+    loop {
+        let requests = app.take_requests();
+        if requests.is_empty() {
+            break;
+        }
+        for request in requests {
+            assert!(!matches!(request, LoadRequest::TransactionIndex { .. }));
+            app.deliver(request.perform());
+        }
+    }
+    let source = app.doc.resident_generator(track).unwrap();
+    let budget = app
+        .doc
+        .session(track.trace)
+        .unwrap()
+        .memory_budget()
+        .unwrap();
+    let object_limit = budget.object_limit();
+    budget.set_object_limit(1);
+    app.handle(Command::AddToWaves(vec![member]));
+    let waves = app.panels.focused_id();
+    let mut requests = app.take_requests();
+    assert_eq!(requests.len(), 1);
+    let failed = requests.remove(0).perform();
+    assert!(matches!(
+        &failed,
+        LoadResult::TransactionIndex { result: Err(_), .. }
+    ));
+    app.deliver(failed);
+    assert!(matches!(
+        app.doc.transaction_index(track),
+        Some(AnalysisLoad::Failed)
+    ));
+    assert!(matches!(
+        app.panels.pipeline(pipeline).unwrap().rows(&app.doc),
+        volna_core::pipeline::Rows::Ready(_)
+    ));
+    assert!(Arc::ptr_eq(
+        &source,
+        &app.doc.resident_generator(track).unwrap()
+    ));
+    budget.set_object_limit(object_limit);
+    app.handle(Command::SetSidebarWidth(app.sidebar_width));
+    pump(&mut app);
+    let Some(AnalysisLoad::Ready(index)) = app.doc.transaction_index(track) else {
+        panic!("index retried")
+    };
+    let old_index = Arc::downgrade(index);
+    app.handle(Command::Panels(PanelsCommand::Focus(waves)));
+    app.handle(Command::Action(Action::RemoveSelected));
+    assert!(app.doc.transaction_index(track).is_none());
+    assert!(old_index.upgrade().is_none());
+    assert!(app.doc.resident_generator(track).is_some());
+    app.handle(Command::AddToWaves(vec![member]));
+    let pending = app.take_requests().remove(0);
+    app.handle(Command::Action(Action::RemoveSelected));
+    app.handle(Command::AddToWaves(vec![member]));
+    let current = app.take_requests().remove(0);
+    let result = pending.perform();
+    let LoadResult::TransactionIndex {
+        result: Ok(index), ..
+    } = &result
+    else {
+        panic!("prepared stale index")
+    };
+    let stale = Arc::downgrade(index);
+    app.deliver(result);
+    assert!(stale.upgrade().is_none());
+    assert!(matches!(
+        app.doc.transaction_index(track),
+        Some(AnalysisLoad::Building(_))
+    ));
+    app.deliver(current.perform());
+    assert!(matches!(
+        app.doc.transaction_index(track),
+        Some(AnalysisLoad::Ready(_))
+    ));
+    app.handle(Command::Action(Action::RemoveSelected));
+    budget.set_object_limit(1);
+    app.handle(Command::AddToWaves(vec![member]));
+    let failure = app.take_requests().remove(0).perform();
+    budget.set_object_limit(object_limit);
+    app.handle(Command::SetSidebarWidth(app.sidebar_width));
+    app.deliver(failure);
+    pump(&mut app);
+    assert!(matches!(
+        app.doc.transaction_index(track),
+        Some(AnalysisLoad::Ready(_))
+    ));
+}
+
+#[test]
+fn revealed_sub_rows_autosave_round_trip_and_follow_undo() {
+    use volna_core::panels::PanelsCommand;
+    let (mut app, _, waves, tracks) = with_lanes(&[CPU1]);
+    let track = a(tracks[0]);
+    let source = app.doc.resident_generator(track).unwrap();
+    let ordinal = (0..source.transactions().len())
+        .max_by_key(|&i| source.sub_row(i))
+        .unwrap();
+    let id = source.transactions()[ordinal].id;
+    app.doc.shared.cursor = Some(source.transactions()[ordinal].begin);
+    app.handle(Command::SelectTransaction {
+        panel: waves,
+        track,
+        id,
+        cursor: None,
+    });
+    app.handle(Command::ShowTransaction { from: waves });
+    let details = app.panels.focused_id();
+    app.configure_persistence(volna_core::workspace::persistence::Persistence::Auto);
+    let revision = app.workspace.scheduler.revision();
+    app.handle(Command::RevealWaveTransaction { panel: details });
+    let first = app.panels.waves(waves).unwrap().items()[0]
+        .lane()
+        .unwrap()
+        .first_sub_row;
+    assert!(first > 0);
+    assert!(app.workspace.scheduler.revision() > revision);
+    app.handle(Command::Undo);
+    assert_eq!(
+        app.panels.waves(waves).unwrap().items()[0]
+            .lane()
+            .unwrap()
+            .first_sub_row,
+        0
+    );
+    app.handle(Command::Redo);
+    assert_eq!(
+        app.panels.waves(waves).unwrap().items()[0]
+            .lane()
+            .unwrap()
+            .first_sub_row,
+        first
+    );
+    let save = || Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+    let bytes = serde_json::to_vec(&save()).unwrap();
+    Workspace::parse(&bytes)
+        .unwrap()
+        .prepare(&app, TRACE, LOCATION)
+        .unwrap()
+        .commit(&mut app)
+        .unwrap();
+    pump(&mut app);
+    assert_eq!(
+        app.panels.waves(waves).unwrap().items()[0]
+            .lane()
+            .unwrap()
+            .first_sub_row,
+        first
+    );
+    let mut invalid: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let panel = invalid["panels"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p["id"] == waves.0)
+        .unwrap();
+    panel["rows"][0]["first_sub_row"] = serde_json::json!(usize::MAX);
+    assert!(
+        Workspace::parse(&serde_json::to_vec(&invalid).unwrap())
+            .unwrap()
+            .prepare(&app, TRACE, LOCATION)
+            .is_err()
+    );
+    app.handle(Command::Panels(PanelsCommand::Focus(waves)));
 }

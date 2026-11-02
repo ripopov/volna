@@ -9,6 +9,13 @@ use volna_trace::session::{
 };
 
 pub enum LoadRequest {
+    TransactionIndex {
+        generation: u64,
+        request: u64,
+        track: Traced<volna_trace::data::transactions::TrackRef>,
+        source: Arc<crate::data::loaded_tracks::LoadedGenerator>,
+        budget: MemoryBudget,
+    },
     Trace(TraceRequest<TraceId>),
     Projection {
         request: u64,
@@ -76,7 +83,8 @@ impl LoadRequest {
     pub fn remote_id(&self) -> Option<u64> {
         match self {
             Self::Trace(request) => request.remote_id(),
-            Self::Projection { .. }
+            Self::TransactionIndex { .. }
+            | Self::Projection { .. }
             | Self::Open { .. }
             | Self::Sizes { .. }
             | Self::ActivityCounter { .. }
@@ -92,6 +100,20 @@ impl LoadRequest {
     pub fn fail(self, error: anyhow::Error) -> LoadResult {
         match self {
             Self::Trace(request) => LoadResult::from_trace(request.fail(error), None),
+            Self::TransactionIndex {
+                generation,
+                request,
+                track,
+                source,
+                budget,
+            } => LoadResult::TransactionIndex {
+                generation,
+                request,
+                track,
+                source: Arc::as_ptr(&source) as usize,
+                limits: (budget.limit(), budget.object_limit()),
+                result: Err(error),
+            },
             Self::Projection { request, .. } => LoadResult::Projection {
                 request,
                 result: Err(error),
@@ -183,6 +205,28 @@ impl LoadRequest {
 
     pub fn perform(self) -> LoadResult {
         match self {
+            Self::TransactionIndex {
+                generation,
+                request,
+                track,
+                source,
+                budget,
+            } => {
+                let identity = Arc::as_ptr(&source) as usize;
+                let limits = (budget.limit(), budget.object_limit());
+                LoadResult::TransactionIndex {
+                    generation,
+                    request,
+                    track,
+                    source: identity,
+                    limits,
+                    result: crate::data::transaction_index::TransactionIndex::build(
+                        source,
+                        Some(&budget),
+                    )
+                    .map(Arc::new),
+                }
+            }
             Self::Trace(request) => {
                 let budget = match &request {
                     TraceRequest::Track { session, .. } => session.memory_budget(),
@@ -312,6 +356,14 @@ impl LoadRequest {
 }
 
 pub enum LoadResult {
+    TransactionIndex {
+        generation: u64,
+        request: u64,
+        track: Traced<volna_trace::data::transactions::TrackRef>,
+        source: usize,
+        limits: (u64, u64),
+        result: anyhow::Result<Arc<crate::data::transaction_index::TransactionIndex>>,
+    },
     Projection {
         request: u64,
         result: anyhow::Result<Arc<dyn volna_trace::data::SignalHistory>>,

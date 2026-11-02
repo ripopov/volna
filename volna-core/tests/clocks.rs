@@ -551,7 +551,8 @@ fn ruler_selection_follows_clicks_and_clears_when_selecting_signal_rows() {
                 position: bus,
                 button: MouseButton::Left,
                 modifiers: Modifiers {
-                    platform: true,
+                    platform: cfg!(target_os = "macos"),
+                    control: !cfg!(target_os = "macos"),
                     ..Modifiers::default()
                 },
             },

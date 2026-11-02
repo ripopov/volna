@@ -16,7 +16,6 @@ use super::tree::{self, Entry, Place, Splice};
 use super::viewport::Viewport;
 use crate::clock::ClockKey;
 use crate::data::Translator;
-use crate::data::loaded_tracks::LoadedGenerator;
 use crate::document::{Document, TxSelection};
 use crate::geometry::{Modifiers, MouseButton, Point, point};
 use crate::history::{Before, Edit, History, MergeKey, RowSelection, count};
@@ -585,7 +584,9 @@ impl WaveRow {
                     && analog(&a.analog) == analog(&b.analog)
                     && a.overlay_hidden == b.overlay_hidden
             }
-            (Self::Lane(a), Self::Lane(b)) => a.source == b.source && a.height == b.height,
+            (Self::Lane(a), Self::Lane(b)) => {
+                a.source == b.source && a.height == b.height && a.first_sub_row == b.first_sub_row
+            }
             (Self::Clock(a), Self::Clock(b)) => a == b,
             (Self::Group(a), Self::Group(b)) => {
                 a.name == b.name && a.height == b.height && a.style == b.style
@@ -618,7 +619,7 @@ pub type Resident = HashMap<Traced<SignalRef>, Arc<dyn SignalHistory>>;
 
 enum EdgeSource<'a> {
     History(Arc<dyn SignalHistory>),
-    Lane(&'a LoadedGenerator),
+    Lane(lane::Edges<'a>),
     Clock(Arc<crate::clock::ClockTimeline>),
     Group(Vec<Arc<dyn SignalHistory>>),
     Stack(Vec<stack::Layer>),
@@ -812,6 +813,7 @@ impl RowEdit {
 }
 
 pub struct WaveModel {
+    pub(super) transaction_detail: std::cell::RefCell<lane::DetailCache>,
     pub(super) items: Vec<Entry>,
     journal: RowJournal,
     pub selected: BTreeSet<usize>,
@@ -888,6 +890,7 @@ impl WaveModel {
     #[must_use]
     pub fn new() -> Self {
         WaveModel {
+            transaction_detail: Default::default(),
             items: Vec::new(),
             journal: RowJournal::default(),
             selected: BTreeSet::new(),
@@ -2720,7 +2723,7 @@ impl WaveModel {
     fn edge_source<'a>(&self, doc: &'a Document, row: usize) -> Option<EdgeSource<'a>> {
         match &self.items.get(row)?.row {
             WaveRow::Signal(s) => s.history.clone().map(EdgeSource::History),
-            WaveRow::Lane(l) => l.generator(doc).map(EdgeSource::Lane),
+            WaveRow::Lane(l) => lane::edges(l, doc).map(EdgeSource::Lane),
             WaveRow::Clock(c) => c.timeline(doc).cloned().map(EdgeSource::Clock),
             WaveRow::Group(g) if g.is_stacked() => Some(EdgeSource::Stack(self.stack_layers(row))),
             WaveRow::Group(g) if g.is_overlaid() => Some(EdgeSource::Group(
@@ -3127,6 +3130,50 @@ impl WaveModel {
             .map(|(track, id, _)| (track, id))
     }
 
+    pub fn reveal_transaction(
+        &mut self,
+        doc: &Document,
+        track: Traced<TrackRef>,
+        id: volna_trace::data::transactions::TransactionRef,
+    ) -> bool {
+        let Some(row) = self
+            .items
+            .iter()
+            .position(|entry| entry.lane().is_some_and(|lane| lane.track() == Some(track)))
+        else {
+            return false;
+        };
+        let Some(generator) = doc.resident_generator(track) else {
+            return false;
+        };
+        let Some(ordinal) = generator.transaction_ordinal(id) else {
+            return false;
+        };
+        let sub = generator.sub_row(ordinal);
+        let mut parent = tree::parent(&self.items, row);
+        while let Some(index) = parent {
+            self.set_folded(doc, index, false, false);
+            parent = tree::parent(&self.items, index);
+        }
+        self.rewrite_rows("Reveal transaction".into(), None, [row], |entry| {
+            let WaveRow::Lane(lane) = &mut entry.row else {
+                return false;
+            };
+            let before = (lane.height, lane.first_sub_row);
+            if lane::capacity(lane.height) == 0 {
+                lane.height = RowHeight::PRESETS[3];
+                lane.auto_height = false;
+            }
+            let capacity = lane::capacity(lane.height);
+            if sub < lane.first_sub_row || sub >= lane.first_sub_row + capacity {
+                lane.first_sub_row = sub.saturating_sub(capacity - 1);
+            }
+            before != (lane.height, lane.first_sub_row)
+        });
+        self.reveal_entry(row);
+        true
+    }
+
     fn lane_pick(
         &self,
         doc: &Document,
@@ -3155,15 +3202,24 @@ impl WaveModel {
             ));
         }
         let ppu = viewport.px_per_unit(width);
-        if lane::is_density(generator, ppu) {
-            return None;
-        }
         let (y, h) = layout.entry_span(row)?;
         let geometry = LaneGeometry::new(y, h, layout.row_h, lane.height);
         let sub = geometry.sub_at(p.y)?;
+        let crate::analysis::AnalysisLoad::Ready(index) = doc.transaction_index(lane.track()?)?
+        else {
+            return None;
+        };
+        let plan = lane::RenderPlan::new(
+            lane,
+            index,
+            &viewport,
+            &mut self.transaction_detail.borrow_mut(),
+        );
+        plan.details.get(sub).copied().flatten()?;
+        let sub = lane.first_sub_row + sub;
         let time = viewport.time_at(f64::from(p.x - layout.waves.left()), width);
         let tolerance = 3.0 * f64::from(layout.zoom) / ppu;
-        let ordinal = lane::hit(generator, lane.height, sub, time, tolerance)?;
+        let ordinal = lane::hit(index, sub, time, tolerance)?;
         let tx = &generator.transactions()[ordinal];
         Some((Traced::new(lane.source.trace(), tx.generator), tx.id, None))
     }
@@ -3501,20 +3557,42 @@ impl WaveModel {
                         let hit = self.lane_pick(doc, r, p);
                         if let Some((track, id, _)) = hit
                             && let Some(generator) = doc.resident_generator(track)
-                            && generator.points().is_some()
                             && let Some(record) = generator.transaction(id)
                         {
-                            t = record.begin;
+                            t = if record.begin == record.end {
+                                record.begin
+                            } else {
+                                t.clamp(record.begin, record.end - 1)
+                            };
                         }
-                        doc.select_range(
-                            hit.map(|(track, id, _)| TxSelection {
+                        if hit.is_some()
+                            || self.items[r].lane().is_some_and(|lane| {
+                                lane.generator(doc).is_some_and(|g| g.points().is_some())
+                            })
+                        {
+                            doc.select_range(
+                                hit.map(|(track, id, _)| TxSelection {
+                                    track,
+                                    id,
+                                    origin: panel,
+                                }),
+                                hit.and_then(|(_, _, range)| range),
+                            );
+                        }
+                        if let Some(track) = self.items[r].lane().and_then(TxLane::track)
+                            && self.items[r]
+                                .lane()
+                                .and_then(|lane| lane.generator(doc))
+                                .is_some_and(|g| g.points().is_none())
+                        {
+                            doc.set_record_cursor(crate::document::RecordCursor {
                                 track,
-                                id,
                                 origin: panel,
-                            }),
-                            hit.and_then(|(_, _, range)| range),
-                        );
-                        self.pressed_record = hit.is_some();
+                            });
+                            self.pressed_record = true;
+                        } else {
+                            self.pressed_record = hit.is_some();
+                        }
                     }
                     self.set_cursor(doc, Some(t));
                     self.drag = Some(Drag::Cursor);
@@ -3871,7 +3949,7 @@ fn snapped_time(
 fn row_edge(edges: &EdgeSource<'_>, raw: f64, exact: f64, tol: f64) -> Option<u64> {
     match edges {
         EdgeSource::History(h) => history_edge(h.as_ref(), raw, tol),
-        EdgeSource::Lane(g) => lane::nearest_boundary(g, exact, tol),
+        EdgeSource::Lane(g) => g.nearest(exact, tol),
         EdgeSource::Clock(c) => crate::clock::nearest_edge(c, exact, tol),
         EdgeSource::Group(hs) => hs
             .iter()

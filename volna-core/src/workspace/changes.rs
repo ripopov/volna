@@ -97,6 +97,9 @@ impl Stamp {
             return None;
         }
         let panel = match command {
+            Command::RevealWaveTransaction { panel } => {
+                app.transaction_wave_panel(*panel).unwrap_or(*panel)
+            }
             Command::Pointer(id, _)
             | Command::Table(id, _)
             | Command::PipelineActivity(id, _)
