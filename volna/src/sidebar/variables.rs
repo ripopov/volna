@@ -225,6 +225,7 @@ impl Workspace {
                             row = row.hover(move |s| s.bg(hover.bg).text_color(hover.text));
                         }
                         let row = row
+                            .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                             .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
                             .when(letters, |row| {
                                 row.child(crate::traces::letter_badge(traced.trace, cx))

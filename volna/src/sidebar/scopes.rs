@@ -355,7 +355,8 @@ impl Workspace {
                 .size(t.px(14.0))
                 .inherit_color(),
             );
-        row.tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
+        row.tooltip_show_delay(crate::ui::tooltip::delay(cx))
+            .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
             .child(chevron)
             .child(crate::traces::letter_badge(trace, cx))
             .child(
@@ -566,6 +567,7 @@ impl Workspace {
                         let row =
                             row.relative()
                                 .children(guides)
+                                .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                                 .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
                                 .child(chevron)
                                 .child(Icon::new(icon).size(t.px(14.0)).color(tint.color(&t)))

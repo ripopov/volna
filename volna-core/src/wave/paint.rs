@@ -156,6 +156,7 @@ pub(crate) fn paint(
     doc: &Document,
     mut p: TextPainter<'_>,
     focused: bool,
+    marker_tooltip_visible: bool,
     cache: &mut DigitalCache,
     budget: &volna_trace::remote::memory::MemoryBudget,
 ) {
@@ -864,6 +865,7 @@ pub(crate) fn paint(
         doc,
         cursor,
         model.pointer,
+        marker_tooltip_visible,
         match model.drag {
             Some(Drag::Marker(held)) if held.moved => Some(held.from),
             _ => None,

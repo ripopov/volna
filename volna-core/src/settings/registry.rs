@@ -354,6 +354,22 @@ pub static REGISTRY: &[Spec] = &[
         hosts: Hosts::ALL,
     },
     Spec {
+        id: "appearance.tooltipDelay",
+        page: Page::Appearance,
+        group: "Tooltips",
+        title: "Tooltip delay (ms)",
+        description: "Wait before showing explanatory hover popups, including marker and measurement details. Set to 0 to show immediately. Live waveform values and click menus remain immediate.",
+        keywords: &["popup", "hover", "hint", "speed", "wait", "milliseconds"],
+        kind: Kind::Integer {
+            min: 0,
+            max: 5000,
+            step: 100,
+        },
+        default: Literal::Integer(500),
+        apply: Apply::Live,
+        hosts: Hosts::ALL,
+    },
+    Spec {
         id: "appearance.digitalWaveWidth",
         page: Page::Appearance,
         group: "Waveforms",

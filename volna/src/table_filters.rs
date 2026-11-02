@@ -321,6 +321,7 @@ impl Render for FilterEditor {
                 div()
                     .id("column-filter-hint")
                     .size_full()
+                    .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                     .tooltip(move |window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(hint.clone()).build(window, cx)
                     })

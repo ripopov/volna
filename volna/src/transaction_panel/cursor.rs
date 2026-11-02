@@ -198,6 +198,7 @@ impl TransactionPanelView {
                         t.panel.bg
                     })
                     .hover(|style| style.bg(t.hover.bg))
+                    .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                     .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))
                     .on_click(cx.listener(move |view, _, window, cx| {
                         window.focus(&view.focus, cx);

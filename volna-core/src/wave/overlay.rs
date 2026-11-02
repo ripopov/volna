@@ -963,6 +963,7 @@ pub fn marker_lane_paint(
     doc: &Document,
     cursor: Option<u64>,
     pointer: Option<Point>,
+    tooltip_visible: bool,
     dragged_from: Option<u64>,
 ) {
     let t = p.theme;
@@ -1111,6 +1112,9 @@ pub fn marker_lane_paint(
     });
     for chip in &lane.chips {
         p.scene.cursors.push((chip.rect, CursorIcon::PointingHand));
+    }
+    if !tooltip_visible {
+        return;
     }
     let over_measure = pointer.and_then(|mp| {
         let hit = lane.hit(mp)?;

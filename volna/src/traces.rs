@@ -138,6 +138,7 @@ impl Workspace {
                     this.open_trace_menu(trace, ev.position, window, cx);
                 }),
             )
+            .tooltip_show_delay(crate::ui::tooltip::delay(cx))
             .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
             .child(letter_badge(trace, cx))
             .child(body)

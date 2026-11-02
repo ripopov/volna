@@ -462,13 +462,265 @@ fn the_tooltip_of_a_chip_has_the_full_name() {
     );
     assert!(!frame(&mut app).texts().any(|t| t == long));
     let p = point(chip.rect.left() + 4.0, chip.rect.top() + 4.0);
-    app.handle(Command::Pointer(
-        app.panels.focused_id(),
-        PointerEvent::Move { position: p },
-    ));
+    let now = Instant::now();
+    app.handle_at(
+        Command::Pointer(app.panels.focused_id(), PointerEvent::Move { position: p }),
+        now,
+    );
+    assert!(!frame(&mut app).texts().any(|t| t == long));
+    app.tick(now + std::time::Duration::from_millis(499));
+    assert!(!frame(&mut app).texts().any(|t| t == long));
+    app.tick(now + std::time::Duration::from_millis(500));
     let texts: Vec<String> = frame(&mut app).texts().map(str::to_owned).collect();
     assert!(texts.iter().any(|t| t == "Marker 1"), "{texts:?}");
     assert!(texts.iter().any(|t| t == long), "{texts:?}");
+}
+
+#[test]
+fn tooltip_hover_waits_per_target_and_cancels_on_leave_or_click() {
+    use std::time::Duration;
+    use volna_core::geometry::{Modifiers, MouseButton, point};
+    use volna_core::wave::PointerEvent;
+
+    let mut app = app();
+    scene(&mut app);
+    frame(&mut app);
+    let panel = app.panels.focused_id();
+    let positions: Vec<_> = lane(&app)
+        .chips
+        .iter()
+        .map(|chip| point(chip.rect.left() + 2.0, chip.rect.top() + 2.0))
+        .collect();
+    let now = Instant::now();
+    let send = |app: &mut App, event, ms| {
+        app.handle_at(
+            Command::Pointer(panel, event),
+            now + Duration::from_millis(ms),
+        );
+    };
+    let tooltip = |app: &mut App, label: &str| frame(app).texts().any(|text| text == label);
+    send(
+        &mut app,
+        PointerEvent::Move {
+            position: positions[0],
+        },
+        0,
+    );
+    send(
+        &mut app,
+        PointerEvent::Move {
+            position: positions[0],
+        },
+        400,
+    );
+    app.tick(now + Duration::from_millis(500));
+    assert!(
+        tooltip(&mut app, "Marker 1"),
+        "movement within a target keeps its deadline"
+    );
+
+    send(
+        &mut app,
+        PointerEvent::Move {
+            position: positions[1],
+        },
+        600,
+    );
+    app.tick(now + Duration::from_millis(1099));
+    assert!(!tooltip(&mut app, "Marker 2"));
+    app.tick(now + Duration::from_millis(1100));
+    assert!(tooltip(&mut app, "Marker 2"));
+    send(&mut app, PointerEvent::Leave, 1200);
+    assert!(!tooltip(&mut app, "Marker 2"));
+
+    send(
+        &mut app,
+        PointerEvent::Move {
+            position: positions[0],
+        },
+        1300,
+    );
+    send(&mut app, PointerEvent::Leave, 1400);
+    app.tick(now + Duration::from_millis(1800));
+    assert!(
+        !tooltip(&mut app, "Marker 1"),
+        "leaving cancels a pending popup"
+    );
+    send(
+        &mut app,
+        PointerEvent::Move {
+            position: positions[0],
+        },
+        1900,
+    );
+    send(
+        &mut app,
+        PointerEvent::Down {
+            position: positions[0],
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+        2000,
+    );
+    app.tick(now + Duration::from_millis(2500));
+    assert!(
+        !tooltip(&mut app, "Marker 1"),
+        "clicking cancels a pending popup"
+    );
+}
+
+#[test]
+fn tooltip_waits_expose_a_deadline_without_requesting_animation_frames() {
+    use std::time::Duration;
+    use volna_core::geometry::point;
+    use volna_core::wave::PointerEvent;
+
+    let mut app = app();
+    scene(&mut app);
+    frame(&mut app);
+    let panel = app.panels.focused_id();
+    let chip = lane(&app).chips[0].rect;
+    let now = Instant::now();
+    app.handle_at(
+        Command::Pointer(
+            panel,
+            PointerEvent::Move {
+                position: point(chip.left() + 2.0, chip.top() + 2.0),
+            },
+        ),
+        now,
+    );
+    assert_eq!(
+        app.tooltip_deadline(),
+        Some(now + Duration::from_millis(500))
+    );
+    assert!(!app.is_animating());
+    assert!(!app.tick(now + Duration::from_millis(499)));
+    assert!(!app.is_animating());
+    app.take_events();
+    assert!(!app.tick(now + Duration::from_millis(500)));
+    assert_eq!(app.tooltip_deadline(), None);
+    assert!(app.take_events().contains(&volna_core::Event::Changed));
+    assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
+    app.tick(now + Duration::from_secs(1));
+    assert!(app.take_events().is_empty(), "the deadline fires only once");
+}
+
+#[test]
+fn viewport_motion_restarts_tooltip_delay_for_the_new_target() {
+    use std::time::Duration;
+    use volna_core::geometry::point;
+    use volna_core::settings::Animation;
+    use volna_core::wave::PointerEvent;
+
+    for already_visible in [false, true] {
+        let mut app = app();
+        app.doc.add_marker(100);
+        app.doc.add_marker(200);
+        app.doc.shared.viewport.set(Viewport {
+            start: 0.0,
+            end: 1000.0,
+        });
+        frame(&mut app);
+        let panel = app.panels.focused_id();
+        let chip = lane(&app).chips[0].rect;
+        let position = point(chip.left() + 2.0, chip.top() + 2.0);
+        let now = Instant::now();
+        app.handle_at(
+            Command::Pointer(panel, PointerEvent::Move { position }),
+            now,
+        );
+        let moving_at = if already_visible {
+            let ready = now + Duration::from_millis(500);
+            app.tick(ready);
+            assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
+            ready
+        } else {
+            now
+        };
+        app.doc.shared.viewport.animate_to(
+            Viewport {
+                start: 100.0,
+                end: 1100.0,
+            },
+            moving_at,
+            Animation::On,
+        );
+        let arrived = moving_at + Duration::from_millis(140);
+        app.tick(arrived);
+        frame(&mut app);
+        assert_eq!(
+            lane(&app).hit(position),
+            Some(volna_core::marker::LaneHit::Chip(1))
+        );
+        assert_eq!(
+            app.tooltip_deadline(),
+            Some(arrived + Duration::from_millis(500))
+        );
+        app.tick(arrived + Duration::from_millis(499));
+        assert!(!frame(&mut app).texts().any(|text| text == "Marker 2"));
+        app.tick(arrived + Duration::from_millis(500));
+        assert!(frame(&mut app).texts().any(|text| text == "Marker 2"));
+    }
+}
+
+#[test]
+fn tooltip_delay_edits_apply_to_the_next_hover_and_survive_settings_reload() {
+    use std::time::Duration;
+    use volna_core::app::SettingsCommand;
+    use volna_core::geometry::point;
+    use volna_core::settings::Value;
+    use volna_core::wave::PointerEvent;
+
+    let mut app = app();
+    scene(&mut app);
+    frame(&mut app);
+    let panel = app.panels.focused_id();
+    let chip = lane(&app).chips[0].rect;
+    let position = point(chip.left() + 2.0, chip.top() + 2.0);
+    let now = Instant::now();
+    app.handle_at(
+        Command::Settings(SettingsCommand::Set {
+            id: "appearance.tooltipDelay".into(),
+            value: Value::Integer(900),
+        }),
+        now,
+    );
+    app.handle_at(
+        Command::Pointer(panel, PointerEvent::Move { position }),
+        now,
+    );
+    app.tick(now + Duration::from_millis(899));
+    assert!(!frame(&mut app).texts().any(|text| text == "Marker 1"));
+    app.tick(now + Duration::from_millis(900));
+    assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
+
+    let mut restored = App::new();
+    restored.settings_loaded(app.settings.text());
+    assert_eq!(
+        restored.settings.resolved().appearance.tooltip_delay,
+        Duration::from_millis(900)
+    );
+    app.handle_at(
+        Command::Settings(SettingsCommand::Set {
+            id: "appearance.tooltipDelay".into(),
+            value: Value::Integer(0),
+        }),
+        now + Duration::from_secs(1),
+    );
+    app.handle_at(
+        Command::Pointer(panel, PointerEvent::Move { position }),
+        now + Duration::from_secs(1),
+    );
+    assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
+    app.handle(Command::Settings(SettingsCommand::Reset {
+        id: "appearance.tooltipDelay".into(),
+    }));
+    assert_eq!(
+        app.settings.resolved().appearance.tooltip_delay,
+        Duration::from_millis(500)
+    );
+    assert!(!app.settings.text().contains("appearance.tooltipDelay"));
 }
 
 #[test]

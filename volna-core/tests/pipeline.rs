@@ -2333,12 +2333,25 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
     let cluster = centre(lane.chips[0].rect);
     let members = lane.chips[0].markers.len();
     let last = near + members as u64 - 1;
-    app.handle(Command::Pointer(
-        waves,
-        PointerEvent::Move { position: cluster },
-    ));
+    let hover_start = Instant::now();
+    app.handle_at(
+        Command::Pointer(waves, PointerEvent::Move { position: cluster }),
+        hover_start,
+    );
+    app.handle_at(
+        Command::Pointer(
+            pipeline,
+            PointerEvent::Move {
+                position: point(-1.0, -1.0),
+            },
+        ),
+        hover_start,
+    );
     frame(&mut app, waves, &theme);
     let title = format!("{members} markers · click to zoom in");
+    assert!(!app.scene().texts().any(|t| *t == title));
+    app.tick(hover_start + std::time::Duration::from_millis(500));
+    frame(&mut app, waves, &theme);
     assert!(app.scene().texts().any(|t| *t == title));
     assert!(app.scene().texts().any(|t| t == "Marker 2"));
     press(&mut app, waves, cluster, Modifiers::default());

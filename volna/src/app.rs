@@ -303,6 +303,7 @@ pub struct Workspace {
     pub embedded: bool,
     pub(crate) cli_policy: bool,
     menu_generation: Option<MenuKey>,
+    tooltip_timer: Option<(Instant, gpui_kit::Task<()>)>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) config_watcher: Option<notify::RecommendedWatcher>,
     #[cfg(not(target_family = "wasm"))]
@@ -685,6 +686,7 @@ pub(crate) fn menus(
 pub(crate) const MEMORY_PILL_W: f32 = 112.0;
 
 fn memory_meter(
+    cx: &gpui_kit::App,
     memory: volna_core::app::MemoryStatus,
     t: &crate::theme::Theme,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
@@ -721,6 +723,7 @@ fn memory_meter(
         .bg(t.bar.text.alpha(0.05))
         .cursor(CursorStyle::PointingHand)
         .hover(move |s| s.bg(t.bar.text.alpha(0.1)).border_color(t.border_focused))
+        .tooltip_show_delay(crate::ui::tooltip::delay(cx))
         .tooltip(move |w, cx| Tooltip::new(detail.clone()).build(w, cx))
         .child(
             div()
@@ -845,6 +848,7 @@ impl Workspace {
             embedded: false,
             cli_policy: false,
             menu_generation: None,
+            tooltip_timer: None,
             #[cfg(not(target_family = "wasm"))]
             config_watcher: None,
             #[cfg(not(target_family = "wasm"))]
@@ -1030,6 +1034,7 @@ impl Workspace {
         self.sync_rename(window, cx);
         self.sync_filter(cx);
         self.sync_menus(cx);
+        self.sync_tooltip_timer(cx);
         self.run_requests(cx);
         #[cfg(not(target_family = "wasm"))]
         crate::native_windows::schedule(self, cx);
@@ -1048,6 +1053,29 @@ impl Workspace {
         #[cfg(target_family = "wasm")]
         if self.app.doc.is_loaded() {
             crate::web::viewer_state(&self.debug_state());
+        }
+    }
+
+    pub(crate) fn sync_tooltip_timer(&mut self, cx: &mut Context<Self>) {
+        let deadline = self.app.tooltip_deadline();
+        if self.tooltip_timer.as_ref().map(|(at, _)| *at) == deadline {
+            return;
+        }
+        self.tooltip_timer = None;
+        if let Some(deadline) = deadline {
+            let timer = cx
+                .background_executor()
+                .timer(deadline.saturating_duration_since(Instant::now()));
+            let task = cx.spawn(async move |this, cx| {
+                timer.await;
+                this.update(cx, |ws, cx| {
+                    ws.tooltip_timer = None;
+                    ws.app.tick(Instant::now());
+                    ws.after(None, cx);
+                })
+                .ok();
+            });
+            self.tooltip_timer = Some((deadline, task));
         }
     }
 
@@ -1188,6 +1216,7 @@ impl Workspace {
                             .aria_description(hint)
                             .child(Icon::new(icon).inherit_color())
                             .child(label.clone())
+                            .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                             .tooltip(move |window, cx| Tooltip::new(hint).build(window, cx))
                     })
                 }
@@ -1493,6 +1522,12 @@ impl Workspace {
     }
 
     fn settings_changed(&mut self, keys: &[&'static str], cx: &mut Context<Self>) {
+        if keys.contains(&"appearance.tooltipDelay") {
+            crate::ui::tooltip::set_delay(
+                self.app.settings.resolved().appearance.tooltip_delay,
+                cx,
+            );
+        }
         if keys.contains(&"appearance.theme") {
             self.apply_theme_setting(cx);
         }
@@ -2170,6 +2205,7 @@ impl Workspace {
                 .cursor_pointer()
                 .when(selected, |el| el.bg(t.selection.bg))
                 .when(!selected, |el| el.hover(|s| s.bg(t.hover.bg)))
+                .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                 .tooltip(move |w, cx| Tooltip::new(path.clone()).build(w, cx))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.dispatch(Command::Recent(RecentCommand::Open(ix)), Some(window), cx);
@@ -2558,6 +2594,7 @@ impl Workspace {
                     .text_color(t.editor.error)
                     .text_size(px(t.ui_size_small))
                     .child("Workspace notice")
+                    .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                     .tooltip(move |w, cx| Tooltip::new(notice.clone()).build(w, cx))
                     .on_click(move |_, window, cx| {
                         open_message_dialog("Workspace details", details.clone(), window, cx);
@@ -2572,6 +2609,7 @@ impl Workspace {
                 .min_w_0()
                 .cursor(CursorStyle::PointingHand)
                 .child(crop(text, colors.text_muted, false))
+                .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                 .tooltip(|w, cx| Tooltip::new("Click for message details").build(w, cx))
                 .on_click(move |_, window, cx| {
                     open_message_dialog("Message details", details.clone(), window, cx);
@@ -2595,7 +2633,7 @@ impl Workspace {
         }
         let mut meters = group();
         if let Some(memory) = status.memory {
-            meters = meters.child(memory_meter(memory, &t).on_click(cx.listener(
+            meters = meters.child(memory_meter(cx, memory, &t).on_click(cx.listener(
                 |this, ev: &gpui_kit::ClickEvent, window, cx| {
                     let p = ev.position();
                     let t = theme(cx);

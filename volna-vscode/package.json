@@ -348,6 +348,13 @@
           "minimum": 1,
           "type": "number"
         },
+        "volna.appearance.tooltipDelay": {
+          "default": 500,
+          "markdownDescription": "Wait before showing explanatory hover popups, including marker and measurement details. Set to 0 to show immediately. Live waveform values and click menus remain immediate.",
+          "maximum": 5000,
+          "minimum": 0,
+          "type": "integer"
+        },
         "volna.appearance.waveSpacing": {
           "default": 5,
           "markdownDescription": "Blank space above and below each waveform in logical pixels at interface zoom 1. Scales with interface zoom without changing row heights. Reduced in short rows to leave room for the trace.",

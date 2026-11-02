@@ -288,6 +288,24 @@ impl TextMeasure for GpuiMeasure<'_> {
     }
 }
 
+fn table_header_tooltip(
+    title: &str,
+    title_bounds: CRect,
+    viewport: CRect,
+    window: &Window,
+    cx: &App,
+) -> Option<String> {
+    let t = theme(cx);
+    let width = GpuiMeasure { window, theme: t }.text_width(
+        title,
+        FontRole::Mono,
+        core_theme(cx).mono_size,
+    );
+    let clipped = title_bounds.left() < viewport.left()
+        || title_bounds.left() + width > title_bounds.right().min(viewport.right());
+    clipped.then(|| title.to_owned())
+}
+
 fn fit_table_column(
     owner: &Entity<Workspace>,
     panel: volna_core::panels::PanelId,
@@ -642,6 +660,7 @@ impl Element for PanelCanvas {
             window,
             theme: &paint_theme,
         };
+        let before = self.ws.read(cx).app.tooltip_deadline();
         let rects = self.ws.update(cx, |ws, _| {
             match ws.app.layout_panel(
                 self.panel,
@@ -668,6 +687,12 @@ impl Element for PanelCanvas {
                 Some(PanelLayout::Table(_)) | None => Vec::new(),
             }
         });
+        if self.ws.read(cx).app.tooltip_deadline() != before {
+            let owner = self.ws.downgrade();
+            cx.defer(move |cx| {
+                drop(owner.update(cx, Workspace::sync_tooltip_timer));
+            });
+        }
         if let Some(command) = self.ws.read(cx).app.panel_measurement(self.panel) {
             let owner = self.ws.downgrade();
             let generation = self.generation;
@@ -681,7 +706,7 @@ impl Element for PanelCanvas {
             .into_iter()
             .map(|r| (r, window.insert_hitbox(gbounds(r), HitboxBehavior::Normal)))
             .collect();
-        let mut table_splitters = self.table_splitters(cx);
+        let mut table_splitters = self.table_splitters(window, cx);
         if let Some((edges, bounds)) = &mut table_splitters {
             edges.prepaint_as_root(
                 gbounds(*bounds).origin,
@@ -837,7 +862,7 @@ impl Element for PanelCanvas {
 }
 
 impl PanelCanvas {
-    fn table_splitters(&self, cx: &App) -> Option<(AnyElement, CRect)> {
+    fn table_splitters(&self, window: &Window, cx: &App) -> Option<(AnyElement, CRect)> {
         let table = self.ws.read(cx).app.panels.get(self.panel)?.kind.table()?;
         let header = table.layout.header;
         let bounds = CRect::from_xywh(
@@ -893,7 +918,7 @@ impl PanelCanvas {
             let context_owner = self.ws.clone();
             let drop_owner = self.ws.clone();
             let title = table.column_title(source_index).to_owned();
-            let header_hint = title.clone();
+            let header_hint = table_header_tooltip(&title, column.header.title, header, window, cx);
             let (hide_command, next) = match table.columns.get() {
                 volna_core::table::columns::ColumnSet::Transactions(columns) => {
                     let order: Vec<_> = columns.iter().map(|(i, _, _)| i).collect();
@@ -971,9 +996,12 @@ impl PanelCanvas {
                             );
                         });
                     })
-                    .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(header_hint.clone())
-                            .build(window, cx)
+                    .when_some(header_hint, |el, hint| {
+                        el.tooltip_show_delay(crate::ui::tooltip::delay(cx))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(hint.clone())
+                                    .build(window, cx)
+                            })
                     })
                     .when(draggable, |el| {
                         el.on_drag(
@@ -1624,6 +1652,40 @@ mod text_tests {
     use gpui_kit::{TestAppContext, VisualTestContext};
     use vtr::Recorder;
 
+    #[gpui_kit::test]
+    fn table_header_tooltips_only_reveal_clipped_names(cx: &mut TestAppContext) {
+        cx.update(crate::init_app);
+        let host = cx.add_window(Workspace::new);
+        host.update(cx, |_, window, cx| {
+            for zoom in [1.0, 1.5] {
+                crate::theme::set(crate::theme::CoreTheme::volna(true).zoomed(zoom), cx);
+                let t = theme(cx);
+                for title in ["Attributes · preview", "取指 · preview"] {
+                    let width = GpuiMeasure { window, theme: t }.text_width(
+                        title,
+                        FontRole::Mono,
+                        core_theme(cx).mono_size,
+                    );
+                    let viewport = CRect::from_xywh(0.0, 0.0, width + 40.0, 40.0);
+                    for (left, available, clipped) in [
+                        (0.0, width, false),
+                        (0.0, width - 1.0, true),
+                        (-1.0, width + 20.0, true),
+                        (41.0, width, true),
+                        (0.0, width + 100.0, false),
+                    ] {
+                        let bounds = CRect::from_xywh(left, 0.0, available, 40.0);
+                        assert_eq!(
+                            table_header_tooltip(title, bounds, viewport, window, cx).as_deref(),
+                            clipped.then_some(title),
+                            "{title}: left={left}, available={available}, zoom={zoom}",
+                        );
+                    }
+                }
+            }
+        })
+        .unwrap();
+    }
     #[gpui_kit::test]
     fn pipeline_draws_multiline_trace_labels(cx: &mut TestAppContext) {
         use volna_core::pipeline::{FollowActivity, PipelineModel, Rows};

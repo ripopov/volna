@@ -8,6 +8,7 @@ pub mod menu;
 pub(crate) mod message_dialog;
 pub mod splitter;
 pub mod text_input;
+pub(crate) mod tooltip;
 pub mod window_controls;
 
 pub use button::{action_button, icon_button};

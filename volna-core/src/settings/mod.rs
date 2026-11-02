@@ -142,6 +142,7 @@ impl Autosave {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppearanceSettings {
     pub theme: String,
+    pub tooltip_delay: std::time::Duration,
     pub zoom: f64,
     pub digital_wave_width: f64,
     pub analog_wave_width: f64,
@@ -245,6 +246,9 @@ impl Settings {
             },
             appearance: AppearanceSettings {
                 theme: text("appearance.theme"),
+                tooltip_delay: std::time::Duration::from_millis(
+                    int("appearance.tooltipDelay") as u64
+                ),
                 zoom: normalize_zoom(value("appearance.zoom").as_f64().unwrap_or(1.0)),
                 digital_wave_width: value("appearance.digitalWaveWidth").as_f64().unwrap_or(1.0),
                 analog_wave_width: value("appearance.analogWaveWidth").as_f64().unwrap_or(1.25),

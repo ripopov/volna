@@ -1,4 +1,4 @@
-//! Paint the pipeline panel into a [`Scene`]: the label column, one row per transaction
+//! Paint the pipeline panel into a [`crate::scene::Scene`]: the label column, one row per transaction
 //! with a cell per stage on the primary lane and a band per overlay stage, plus the shared
 //! timeline header, cursor and markers.
 
@@ -6,8 +6,8 @@ use crate::color::Color;
 use crate::document::Document;
 use crate::geometry::{CursorIcon, Point, Rect, point, size, snap};
 use crate::icons::IconName;
-use crate::scene::{FontRole, Scene, TextCache, TextMeasure};
-use crate::theme::{Theme, contrast};
+use crate::scene::FontRole;
+use crate::theme::contrast;
 use crate::wave::marks;
 use crate::wave::overlay::{self, TextPainter, TimeColumn};
 use volna_trace::data::transactions::Status;
@@ -69,22 +69,14 @@ fn arrow_head(from: Point, to: Point, size: f32) -> [[Point; 2]; 2] {
 pub fn paint(
     model: &PipelineModel,
     doc: &Document,
-    theme: &Theme,
-    text: &mut TextCache,
-    measure: &mut dyn TextMeasure,
-    scene: &mut Scene,
+    mut p: TextPainter<'_>,
     focused: bool,
+    marker_tooltip_visible: bool,
 ) {
     let layout = model.last_layout().clone();
     let bounds = layout.bounds;
-    let t = theme;
+    let t = p.theme;
     let z = |v: f32| v * t.zoom;
-    let mut p = TextPainter {
-        theme,
-        text,
-        measure,
-        scene,
-    };
     let viewport = model.nav.viewport(doc);
     let cursor = model.nav.cursor(doc);
     let base = doc.time_base();
@@ -597,6 +589,7 @@ pub fn paint(
         doc,
         cursor,
         model.pointer,
+        marker_tooltip_visible,
         match model.drag {
             Some(super::model::Drag::Marker(held)) if held.moved => Some(held.from),
             _ => None,

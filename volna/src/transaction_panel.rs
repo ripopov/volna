@@ -446,7 +446,7 @@ impl TransactionPanelView {
             .text_size(px(t.ui_size_small))
             .text_color(muted)
             .child(Icon::new(IconName::Workflow).size(t.px(12.0)).color(muted))
-            .child(detail_text("tx-path", path).flex_1());
+            .child(detail_text(cx, "tx-path", path).flex_1());
 
         let mut title = div().flex().min_w_0().items_center().gap_2().child(
             div()
@@ -463,6 +463,7 @@ impl TransactionPanelView {
         );
         title = title.child(
             detail_text(
+                cx,
                 "tx-label",
                 identity
                     .label
@@ -493,7 +494,7 @@ impl TransactionPanelView {
                 );
             }
         } else {
-            title = title.child(status_badge(&t, identity.status_text, identity.status));
+            title = title.child(status_badge(cx, &t, identity.status_text, identity.status));
         }
         if let Some(kind) = identity.kind.filter(|_| view.point_kind.is_none()) {
             point_metadata = point_metadata.child(
@@ -655,7 +656,7 @@ impl TransactionPanelView {
                                 .child(SharedString::from(name.clone())),
                         )
                         .child(
-                            detail_text(format!("tx-source-{name}"), value.clone())
+                            detail_text(cx, format!("tx-source-{name}"), value.clone())
                                 .flex_1()
                                 .font_family(t.mono_font),
                         ),
@@ -1120,7 +1121,9 @@ impl TransactionPanelView {
                     .text_color(t.panel.text_muted)
                     .child(label),
             )
-            .child(detail_text(format!("tx-time-value-{label}"), text).font_family(t.mono_font));
+            .child(
+                detail_text(cx, format!("tx-time-value-{label}"), text).font_family(t.mono_font),
+            );
         match time {
             Some(time) => tile
                 .id(SharedString::from(format!("tx-time-{label}")))
@@ -1165,6 +1168,7 @@ impl TransactionPanelView {
                         .text_size(px(t.ui_size_small))
                         .text_color(hsla(style.text))
                         .font_family(t.mono_font)
+                        .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                         .tooltip({
                             let name = cell.name.clone();
                             move |w, cx| Tooltip::new(name.clone()).build(w, cx)
@@ -1353,6 +1357,7 @@ impl TransactionPanelView {
             .whitespace_nowrap()
             .text_ellipsis()
             .font_family(t.mono_font)
+            .tooltip_show_delay(crate::ui::tooltip::delay(cx))
             .tooltip(move |w, cx| Tooltip::new(hint.clone()).build(w, cx))
             .child(SharedString::from(row.value.clone()));
         let value = match row.radix {
@@ -1393,7 +1398,7 @@ impl TransactionPanelView {
                     .gap_1()
                     .text_color(t.panel.text_muted)
                     .child(
-                        detail_text(format!("tx-attr-key-{attribute}"), row.key.clone())
+                        detail_text(cx, format!("tx-attr-key-{attribute}"), row.key.clone())
                             .text_ellipsis_start()
                             .debug_selector(move || format!("tx-attr-key-{attribute}"))
                             .flex_1(),
@@ -1506,13 +1511,18 @@ impl TransactionPanelView {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(detail_text(format!("tx-related-label-{index}"), subtitle))
+                    .child(detail_text(
+                        cx,
+                        format!("tx-related-label-{index}"),
+                        subtitle,
+                    ))
                     .when_some(row.track.clone(), |element, path| {
                         element.child(
                             div()
                                 .text_size(px(t.ui_size_small))
                                 .text_color(t.panel.text_muted)
                                 .child(detail_text(
+                                    cx,
                                     format!("tx-related-path-{index}"),
                                     path.join("."),
                                 )),
@@ -1523,7 +1533,11 @@ impl TransactionPanelView {
                             div()
                                 .text_size(px(t.ui_size_small))
                                 .text_color(t.panel.text_muted)
-                                .child(detail_text(format!("tx-related-relation-{index}"), label)),
+                                .child(detail_text(
+                                    cx,
+                                    format!("tx-related-relation-{index}"),
+                                    label,
+                                )),
                         )
                     }),
             )
@@ -1533,6 +1547,7 @@ impl TransactionPanelView {
 }
 
 fn detail_text(
+    cx: &App,
     id: impl Into<gpui_kit::ElementId>,
     text: impl Into<SharedString>,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
@@ -1543,6 +1558,7 @@ fn detail_text(
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
+        .tooltip_show_delay(crate::ui::tooltip::delay(cx))
         .tooltip({
             let text = text.clone();
             move |window, cx| Tooltip::new(text.clone()).build(window, cx)
@@ -1589,6 +1605,7 @@ fn tag(t: &crate::theme::Theme, text: &str) -> AnyElement {
 }
 
 fn status_badge(
+    cx: &App,
     t: &crate::theme::Theme,
     text: &str,
     status: volna_trace::data::transactions::Status,
@@ -1612,12 +1629,13 @@ fn status_badge(
         .text_size(px(t.ui_size_small))
         .text_color(color)
         .when(status == Status::Open, gpui_kit::Styled::border_dashed)
+        .tooltip_show_delay(crate::ui::tooltip::delay(cx))
         .tooltip(move |w, cx| Tooltip::new(raw).build(w, cx))
         .child(SharedString::from(text.to_owned()))
         .into_any_element()
 }
 
-fn chips(t: &crate::theme::Theme, items: &[Chip], total: usize) -> AnyElement {
+fn chips(cx: &App, t: &crate::theme::Theme, items: &[Chip], total: usize) -> AnyElement {
     let mut element = div().flex().flex_wrap().gap_1();
     for chip in items {
         element = element.child(
@@ -1630,6 +1648,7 @@ fn chips(t: &crate::theme::Theme, items: &[Chip], total: usize) -> AnyElement {
                 .text_color(t.badge.text)
                 .max_w_full()
                 .child(detail_text(
+                    cx,
                     format!("tx-chip-{}", chip.key),
                     format!("{} {}", chip.key, chip.value),
                 )),
@@ -1684,7 +1703,7 @@ fn stage_row(
                 .items_center()
                 .gap_1()
                 .font_family(t.mono_font)
-                .child(detail_text(format!("tx-stage-name-{index}"), row.name.clone()).flex_1())
+                .child(detail_text(cx, format!("tx-stage-name-{index}"), row.name.clone()).flex_1())
                 .when(!row.primary, |element| element.child(tag(t, &row.lane))),
         )
         .child(
@@ -1708,7 +1727,7 @@ fn stage_row(
                                 .bg(hsla(style.fill)),
                         ),
                 )
-                .child(chips(t, &row.attributes, row.attributes_total)),
+                .child(chips(cx, t, &row.attributes, row.attributes_total)),
         )
         .child(
             div()
@@ -1749,6 +1768,7 @@ fn event_row(
                 .flex_none()
                 .font_family(t.mono_font)
                 .child(detail_text(
+                    cx,
                     format!("tx-event-name-{index}"),
                     row.name.clone(),
                 )),
@@ -1768,7 +1788,7 @@ fn event_row(
             div()
                 .flex_1()
                 .min_w_0()
-                .child(chips(t, &row.attributes, row.attributes_total)),
+                .child(chips(cx, t, &row.attributes, row.attributes_total)),
         )
         .into_any_element()
 }

@@ -1,6 +1,7 @@
 //! `App`: the whole viewer with no toolkit attached.
 
 mod opening;
+mod tooltip;
 mod traces;
 mod undo;
 
@@ -542,6 +543,7 @@ pub struct App {
     pub history: crate::history::History,
     announcement: Option<String>,
     marker_edit: Option<(PanelId, crate::marker::MarkerId)>,
+    marker_tooltip: tooltip::MarkerTooltip,
     transient_menu: Option<(PanelId, WaveMenu)>,
     transient_menus: usize,
     pub frames: crate::frames::FrameStats,
@@ -579,6 +581,7 @@ impl App {
             history: History::default(),
             announcement: None,
             marker_edit: None,
+            marker_tooltip: tooltip::MarkerTooltip::default(),
             transient_menu: None,
             transient_menus: 0,
             frames: FrameStats::default(),
@@ -644,6 +647,7 @@ impl App {
         self.history.clear();
         self.announcement = None;
         self.marker_edit = None;
+        self.marker_tooltip = tooltip::MarkerTooltip::default();
         self.transient_menu = None;
         if let Err(e) = self.panels.reset() {
             self.events.push(Event::Notice(e.to_string()));
@@ -661,6 +665,7 @@ impl App {
         self.history.clear();
         self.announcement = None;
         self.marker_edit = None;
+        self.marker_tooltip = tooltip::MarkerTooltip::default();
         self.transient_menu = None;
         self.sync_lane_tracks();
         self.sync_analog_summaries();
@@ -1150,6 +1155,7 @@ impl App {
             self.changed();
         }
         self.cancel_pipeline_opening(&command);
+        self.update_marker_tooltip(&command, now);
         self.dispatch(command, now);
         if !pointer {
             self.digital_cache.prune();
@@ -2809,6 +2815,9 @@ impl App {
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {
+        if self.marker_tooltip.tick(now) {
+            self.changed();
+        }
         let mut animating = self.doc.shared.viewport.tick(now);
         for panel in self.panels.iter_mut() {
             animating |= panel.tick(&self.doc, now);
@@ -2838,11 +2847,20 @@ impl App {
         self.doc.clocks.defaults = self.pipeline_clocks();
         self.panels.sync_timeline_dividers();
         let metadata = self.panels.timeline_metadata(id, bounds, theme.zoom);
+        let tooltip_delay = self.settings.resolved().appearance.tooltip_delay;
         let doc = &self.doc;
         Some(match &mut self.panels.get_mut(id)?.kind {
-            PanelKind::Waves(w) => PanelLayout::Waves(w.layout(bounds, doc, theme, metadata)),
+            PanelKind::Waves(w) => {
+                let layout = w.layout(bounds, doc, theme, metadata);
+                self.marker_tooltip
+                    .relayout(id, &layout.marker_lane, tooltip_delay);
+                PanelLayout::Waves(layout)
+            }
             PanelKind::Pipeline(p) => {
-                PanelLayout::Pipeline(p.layout(bounds, doc, theme, metadata, device_scale))
+                let layout = p.layout(bounds, doc, theme, metadata, device_scale);
+                self.marker_tooltip
+                    .relayout(id, &layout.marker_lane, tooltip_delay);
+                PanelLayout::Pipeline(layout)
             }
             PanelKind::Table(table) => PanelLayout::Table(table.layout(bounds, theme, measure)),
             _ => return None,
@@ -2891,6 +2909,7 @@ impl App {
                         scene,
                     },
                     focused,
+                    self.marker_tooltip.visible(id),
                     &mut self.digital_cache,
                     &budget,
                 );
@@ -2900,11 +2919,14 @@ impl App {
                 crate::pipeline::paint::paint(
                     p,
                     &self.doc,
-                    theme,
-                    &mut self.text,
-                    measure,
-                    scene,
+                    crate::wave::overlay::TextPainter {
+                        theme,
+                        text: &mut self.text,
+                        measure,
+                        scene,
+                    },
                     focused,
+                    self.marker_tooltip.visible(id),
                 );
                 p.last_layout().bounds
             }

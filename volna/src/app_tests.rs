@@ -1456,6 +1456,168 @@ fn native_idle_save_reopens_a_copied_trace_with_its_workspace(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
+fn tooltip_deadlines_wake_without_idle_repaints_and_cancel_on_leave(cx: &mut TestAppContext) {
+    use std::time::Duration;
+    use volna_core::geometry::point;
+    use volna_core::scene::MonoMeasure;
+    use volna_core::wave::{PointerEvent, viewport::Viewport};
+
+    init(cx);
+    let host = cx.add_window(Workspace::new);
+    host.update(cx, |ws, window, cx| {
+        ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+        ws.dispatch(Command::AddVars(a_all(vec![0, 1])), Some(window), cx);
+        ws.app
+            .settings_loaded(r#"{"appearance.tooltipDelay":5000}"#);
+        ws.app.doc.add_marker(100);
+        ws.app.doc.add_marker(200);
+        ws.app.doc.shared.viewport.set(Viewport {
+            start: 0.0,
+            end: 1000.0,
+        });
+        ws.after(Some(window), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let (panel, position) = host
+        .update(cx, |ws, window, cx| {
+            let panel = ws.app.panels.focused_id();
+            let chip = ws
+                .app
+                .panels
+                .waves(panel)
+                .unwrap()
+                .last_layout()
+                .marker_lane
+                .chips[0]
+                .rect;
+            let position = point(chip.left() + 2.0, chip.top() + 2.0);
+            ws.app.handle_at(
+                Command::Pointer(panel, PointerEvent::Move { position }),
+                Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
+            );
+            ws.after(Some(window), cx);
+            (panel, position)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let frames = host
+        .update(cx, |ws, _, cx| {
+            assert!(!ws.app.is_animating());
+            assert_eq!(
+                ws.tooltip_timer.as_ref().map(|(at, _)| *at),
+                ws.app.tooltip_deadline()
+            );
+            ws.sync_tooltip_timer(cx);
+            ws.app.panels.waves(panel).unwrap().frames_painted
+        })
+        .unwrap();
+    cx.run_until_parked();
+    host.update(cx, |ws, window, _| {
+        assert_eq!(ws.app.panels.waves(panel).unwrap().frames_painted, frames);
+        ws.app.doc.shared.viewport.set(Viewport {
+            start: 100.0,
+            end: 1100.0,
+        });
+        window.refresh();
+    })
+    .unwrap();
+    cx.run_until_parked();
+    host.update(cx, |ws, window, cx| {
+        let deadline = ws.app.tooltip_deadline().expect("new target waits");
+        assert!(deadline > Instant::now() + Duration::from_secs(4));
+        assert_eq!(ws.tooltip_timer.as_ref().map(|(at, _)| *at), Some(deadline));
+        ws.dispatch(
+            Command::Pointer(panel, PointerEvent::Leave),
+            Some(window),
+            cx,
+        );
+        assert!(ws.tooltip_timer.is_none());
+        ws.app.handle_at(
+            Command::Pointer(panel, PointerEvent::Move { position }),
+            Instant::now().checked_sub(Duration::from_secs(6)).unwrap(),
+        );
+        ws.after(Some(window), cx);
+        assert!(ws.tooltip_timer.is_some());
+    })
+    .unwrap();
+    cx.run_until_parked();
+    host.update(cx, |ws, _, cx| {
+        assert!(ws.tooltip_timer.is_none(), "the one-shot wakeup completed");
+        assert!(ws.app.tooltip_deadline().is_none());
+        assert!(!ws.app.is_animating());
+        assert!(
+            ws.app
+                .render_panel(panel, crate::theme::core_theme(cx), &mut MonoMeasure)
+                .texts()
+                .any(|text| text == "Marker 2")
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn tooltip_delay_can_be_edited_in_settings_and_reset_live(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, VisualTestContext};
+    use std::time::Duration;
+    use volna_core::app::SettingsCommand;
+
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let host = RootWindow {
+        root,
+        workspace: workspace.unwrap(),
+    };
+    host.update(cx, |ws, window, cx| {
+        ws.dispatch(
+            Command::Settings(SettingsCommand::Reveal {
+                id: "appearance.tooltipDelay".into(),
+            }),
+            Some(window),
+            cx,
+        );
+    })
+    .unwrap();
+    let mut view = VisualTestContext::from_window(root.into(), cx);
+    view.run_until_parked();
+    let control = view
+        .debug_bounds("setting-number-appearance.tooltipDelay")
+        .expect("tooltip delay control");
+    view.simulate_click(control.center(), Modifiers::default());
+    view.simulate_keystrokes(SELECT_ALL);
+    view.simulate_input("900");
+    view.simulate_keystrokes("enter");
+    view.run_until_parked();
+    host.update(&mut view, |ws, window, cx| {
+        assert_eq!(
+            ws.app.settings.resolved().appearance.tooltip_delay,
+            Duration::from_millis(900)
+        );
+        assert_eq!(crate::ui::tooltip::delay(cx), Duration::from_millis(900));
+        assert!(
+            ws.app
+                .settings
+                .text()
+                .contains("\"appearance.tooltipDelay\": 900")
+        );
+        ws.dispatch(
+            Command::Settings(SettingsCommand::Reset {
+                id: "appearance.tooltipDelay".into(),
+            }),
+            Some(window),
+            cx,
+        );
+        assert_eq!(crate::ui::tooltip::delay(cx), Duration::from_millis(500));
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn settings_tab_results_json_view_and_palette_render(cx: &mut TestAppContext) {
     use volna_core::app::SettingsCommand;
     init(cx);

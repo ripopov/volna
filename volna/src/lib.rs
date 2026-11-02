@@ -42,6 +42,12 @@ pub use app::Workspace;
 
 pub fn init_app(cx: &mut App) {
     gpui_kit::init(cx);
+    ui::tooltip::set_delay(
+        volna_core::settings::Settings::default()
+            .appearance
+            .tooltip_delay,
+        cx,
+    );
     // Test applications have short-lived executors; core tests use their own worker threads.
     #[cfg(not(test))]
     {
