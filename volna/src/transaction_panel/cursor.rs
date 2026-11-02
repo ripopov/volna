@@ -2,6 +2,7 @@
 
 use super::{TransactionCommand, TransactionPanelView};
 use crate::theme::{ThemePx, theme};
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, Context, SharedString, Window, div, px, uniform_list};
@@ -118,18 +119,24 @@ impl TransactionPanelView {
             );
         } else {
             section = section.child(
-                uniform_list(
-                    ("tx-active-list", self.id.0),
-                    count,
-                    cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
-                        Self::cursor_rows(&query, range, cx)
-                    }),
-                )
-                .track_scroll(&self.cursor_list.scroll)
-                .h(t.px(34.0 * count.min(4) as f32))
-                .w_full()
-                .min_w_0()
-                .flex_none(),
+                div()
+                    .relative()
+                    .h(t.px(34.0 * count.min(4) as f32))
+                    .w_full()
+                    .min_w_0()
+                    .flex_none()
+                    .child(
+                        uniform_list(
+                            ("tx-active-list", self.id.0),
+                            count,
+                            cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
+                                Self::cursor_rows(&query, range, cx)
+                            }),
+                        )
+                        .track_scroll(&self.cursor_list.scroll)
+                        .size_full(),
+                    )
+                    .child(Scrollbar::vertical(&self.cursor_list.scroll)),
             );
         }
         if outside {
