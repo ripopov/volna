@@ -95,21 +95,39 @@ fn embedded_toolbar_routes_navigation_and_overflow_without_losing_panel_focus(
     let first_zoomed = viewport(&mut vcx, first);
     assert!(first_zoomed.width() < before.width());
     assert_eq!(viewport(&mut vcx, second), second_zoomed);
+    click(&mut vcx, "wave-pan-right");
+    let first_panned = viewport(&mut vcx, first);
+    assert_ne!(first_panned, first_zoomed);
+    assert_eq!(viewport(&mut vcx, second), second_zoomed);
+    ws.update(&mut vcx, |ws, cx| {
+        ws.dispatch(Command::Panels(PanelsCommand::Focus(second)), None, cx);
+    });
+    vcx.run_until_parked();
+    click(&mut vcx, "wave-pan-left");
+    let second_panned = viewport(&mut vcx, second);
+    assert_ne!(second_panned, second_zoomed);
+    assert_eq!(viewport(&mut vcx, first), first_panned);
+
+    vcx.simulate_resize(size(px(300.0), px(700.0)));
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("wave-pan-left").is_none());
+    assert!(vcx.debug_bounds("wave-toolbar-more").is_some());
     click(&mut vcx, "wave-toolbar-more");
     vcx.simulate_keystrokes("down down enter");
     vcx.run_until_parked();
-    assert_ne!(viewport(&mut vcx, first), first_zoomed);
-    assert_eq!(viewport(&mut vcx, second), second_zoomed);
+    assert_eq!(viewport(&mut vcx, first), first_panned);
+    assert_ne!(viewport(&mut vcx, second), second_panned);
 
-    let first_panned = viewport(&mut vcx, first);
+    let second_panned_again = viewport(&mut vcx, second);
     click(&mut vcx, "wave-toolbar-more");
     ws.update(&mut vcx, |ws, cx| {
-        ws.dispatch(Command::Panels(PanelsCommand::Focus(second)), None, cx);
+        ws.dispatch(Command::Panels(PanelsCommand::Focus(first)), None, cx);
     });
     vcx.simulate_keystrokes("down enter");
     vcx.run_until_parked();
     assert_eq!(viewport(&mut vcx, first), first_panned);
-    assert_eq!(viewport(&mut vcx, second), second_zoomed);
+    assert_eq!(viewport(&mut vcx, second), second_panned_again);
     ws.update(&mut vcx, |ws, cx| {
         ws.dispatch(Command::Panels(PanelsCommand::Focus(first)), None, cx);
     });
@@ -121,7 +139,13 @@ fn embedded_toolbar_routes_navigation_and_overflow_without_losing_panel_focus(
     assert!(ws.read_with(&vcx, |ws, _| ws.app.sidebar_visible));
 
     for dark in [true, false] {
-        for (width, zoom) in [(900.0, 1.0), (360.0, 1.0), (360.0, 1.6), (360.0, 3.0)] {
+        for (width, zoom) in [
+            (900.0, 1.0),
+            (340.0, 1.0),
+            (360.0, 1.0),
+            (360.0, 1.6),
+            (360.0, 3.0),
+        ] {
             vcx.simulate_resize(size(px(width), px(700.0)));
             vcx.update(|_, cx| {
                 crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
@@ -135,6 +159,7 @@ fn embedded_toolbar_routes_navigation_and_overflow_without_losing_panel_focus(
                 "wave-toolbar-more",
                 "wave-zoom-in",
                 "wave-next-transition",
+                "wave-pan-left",
                 "toggle-sidebar",
             ] {
                 if let Some(button) = vcx.debug_bounds(selector) {
@@ -145,22 +170,30 @@ fn embedded_toolbar_routes_navigation_and_overflow_without_losing_panel_focus(
                     assert!(button.top() >= toolbar.top() && button.bottom() <= toolbar.bottom());
                 }
             }
-            assert_eq!(
-                vcx.debug_bounds("wave-zoom-in").is_some(),
-                width / zoom >= 340.0
-            );
+            for selector in ["wave-zoom-in", "wave-pan-left"] {
+                assert_eq!(
+                    vcx.debug_bounds(selector).is_some(),
+                    width / zoom >= 340.0,
+                    "{selector}: dark={dark} width={width} zoom={zoom}"
+                );
+            }
             assert_eq!(
                 vcx.debug_bounds("wave-next-transition").is_some(),
                 width / zoom >= 240.0
             );
+            assert_eq!(
+                vcx.debug_bounds("wave-toolbar-more").is_some(),
+                width / zoom < 340.0
+            );
         }
     }
+    let second_unchanged = viewport(&mut vcx, second);
     let before = viewport(&mut vcx, first);
     click(&mut vcx, "wave-toolbar-more");
     vcx.simulate_keystrokes("down enter");
     vcx.run_until_parked();
     assert!(viewport(&mut vcx, first).width() < before.width());
-    assert_eq!(viewport(&mut vcx, second), second_zoomed);
+    assert_eq!(viewport(&mut vcx, second), second_unchanged);
 }
 
 #[gpui_kit::test]

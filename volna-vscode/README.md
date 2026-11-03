@@ -17,11 +17,12 @@ Viewer commands, VS Code themes, resource settings, and saved `.volna.json`
 workspaces pass through the extension host. Settings and saved workspaces retain
 the original source URI, so reopening an import converts that source again.
 
-The viewer toolbar provides zoom, fit, transition navigation, and sidebar toggles.
-It controls the active waveform panel and restores keyboard focus after navigation.
-Narrow editors move controls into the toolbar's dropdown; page panning is always
-available there. VS Code's editor overflow menu and Command Palette also expose
-navigation, layout, workspace, and settings commands.
+The viewer toolbar provides zoom, fit, panning, transition navigation, and sidebar
+toggles. It controls the active waveform panel and restores keyboard focus after
+navigation. Editors too narrow for the full set move zoom and pan controls into
+the toolbar's dropdown, which appears whenever controls do not fit. VS Code's
+editor overflow menu and Command Palette also expose navigation, layout,
+workspace, and settings commands.
 
 ## Build and install
 

@@ -4,26 +4,25 @@ use super::*;
 
 #[derive(Clone, Copy)]
 struct ToolbarLayout {
-    embedded: bool,
-    zoom: bool,
+    wide: bool,
     navigation: bool,
 }
 
 impl ToolbarLayout {
     fn new(embedded: bool, width: f32) -> Self {
         Self {
-            embedded,
-            zoom: !embedded || width >= 340.0,
+            wide: !embedded || width >= 340.0,
             navigation: !embedded || width >= 240.0,
         }
     }
 
-    fn shows(self, action: Action) -> bool {
-        match action {
-            Action::ZoomIn | Action::ZoomOut => self.zoom,
-            Action::PrevEdge | Action::NextEdge => self.navigation,
-            Action::PanPageLeft | Action::PanPageRight => !self.embedded,
-            _ => true,
+    fn fits(self, tool: WaveTool) -> bool {
+        if matches!(tool.action, Action::ZoomFit) {
+            return true;
+        }
+        match tool.group {
+            ToolGroup::Zoom | ToolGroup::Pan => self.wide,
+            ToolGroup::Transitions => self.navigation,
         }
     }
 }
@@ -101,6 +100,12 @@ const WAVE_TOOLS: [WaveTool; 7] = [
         group: ToolGroup::Transitions,
     },
 ];
+
+fn hidden_tools(layout: ToolbarLayout) -> impl Iterator<Item = WaveTool> {
+    WAVE_TOOLS
+        .into_iter()
+        .filter(move |&tool| !layout.fits(tool))
+}
 
 impl Workspace {
     pub(super) fn workspace_header_height(&self, cx: &App) -> f32 {
@@ -202,31 +207,22 @@ impl Workspace {
             .flex_none()
             .items_center()
             .gap(t.px(4.0));
+        let button_size = t.px(if self.embedded { 24.0 } else { 32.0 });
         let mut previous_group = None;
-        for tool in WAVE_TOOLS {
-            let WaveTool {
-                id,
-                icon,
-                label,
-                action,
-                group,
-            } = tool;
-            if !layout.shows(action) {
-                continue;
-            }
-            if previous_group.is_some_and(|previous| previous != group) {
+        for tool in WAVE_TOOLS.into_iter().filter(|&tool| layout.fits(tool)) {
+            if previous_group.is_some_and(|previous| previous != tool.group) {
                 toolbar = toolbar.child(Self::titlebar_divider(cx));
             }
-            previous_group = Some(group);
+            previous_group = Some(tool.group);
             toolbar = toolbar.child(
-                icon_button(id, icon, t.bar, t.bar_hover, cx)
-                    .w(t.px(if self.embedded { 24.0 } else { 32.0 }))
-                    .h(t.px(if self.embedded { 24.0 } else { 32.0 }))
-                    .debug_selector(move || id.into())
+                icon_button(tool.id, tool.icon, t.bar, t.bar_hover, cx)
+                    .w(button_size)
+                    .h(button_size)
+                    .debug_selector(move || tool.id.into())
                     .disabled(!tool.available(enabled, transitions))
-                    .tooltip(label)
+                    .tooltip(tool.label)
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.run_toolbar_action(action, window, cx);
+                        this.run_toolbar_action(tool.action, window, cx);
                     })),
             );
         }
@@ -240,6 +236,7 @@ impl Workspace {
     ) -> impl IntoElement {
         let t = *theme(cx);
         let layout = ToolbarLayout::new(true, f32::from(window.viewport_size().width) / t.zoom);
+        let overflow = !layout.navigation || hidden_tools(layout).next().is_some();
         div()
             .id("viewer-toolbar")
             .debug_selector(|| "viewer-toolbar".into())
@@ -264,22 +261,24 @@ impl Workspace {
                     .when(layout.navigation, |el| {
                         el.child(self.render_sidebar_toggles(cx))
                     })
-                    .child(
-                        icon_button(
-                            "wave-toolbar-more",
-                            IconName::ChevronDown,
-                            t.bar,
-                            t.bar_hover,
-                            cx,
+                    .when(overflow, |el| {
+                        el.child(
+                            icon_button(
+                                "wave-toolbar-more",
+                                IconName::ChevronDown,
+                                t.bar,
+                                t.bar_hover,
+                                cx,
+                            )
+                            .debug_selector(|| "wave-toolbar-more".into())
+                            .tooltip("More waveform actions")
+                            .on_click(cx.listener(
+                                move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                                    this.open_toolbar_menu(event.position(), layout, window, cx);
+                                },
+                            )),
                         )
-                        .debug_selector(|| "wave-toolbar-more".into())
-                        .tooltip("More waveform actions")
-                        .on_click(cx.listener(
-                            move |this, event: &gpui_kit::ClickEvent, window, cx| {
-                                this.open_toolbar_menu(event.position(), layout, window, cx);
-                            },
-                        )),
-                    ),
+                    }),
             )
     }
 
@@ -327,14 +326,12 @@ impl Workspace {
             .as_ref()
             .map(|dock| dock.open);
         let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
-            for tool in WAVE_TOOLS {
-                if !layout.shows(tool.action) {
-                    menu = menu.item(
-                        PopupMenuItem::new(tool.label)
-                            .disabled(!tool.available(enabled, transitions))
-                            .on_click(run(Command::Action(tool.action))),
-                    );
-                }
+            for tool in hidden_tools(layout) {
+                menu = menu.item(
+                    PopupMenuItem::new(tool.label)
+                        .disabled(!tool.available(enabled, transitions))
+                        .on_click(run(Command::Action(tool.action))),
+                );
             }
             if !layout.navigation {
                 menu = menu.separator().item(
