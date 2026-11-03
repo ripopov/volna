@@ -5071,6 +5071,59 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
             assert!(chips.iter().all(|c| !c.loading));
         })
         .unwrap();
+    let copy_path =
+        |vcx: &mut VisualTestContext, trace: char, path: &std::path::Path, dropdown: bool| {
+            let selector = match (trace, dropdown) {
+                ('A', true) => "trace-menu-A",
+                ('A', false) => "trace-chip-A",
+                ('B', true) => "trace-menu-B",
+                _ => unreachable!(),
+            };
+            let bounds = vcx.debug_bounds(selector).unwrap();
+            if dropdown {
+                vcx.simulate_click(bounds.center(), Modifiers::default());
+            } else {
+                vcx.simulate_mouse_down(
+                    bounds.center(),
+                    gpui_kit::MouseButton::Right,
+                    Modifiers::default(),
+                );
+                vcx.simulate_mouse_up(
+                    bounds.center(),
+                    gpui_kit::MouseButton::Right,
+                    Modifiers::default(),
+                );
+            }
+            draw(vcx);
+            window
+                .update(vcx, |ws, _, _| {
+                    assert_eq!(
+                        ws.status_menu.as_ref().unwrap().trace,
+                        TraceId::from_letter(trace)
+                    );
+                })
+                .unwrap();
+            vcx.update(|window, cx| {
+                use gpui_kit::test::TestWindowExt;
+                window.render_frame(cx);
+                let mut menu = window.within("popup-menu");
+                assert_eq!(
+                    menu.find(0usize).label(),
+                    Some(format!("Copy path: {}", path.display()).as_str())
+                );
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("old".into()));
+                menu.click(0usize, cx);
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    path.to_str().unwrap()
+                );
+            });
+            draw(vcx);
+            window
+                .update(vcx, |ws, _, _| assert!(ws.status_menu.is_none()))
+                .unwrap();
+        };
+    copy_path(&mut vcx, 'B', &b, true);
     assert!(vcx.debug_bounds("trace-chip-A").is_some());
     let chip = vcx.debug_bounds("trace-chip-B").expect("B's chip");
     assert!(vcx.debug_bounds("trace-row-A").is_some());
@@ -5117,8 +5170,20 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
         })
         .unwrap();
     draw(&mut vcx);
-    assert!(vcx.debug_bounds("trace-chip-A").is_none());
+    assert!(vcx.debug_bounds("trace-chip-A").is_some());
     assert!(vcx.debug_bounds("trace-row-A").is_none());
+    window
+        .update(&mut vcx, |ws, window, cx| {
+            ws.dispatch(
+                Command::RenameTrace(TraceId::A, Some("Processor".into())),
+                Some(window),
+                cx,
+            );
+        })
+        .unwrap();
+    draw(&mut vcx);
+    copy_path(&mut vcx, 'A', &a, false);
+    copy_path(&mut vcx, 'A', &a, true);
 }
 
 #[gpui_kit::test]

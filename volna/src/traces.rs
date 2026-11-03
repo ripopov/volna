@@ -1,6 +1,6 @@
-//! Several traces in one window: the trace chips in the title bar and their menu, a trace's
-//! name field, and adding traces by dialog, command line and drop.
+//! Title-bar trace controls, renaming, and adding traces by dialog, command line and drop.
 
+use gpui_kit::component::Sizable;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
@@ -43,7 +43,7 @@ pub(crate) fn letter_badge(trace: TraceId, cx: &gpui_kit::App) -> impl IntoEleme
 impl Workspace {
     pub(crate) fn render_trace_chips(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let chips = self.app.trace_chips();
-        if chips.len() < 2 {
+        if chips.is_empty() {
             return None;
         }
         let row = div()
@@ -52,13 +52,23 @@ impl Workspace {
             .min_w_0()
             .items_center()
             .gap_1()
-            .children(chips.iter().map(|chip| self.trace_chip(chip, cx)));
+            .children(
+                chips
+                    .iter()
+                    .map(|chip| self.trace_chip(chip, chips.len() > 1, cx)),
+            );
         Some(row.into_any_element())
     }
 
-    fn trace_chip(&self, chip: &TraceChip, cx: &mut Context<Self>) -> AnyElement {
+    fn trace_chip(&self, chip: &TraceChip, multiple: bool, cx: &mut Context<Self>) -> AnyElement {
         let t = *theme(cx);
+        let mut chevron = t.bar;
+        chevron.icon = t.bar.icon_muted;
         let trace = chip.trace;
+        let menu_open = self
+            .status_menu
+            .as_ref()
+            .is_some_and(|menu| menu.trace == Some(trace));
         let renaming = self.trace_rename.as_ref().filter(|r| r.trace == trace);
         let tooltip = chip.tooltip();
         let name: SharedString = chip.name.clone().into();
@@ -95,13 +105,15 @@ impl Workspace {
                         .text_color(t.bar.text)
                         .child(name),
                 )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(t.ui_size_small))
-                        .text_color(t.bar.text_muted)
-                        .child(detail),
-                )
+                .when(multiple || chip.loading, |el| {
+                    el.child(
+                        div()
+                            .flex_none()
+                            .text_size(px(t.ui_size_small))
+                            .text_color(t.bar.text_muted)
+                            .child(detail),
+                    )
+                })
                 .into_any_element(),
         };
         div()
@@ -111,15 +123,13 @@ impl Workspace {
             .flex_none()
             .items_center()
             .gap_1()
-            .h(t.px(22.0))
-            .pl(t.px(3.0))
-            .pr(t.px(8.0))
+            .h(t.px(28.0))
+            .pl(t.px(8.0))
+            .pr(t.px(4.0))
             .rounded(t.px(4.0))
-            .border_1()
-            .border_color(t.border_variant)
-            .bg(t.badge.bg)
+            .when(menu_open, |el| el.bg(t.bar_hover.bg))
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(t.badge_hover.bg))
+            .hover(move |s| s.bg(t.bar_hover.bg))
             .when(chip.loading, |el| el.opacity(0.6))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(
@@ -140,8 +150,27 @@ impl Workspace {
             )
             .tooltip_show_delay(crate::ui::tooltip::delay(cx))
             .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
-            .child(letter_badge(trace, cx))
+            .when(multiple, |el| el.child(letter_badge(trace, cx)))
             .child(body)
+            .child(
+                crate::ui::button::icon_button(
+                    ("trace-menu", trace.index()),
+                    crate::ui::IconName::ChevronDown,
+                    chevron,
+                    t.bar_hover,
+                    cx,
+                )
+                .with_size(t.px(12.0) / 0.75)
+                .debug_selector(move || format!("trace-menu-{trace}"))
+                .tooltip("Trace actions")
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(
+                    move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.open_trace_menu(trace, event.position(), window, cx);
+                    },
+                )),
+            )
             .into_any_element()
     }
 
@@ -169,6 +198,7 @@ impl Workspace {
         };
         let focus = self.window_focus(window);
         let min_w = theme(cx).px(200.0);
+        let copy_workspace = cx.entity().downgrade();
         let menu = PopupMenu::build(window, cx, move |menu, _, _| {
             let close = if chip.closable {
                 PopupMenuItem::new(format!("Close Trace {trace}")).on_click(run(
@@ -180,7 +210,26 @@ impl Workspace {
                 }))
             };
             let mut menu = menu
-                .item(PopupMenuItem::label(chip.tooltip()))
+                .item(
+                    PopupMenuItem::new(format!("Copy path: {}", chip.source)).on_click({
+                        let path = chip.source.clone();
+                        let workspace = copy_workspace.clone();
+                        move |_, _, cx| {
+                            #[cfg(target_family = "wasm")]
+                            crate::clipboard::copy(&path);
+                            #[cfg(not(target_family = "wasm"))]
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                path.clone(),
+                            ));
+                            workspace
+                                .update(cx, |this, cx| {
+                                    this.status_menu = None;
+                                    cx.notify();
+                                })
+                                .ok();
+                        }
+                    }),
+                )
                 .separator()
                 .item(
                     PopupMenuItem::new("Rename Trace…")
@@ -204,6 +253,9 @@ impl Workspace {
                 .action_context(focus)
         });
         self.show_status_menu(position, menu, window, cx);
+        if let Some(menu) = self.status_menu.as_mut() {
+            menu.trace = Some(trace);
+        }
     }
 
     pub(crate) fn start_trace_rename(

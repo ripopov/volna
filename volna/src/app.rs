@@ -323,6 +323,7 @@ pub(crate) struct HostedRename {
 }
 
 pub(crate) struct HostedMenu {
+    pub(crate) trace: Option<volna_core::trace::TraceId>,
     window: gpui_kit::WindowId,
     position: gpui_kit::Point<Pixels>,
     popup: Entity<PopupMenu>,
@@ -2747,6 +2748,7 @@ impl Workspace {
         })
         .detach();
         self.status_menu = Some(HostedMenu {
+            trace: None,
             window: window.window_handle().window_id(),
             position,
             popup: menu,

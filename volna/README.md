@@ -118,6 +118,12 @@ The launcher accepts VTR, FST, and Kanata paths, multiple traces, and saved
 `.volna.json` workspaces. `--no-workspace` disables workspace reads and writes;
 `--config-dir DIR` chooses the settings directory.
 
+Each trace name in the title bar has a source-path tooltip and an actions menu,
+including when only one file is open. Open the menu with its dropdown arrow or
+by right-clicking the name. The first item, **Copy path**, copies the source path
+even after renaming the trace. Click the name to reveal the trace in the hierarchy;
+double-click to rename it. Letter badges distinguish traces when several are open.
+
 Build a native distribution directory for the current platform with both
 executables and dependency license notices:
 
