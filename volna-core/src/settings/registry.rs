@@ -365,7 +365,7 @@ pub static REGISTRY: &[Spec] = &[
             max: 5000,
             step: 100,
         },
-        default: Literal::Integer(500),
+        default: Literal::Integer(1000),
         apply: Apply::Live,
         hosts: Hosts::ALL,
     },

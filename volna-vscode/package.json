@@ -385,7 +385,7 @@
           "type": "number"
         },
         "volna.appearance.tooltipDelay": {
-          "default": 500,
+          "default": 1000,
           "markdownDescription": "Wait before showing explanatory hover popups, including marker and measurement details. Set to 0 to show immediately. Live waveform values and click menus remain immediate.",
           "maximum": 5000,
           "minimum": 0,

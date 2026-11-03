@@ -443,6 +443,7 @@ fn renaming_by_chip_reveals_the_marker_and_follows_panel_focus() {
 
 #[test]
 fn the_tooltip_of_a_chip_has_the_full_name() {
+    use std::time::Duration;
     use volna_core::geometry::point;
     use volna_core::wave::PointerEvent;
     let mut app = app();
@@ -463,14 +464,15 @@ fn the_tooltip_of_a_chip_has_the_full_name() {
     assert!(!frame(&mut app).texts().any(|t| t == long));
     let p = point(chip.rect.left() + 4.0, chip.rect.top() + 4.0);
     let now = Instant::now();
+    let deadline = now + app.settings.resolved().appearance.tooltip_delay;
     app.handle_at(
         Command::Pointer(app.panels.focused_id(), PointerEvent::Move { position: p }),
         now,
     );
     assert!(!frame(&mut app).texts().any(|t| t == long));
-    app.tick(now + std::time::Duration::from_millis(499));
+    app.tick(deadline - Duration::from_millis(1));
     assert!(!frame(&mut app).texts().any(|t| t == long));
-    app.tick(now + std::time::Duration::from_millis(500));
+    app.tick(deadline);
     let texts: Vec<String> = frame(&mut app).texts().map(str::to_owned).collect();
     assert!(texts.iter().any(|t| t == "Marker 1"), "{texts:?}");
     assert!(texts.iter().any(|t| t == long), "{texts:?}");
@@ -491,12 +493,11 @@ fn tooltip_hover_waits_per_target_and_cancels_on_leave_or_click() {
         .iter()
         .map(|chip| point(chip.rect.left() + 2.0, chip.rect.top() + 2.0))
         .collect();
+    let delay = app.settings.resolved().appearance.tooltip_delay;
     let now = Instant::now();
-    let send = |app: &mut App, event, ms| {
-        app.handle_at(
-            Command::Pointer(panel, event),
-            now + Duration::from_millis(ms),
-        );
+    let first_deadline = now + delay;
+    let send = |app: &mut App, event, at| {
+        app.handle_at(Command::Pointer(panel, event), at);
     };
     let tooltip = |app: &mut App, label: &str| frame(app).texts().any(|text| text == label);
     send(
@@ -504,16 +505,16 @@ fn tooltip_hover_waits_per_target_and_cancels_on_leave_or_click() {
         PointerEvent::Move {
             position: positions[0],
         },
-        0,
+        now,
     );
     send(
         &mut app,
         PointerEvent::Move {
             position: positions[0],
         },
-        400,
+        now + delay / 2,
     );
-    app.tick(now + Duration::from_millis(500));
+    app.tick(first_deadline);
     assert!(
         tooltip(&mut app, "Marker 1"),
         "movement within a target keeps its deadline"
@@ -524,13 +525,14 @@ fn tooltip_hover_waits_per_target_and_cancels_on_leave_or_click() {
         PointerEvent::Move {
             position: positions[1],
         },
-        600,
+        first_deadline,
     );
-    app.tick(now + Duration::from_millis(1099));
+    let second_deadline = first_deadline + delay;
+    app.tick(second_deadline - Duration::from_millis(1));
     assert!(!tooltip(&mut app, "Marker 2"));
-    app.tick(now + Duration::from_millis(1100));
+    app.tick(second_deadline);
     assert!(tooltip(&mut app, "Marker 2"));
-    send(&mut app, PointerEvent::Leave, 1200);
+    send(&mut app, PointerEvent::Leave, second_deadline);
     assert!(!tooltip(&mut app, "Marker 2"));
 
     send(
@@ -538,20 +540,21 @@ fn tooltip_hover_waits_per_target_and_cancels_on_leave_or_click() {
         PointerEvent::Move {
             position: positions[0],
         },
-        1300,
+        second_deadline,
     );
-    send(&mut app, PointerEvent::Leave, 1400);
-    app.tick(now + Duration::from_millis(1800));
+    send(&mut app, PointerEvent::Leave, second_deadline + delay / 2);
+    app.tick(second_deadline + delay);
     assert!(
         !tooltip(&mut app, "Marker 1"),
         "leaving cancels a pending popup"
     );
+    let clicked_hover = second_deadline + delay;
     send(
         &mut app,
         PointerEvent::Move {
             position: positions[0],
         },
-        1900,
+        clicked_hover,
     );
     send(
         &mut app,
@@ -560,9 +563,9 @@ fn tooltip_hover_waits_per_target_and_cancels_on_leave_or_click() {
             button: MouseButton::Left,
             modifiers: Modifiers::default(),
         },
-        2000,
+        clicked_hover + delay / 2,
     );
-    app.tick(now + Duration::from_millis(2500));
+    app.tick(clicked_hover + delay);
     assert!(
         !tooltip(&mut app, "Marker 1"),
         "clicking cancels a pending popup"
@@ -581,6 +584,8 @@ fn tooltip_waits_expose_a_deadline_without_requesting_animation_frames() {
     let panel = app.panels.focused_id();
     let chip = lane(&app).chips[0].rect;
     let now = Instant::now();
+    let delay = app.settings.resolved().appearance.tooltip_delay;
+    let deadline = now + delay;
     app.handle_at(
         Command::Pointer(
             panel,
@@ -590,19 +595,16 @@ fn tooltip_waits_expose_a_deadline_without_requesting_animation_frames() {
         ),
         now,
     );
-    assert_eq!(
-        app.tooltip_deadline(),
-        Some(now + Duration::from_millis(500))
-    );
+    assert_eq!(app.tooltip_deadline(), Some(deadline));
     assert!(!app.is_animating());
-    assert!(!app.tick(now + Duration::from_millis(499)));
+    assert!(!app.tick(deadline - Duration::from_millis(1)));
     assert!(!app.is_animating());
     app.take_events();
-    assert!(!app.tick(now + Duration::from_millis(500)));
+    assert!(!app.tick(deadline));
     assert_eq!(app.tooltip_deadline(), None);
     assert!(app.take_events().contains(&volna_core::Event::Changed));
     assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
-    app.tick(now + Duration::from_secs(1));
+    app.tick(deadline + delay);
     assert!(app.take_events().is_empty(), "the deadline fires only once");
 }
 
@@ -626,12 +628,13 @@ fn viewport_motion_restarts_tooltip_delay_for_the_new_target() {
         let chip = lane(&app).chips[0].rect;
         let position = point(chip.left() + 2.0, chip.top() + 2.0);
         let now = Instant::now();
+        let delay = app.settings.resolved().appearance.tooltip_delay;
         app.handle_at(
             Command::Pointer(panel, PointerEvent::Move { position }),
             now,
         );
         let moving_at = if already_visible {
-            let ready = now + Duration::from_millis(500);
+            let ready = now + delay;
             app.tick(ready);
             assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
             ready
@@ -646,20 +649,18 @@ fn viewport_motion_restarts_tooltip_delay_for_the_new_target() {
             moving_at,
             Animation::On,
         );
-        let arrived = moving_at + Duration::from_millis(140);
+        let arrived = moving_at + Animation::On.duration().unwrap();
         app.tick(arrived);
         frame(&mut app);
         assert_eq!(
             lane(&app).hit(position),
             Some(volna_core::marker::LaneHit::Chip(1))
         );
-        assert_eq!(
-            app.tooltip_deadline(),
-            Some(arrived + Duration::from_millis(500))
-        );
-        app.tick(arrived + Duration::from_millis(499));
+        let deadline = arrived + delay;
+        assert_eq!(app.tooltip_deadline(), Some(deadline));
+        app.tick(deadline - Duration::from_millis(1));
         assert!(!frame(&mut app).texts().any(|text| text == "Marker 2"));
-        app.tick(arrived + Duration::from_millis(500));
+        app.tick(deadline);
         assert!(frame(&mut app).texts().any(|text| text == "Marker 2"));
     }
 }
@@ -690,27 +691,29 @@ fn tooltip_delay_edits_apply_to_the_next_hover_and_survive_settings_reload() {
         Command::Pointer(panel, PointerEvent::Move { position }),
         now,
     );
-    app.tick(now + Duration::from_millis(899));
+    let custom_delay = Duration::from_millis(900);
+    let deadline = now + custom_delay;
+    app.tick(deadline - Duration::from_millis(1));
     assert!(!frame(&mut app).texts().any(|text| text == "Marker 1"));
-    app.tick(now + Duration::from_millis(900));
+    app.tick(deadline);
     assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
 
     let mut restored = App::new();
     restored.settings_loaded(app.settings.text());
     assert_eq!(
         restored.settings.resolved().appearance.tooltip_delay,
-        Duration::from_millis(900)
+        custom_delay
     );
     app.handle_at(
         Command::Settings(SettingsCommand::Set {
             id: "appearance.tooltipDelay".into(),
             value: Value::Integer(0),
         }),
-        now + Duration::from_secs(1),
+        deadline,
     );
     app.handle_at(
         Command::Pointer(panel, PointerEvent::Move { position }),
-        now + Duration::from_secs(1),
+        deadline,
     );
     assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
     app.handle(Command::Settings(SettingsCommand::Reset {
@@ -718,7 +721,7 @@ fn tooltip_delay_edits_apply_to_the_next_hover_and_survive_settings_reload() {
     }));
     assert_eq!(
         app.settings.resolved().appearance.tooltip_delay,
-        Duration::from_millis(500)
+        Duration::from_secs(1)
     );
     assert!(!app.settings.text().contains("appearance.tooltipDelay"));
 }

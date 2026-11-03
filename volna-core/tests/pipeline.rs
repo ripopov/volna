@@ -2703,7 +2703,7 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
     frame(&mut app, waves, &theme);
     let title = format!("{members} markers · click to zoom in");
     assert!(!app.scene().texts().any(|t| *t == title));
-    app.tick(hover_start + std::time::Duration::from_millis(500));
+    app.tick(hover_start + app.settings.resolved().appearance.tooltip_delay);
     frame(&mut app, waves, &theme);
     assert!(app.scene().texts().any(|t| *t == title));
     assert!(app.scene().texts().any(|t| t == "Marker 2"));

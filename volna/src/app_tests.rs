@@ -1665,9 +1665,10 @@ fn tooltip_deadlines_wake_without_idle_repaints_and_cancel_on_leave(cx: &mut Tes
                 .chips[0]
                 .rect;
             let position = point(chip.left() + 2.0, chip.top() + 2.0);
+            let delay = ws.app.settings.resolved().appearance.tooltip_delay;
             ws.app.handle_at(
                 Command::Pointer(panel, PointerEvent::Move { position }),
-                Instant::now().checked_sub(Duration::from_secs(1)).unwrap(),
+                Instant::now().checked_sub(delay / 2).unwrap(),
             );
             ws.after(Some(window), cx);
             (panel, position)
@@ -1686,6 +1687,7 @@ fn tooltip_deadlines_wake_without_idle_repaints_and_cancel_on_leave(cx: &mut Tes
         })
         .unwrap();
     cx.run_until_parked();
+    let retargeted_at = Instant::now();
     host.update(cx, |ws, window, _| {
         assert_eq!(ws.app.panels.waves(panel).unwrap().frames_painted, frames);
         ws.app.doc.shared.viewport.set(Viewport {
@@ -1698,7 +1700,8 @@ fn tooltip_deadlines_wake_without_idle_repaints_and_cancel_on_leave(cx: &mut Tes
     cx.run_until_parked();
     host.update(cx, |ws, window, cx| {
         let deadline = ws.app.tooltip_deadline().expect("new target waits");
-        assert!(deadline > Instant::now() + Duration::from_secs(4));
+        let delay = ws.app.settings.resolved().appearance.tooltip_delay;
+        assert!(deadline >= retargeted_at + delay);
         assert_eq!(ws.tooltip_timer.as_ref().map(|(at, _)| *at), Some(deadline));
         ws.dispatch(
             Command::Pointer(panel, PointerEvent::Leave),
@@ -1708,7 +1711,9 @@ fn tooltip_deadlines_wake_without_idle_repaints_and_cancel_on_leave(cx: &mut Tes
         assert!(ws.tooltip_timer.is_none());
         ws.app.handle_at(
             Command::Pointer(panel, PointerEvent::Move { position }),
-            Instant::now().checked_sub(Duration::from_secs(6)).unwrap(),
+            Instant::now()
+                .checked_sub(delay + Duration::from_millis(1))
+                .unwrap(),
         );
         ws.after(Some(window), cx);
         assert!(ws.tooltip_timer.is_some());
@@ -1736,6 +1741,7 @@ fn tooltip_delay_can_be_edited_in_settings_and_reset_live(cx: &mut TestAppContex
     use volna_core::app::SettingsCommand;
 
     init(cx);
+    let default_delay = cx.update(|cx| crate::ui::tooltip::delay(cx));
     let mut workspace = None;
     let root = cx.add_window(|window, cx| {
         let ws = cx.new(|cx| Workspace::new(window, cx));
@@ -1785,7 +1791,7 @@ fn tooltip_delay_can_be_edited_in_settings_and_reset_live(cx: &mut TestAppContex
             Some(window),
             cx,
         );
-        assert_eq!(crate::ui::tooltip::delay(cx), Duration::from_millis(500));
+        assert_eq!(crate::ui::tooltip::delay(cx), default_delay);
     })
     .unwrap();
 }
