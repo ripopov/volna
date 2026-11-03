@@ -21,6 +21,9 @@ use volna_trace::data::transactions::{
 
 pub const VIEW_BYTES: usize = 128 * 1024;
 pub const FILTER_THRESHOLD: usize = 8;
+pub const DEFAULT_CURSOR_HEIGHT: f32 = 198.0;
+pub const MIN_CURSOR_HEIGHT: f32 = 96.0;
+pub const MAX_CURSOR_HEIGHT: f32 = 1200.0;
 
 fn clock_time(clock: Option<&Clock>, time: u64) -> Option<String> {
     let clock = clock?;
@@ -129,6 +132,7 @@ impl SectionKey {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewPrefs {
+    pub cursor_height: f32,
     pub detail_items: usize,
     pub radix: BTreeMap<String, Radix>,
     pub collapsed: BTreeSet<SectionKey>,
@@ -138,6 +142,7 @@ pub struct ViewPrefs {
 impl Default for ViewPrefs {
     fn default() -> Self {
         Self {
+            cursor_height: DEFAULT_CURSOR_HEIGHT,
             detail_items: 20,
             radix: BTreeMap::new(),
             collapsed: BTreeSet::new(),

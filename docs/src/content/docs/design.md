@@ -108,6 +108,16 @@ values. Focus a divider with Tab, resize with Left or Right, and fit with Enter.
 Attributes fills unused space until given an explicit width. Workspace files
 remember widths, including hidden columns; resetting columns restores defaults.
 
+The Record details panel in `volna/examples/landing-page.volna.json` is the
+specimen for the native horizontal split. The At cursor list keeps its height
+when its count changes, with overflow scrolling inside the list. The 1px divider
+uses the shared splitter grab area, resize cursor, and focused-border role on
+hover, keyboard focus, and drag. Drag resizes, double-click resets, and Tab focuses
+the divider for Up/Down resizing; Shift increases the step, Home/End reach the
+limits, Enter resets, and Escape cancels a drag. Details scroll independently.
+The saved height scales with interface zoom and is temporarily constrained when
+the panel is too short to display both panes at their preferred sizes.
+
 The native waveform point tracks in `volna/examples/landing.vtr` are a specimen
 of inline labels, exact-time groups, and time-range groups. Labels use the viewer
 panel surface and border; a severity-colored edge remains visible beside a

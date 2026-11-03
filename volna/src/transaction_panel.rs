@@ -1,6 +1,7 @@
 //! The Transaction panel: everything recorded about one selected record.
 
 mod cursor;
+mod split;
 
 #[cfg(not(target_arch = "wasm32"))]
 use gpui_kit::ClipboardItem;
@@ -61,6 +62,7 @@ pub(crate) struct TransactionPanelView {
     group_filter: Entity<InputState>,
     synced_group_filter: String,
     cursor_list: cursor::CursorList,
+    cursor_split: Entity<split::RecordSplit>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -106,6 +108,7 @@ impl TransactionPanelView {
             group_filter,
             synced_group_filter: String::new(),
             cursor_list: cursor::CursorList::default(),
+            cursor_split: cx.new(split::RecordSplit::new),
             _subscriptions: vec![subscription, group_subscription],
         }
     }
@@ -253,7 +256,6 @@ impl Render for TransactionPanelView {
                 .update(cx, |input, cx| input.set_value(group_search, window, cx));
         }
         let t = *theme(cx);
-        let cursor_list = self.render_cursor_records(cx);
         let Some(owner) = self.ws.upgrade() else {
             return div().into_any_element();
         };
@@ -304,6 +306,7 @@ impl Render for TransactionPanelView {
             TxPanelState::Failed(error) => notice(&t, "Cannot load the record", &error),
             TxPanelState::Refused(error) => notice(&t, "Not admitted", &error),
         };
+        let body = self.render_cursor_split(body, cx);
         let follows = div()
             .flex()
             .items_center()
@@ -409,7 +412,6 @@ impl Render for TransactionPanelView {
                 }),
             )
             .child(header)
-            .child(cursor_list)
             .child(body)
             .into_any_element()
     }

@@ -57,6 +57,7 @@ pub enum TxPanelState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransactionCommand {
+    CursorHeight(f32),
     CursorSelect {
         track: Traced<TrackRef>,
         id: TransactionRef,
@@ -493,6 +494,18 @@ impl TransactionModel {
         now: Instant,
     ) -> bool {
         match command {
+            TransactionCommand::CursorHeight(height) => {
+                if !height.is_finite() {
+                    return false;
+                }
+                let height = height.clamp(
+                    super::view::MIN_CURSOR_HEIGHT,
+                    super::view::MAX_CURSOR_HEIGHT,
+                );
+                let changed = self.prefs.cursor_height != height;
+                self.prefs.cursor_height = height;
+                changed
+            }
             TransactionCommand::CursorSelect { track, id, time } => {
                 let Some(generator) = doc.resident_generator(track) else {
                     return false;

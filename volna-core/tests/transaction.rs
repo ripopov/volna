@@ -852,6 +852,7 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         TransactionCommand::Pin(true),
         TransactionCommand::Radix("payload.pc".into()),
         TransactionCommand::Collapse(SectionKey::Events, true),
+        TransactionCommand::CursorHeight(286.0),
     ] {
         app.handle(Command::Transaction(pinned, command));
     }
@@ -867,6 +868,7 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         .clone();
     assert_eq!(entry["record"]["id"], load.0);
     assert_eq!(entry["radix"]["payload.pc"], "hex");
+    assert_eq!(entry["cursor_height"], 286.0);
 
     let mut restored = App::new();
     restored.set_session(session.clone());
@@ -893,12 +895,85 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         "0x80000060"
     );
     assert!(v.events.collapsed);
+    assert_eq!(
+        restored
+            .panels
+            .transaction(pinned)
+            .unwrap()
+            .prefs()
+            .cursor_height,
+        286.0
+    );
+    assert_eq!(
+        restored
+            .panels
+            .transaction(free)
+            .unwrap()
+            .prefs()
+            .cursor_height,
+        volna_core::transaction::view::DEFAULT_CURSOR_HEIGHT
+    );
     assert_eq!(view(&restored, free).identity.id, add);
     for id in [load, add] {
         select(&mut restored, pipeline, insn, id.0);
         assert_eq!(view(&restored, free).identity.id, id);
         assert_eq!(view(&restored, pinned).identity.id, load);
     }
+}
+
+#[test]
+fn cursor_split_validates_sizes_and_only_marks_changed_preferences_for_autosave() {
+    use volna_core::transaction::view::{
+        DEFAULT_CURSOR_HEIGHT, MAX_CURSOR_HEIGHT, MIN_CURSOR_HEIGHT,
+    };
+    use volna_core::workspace::persistence::Persistence;
+    let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
+    let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
+    let panel = show(&mut app, pipeline, insn, load.0);
+    app.configure_persistence(Persistence::Auto);
+    let initial = app.workspace.scheduler.revision();
+    for height in [
+        f32::NAN,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        DEFAULT_CURSOR_HEIGHT,
+    ] {
+        app.handle(Command::Transaction(
+            panel,
+            TransactionCommand::CursorHeight(height),
+        ));
+        assert_eq!(
+            app.panels.transaction(panel).unwrap().prefs().cursor_height,
+            DEFAULT_CURSOR_HEIGHT
+        );
+        assert_eq!(app.workspace.scheduler.revision(), initial);
+    }
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::CursorHeight(-100.0),
+    ));
+    assert_eq!(
+        app.panels.transaction(panel).unwrap().prefs().cursor_height,
+        MIN_CURSOR_HEIGHT
+    );
+    assert_eq!(app.workspace.scheduler.revision(), initial + 1);
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::CursorHeight(10_000.0),
+    ));
+    assert_eq!(
+        app.panels.transaction(panel).unwrap().prefs().cursor_height,
+        MAX_CURSOR_HEIGHT
+    );
+    assert_eq!(app.workspace.scheduler.revision(), initial + 2);
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::CursorHeight(10_000.0),
+    ));
+    assert_eq!(app.workspace.scheduler.revision(), initial + 2);
+    assert_eq!(view(&app, panel).identity.id, load);
+    assert_eq!(app.doc.selection().unwrap().id, load);
 }
 
 #[test]

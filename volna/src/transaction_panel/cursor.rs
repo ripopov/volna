@@ -1,12 +1,13 @@
 //! Virtual cursor records share the existing record details and selection commands.
 
-use super::{TransactionCommand, TransactionPanelView};
+use super::{TransactionCommand, TransactionPanelView, split};
 use crate::theme::{ThemePx, theme};
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{AnyElement, App, Context, SharedString, Window, div, px, uniform_list};
 use gpui_kit::{ScrollStrategy, UniformListScrollHandle};
+use volna_core::transaction::view::DEFAULT_CURSOR_HEIGHT;
 use volna_core::{
     trace::Traced,
     transaction::cursor::{CursorRecords, CursorRecordsState},
@@ -16,24 +17,82 @@ use volna_trace::data::transactions::{TrackRef, TransactionRef};
 #[derive(Default)]
 pub(super) struct CursorList {
     scroll: UniformListScrollHandle,
-    synced: Option<(Traced<TrackRef>, u64, Option<TransactionRef>, u32)>,
+    synced: Option<CursorListKey>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct CursorListKey {
+    track: Traced<TrackRef>,
+    time: u64,
+    selected: Option<TransactionRef>,
+    zoom: u32,
+    height: u32,
 }
 
 impl TransactionPanelView {
+    pub(super) fn render_cursor_split(
+        &self,
+        body: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let records = self.cursor_records(cx);
+        if matches!(records, CursorRecordsState::Hidden) {
+            return body;
+        }
+        let height = self
+            .ws
+            .upgrade()
+            .and_then(|ws| {
+                ws.read(cx)
+                    .app
+                    .panels
+                    .transaction(self.id)
+                    .map(|m| m.prefs().cursor_height)
+            })
+            .unwrap_or(DEFAULT_CURSOR_HEIGHT);
+        let owner = cx.entity().downgrade();
+        let list_owner = owner.clone();
+        split::element(
+            self.cursor_split.clone(),
+            height,
+            body,
+            move |height, _, cx| {
+                list_owner
+                    .update(cx, |view, cx| {
+                        view.render_cursor_records(records, height, cx)
+                    })
+                    .unwrap_or_else(|_| div().into_any_element())
+            },
+            move |height, window, cx| {
+                drop(owner.update(cx, |view, cx| {
+                    view.dispatch(TransactionCommand::CursorHeight(height), window, cx);
+                }));
+            },
+        )
+    }
+
     fn cursor_records(&self, cx: &App) -> CursorRecordsState {
         self.ws.upgrade().map_or(CursorRecordsState::Hidden, |ws| {
             ws.read(cx).app.cursor_records(self.id)
         })
     }
 
-    pub(super) fn render_cursor_records(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let query = match self.cursor_records(cx) {
+    fn render_cursor_records(
+        &mut self,
+        records: CursorRecordsState,
+        height: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let query = match records {
             CursorRecordsState::Ready(query) => query,
             CursorRecordsState::Hidden => return div().into_any_element(),
             state => {
                 let t = *theme(cx);
                 let unavailable = matches!(state, CursorRecordsState::Unavailable);
                 return div()
+                    .debug_selector(|| "tx-cursor-records".into())
+                    .size_full()
+                    .overflow_hidden()
                     .px_3()
                     .py_2()
                     .flex_none()
@@ -61,7 +120,13 @@ impl TransactionPanelView {
                 )
             },
         );
-        let key = (query.track, query.time, query.selected, t.zoom.to_bits());
+        let key = CursorListKey {
+            track: query.track,
+            time: query.time,
+            selected: query.selected,
+            zoom: t.zoom.to_bits(),
+            height: height.to_bits(),
+        };
         if self.cursor_list.synced != Some(key) {
             self.cursor_list
                 .scroll
@@ -79,14 +144,15 @@ impl TransactionPanelView {
             .debug_selector(|| "tx-cursor-records".into())
             .w_full()
             .min_w_0()
-            .flex_none()
+            .h_full()
+            .min_h_0()
+            .overflow_hidden()
             .flex()
             .flex_col()
-            .border_b_1()
-            .border_color(t.border_variant)
             .child(
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .justify_between()
                     .gap_2()
@@ -111,6 +177,8 @@ impl TransactionPanelView {
         if count == 0 {
             section = section.child(
                 div()
+                    .flex_1()
+                    .min_h_0()
                     .px_3()
                     .py_2()
                     .text_size(px(t.ui_size_small))
@@ -121,10 +189,11 @@ impl TransactionPanelView {
             section = section.child(
                 div()
                     .relative()
-                    .h(t.px(34.0 * count.min(4) as f32))
+                    .flex_1()
+                    .min_h_0()
+                    .debug_selector(|| "tx-cursor-list-viewport".into())
                     .w_full()
                     .min_w_0()
-                    .flex_none()
                     .child(
                         uniform_list(
                             ("tx-active-list", self.id.0),
@@ -146,6 +215,8 @@ impl TransactionPanelView {
                     .py_1()
                     .text_size(px(t.ui_size_small))
                     .text_color(t.panel.text_muted)
+                    .flex_none()
+                    .text_ellipsis()
                     .child("Selected record is outside the cursor’s active set"),
             );
         }

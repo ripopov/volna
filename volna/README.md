@@ -15,6 +15,13 @@ The fixed Record details header provides **Back** and **Forward** navigation thr
 visited records. Use **Alt+←/→** on Windows and Linux or **⌘[/]** on macOS;
 shortcuts apply to the focused detail panel.
 
+The **At cursor** list reserves a stable height above the record details, including
+when no transactions are active. Both panes scroll independently. Drag the divider
+to resize; double-click resets it. Tab to the divider and use **↑/↓** to resize,
+**Shift** for larger steps, **Home/End** for the limits, or **Enter** to reset.
+**Escape** cancels a drag. Workspace files remember each panel's divider height;
+small panels temporarily clamp it to keep both panes usable.
+
 Double-click a log or located-event generator to add it to waveforms, or use
 **Add to Waves** in the member context menu. Logs use `log.message`; located
 events use `vtr.label`. Sparse records have inline labels. Simultaneous records

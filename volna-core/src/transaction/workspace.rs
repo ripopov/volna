@@ -8,7 +8,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-pub(crate) const VERSION: u32 = 3;
+pub(crate) const VERSION: u32 = 4;
 
 #[derive(Serialize, Deserialize)]
 struct SavedRecord {
@@ -26,6 +26,7 @@ struct TransactionPanel {
     version: u32,
     title: Option<String>,
     pinned: bool,
+    cursor_height: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     record: Option<SavedRecord>,
     #[serde(default)]
@@ -46,6 +47,7 @@ pub(crate) fn save(
         version: VERSION,
         title,
         pinned: model.pinned(),
+        cursor_height: model.prefs().cursor_height,
         record: shown.map(|record| SavedRecord {
             trace: record.track.trace(),
             track: record.track.path().to_vec(),
@@ -71,7 +73,16 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     let saved: TransactionPanel =
         serde_json::from_str(raw.get()).context("invalid transaction panel")?;
     let mut model = TransactionModel::new(ctx.budget.clone(), ctx.detail_items);
-    let mut prefs = ViewPrefs::default();
+    ensure!(
+        saved.cursor_height.is_finite()
+            && (super::view::MIN_CURSOR_HEIGHT..=super::view::MAX_CURSOR_HEIGHT)
+                .contains(&saved.cursor_height),
+        "invalid cursor list height"
+    );
+    let mut prefs = ViewPrefs {
+        cursor_height: saved.cursor_height,
+        ..ViewPrefs::default()
+    };
     for key in &saved.collapsed {
         let section = SectionKey::parse(key)
             .ok_or_else(|| anyhow::anyhow!("unknown transaction section {key:?}"))?;

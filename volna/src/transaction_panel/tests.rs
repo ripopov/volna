@@ -24,12 +24,24 @@ fn cursor_list_reveals_deep_selection_and_keeps_details_after_cursor_moves(
         .unwrap();
     let key = writer.intern("vtr.label").unwrap();
     let label = writer.intern(&"Load packet · λ ".repeat(24)).unwrap();
-    for _ in 0..5000 {
+    for i in 0..5000 {
         let tx = writer.begin_at(track, 10, &(), None).unwrap();
         writer
             .attribute(tx.owner(), key, vtr::Value::Str(label))
             .unwrap();
-        writer.end_at(tx, 100, vtr::Status::Ok).unwrap();
+        writer
+            .end_at(
+                tx,
+                if i == 0 {
+                    450
+                } else if i < 3 {
+                    300
+                } else {
+                    100
+                },
+                vtr::Status::Ok,
+            )
+            .unwrap();
     }
     writer.advance_time(1000).unwrap();
     writer.close().unwrap();
@@ -100,6 +112,34 @@ fn cursor_list_reveals_deep_selection_and_keeps_details_after_cursor_moves(
                         && selected_bounds.right() <= bounds.right()
                 );
                 assert!(bounds.right() <= px(width));
+                let divider = vcx.debug_bounds("tx-cursor-divider").unwrap();
+                let body = vcx.debug_bounds("tx-body").unwrap();
+                for (time, expected) in [(200, 3), (350, 1), (500, 0), (20, 5000)] {
+                    host.update(&mut vcx, |ws, _, cx| {
+                        ws.app.doc.shared.cursor = Some(time);
+                        cx.notify();
+                    })
+                    .unwrap();
+                    vcx.run_until_parked();
+                    vcx.update(|window, cx| window.draw(cx).clear(cx));
+                    assert_eq!(
+                        vcx.debug_bounds("tx-cursor-divider").unwrap(),
+                        divider,
+                        "cursor count must not move the divider"
+                    );
+                    assert_eq!(
+                        vcx.debug_bounds("tx-body").unwrap(),
+                        body,
+                        "cursor count must not move the details"
+                    );
+                    host.update(&mut vcx, |ws, _, _| {
+                        assert_eq!(
+                            ws.app.cursor_records(details).ready().unwrap().count,
+                            expected
+                        );
+                    })
+                    .unwrap();
+                }
                 host.update(&mut vcx, |ws, _, _| {
                     let query = ws.app.cursor_records(details).ready().unwrap();
                     assert_eq!(query.count, 5000);
@@ -133,8 +173,8 @@ fn cursor_list_reveals_deep_selection_and_keeps_details_after_cursor_moves(
     vcx.run_until_parked();
     host.update(&mut vcx, |ws, _, _| {
         let viewport = ws.app.doc.shared.viewport.target();
-        assert_eq!(viewport.start, 5.5);
-        assert_eq!(viewport.end, 104.5);
+        assert_eq!(viewport.start, -12.0);
+        assert_eq!(viewport.end, 472.0);
     })
     .unwrap();
     vcx.update(|window, cx| window.click("tx-reveal-selected", cx));
@@ -195,4 +235,204 @@ fn cursor_list_reveals_deep_selection_and_keeps_details_after_cursor_moves(
         assert_eq!(ws.app.doc.selection().unwrap().id, previous);
     })
     .unwrap();
+    check_cursor_split(&host, &mut vcx, details);
+}
+
+fn check_cursor_split(
+    host: &gpui_kit::WindowHandle<Workspace>,
+    vcx: &mut VisualTestContext,
+    details: volna_core::panels::PanelId,
+) {
+    use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, point};
+    use volna_core::transaction::view::{DEFAULT_CURSOR_HEIGHT, MIN_CURSOR_HEIGHT};
+    let selected = host
+        .update(vcx, |ws, _, _| {
+            ws.app
+                .panels
+                .transaction(details)
+                .unwrap()
+                .shown()
+                .unwrap()
+                .id
+        })
+        .unwrap();
+    let draw = |vcx: &mut VisualTestContext| {
+        host.update(vcx, |ws, _, _| {
+            assert_eq!(
+                ws.app
+                    .panels
+                    .transaction(details)
+                    .unwrap()
+                    .shown()
+                    .unwrap()
+                    .id,
+                selected,
+                "resizing and scrolling must preserve selection"
+            );
+        })
+        .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+    };
+    let height = |vcx: &mut VisualTestContext| {
+        host.update(vcx, |ws, _, _| {
+            ws.app
+                .panels
+                .transaction(details)
+                .unwrap()
+                .prefs()
+                .cursor_height
+        })
+        .unwrap()
+    };
+    let drag = |vcx: &mut VisualTestContext, delta: f32| {
+        let start = vcx.debug_bounds("tx-cursor-divider").unwrap().center();
+        vcx.simulate_mouse_move(start, None, Modifiers::default());
+        vcx.simulate_event(MouseDownEvent {
+            position: start,
+            button: MouseButton::Left,
+            click_count: 1,
+            ..Default::default()
+        });
+        draw(vcx);
+        let end = point(start.x - px(700.0), start.y + px(delta));
+        vcx.simulate_event(MouseMoveEvent {
+            position: end,
+            pressed_button: Some(MouseButton::Left),
+            ..Default::default()
+        });
+        draw(vcx);
+        vcx.simulate_event(MouseUpEvent {
+            position: end,
+            button: MouseButton::Left,
+            click_count: 1,
+            ..Default::default()
+        });
+        draw(vcx);
+    };
+    vcx.update(|_, cx| crate::theme::set_zoom(1.0, cx));
+    draw(vcx);
+    let before = vcx.debug_bounds("tx-cursor-divider").unwrap();
+    drag(vcx, 72.0);
+    assert_eq!(height(vcx), DEFAULT_CURSOR_HEIGHT + 72.0);
+    assert_eq!(
+        vcx.debug_bounds("tx-cursor-divider").unwrap().top(),
+        before.top() + px(72.0)
+    );
+    vcx.simulate_mouse_move(point(px(10.0), px(10.0)), None, Modifiers::default());
+    draw(vcx);
+    assert_eq!(
+        height(vcx),
+        DEFAULT_CURSOR_HEIGHT + 72.0,
+        "release outside panel ends resizing"
+    );
+
+    vcx.simulate_keystrokes("up shift-down");
+    draw(vcx);
+    assert_eq!(height(vcx), DEFAULT_CURSOR_HEIGHT + 120.0);
+    vcx.simulate_keystrokes("home");
+    draw(vcx);
+    assert_eq!(height(vcx), MIN_CURSOR_HEIGHT);
+    vcx.simulate_keystrokes("enter");
+    draw(vcx);
+    assert_eq!(height(vcx), DEFAULT_CURSOR_HEIGHT);
+
+    let start = vcx.debug_bounds("tx-cursor-divider").unwrap().center();
+    vcx.simulate_event(MouseDownEvent {
+        position: start,
+        button: MouseButton::Left,
+        click_count: 1,
+        ..Default::default()
+    });
+    draw(vcx);
+    vcx.simulate_event(MouseMoveEvent {
+        position: start + point(px(0.0), px(80.0)),
+        pressed_button: Some(MouseButton::Left),
+        ..Default::default()
+    });
+    draw(vcx);
+    assert_eq!(height(vcx), DEFAULT_CURSOR_HEIGHT + 80.0);
+    vcx.simulate_keystrokes("escape");
+    draw(vcx);
+    assert_eq!(
+        height(vcx),
+        DEFAULT_CURSOR_HEIGHT,
+        "Escape restores the original height"
+    );
+    vcx.simulate_event(MouseUpEvent {
+        position: start,
+        button: MouseButton::Left,
+        click_count: 1,
+        ..Default::default()
+    });
+    draw(vcx);
+
+    drag(vcx, -10000.0);
+    assert_eq!(height(vcx), MIN_CURSOR_HEIGHT);
+    drag(vcx, 10000.0);
+    let body = vcx.debug_bounds("tx-details-viewport").unwrap();
+    assert!(
+        body.size.height >= px(159.0),
+        "large drag reserves space for details"
+    );
+    let preferred = height(vcx);
+    vcx.simulate_resize(size(px(360.0), px(360.0)));
+    draw(vcx);
+    let split = vcx.debug_bounds("tx-cursor-split").unwrap();
+    let list = vcx.debug_bounds("tx-cursor-records").unwrap();
+    let body = vcx.debug_bounds("tx-details-viewport").unwrap();
+    assert!(list.size.height > px(0.0) && body.size.height > px(0.0));
+    assert!(
+        body.bottom() <= split.bottom() + px(1.0),
+        "body {body:?}, split {split:?}, list {list:?}"
+    );
+    assert_eq!(
+        height(vcx),
+        preferred,
+        "temporary size constraints preserve the preference"
+    );
+    vcx.simulate_resize(size(px(1200.0), px(800.0)));
+    draw(vcx);
+    assert_eq!(height(vcx), preferred);
+    let before = vcx.debug_bounds("tx-record-path").unwrap();
+    let viewport = vcx.debug_bounds("tx-details-viewport").unwrap();
+    let list_before = vcx.debug_bounds("tx-cursor-records").unwrap();
+    vcx.simulate_mouse_move(viewport.center(), None, Modifiers::default());
+    vcx.simulate_event(gpui_kit::ScrollEvent {
+        position: viewport.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), px(-80.0))),
+        ..Default::default()
+    });
+    draw(vcx);
+    assert!(
+        vcx.debug_bounds("tx-record-path").unwrap().top() < before.top(),
+        "details scroll within their viewport"
+    );
+    assert_eq!(vcx.debug_bounds("tx-cursor-records").unwrap(), list_before);
+    vcx.simulate_event(gpui_kit::ScrollEvent {
+        position: viewport.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.0), px(10000.0))),
+        ..Default::default()
+    });
+    draw(vcx);
+    let start = vcx.debug_bounds("tx-cursor-divider").unwrap().center();
+    vcx.simulate_mouse_move(start, None, Modifiers::default());
+    vcx.simulate_event(MouseDownEvent {
+        position: start,
+        button: MouseButton::Left,
+        click_count: 2,
+        ..Default::default()
+    });
+    vcx.simulate_event(MouseUpEvent {
+        position: start,
+        button: MouseButton::Left,
+        click_count: 2,
+        ..Default::default()
+    });
+    draw(vcx);
+    assert_eq!(
+        height(vcx),
+        DEFAULT_CURSOR_HEIGHT,
+        "double-click resets the split"
+    );
 }
