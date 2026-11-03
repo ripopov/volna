@@ -65,6 +65,7 @@ mod clock_readout_tests {
             trace: TraceId::A,
             track: TrackRef(1),
             path: "cpu.clock".into(),
+            scope_id: None,
             name: "clock".into(),
             state: ClockState::Ready(Arc::new(
                 ClockTimeline::new(vec![(10, 50, 10)], false).unwrap(),

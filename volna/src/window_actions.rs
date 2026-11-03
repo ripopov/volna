@@ -254,6 +254,7 @@ impl Workspace {
                 ZoomIn,
                 ZoomOut,
                 ZoomFit,
+                ToggleScopes,
                 ZoomToCursor,
                 PanPageLeft,
                 PanPageRight,

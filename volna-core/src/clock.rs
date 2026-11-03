@@ -33,6 +33,7 @@ pub struct Clock {
     pub trace: TraceId,
     pub track: TrackRef,
     pub path: String,
+    pub(crate) scope_id: Option<volna_trace::data::ScopeId>,
     pub name: String,
     pub state: ClockState,
 }
@@ -70,7 +71,23 @@ pub struct Clocks {
 }
 
 impl Clocks {
-    pub(crate) fn add_trace(&mut self, trace: TraceId, tracks: &[Track]) {
+    pub(crate) fn add_trace(
+        &mut self,
+        trace: TraceId,
+        tracks: &[Track],
+        hierarchy: &volna_trace::data::Hierarchy,
+    ) {
+        let scopes: HashMap<_, _> = hierarchy
+            .generators()
+            .iter()
+            .filter(|generator| generator.kind == GENERATOR_KIND)
+            .map(|generator| {
+                (
+                    generator.track,
+                    (!generator.root).then_some(generator.scope),
+                )
+            })
+            .collect();
         let first = self.clocks.len();
         self.clocks.extend(
             tracks
@@ -80,6 +97,7 @@ impl Clocks {
                     trace,
                     track: t.id,
                     path: t.path.join("."),
+                    scope_id: scopes.get(&t.id).copied().flatten(),
                     name: t.path.last().cloned().unwrap_or_default(),
                     state: ClockState::Loading,
                 }),

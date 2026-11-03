@@ -434,6 +434,18 @@ impl WaveRow {
         }
     }
 
+    pub(super) fn scope_identity(&self, doc: &Document) -> Option<volna_trace::data::ScopeId> {
+        match self {
+            Self::Signal(signal) => {
+                let var = signal.source.var()?;
+                Some(doc.hierarchy(var.trace)?.get_var(var.item)?.scope)
+            }
+            Self::Lane(lane) => lane.scope_id,
+            Self::Clock(clock) => doc.clocks.find(&clock.key)?.scope_id,
+            Self::Group(_) => None,
+        }
+    }
+
     #[must_use]
     pub fn height(&self) -> RowHeight {
         match self {
@@ -853,7 +865,7 @@ pub struct WaveModel {
     pub nav: NavState,
     pub scroll_y: f32,
     pub names_width: f32,
-    pub scopes_width: f32,
+    pub scope: super::ScopeColumn,
     pub values_width: f32,
     pub hover_row: Option<usize>,
     pub format_hover: Option<usize>,
@@ -913,10 +925,14 @@ impl WaveModel {
             nav: self.nav.clone_view(),
             scroll_y: if with_rows { self.scroll_y } else { 0.0 },
             names_width: self.names_width,
-            scopes_width: self.scopes_width,
+            scope: self.scope,
             values_width: self.values_width,
             ..Self::new()
         }
+    }
+
+    pub fn toggle_scopes(&mut self) {
+        self.scope.toggle();
     }
 
     #[must_use]
@@ -931,7 +947,7 @@ impl WaveModel {
             nav: NavState::new(),
             scroll_y: 0.0,
             names_width: 220.0,
-            scopes_width: 160.0,
+            scope: super::ScopeColumn::default(),
             values_width: 120.0,
             hover_row: None,
             format_hover: None,
@@ -3055,7 +3071,7 @@ impl WaveModel {
             ruler_h: rulers.len() as f32 * super::overlay::RULER_H * theme.zoom,
             zoom: theme.zoom,
             names_width: self.names_width,
-            scopes_width: self.scopes_width,
+            scope: self.scope,
             values_width: self.values_width,
             trace_gutter: doc.traces().is_combined(),
             row_tops: super::layout::row_tops(visible.iter().map(|&i| {
@@ -3281,7 +3297,14 @@ impl WaveModel {
                         Some(!g.collapsed),
                     )
                 }
-                row => (row.name().to_owned(), row.collapsed().map(|c| !c)),
+                row => (
+                    if row.scope().is_empty() {
+                        row.name().to_owned()
+                    } else {
+                        format!("{}.{}", row.scope(), row.name())
+                    },
+                    row.collapsed().map(|c| !c),
+                ),
             };
             let gutter = layout.name_left > layout.names.left();
             let label = match gutter.then(|| self.row_trace(entry)).flatten() {
@@ -3679,6 +3702,10 @@ impl WaveModel {
         self.menu = None;
         self.pressed_record = false;
         if button == MouseButton::Left {
+            if layout.scopes_toggle.contains(p) {
+                self.toggle_scopes();
+                return;
+            }
             if layout.names_split.contains(p) {
                 self.drag = Some(Drag::NamesSplit);
                 return;
@@ -4035,16 +4062,18 @@ impl WaveModel {
                 true
             }
             Some(Drag::ScopesSplit) => {
-                let width = ((p.x - layout.scopes.left()) / layout.zoom).max(MIN_COLUMN);
-                self.scopes_width = if layout.shared_metadata {
+                let mut width = (p.x - layout.scopes.left()) / layout.zoom;
+                if layout.shared_metadata {
                     let remaining =
                         (layout.waves.left() - layout.bounds.left() - layout.names.width())
                             / layout.zoom;
                     let min = MIN_COLUMN.min(remaining / 2.0);
-                    width.clamp(min, (remaining - min).max(min)).max(MIN_COLUMN)
-                } else {
-                    width
-                };
+                    width = width.clamp(
+                        super::ScopeColumn::RAIL_WIDTH.min(min),
+                        (remaining - min).max(min),
+                    );
+                }
+                self.scope.resize(width);
                 true
             }
             Some(Drag::ValuesSplit) => {

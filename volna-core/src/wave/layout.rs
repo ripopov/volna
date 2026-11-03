@@ -50,6 +50,7 @@ pub struct WaveLayout {
     pub marker_lane: MarkerLane,
     pub names_split: Rect,
     pub scopes_split: Rect,
+    pub scopes_toggle: Rect,
     pub values_split: Rect,
 }
 
@@ -61,7 +62,7 @@ pub struct LayoutInput<'a> {
     pub ruler_h: f32,
     pub zoom: f32,
     pub names_width: f32,
-    pub scopes_width: f32,
+    pub scope: super::ScopeColumn,
     pub values_width: f32,
     pub trace_gutter: bool,
     pub row_tops: Arc<[f64]>,
@@ -112,11 +113,12 @@ impl WaveLayout {
             .metadata_width
             .map(|w| w.max(0.0).min(total_w));
         let budget = metadata_w.unwrap_or(available);
-        let min = min_column.min(budget / 2.0);
-        let scope_min = min_column.min((budget - 2.0 * min).max(0.0));
+        let rail = z(super::ScopeColumn::RAIL_WIDTH).min(budget);
+        let min = min_column.min((budget - rail) / 2.0);
+        let scope_min = z(input.scope.width().min(MIN_COLUMN)).min((budget - 2.0 * min).max(0.0));
         let names_w = z(input.names_width).clamp(min, (budget - scope_min - min).max(min));
         let scopes_w =
-            z(input.scopes_width).clamp(scope_min, (budget - names_w - min).max(scope_min));
+            z(input.scope.width()).clamp(scope_min, (budget - names_w - min).max(scope_min));
         let values_w = if let Some(metadata_w) = metadata_w {
             (metadata_w - names_w - scopes_w).max(0.0)
         } else {
@@ -241,6 +243,12 @@ impl WaveLayout {
             marker_lane,
             names_split: split_zone(names.right()),
             scopes_split: split_zone(scopes.right()),
+            scopes_toggle: Rect::from_xywh(
+                scopes.left(),
+                header.top(),
+                (scopes.width() - z(SPLITTER_TOLERANCE)).max(0.0),
+                header.height(),
+            ),
             values_split: split_zone(values.right()),
         }
     }
@@ -371,7 +379,7 @@ mod tests {
             ruler_h: 0.0,
             zoom,
             names_width: 220.0,
-            scopes_width: 160.0,
+            scope: super::super::ScopeColumn::default(),
             values_width: 120.0,
             trace_gutter: false,
             row_tops: row_tops(std::iter::repeat_n(f64::from(24.0 * zoom), items)),
@@ -465,7 +473,7 @@ mod tests {
                 ruler_h: 0.0,
                 zoom: 1.0,
                 names_width: 220.0,
-                scopes_width: 160.0,
+                scope: super::super::ScopeColumn::default(),
                 values_width: 120.0,
                 trace_gutter: false,
                 row_tops: tops,
@@ -505,7 +513,7 @@ mod tests {
             ruler_h: 0.0,
             zoom: 1.0,
             names_width: 220.0,
-            scopes_width: 160.0,
+            scope: super::super::ScopeColumn::default(),
             values_width: 120.0,
             trace_gutter: false,
             row_tops: row_tops(heights.map(|h| f64::from(h.multiple()) * 24.0)),

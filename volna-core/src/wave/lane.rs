@@ -38,6 +38,7 @@ pub struct TxLane {
     pub source: TrackSource,
     pub name: String,
     pub scope: String,
+    pub(crate) scope_id: Option<volna_trace::data::ScopeId>,
     pub height: RowHeight,
     pub auto_height: bool,
     pub occupancy: bool,
@@ -82,6 +83,13 @@ impl TxLane {
         let mut lane = Self {
             name: name.clone(),
             scope: scope.join("."),
+            scope_id: doc.hierarchy(track.trace).and_then(|hierarchy| {
+                hierarchy
+                    .generators()
+                    .iter()
+                    .find(|generator| generator.track == track.item)
+                    .and_then(|generator| (!generator.root).then_some(generator.scope))
+            }),
             source: TrackSource::Resolved {
                 track,
                 path: path.clone(),
@@ -104,6 +112,7 @@ impl TxLane {
             source: TrackSource::Unresolved { trace, path },
             name,
             scope,
+            scope_id: None,
             height,
             auto_height: false,
             occupancy: false,

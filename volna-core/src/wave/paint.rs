@@ -284,21 +284,6 @@ pub(crate) fn paint(
                 .clipped(layout.names, |scene| scene.fill(stripe, t.wave_signal));
         }
         let colors = t.row(is_selected, is_hover);
-        if let Some(scope) =
-            overlay::fit_scope(&mut p, row.scope(), layout.scopes.width() - z(16.0))
-        {
-            let scope_w = p.width(&scope, FontRole::Ui, t.ui_size);
-            p.scene.clipped(layout.scopes, |scene| {
-                scene.text(
-                    point(layout.scopes.right() - z(8.0) - scope_w, y),
-                    row_h,
-                    scope,
-                    FontRole::Ui,
-                    t.ui_size,
-                    colors.text_muted,
-                );
-            });
-        }
         let cells = LaneCells {
             layout: &layout,
             pos,
@@ -648,6 +633,24 @@ pub(crate) fn paint(
         }
     }
 
+    let scope_bands = super::scope::bands(layout.rows.clone().filter_map(|pos| {
+        let row = &model.items().get(layout.entry(pos)?)?.row;
+        Some((
+            row.trace()
+                .map(|trace| super::scope::Scope::new(trace, row.scope_identity(doc), row.scope())),
+            layout.row_y(pos),
+            layout.row_y(pos) + layout.row_height(pos),
+        ))
+    }));
+    super::scope::paint(
+        &mut p,
+        &scope_bands,
+        layout.scopes,
+        model
+            .pointer
+            .filter(|_| model.drag.is_none() && model.menu.is_none()),
+        layout.row_h,
+    );
     p.scene.prims.push(crate::scene::Prim::PopClip);
 
     if layout.rows.is_empty() && doc.is_loaded() {
@@ -785,12 +788,41 @@ pub(crate) fn paint(
             );
         },
     );
+    let collapsed = model.scope.is_collapsed();
+    let toggle = layout.scopes_toggle;
+    let toggle_hover = model.pointer.is_some_and(|point| toggle.contains(point));
+    p.scene.clipped(toggle, |scene| {
+        if toggle_hover {
+            scene.fill(toggle, t.hover.bg);
+        }
+        let cx = toggle.left() + z(10.0).min(toggle.width() / 2.0);
+        let cy = toggle.top() + toggle.height() / 2.0;
+        let direction = if collapsed { 1.0 } else { -1.0 };
+        scene.lines(
+            vec![
+                [
+                    point(cx - direction * z(2.0), cy - z(4.0)),
+                    point(cx + direction * z(2.0), cy),
+                ],
+                [
+                    point(cx + direction * z(2.0), cy),
+                    point(cx - direction * z(2.0), cy + z(4.0)),
+                ],
+            ],
+            if toggle_hover {
+                t.panel.text
+            } else {
+                t.panel.text_muted
+            },
+            z(1.4),
+        );
+    });
     let scope_title_w = p.width("SCOPE", FontRole::UiSemibold, t.ui_size_small);
     p.scene.clipped(
         Rect::from_xywh(
-            layout.scopes.left(),
+            layout.scopes.left() + z(super::ScopeColumn::RAIL_WIDTH),
             header.top(),
-            layout.scopes.width(),
+            (layout.scopes.width() - z(super::ScopeColumn::RAIL_WIDTH)).max(0.0),
             header.height(),
         ),
         |scene| {
@@ -994,6 +1026,9 @@ pub(crate) fn paint(
         p.scene
             .cursors
             .push((layout.values_split, CursorIcon::ResizeLeftRight));
+        p.scene
+            .cursors
+            .push((layout.scopes_toggle, CursorIcon::PointingHand));
         for (_, b) in &layout.badges {
             p.scene.cursors.push((*b, CursorIcon::PointingHand));
         }
@@ -1012,6 +1047,21 @@ pub(crate) fn paint(
         };
         p.scene.quad(thumb, color, z(3.0), 0.0, Color::TRANSPARENT);
     }
+    let scope_toggle_hint = model
+        .pointer
+        .filter(|point| {
+            model.drag.is_none() && model.menu.is_none() && layout.scopes_toggle.contains(*point)
+        })
+        .map(|point| {
+            (
+                if collapsed {
+                    "Expand scopes (Shift+S) · Drag the divider to resize"
+                } else {
+                    "Collapse scopes to colors (Shift+S) · Drag the divider to resize"
+                },
+                point,
+            )
+        });
     let format_hint = model
         .pointer
         .filter(|p| model.drag.is_none() && model.menu.is_none() && layout.format_at(*p).is_some())
@@ -1028,13 +1078,35 @@ pub(crate) fn paint(
             let scope = model.items().get(layout.entry_at(pointer.y)?)?.scope();
             (!scope.is_empty()).then_some((scope, pointer))
         });
+    let ruler_scope_hint = model
+        .pointer
+        .filter(|point| {
+            model.drag.is_none()
+                && model.menu.is_none()
+                && layout.rulers.contains(*point)
+                && point.x >= layout.scopes.left()
+                && point.x < layout.scopes.right()
+                && !layout.near_split(*point)
+        })
+        .and_then(|pointer| {
+            let rulers = model.nav.clocks().rulers(&doc.clocks);
+            let index = ((pointer.y - layout.rulers.top())
+                / (layout.rulers.height() / rulers.len() as f32)) as usize;
+            let clock = rulers.get(index)?;
+            let (scope, _) = clock.path.rsplit_once('.')?;
+            Some((scope.to_owned(), pointer))
+        });
     let transaction_hint = model.transaction_hint(doc);
     if let Some((hint, pointer)) = transaction_hint
         .as_ref()
         .map(|(hint, pointer)| (hint.as_str(), *pointer))
+        .or(scope_toggle_hint)
         .or(format_hint)
         .or_else(|| model.disclosure_hint())
         .or(scope_hint)
+        .or(ruler_scope_hint
+            .as_ref()
+            .map(|(scope, pointer)| (scope.as_str(), *pointer)))
         && let Some(label) = fit_width(
             &mut p,
             hint,
@@ -1068,7 +1140,7 @@ pub(crate) fn paint(
                 t.tooltip.text,
             );
         });
-        if scope_hint.is_none() {
+        if scope_hint.is_none() && ruler_scope_hint.is_none() {
             p.scene.window_cursor = Some(CursorIcon::PointingHand);
         }
     }

@@ -832,7 +832,7 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
     )
     .unwrap();
     let panel = &saved["panels"][0];
-    assert_eq!(panel["version"], 11);
+    assert_eq!(panel["version"], 13);
     let rows = &panel["rows"];
     assert_eq!(rows.as_array().unwrap().len(), 4);
     assert_eq!(rows[2]["type"], "group");
@@ -1077,14 +1077,14 @@ fn rows_are_a_tree_for_assistive_technology_and_group_names_take_a_double_click(
     assert_eq!(
         summary,
         [
-            ("clk".into(), 1, None, false),
-            ("rst_n".into(), 1, None, false),
+            ("top.clk".into(), 1, None, false),
+            ("top.rst_n".into(), 1, None, false),
             ("AXI, 5 rows".into(), 1, Some(true), false),
-            ("awvalid".into(), 2, None, false),
-            ("wdata".into(), 2, Some(false), false),
-            ("bvalid".into(), 2, None, false),
+            ("top.axi.awvalid".into(), 2, None, false),
+            ("top.axi.wdata".into(), 2, Some(false), false),
+            ("top.axi.bvalid".into(), 2, None, false),
             ("Read, 2 rows".into(), 2, Some(false), true),
-            ("pc".into(), 1, Some(false), false),
+            ("top.core.pc".into(), 1, Some(false), false),
         ]
     );
     let w = waves(&app, id);

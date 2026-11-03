@@ -155,23 +155,6 @@ pub fn clock_rulers(
         } else {
             t.panel.text_muted
         };
-        if let Some(scopes) = cells.scopes {
-            let scope = c.path.rsplit_once('.').map_or("", |(scope, _)| scope);
-            if let Some(scope) = fit_scope(p, scope, scopes.width() - z(16.0)) {
-                let width = p.width(&scope, FontRole::Ui, t.ui_size);
-                let cell = Rect::new(point(scopes.left(), y), size(scopes.width(), row_h));
-                p.scene.clipped(cell, |scene| {
-                    scene.text(
-                        point(cell.right() - z(8.0) - width, y),
-                        row_h,
-                        scope,
-                        FontRole::Ui,
-                        t.ui_size,
-                        color,
-                    );
-                });
-            }
-        }
         p.scene.clipped(cell, |scene| {
             scene.text(
                 point(cell.left() + z(12.0), y),
@@ -316,6 +299,24 @@ pub fn clock_rulers(
                 );
             }
         });
+    }
+    if let Some(scopes) = cells.scopes {
+        let area = Rect::from_xywh(
+            scopes.left(),
+            column.rulers.top(),
+            scopes.width(),
+            column.rulers.height(),
+        );
+        let bands = super::scope::bands(rows.iter().enumerate().map(|(i, clock)| {
+            let path = clock.path.rsplit_once('.').map_or("", |(scope, _)| scope);
+            let top = column.rulers.top() + row_h * i as f32;
+            (
+                Some(super::scope::Scope::new(clock.trace, clock.scope_id, path)),
+                top,
+                top + row_h,
+            )
+        }));
+        super::scope::paint(p, &bands, area, None, row_h);
     }
 }
 
@@ -1678,6 +1679,7 @@ mod tests {
             trace: crate::trace::TraceId::A,
             track: volna_trace::data::transactions::TrackRef(0),
             path: format!("top.{name}"),
+            scope_id: Some(0),
             name: name.into(),
             state: clock::ClockState::Ready(std::sync::Arc::new(timeline)),
         }

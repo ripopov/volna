@@ -670,8 +670,12 @@ impl Element for PanelCanvas {
                 &mut measure,
             ) {
                 Some(PanelLayout::Waves(layout)) => {
-                    let mut rects =
-                        vec![layout.names_split, layout.scopes_split, layout.values_split];
+                    let mut rects = vec![
+                        layout.names_split,
+                        layout.scopes_split,
+                        layout.values_split,
+                        layout.scopes_toggle,
+                    ];
                     rects.extend(layout.badges.iter().map(|(_, b)| *b));
                     rects.extend(layout.format_summaries.iter().map(|(_, rect)| *rect));
                     rects.extend(layout.marker_lane.chips.iter().map(|c| c.rect));

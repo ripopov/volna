@@ -412,7 +412,8 @@ impl Document {
             .collect();
         for (id, session) in loaded {
             self.load_scope_sizes(id, &session);
-            self.clocks.add_trace(id, session.tracks());
+            self.clocks
+                .add_trace(id, session.tracks(), session.hierarchy());
             self.retain_clocks(id);
         }
     }
@@ -469,7 +470,8 @@ impl Document {
         if first {
             self.shared.viewport.set(Viewport::fit(self.limits()));
         }
-        self.clocks.add_trace(id, session.tracks());
+        self.clocks
+            .add_trace(id, session.tracks(), session.hierarchy());
         self.retain_clocks(id);
         Ok(refined)
     }

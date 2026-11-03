@@ -4,6 +4,8 @@
 pub mod analog;
 pub mod bus;
 mod clipboard;
+mod column;
+pub use column::ScopeColumn;
 mod format;
 pub mod group;
 pub mod lane;
@@ -14,6 +16,7 @@ pub mod overlaid;
 pub mod overlay;
 pub mod paint;
 pub mod points;
+mod scope;
 pub mod stack;
 pub mod timeline;
 pub mod tint;

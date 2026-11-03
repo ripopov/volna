@@ -42,6 +42,8 @@ impl TimelineMargins {
 pub struct TimelineDivider {
     pub panels: Vec<PanelId>,
     pub width: f32,
+    // Rendering clamps the derived width; this anchor preserves reversible scope toggles.
+    pub(crate) scope_offset: f64,
 }
 
 fn columns(layout: &Layout, out: &mut Vec<Vec<Vec<PanelId>>>) -> Vec<Vec<PanelId>> {
@@ -93,15 +95,18 @@ impl Panels {
                 }
                 let mut panels: Vec<_> = groups.into_iter().flatten().collect();
                 panels.sort_unstable();
+                if let Some(old) = self.timeline.iter().find(|old| old.panels == panels) {
+                    return Some(old.clone());
+                }
                 let mut width: f32 = 0.0;
                 for id in &panels {
                     if let Some(old) = self.timeline.iter().find(|old| old.panels.contains(id)) {
-                        width = width.max(old.width);
+                        width = width.max(self.requested_timeline_width(old));
                     } else {
                         width = width.max(match &self.get(*id)?.kind {
                             PanelKind::Waves(w) => {
                                 w.names_width.max(MIN_COLUMN)
-                                    + w.scopes_width.max(MIN_COLUMN)
+                                    + w.scope.width()
                                     + w.values_width.max(MIN_COLUMN)
                             }
                             PanelKind::Pipeline(p) => p.label_width.clamp(
@@ -112,7 +117,12 @@ impl Panels {
                         });
                     }
                 }
-                Some(TimelineDivider { panels, width })
+                let scope_offset = self.scope_offset(&panels);
+                Some(TimelineDivider {
+                    panels,
+                    width: width.max(1.0),
+                    scope_offset,
+                })
             })
             .collect()
     }
@@ -147,8 +157,9 @@ impl Panels {
         .content(bounds);
         TimelineMargins {
             trailing_width,
-            metadata_width: divider
-                .map(|d| self.clamp_timeline_width(d, d.width, content, zoom) * zoom),
+            metadata_width: divider.map(|d| {
+                self.clamp_timeline_width(d, self.requested_timeline_width(d), content, zoom) * zoom
+            }),
         }
     }
 
@@ -164,12 +175,29 @@ impl Panels {
         width.clamp(min.min(max), max)
     }
 
+    fn scope_offset(&self, panels: &[PanelId]) -> f64 {
+        panels
+            .iter()
+            .filter_map(|&id| self.waves(id))
+            .map(|waves| waves.scope.timeline_offset())
+            .sum()
+    }
+
+    fn requested_timeline_width(&self, divider: &TimelineDivider) -> f32 {
+        (f64::from(divider.width) + self.scope_offset(&divider.panels) - divider.scope_offset)
+            .clamp(0.0, f64::from(f32::MAX)) as f32
+    }
+
     fn timeline_minimum(&self, divider: &TimelineDivider) -> f32 {
-        if divider.panels.iter().any(|id| self.waves(*id).is_some()) {
-            3.0 * MIN_COLUMN
-        } else {
-            crate::pipeline::layout::LABEL_W_MIN
-        }
+        divider
+            .panels
+            .iter()
+            .filter_map(|&id| self.get(id))
+            .map(|panel| match &panel.kind {
+                PanelKind::Waves(waves) => 2.0 * MIN_COLUMN + waves.scope.width().min(MIN_COLUMN),
+                _ => crate::pipeline::layout::LABEL_W_MIN,
+            })
+            .fold(0.0, f32::max)
     }
 
     pub(crate) fn resize_timeline(&mut self, id: PanelId, position: Point) -> bool {
@@ -190,7 +218,9 @@ impl Panels {
         };
         let bounds = self.timeline_margins(id, bounds, zoom).content(bounds);
         let width = (position.x - bounds.left()) / zoom;
+        let scope_offset = self.scope_offset(&self.timeline[index].panels);
         let min = self.timeline_minimum(&self.timeline[index]);
+        self.timeline[index].scope_offset = scope_offset;
         self.timeline[index].width = self
             .clamp_timeline_width(&self.timeline[index], width, bounds, zoom)
             .max(min);
@@ -214,7 +244,9 @@ impl Panels {
         let mut seen = std::collections::BTreeSet::new();
         for divider in &dividers {
             ensure!(
-                divider.width.is_finite() && divider.width > 0.0,
+                divider.width.is_finite()
+                    && divider.width > 0.0
+                    && divider.scope_offset.is_finite(),
                 "invalid timeline divider width"
             );
             ensure!(

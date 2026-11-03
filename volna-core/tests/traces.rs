@@ -165,7 +165,7 @@ fn rows_of_both_traces_show_their_letters_in_one_panel() {
     assert_eq!(shown.len(), 2);
     let waves = app.panels.waves(id).unwrap();
     let rows: Vec<_> = waves.accessible_rows(&app.doc).map(|r| r.label).collect();
-    assert_eq!(rows, ["pc, trace A", "pc, trace B"]);
+    assert_eq!(rows, ["soc.cpu0.pc, trace A", "soc.cpu0.pc, trace B"]);
     let layout = waves.last_layout();
     assert!(layout.name_left > layout.names.left(), "a trace gutter");
     let letters: Vec<String> = app

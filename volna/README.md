@@ -151,10 +151,29 @@ See [geometry and implementation](ISLANDS.md).
 ## Signal formatting
 
 Waveform rows place Scope before Name, Value, and the waveform. Names stay aligned
-when signals from different scopes share a name. Scope paths are right-aligned in secondary text;
-long paths retain their trailing portion, and hovering shows the full scope.
+when signals from different scopes share a name. Consecutive visible rows with
+the same trace and scope share a faint band and one scope label. Tall bands show the scope name above its parent path; short
+bands show the fitted full path. Labels stay visible while scrolling through a
+band. Scope bands preserve row ordering and break at groups or unscoped rows.
+Long paths retain their trailing portion, and hovering shows the full scope.
 Drag the column dividers to resize Scope, Name, and Value. Column widths are saved
-in the workspace. To compare repeated names, add `soc.cpu0.pc` and `soc.cpu1.pc`
+in the workspace. Collapse Scope with the chevron in its header or **Shift+S**;
+it becomes a 20 px color rail. Drag its divider below 48 px to snap it closed,
+or drag outward to expand it. The chevron and shortcut restore the last expanded
+width. Scope bands use stable colors from the current theme, independently of
+waveform colors. Colors are recognition aids and may repeat; hover a band for
+the full scope path. Accessibility labels retain each signal's full path.
+To inspect the bands, open `volna/examples/analog_showcase.vtr` and add
+`analog.waves.sine`, `analog.waves.cosine`, `analog.power.cpu_mw`, and
+`analog.power.gpu_mw`. Each pair shares one band. Collapse Scope with **Shift+S**
+to inspect the same boundaries in the rail.
+
+The compact state and expanded width are saved per panel; waveform panel schema
+is v13, within workspace format v11. Linked timelines derive their width from a
+saved reference, so collapse/expand cycles preserve the divider even when the
+available space constrains it. Scope bands use hierarchy identities; distinct
+scopes with identical paths remain separate. To compare repeated names, add
+`soc.cpu0.pc` and `soc.cpu1.pc`
 from `volna/examples/pipeline_showcase.vtr`.
 
 Right-click a signal and choose **Format signal…**, or click its value-format

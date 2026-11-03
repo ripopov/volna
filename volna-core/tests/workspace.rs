@@ -48,7 +48,7 @@ fn complete_round_trip_preserves_layout_rows_links_chrome_and_exact_times() {
             end: 420.25,
         });
     w.scroll_y = 2.5;
-    w.scopes_width = 235.0;
+    w.scope.resize(235.0);
     app.doc.shared.cursor = Some(u64::MAX - 1);
     let id = app.doc.add_marker(u64::MAX - 2).unwrap();
     app.doc.rename_marker(id, "interrupt");
@@ -541,7 +541,7 @@ fn invalid_open_workspace_cannot_flush_live_edits_or_queue_trace_opens() {
         ("/shared/reference", json!({"marker": 99})),
         ("/sidebar/width", json!(-1)),
         ("/panels/0/selected", json!([999])),
-        ("/panels/0/columns/scopes", json!(-1)),
+        ("/panels/0/columns/scope/expanded_width", json!(-1)),
         ("/panels/0/link/cursor", json!(false)),
         ("/layout/center/tabs", json!([999])),
         ("/focused", json!(999)),
@@ -1427,7 +1427,7 @@ fn a_shared_timeline_divider_drag_schedules_an_autosave() {
             if scope_column { 500.0 } else { 600.0 }
         );
         if scope_column {
-            assert_eq!(app.panels.waves(second).unwrap().scopes_width, 208.0);
+            assert_eq!(app.panels.waves(second).unwrap().scope.width(), 208.0);
         }
     }
 }

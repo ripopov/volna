@@ -174,6 +174,7 @@ fn fixed_commands() -> Vec<(&'static str, Box<dyn Action>)> {
         ("Zoom In", Box::new(app::ZoomIn)),
         ("Zoom Out", Box::new(app::ZoomOut)),
         ("Zoom to Fit", Box::new(app::ZoomFit)),
+        ("Collapse / Expand Scopes", Box::new(app::ToggleScopes)),
         ("Zoom to Cursor", Box::new(app::ZoomToCursor)),
         ("Go to Start", Box::new(app::GoToStart)),
         ("Go to End", Box::new(app::GoToEnd)),

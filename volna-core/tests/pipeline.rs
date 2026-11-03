@@ -4387,9 +4387,9 @@ fn timeline_divider_survives_narrow_windows_and_workspace_restore() {
 
     let mut invalid = serde_json::to_value(&saved).unwrap();
     for divider in [
-        serde_json::json!({"panels":[waves,pipeline],"width":-1}),
-        serde_json::json!({"panels":[waves],"width":500}),
-        serde_json::json!({"panels":[waves,999_999],"width":500}),
+        serde_json::json!({"panels":[waves,pipeline],"width":-1,"scope_offset":0.0}),
+        serde_json::json!({"panels":[waves],"width":500,"scope_offset":0.0}),
+        serde_json::json!({"panels":[waves,999_999],"width":500,"scope_offset":0.0}),
     ] {
         invalid["timeline_dividers"] = serde_json::json!([divider]);
         assert!(

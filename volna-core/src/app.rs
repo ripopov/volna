@@ -49,6 +49,7 @@ pub enum Action {
     FocusPrevPanel,
     ToggleViewportLink,
     ToggleCursorLink,
+    ToggleScopes,
     ZoomIn,
     ZoomOut,
     ZoomFit,
@@ -114,6 +115,7 @@ impl Command {
             "zoomIn" => Action::ZoomIn,
             "zoomOut" => Action::ZoomOut,
             "zoomFit" => Action::ZoomFit,
+            "toggleScopes" => Action::ToggleScopes,
             "panLeft" => Action::PanPageLeft,
             "panRight" => Action::PanPageRight,
             "prevEdge" => Action::PrevEdge,
@@ -2488,6 +2490,13 @@ impl App {
         use crate::panels::Axis;
         use crate::wave::model::LinkDim;
         let panel = self.panels.focused_id();
+        if action == Action::ToggleScopes {
+            if let Some(waves) = self.panels.waves_mut(panel) {
+                waves.toggle_scopes();
+                self.changed();
+            }
+            return;
+        }
         let panel_command = match action {
             Action::SplitRight => Some(PanelsCommand::Split {
                 panel,
@@ -2706,6 +2715,7 @@ impl App {
                 | Action::FocusPrevPanel
                 | Action::ToggleViewportLink
                 | Action::ToggleCursorLink
+                | Action::ToggleScopes
                 | Action::NextCycle
                 | Action::PrevCycle
                 | Action::ToggleCycleOrigin
@@ -2779,6 +2789,7 @@ impl App {
                 | Action::FocusPrevPanel
                 | Action::ToggleViewportLink
                 | Action::ToggleCursorLink
+                | Action::ToggleScopes
                 | Action::NextCycle
                 | Action::PrevCycle
                 | Action::ToggleCycleOrigin
@@ -2838,6 +2849,7 @@ impl App {
                 | Action::FocusPrevPanel
                 | Action::ToggleViewportLink
                 | Action::ToggleCursorLink
+                | Action::ToggleScopes
                 | Action::NextCycle
                 | Action::PrevCycle
                 | Action::ToggleCycleOrigin

@@ -388,8 +388,17 @@ fn ruler_labels_use_separate_scope_and_name_cells() {
     ])));
     let panel = app.panels.focused_id();
     for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
-        for (width, scopes_width) in [(1200.0, 400.0), (1200.0, 100.0), (360.0, 100.0)] {
-            app.panels.waves_mut(panel).unwrap().scopes_width = scopes_width;
+        for (width, scopes_width) in [
+            (1200.0, 400.0),
+            (1200.0, 100.0),
+            (1200.0, 20.0),
+            (360.0, 100.0),
+        ] {
+            app.panels
+                .waves_mut(panel)
+                .unwrap()
+                .scope
+                .resize(scopes_width);
             app.layout_panel(
                 panel,
                 Rect::from_xywh(25.0, 0.0, width, 600.0),
@@ -440,8 +449,29 @@ fn ruler_labels_use_separate_scope_and_name_cells() {
                 }
             }
             assert_eq!(names, ["root_clk", "nested_clk"]);
-            if layout.scopes.width() <= 16.0 * theme.zoom {
+            if layout.scopes.width() < 72.0 * theme.zoom {
                 assert!(scopes.is_empty());
+                let swatches = scene.prims.iter().filter(|prim| matches!(prim,
+                    Prim::Quad { rect, .. } if rect.left() >= layout.scopes.left()
+                        && rect.right() < layout.scopes.right()
+                        && rect.width() == 2.0 * theme.zoom
+                        && rect.top() >= layout.rulers.top() && rect.bottom() <= layout.rulers.bottom()
+                )).count();
+                assert_eq!(swatches, 1, "only the scoped clock has a band");
+                app.handle(Command::Pointer(
+                    panel,
+                    PointerEvent::Move {
+                        position: point(
+                            layout.scopes.left() + 10.0 * theme.zoom,
+                            layout.rulers.top() + 24.0 * theme.zoom,
+                        ),
+                    },
+                ));
+                assert!(
+                    app.render_panel(panel, &theme, &mut MonoMeasure)
+                        .texts()
+                        .any(|text| text == format!("soc.{domain}"))
+                );
                 continue;
             }
             assert_eq!(scopes.len(), 1, "root clocks have no scope label");
