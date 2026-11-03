@@ -261,6 +261,7 @@ pub enum Command {
         panel: PanelId,
     },
     PipelineActivity(PanelId, crate::pipeline::ActivityCommand),
+    PipelineOccupancy(PanelId, crate::pipeline::OccupancyCommand),
     PipelineNavigator(PanelId, crate::pipeline::NavigatorCommand),
     PipelineMeasured(PanelId, crate::pipeline::ViewportSize),
     SetSearchEverywhere(bool),
@@ -851,11 +852,11 @@ impl App {
         }
         match self.doc.deliver(result) {
             Some(Delivered::Summary | Delivered::Sizes) => {
-                self.sync_transaction_indexes();
+                self.sync_transaction_analysis();
                 self.changed();
             }
             Some(Delivered::Track) => {
-                self.sync_transaction_indexes();
+                self.sync_transaction_analysis();
                 self.initialize_pipelines();
                 for pipeline in self.panels.pipelines_mut() {
                     pipeline.refresh(&self.doc);
@@ -1205,7 +1206,7 @@ impl App {
             self.sync_selection();
         }
         if press {
-            self.sync_transaction_indexes();
+            self.sync_transaction_analysis();
         }
         self.end_step(now);
         if let Some(command) = tracked
@@ -1310,6 +1311,12 @@ impl App {
                     pipeline.measure_viewport(size);
                 }
                 self.initialize_pipelines();
+            }
+            Command::PipelineOccupancy(panel, command) => {
+                if let Some(pipeline) = self.panels.pipeline_mut(panel) {
+                    pipeline.occupancy_command(command);
+                    self.changed();
+                }
             }
             Command::PipelineNavigator(panel, command) => {
                 if let Some(pipeline) = self.panels.pipeline_mut(panel) {
@@ -1754,7 +1761,7 @@ impl App {
         }
     }
 
-    pub(crate) fn sync_transaction_indexes(&mut self) {
+    pub(crate) fn sync_transaction_analysis(&mut self) {
         let mut wanted = std::collections::HashMap::new();
         for waves in self.panels.iter().filter_map(|panel| panel.kind.waves()) {
             for entry in waves.items() {
@@ -1782,7 +1789,29 @@ impl App {
                 wanted.insert(track, source);
             }
         }
+        let mut occupancy = std::collections::HashMap::new();
+        for (track, source) in &wanted {
+            occupancy.insert(
+                (track.trace, vec![Arc::as_ptr(source) as usize]),
+                vec![source.clone()],
+            );
+        }
+        for pipeline in self.panels.iter().filter_map(|p| p.kind.pipeline()) {
+            if pipeline.occupancy.visible
+                && let crate::pipeline::Rows::Ready(rows) = pipeline.rows(&self.doc)
+            {
+                let sources = rows.generators().to_vec();
+                occupancy.insert(
+                    (
+                        pipeline.track.trace(),
+                        sources.iter().map(|s| Arc::as_ptr(s) as usize).collect(),
+                    ),
+                    sources,
+                );
+            }
+        }
         let budget = self.viewer_memory_budget();
+        self.doc.sync_occupancies(occupancy, &budget);
         self.doc.sync_transaction_indexes(wanted, &budget);
     }
 
@@ -2286,7 +2315,7 @@ impl App {
         let budget = self.viewer_memory_budget();
         self.doc.sync_summaries(wanted, &budget);
         self.sync_group_summaries();
-        self.sync_transaction_indexes();
+        self.sync_transaction_analysis();
     }
 
     pub(crate) fn sync_group_summaries(&mut self) {
@@ -3447,7 +3476,7 @@ impl App {
                 crate::pipeline::Rows::Unavailable => ("unavailable", 0),
             };
             return format!(
-                "panel={} pipeline track={} focused={} linked=({},{}) {state} rows={count} top={:.2} row_px={:.2} label_w={} cursor={:?} markers={} viewport=({:.0},{:.0}) hover={:?} drag={:?} navigator=({},{:.0}) navigator_rect=({:.0},{:.0},{:.0},{:.0})",
+                "panel={} pipeline track={} focused={} linked=({},{}) {state} rows={count} top={:.2} row_px={:.2} label_w={} cursor={:?} markers={} viewport=({:.0},{:.0}) hover={:?} drag={:?} navigator=({},{:.0}) navigator_rect=({:.0},{:.0},{:.0},{:.0}) occupancy=({},{:.0}) occupancy_rect=({:.0},{:.0},{:.0},{:.0})",
                 id.0, p.track.path().join("."), id == self.panels.focused_id(), p.nav.link.viewport, p.nav.link.cursor,
                 rows.top, rows.row_px, p.label_width,
                 p.nav.cursor(&self.doc), self.doc.markers().len(),
@@ -3455,6 +3484,9 @@ impl App {
                 p.hover, p.drag,
                 p.navigator.visible, p.navigator.width,
                 navigator.left(), navigator.top(), navigator.width(), navigator.height(),
+                p.occupancy.visible, p.occupancy.height,
+                p.last_layout().occupancy.left(), p.last_layout().occupancy.top(),
+                p.last_layout().occupancy.width(), p.last_layout().occupancy.height(),
             );
         }
         if let Some(model) = panel.kind.transaction() {

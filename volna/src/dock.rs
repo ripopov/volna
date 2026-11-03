@@ -734,6 +734,32 @@ pub(crate) fn panel_menu(
             );
         }
     }
+    if let Some(settings) = ws
+        .upgrade()
+        .and_then(|owner| owner.read(cx).app.panels.pipeline(id).map(|p| p.occupancy))
+    {
+        use volna_core::pipeline::OccupancyCommand;
+        menu = menu.separator();
+        for (label, command, checked) in [
+            ("Occupancy plot", OccupancyCommand::Toggle, settings.visible),
+            ("Taller occupancy plot", OccupancyCommand::Taller, false),
+            ("Shorter occupancy plot", OccupancyCommand::Shorter, false),
+        ] {
+            let owner = ws.clone();
+            menu = menu.item(PopupMenuItem::new(label).checked(checked).on_click(
+                move |_, window, cx| {
+                    drop(owner.update(cx, |ws, cx| {
+                        ws.dispatch_if_current(
+                            generation,
+                            Command::PipelineOccupancy(id, command),
+                            Some(window),
+                            cx,
+                        );
+                    }));
+                },
+            ));
+        }
+    }
     if let Some(pinned) = pinned {
         let ws = ws.clone();
         menu = menu
@@ -1097,15 +1123,18 @@ impl Panel for CanvasPanelView {
                     view.dispatch(PanelsCommand::NewTab { group_of: view.id }, window, cx);
                 })),
         ];
-        if let Some((follow, activity, navigator_visible)) = self.ws.upgrade().and_then(|owner| {
-            let ws = owner.read(cx);
-            let pipeline = ws.app.panels.pipeline(self.id)?;
-            Some((
-                pipeline.follow,
-                pipeline.activity(&ws.app.doc),
-                pipeline.navigator.visible,
-            ))
-        }) {
+        if let Some((follow, activity, navigator_visible, occupancy_visible)) =
+            self.ws.upgrade().and_then(|owner| {
+                let ws = owner.read(cx);
+                let pipeline = ws.app.panels.pipeline(self.id)?;
+                Some((
+                    pipeline.follow,
+                    pipeline.activity(&ws.app.doc),
+                    pipeline.navigator.visible,
+                    pipeline.occupancy.visible,
+                ))
+            })
+        {
             use volna_core::pipeline::{ActivityCommand, FollowActivity};
             let owner = self.ws.clone();
             let generation = self.generation;
@@ -1127,6 +1156,29 @@ impl Panel for CanvasPanelView {
                             ws.dispatch_if_current(
                                 generation,
                                 Command::PipelineNavigator(panel, volna_core::pipeline::NavigatorCommand::Toggle),
+                                Some(window),
+                                cx,
+                            );
+                        }));
+                    }),
+            );
+            let owner = self.ws.clone();
+            buttons.insert(
+                1,
+                Button::new("pipeline-occupancy")
+                    .label("Occupancy")
+                    .ghost()
+                    .xsmall()
+                    .selected(occupancy_visible)
+                    .tooltip("Show or hide occupancy; drag its top edge to resize")
+                    .on_click(move |_, window, cx| {
+                        drop(owner.update(cx, |ws, cx| {
+                            ws.dispatch_if_current(
+                                generation,
+                                Command::PipelineOccupancy(
+                                    panel,
+                                    volna_core::pipeline::OccupancyCommand::Toggle,
+                                ),
                                 Some(window),
                                 cx,
                             );

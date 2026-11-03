@@ -135,7 +135,7 @@ pub(super) fn paint(
                 scene.text(origin, bar_h, label, FontRole::Mono, font, color);
             }
             if lane.occupancy {
-                occupancy(scene, &index.occupancy, viewport, area, t);
+                crate::occupancy_plot::paint(scene, &index.occupancy, viewport, area, t);
             } else if area.height() > 0.0 {
                 occupancy_ribbon(scene, &index.occupancy, viewport, area, t);
             }
@@ -213,105 +213,6 @@ fn append(rects: &mut Vec<Rect>, rect: Rect) {
         last.size.width = rect.right() - last.left();
     } else {
         rects.push(rect);
-    }
-}
-
-fn occupancy(
-    scene: &mut Scene,
-    summary: &crate::data::occupancy::Occupancy,
-    viewport: &Viewport,
-    area: Rect,
-    t: &Theme,
-) {
-    let z = |v: f32| v * t.zoom;
-    let bottom = area.bottom() - z(3.0);
-    let heading = if area.height() >= z(32.0) {
-        z(17.0)
-    } else {
-        0.0
-    };
-    let height = (area.height() - z(7.0) - heading).max(1.0);
-    let peak = summary.maximum().max(1) as f64;
-    let columns = (area.width().ceil().max(1.0) as usize).min(PIXELS);
-    let step = viewport.width() / columns as f64;
-    let w = area.width() / columns as f32;
-    let mut fills = Vec::with_capacity(columns);
-    let mut peaks = Vec::with_capacity(columns * 2);
-    let mut errors = Vec::new();
-    let mut previous = None;
-    for x in 0..columns {
-        let start = viewport.start + x as f64 * step;
-        let sample = summary.sample(start, start + step);
-        let left = area.left() + x as f32 * w;
-        if sample.average > 0.0 {
-            let h = (height * (sample.average / peak) as f32).max(0.5);
-            append(&mut fills, Rect::from_xywh(left, bottom - h, w, h));
-        }
-        if sample.peak > 0 {
-            let y = bottom - height * (sample.peak as f64 / peak) as f32;
-            if let Some(old) = previous.filter(|&old| old != y) {
-                peaks.push([point(left, old), point(left, y)]);
-            }
-            if let Some(last) = peaks
-                .last_mut()
-                .filter(|last| last[0].y == y && last[1].y == y && (last[1].x - left).abs() < 0.01)
-            {
-                last[1].x = left + w;
-            } else {
-                peaks.push([point(left, y), point(left + w, y)]);
-            }
-            previous = Some(y);
-        } else {
-            previous = None;
-        }
-        if sample.failed {
-            append(
-                &mut errors,
-                Rect::from_xywh(left, area.top() + heading + z(1.0), w, z(2.0)),
-            );
-        }
-    }
-    scene.fill(area, t.panel.bg.with_alpha(0.55));
-    scene.fill(
-        Rect::from_xywh(area.left(), area.top(), area.width(), 1.0),
-        t.border_variant,
-    );
-    if let (Some(first), Some(last)) = (fills.first(), fills.last()) {
-        let mut points = Vec::with_capacity(fills.len() * 2 + 2);
-        points.push(point(first.left(), bottom));
-        let mut right = first.left();
-        for rect in &fills {
-            if rect.left() > right {
-                points.push(point(right, bottom));
-                points.push(point(rect.left(), bottom));
-            }
-            points.push(rect.origin);
-            points.push(point(rect.right(), rect.top()));
-            right = rect.right();
-        }
-        points.push(point(last.right(), bottom));
-        scene.polygon(points, t.wave_signal.with_alpha(0.35));
-    }
-    scene.lines(peaks, t.wave_signal.with_alpha(0.85), 1.0);
-    scene.rects(errors, t.editor.error);
-    scene.fill(
-        Rect::from_xywh(area.left(), bottom, area.width(), 1.0),
-        t.border_variant,
-    );
-    if area.height() >= z(32.0) {
-        let label = if area.width() >= z(240.0) {
-            format!("occupancy · avg / peak · 0–{}", summary.maximum())
-        } else {
-            format!("occupancy · 0–{}", summary.maximum())
-        };
-        scene.text(
-            point(area.left() + z(6.0), area.top() + z(1.0)),
-            z(16.0),
-            label,
-            FontRole::Ui,
-            t.ui_size_small,
-            t.panel.text_muted,
-        );
     }
 }
 

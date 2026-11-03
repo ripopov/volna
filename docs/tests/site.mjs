@@ -180,6 +180,55 @@ try {
   await page.mouse.click(navX - 2, navY + navH / 2);
   await waitForNavigator(true);
   report.behavior.push('pipeline navigator picking, stream-following wheel, resizing, collapse and restore preserve selection and zoom');
+  const occupancyRect = state => state.match(/occupancy_rect=\(([^)]+)\)/)[1].split(',').map(Number);
+  const waitForOccupancy = visible => page.waitForFunction(visible => {
+    const state = window.volnaCurrentState.split('\n').find(line => line.startsWith('panel=38 pipeline '));
+    const height = Number(state?.match(/occupancy_rect=\(([^)]+)\)/)?.[1].split(',')[3]);
+    return state?.includes(`occupancy=(${visible},96)`) && (visible ? height > 0 : height === 0);
+  }, visible);
+  await waitForOccupancy(true);
+  let [plotX, plotY, plotW, plotH] = occupancyRect(await pipelineState());
+  assert.ok(plotW > 0 && plotH > 0);
+  const plotRows = rowTop(await pipelineState());
+  const plotView = pipelineView(await pipelineState());
+  await page.mouse.click(plotX + plotW * 0.7, plotY + plotH * 0.6);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.deepEqual(pipelineView(await pipelineState()), plotView, 'occupancy clicks use the canvas time range');
+  assert.equal(await selectedTransaction(), islandTransaction, 'occupancy navigation preserves selected record');
+  assert.equal(rowTop(await pipelineState()), plotRows, 'occupancy navigation preserves row position');
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate(async ({ base, theme }) => {
+      (await import(`${base}viewer/pkg/volna.js`)).set_settings(JSON.stringify({ 'appearance.theme': `volna-islands-${theme}` }));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    }, { base, theme });
+    await page.screenshot({ path: `${results}/pipeline-occupancy-${theme}.png` });
+  }
+  const beforePlotZoom = await pipelineState();
+  const beforePlotZoomView = pipelineView(beforePlotZoom);
+  const beforePlotZoomCursor = beforePlotZoom.match(/cursor=([^ ]+)/)[1];
+  await page.keyboard.down('Control');
+  await page.mouse.move(plotX + plotW * 0.2, plotY + plotH * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(plotX + plotW * 0.8, plotY + plotH * 0.5, { steps: 5 });
+  await page.screenshot({ path: `${results}/pipeline-occupancy-zoom-light.png` });
+  await page.mouse.up();
+  await page.keyboard.up('Control');
+  await page.waitForFunction(width => {
+    const state = window.volnaCurrentState.split('\n').find(line => line.startsWith('panel=38 pipeline '));
+    const view = state.match(/viewport=\(([^)]+)\)/)[1].split(',').map(Number);
+    return view[1] - view[0] < width * 0.7;
+  }, beforePlotZoomView[1] - beforePlotZoomView[0]);
+  const afterPlotZoom = await pipelineState();
+  assert.equal(afterPlotZoom.match(/cursor=([^ ]+)/)[1], beforePlotZoomCursor, 'occupancy Ctrl-drag preserves cursor');
+  assert.equal(rowTop(afterPlotZoom), rowTop(beforePlotZoom), 'occupancy Ctrl-drag preserves row position');
+  assert.equal(afterPlotZoom.match(/row_px=([^ ]+)/)[1], beforePlotZoom.match(/row_px=([^ ]+)/)[1], 'occupancy Ctrl-drag preserves row height');
+  assert.equal(await selectedTransaction(), islandTransaction, 'occupancy Ctrl-drag preserves selected record');
+  await page.mouse.click(plotX + plotW / 2, plotY - 5);
+  await waitForOccupancy(false);
+  [plotX, plotY, plotW] = occupancyRect(await pipelineState());
+  await page.mouse.click(plotX + plotW / 2, plotY - 5);
+  await waitForOccupancy(true);
+  report.behavior.push('pipeline occupancy follows canvas time; cursor placement, collapse and restore preserve rows and selection in both themes');
   const navigatorThemes = [
     'volna', 'volna-dark', 'volna-light', 'volna-mixed', 'volna-islands-dark',
     'volna-islands-light', 'one-dark', 'dracula', 'catppuccin-mocha',

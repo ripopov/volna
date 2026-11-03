@@ -36,6 +36,9 @@ pub struct PipelineLayout {
     pub navigator_split: Rect,
     pub navigator_grip_target: Rect,
     pub gutter: Rect,
+    pub occupancy: Rect,
+    pub occupancy_labels: Rect,
+    pub occupancy_split: Rect,
     pub rows: RowView,
     pub row_range: Range<usize>,
     pub device_scale: f64,
@@ -54,6 +57,7 @@ pub struct LayoutInput<'a> {
     pub zoom: f32,
     pub label_width: f32,
     pub navigator_width: f32,
+    pub occupancy: super::OccupancySettings,
     pub rows: RowView,
     pub row_count: usize,
     pub markers: &'a [Marker],
@@ -103,7 +107,22 @@ impl PipelineLayout {
             zoom,
         );
         let rows_top = marker_lane.strip().bottom();
-        let rows_h = (bounds.bottom() - rows_top).max(0.0);
+        let available = (bounds.bottom() - rows_top).max(0.0);
+        let split_h = z(6.0).min(available);
+        let plot_h = if input.occupancy.visible {
+            z(input
+                .occupancy
+                .height
+                .clamp(super::plot::MIN_HEIGHT, super::plot::MAX_HEIGHT))
+            .min((available - split_h).max(0.0) * 0.5)
+        } else {
+            0.0
+        };
+        let rows_h = (available - split_h - plot_h).max(0.0);
+        let occupancy_split =
+            Rect::from_xywh(bounds.left(), rows_top + rows_h, bounds.width(), split_h);
+        let occupancy = Rect::from_xywh(cells_left, occupancy_split.bottom(), cells_w, plot_h);
+        let occupancy_labels = Rect::from_xywh(bounds.left(), occupancy.top(), labels_w, plot_h);
         let labels = Rect::new(point(bounds.left(), rows_top), size(labels_w, rows_h));
         let cells = Rect::new(point(cells_left, rows_top), size(cells_w, rows_h));
         let mut rows = input.rows.zoomed(zoom);
@@ -169,6 +188,9 @@ impl PipelineLayout {
             navigator_split,
             navigator_grip_target,
             gutter,
+            occupancy,
+            occupancy_labels,
+            occupancy_split,
             rows,
             row_range,
             device_scale: input.device_scale,
@@ -247,6 +269,10 @@ mod tests {
             zoom,
             label_width: 190.0,
             navigator_width: 0.0,
+            occupancy: super::super::OccupancySettings {
+                visible: false,
+                ..Default::default()
+            },
             rows: RowView { top: 3.0, row_px },
             row_count: rows,
             markers,
@@ -292,7 +318,7 @@ mod tests {
             assert_eq!(l.rows.row_px, 20.0 * zoom);
             assert!(!l.is_overview());
             assert_eq!(l.row_range.start, 3);
-            let visible = ((332.0 - (32.0 + LANE_H) * zoom) / (20.0 * zoom)).ceil() as usize;
+            let visible = ((332.0 - (32.0 + LANE_H + 6.0) * zoom) / (20.0 * zoom)).ceil() as usize;
             assert_eq!(l.row_range.end, 3 + visible);
             assert_eq!(l.row_at(l.cells.top() + 20.0 * zoom * 1.5), Some(4));
             assert_eq!(l.row_at(l.cells.top() - 1.0), None);

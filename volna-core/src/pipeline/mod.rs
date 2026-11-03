@@ -6,7 +6,9 @@ pub use activity::{Activity, ActivityCommand, FollowActivity};
 pub mod layout;
 pub mod model;
 pub mod navigator;
+pub mod plot;
 pub use navigator::{NavigatorCommand, NavigatorSettings};
+pub use plot::{OccupancyCommand, OccupancySettings};
 pub(crate) mod occupancy;
 mod opening;
 pub use opening::ViewportSize;
@@ -14,6 +16,8 @@ pub mod paint;
 pub mod palette;
 mod raster;
 mod row_set;
+mod selection;
+pub use selection::ZoomSelection;
 pub mod rows;
 pub mod zoom;
 

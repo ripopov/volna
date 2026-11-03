@@ -7,6 +7,7 @@ use web_time::Instant;
 use super::layout::{LABEL_W_DEFAULT, LABEL_W_MAX, LABEL_W_MIN, LayoutInput, PipelineLayout};
 use super::palette::StagePalette;
 use super::rows::{ROW_PX_DEFAULT, ROW_PX_MAX, ROW_PX_MIN, RowView};
+use super::selection::{ZoomPreview, ZoomSelection, ZoomTarget};
 use super::zoom::{self, CYCLE_PX_MAX, ROW_PX_CAP, ZoomBox, ZoomPoint};
 use crate::clock::ClockKey;
 use crate::document::{Document, TrackLoadState, TxSelection};
@@ -25,7 +26,6 @@ use volna_trace::data::transactions::{
 
 pub const LABEL_ATTRIBUTE: &str = "vtr.label";
 const DRAG_THRESHOLD_PX: f32 = 3.0;
-const BOX_ZOOM_MIN_PX: f32 = 4.0;
 pub(super) const START_MARGIN_PX: f64 = 32.0;
 pub const SCROLL_ROWS: f64 = 3.0;
 const ROW_HEIGHT_STEP: f64 = std::f64::consts::SQRT_2;
@@ -69,6 +69,8 @@ impl TrackSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
+    Occupancy,
+    OccupancySplit,
     Overview,
     Navigator,
     NavigatorSplit,
@@ -87,18 +89,19 @@ pub enum Hit {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
+    Occupancy,
+    OccupancySplit {
+        start: f32,
+        height: f32,
+        moved: bool,
+    },
     Pan {
         button: MouseButton,
         start: Point,
         last: Point,
         moved: bool,
     },
-    BoxZoom {
-        start: Point,
-        current: Point,
-        cells: Rect,
-        zoom: f32,
-    },
+    BoxZoom(ZoomSelection),
     Cursor,
     Navigator,
     NavigatorSplit {
@@ -129,6 +132,7 @@ pub struct PipelineModel {
     pub row_cap: f32,
     pub label_width: f32,
     pub navigator: super::NavigatorSettings,
+    pub occupancy: super::OccupancySettings,
     pub hover: Option<Hit>,
     pub drag: Option<Drag>,
     pub pointer: Option<Point>,
@@ -152,6 +156,7 @@ impl PipelineModel {
             row_cap: ROW_PX_CAP,
             label_width: LABEL_W_DEFAULT,
             navigator: super::NavigatorSettings::default(),
+            occupancy: super::OccupancySettings::default(),
             hover: None,
             drag: None,
             pointer: None,
@@ -233,6 +238,7 @@ impl PipelineModel {
             row_cap: self.row_cap,
             label_width: self.label_width,
             navigator: self.navigator,
+            occupancy: self.occupancy,
             palette: self.palette.clone(),
             ..Self::new(self.track.clone(), self.nav.link)
         }
@@ -487,6 +493,13 @@ impl PipelineModel {
 
     #[must_use]
     pub fn hover_text(&self, doc: &Document) -> Option<String> {
+        match self.hover {
+            Some(Hit::Occupancy) => return self.occupancy_hover(doc),
+            Some(Hit::OccupancySplit) => {
+                return Some("Drag to resize occupancy; click to show or hide".into());
+            }
+            _ => {}
+        }
         if self.hover == Some(Hit::Overview) {
             return Some("Pipeline presence · zoom in to inspect records".into());
         }
@@ -551,6 +564,7 @@ impl PipelineModel {
             zoom: theme.zoom,
             label_width: self.label_width,
             navigator_width: self.navigator.width(),
+            occupancy: self.occupancy,
             rows: self.rows.value,
             row_count,
             markers: doc.markers(),
@@ -566,13 +580,12 @@ impl PipelineModel {
             device_scale,
         };
         self.layout = PipelineLayout::compute(input);
-        if let Some(Drag::BoxZoom { cells, zoom, .. }) = self.drag
-            && (cells != self.layout.cells || zoom != self.layout.zoom)
+        if let Some(Drag::BoxZoom(selection)) = self.drag
+            && !selection.matches_layout(&self.layout)
         {
             self.drag = None;
         }
-        let followed = if self.opening.is_some() || matches!(self.drag, Some(Drag::BoxZoom { .. }))
-        {
+        let followed = if self.opening.is_some() || matches!(self.drag, Some(Drag::BoxZoom(_))) {
             None
         } else {
             self.follow_activity(doc)
@@ -631,6 +644,12 @@ impl PipelineModel {
         let layout = &self.layout;
         if !layout.bounds.contains(p) {
             return None;
+        }
+        if layout.occupancy_split.contains(p) {
+            return Some(Hit::OccupancySplit);
+        }
+        if layout.occupancy.contains(p) {
+            return Some(Hit::Occupancy);
         }
         if layout.navigator_split.contains(p) || layout.navigator_grip_target.contains(p) {
             return Some(Hit::NavigatorSplit);
@@ -804,30 +823,37 @@ impl PipelineModel {
         (lo.ln(), cap.ln())
     }
 
-    pub(super) fn selection_box(&self) -> Option<(Rect, bool)> {
-        let Drag::BoxZoom {
-            start,
-            current,
-            cells,
-            ..
-        } = self.drag?
-        else {
-            return None;
-        };
-        let x = |v: f32| v.clamp(cells.left(), cells.right());
-        let y = |v: f32| v.clamp(cells.top(), cells.bottom());
-        let rect = Rect::from_xywh(
-            x(start.x).min(x(current.x)),
-            y(start.y).min(y(current.y)),
-            (x(start.x) - x(current.x)).abs(),
-            (y(start.y) - y(current.y)).abs(),
-        );
-        let min = BOX_ZOOM_MIN_PX * self.layout.zoom;
-        Some((rect, rect.width() >= min && rect.height() >= min))
+    pub(super) fn selection_box(&self) -> Option<ZoomPreview> {
+        match self.drag {
+            Some(Drag::BoxZoom(selection)) => Some(selection.preview()),
+            _ => None,
+        }
     }
 
-    fn fit_selection(&mut self, doc: &mut Document, rect: Rect, now: Instant) {
+    fn begin_selection(&mut self, doc: &mut Document, start: Point, target: ZoomTarget) {
         let viewport = self.nav.viewport(doc);
+        self.nav.viewport_state_mut(doc).set(viewport);
+        if target == ZoomTarget::Cells {
+            self.rows.set(self.layout.rows.unzoomed(self.layout.zoom));
+        }
+        self.drag = Some(Drag::BoxZoom(ZoomSelection::new(
+            target,
+            start,
+            &self.layout,
+        )));
+    }
+
+    fn fit_selection(&mut self, doc: &mut Document, rect: Rect, target: ZoomTarget, now: Instant) {
+        let viewport = self.nav.viewport(doc);
+        if target == ZoomTarget::Occupancy {
+            let target = Viewport {
+                start: self.layout.time_at(&viewport, rect.left()),
+                end: self.layout.time_at(&viewport, rect.right()),
+            };
+            self.suspend_follow();
+            self.nav.animate_to(doc, target, now);
+            return;
+        }
         let mut rows = self.rows.value.zoomed(self.layout.zoom);
         let bounds = self.zoom_box(doc, &viewport);
         let from = self.zoom_point(&viewport, rows);
@@ -1195,7 +1221,7 @@ impl PipelineModel {
         event: PointerEvent,
         now: Instant,
     ) -> bool {
-        if matches!(self.drag, Some(Drag::BoxZoom { .. }))
+        if matches!(self.drag, Some(Drag::BoxZoom(_)))
             && matches!(
                 event,
                 PointerEvent::Wheel { .. } | PointerEvent::Pinch { .. }
@@ -1214,12 +1240,16 @@ impl PipelineModel {
             }
             PointerEvent::Move { position } => self.pointer_move(doc, position),
             PointerEvent::Up => {
-                let selection = self.selection_box();
                 let drag = self.drag.take();
-                if let Some((rect, valid)) = selection {
-                    if valid {
-                        self.fit_selection(doc, rect, now);
+                if let Some(Drag::BoxZoom(selection)) = drag {
+                    let preview = selection.preview();
+                    if preview.valid {
+                        self.fit_selection(doc, preview.rect, selection.target(), now);
                     }
+                    return true;
+                }
+                if let Some(Drag::OccupancySplit { moved: false, .. }) = drag {
+                    self.occupancy.visible = !self.occupancy.visible;
                     return true;
                 }
                 if let Some(Drag::NavigatorSplit { moved: false, .. }) = drag {
@@ -1283,7 +1313,16 @@ impl PipelineModel {
             }
             PointerEvent::Pinch { position, delta } => {
                 let factor = f64::from(1.0 + delta).clamp(0.2, 5.0);
-                self.zoom_about(doc, position, factor, None);
+                if self.layout.occupancy.contains(position) {
+                    self.nav.zoom_at(
+                        doc,
+                        f64::from(position.x - self.layout.cells.left()),
+                        self.cells_w(),
+                        factor,
+                    );
+                } else {
+                    self.zoom_about(doc, position, factor, None);
+                }
                 true
             }
         }
@@ -1312,6 +1351,34 @@ impl PipelineModel {
         now: Instant,
     ) {
         self.pointer = Some(p);
+        if self.layout.occupancy_split.contains(p) {
+            if button == MouseButton::Left {
+                self.drag = Some(Drag::OccupancySplit {
+                    start: p.y,
+                    height: if self.occupancy.visible {
+                        self.layout.occupancy.height() / self.layout.zoom
+                    } else {
+                        0.0
+                    },
+                    moved: false,
+                });
+            }
+            return;
+        }
+        if self.layout.occupancy_labels.contains(p) {
+            return;
+        }
+        if self.layout.occupancy.contains(p) {
+            if button == MouseButton::Left {
+                if modifiers.control || modifiers.platform {
+                    self.begin_selection(doc, p, ZoomTarget::Occupancy);
+                } else {
+                    self.drag = Some(Drag::Occupancy);
+                    self.occupancy_at(doc, p.x);
+                }
+            }
+            return;
+        }
         if button == MouseButton::Left
             && let Some(Hit::Activity(command)) = self.hit_at(p, doc)
         {
@@ -1411,17 +1478,7 @@ impl PipelineModel {
             && (modifiers.control || modifiers.platform)
             && layout.cells.contains(p)
         {
-            let cells = layout.cells;
-            let zoom = layout.zoom;
-            let viewport = self.nav.viewport(doc);
-            self.nav.viewport_state_mut(doc).set(viewport);
-            self.rows.set(self.layout.rows.unzoomed(zoom));
-            self.drag = Some(Drag::BoxZoom {
-                start: p,
-                current: p,
-                cells,
-                zoom,
-            });
+            self.begin_selection(doc, p, ZoomTarget::Cells);
             return;
         }
         if layout.cells.contains(p) || (button == MouseButton::Middle && in_time) {
@@ -1437,15 +1494,34 @@ impl PipelineModel {
     fn pointer_move(&mut self, doc: &mut Document, p: Point) -> bool {
         self.pointer = Some(p);
         match self.drag {
-            Some(Drag::BoxZoom {
-                start, cells, zoom, ..
+            Some(Drag::Occupancy) => {
+                self.occupancy_at(doc, p.x);
+                true
+            }
+            Some(Drag::OccupancySplit {
+                start,
+                height,
+                moved,
             }) => {
-                self.drag = Some(Drag::BoxZoom {
+                let delta = (start - p.y) / self.layout.zoom;
+                let moved = moved || delta.abs() >= DRAG_THRESHOLD_PX;
+                self.drag = Some(Drag::OccupancySplit {
                     start,
-                    current: p,
-                    cells,
-                    zoom,
+                    height,
+                    moved,
                 });
+                if moved {
+                    self.occupancy.visible = height + delta >= super::plot::MIN_HEIGHT * 0.5;
+                    if self.occupancy.visible {
+                        self.occupancy.height = (height + delta)
+                            .clamp(super::plot::MIN_HEIGHT, super::plot::MAX_HEIGHT);
+                    }
+                }
+                true
+            }
+            Some(Drag::BoxZoom(mut selection)) => {
+                selection.move_to(p);
+                self.drag = Some(Drag::BoxZoom(selection));
                 true
             }
             Some(Drag::Pan {
@@ -1527,6 +1603,22 @@ impl PipelineModel {
     }
 
     fn wheel(&mut self, doc: &mut Document, p: Point, dx: f32, dy: f32, modifiers: Modifiers) {
+        if self.layout.occupancy.contains(p) {
+            if modifiers.control || modifiers.platform {
+                self.nav.zoom_at(
+                    doc,
+                    f64::from(p.x - self.layout.cells.left()),
+                    self.cells_w(),
+                    2f64.powf(f64::from(dy) / 120.0),
+                );
+            } else {
+                self.pan_px(doc, -(dx + dy), 0.0);
+            }
+            return;
+        }
+        if self.layout.occupancy_split.contains(p) || self.layout.occupancy_labels.contains(p) {
+            return;
+        }
         if self.layout.gutter.contains(p)
             || self.layout.navigator_split.contains(p)
             || self.layout.navigator_grip_target.contains(p)

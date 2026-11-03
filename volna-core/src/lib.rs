@@ -13,6 +13,7 @@ pub mod icons;
 pub mod marker;
 pub mod measure;
 pub mod nav;
+mod occupancy_plot;
 pub mod panels;
 pub mod pipeline;
 pub mod remote;

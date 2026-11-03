@@ -106,6 +106,7 @@ impl Stamp {
             | Command::Table(id, _)
             | Command::PipelineActivity(id, _)
             | Command::PipelineNavigator(id, _)
+            | Command::PipelineOccupancy(id, _)
             | Command::MenuSelect(id, _)
             | Command::RenameMarker(id, _)
             | Command::ZoomToSpan(id, ..)

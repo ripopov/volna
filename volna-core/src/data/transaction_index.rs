@@ -69,7 +69,7 @@ impl<'a> TransactionRow<'a> {
 #[derive(Debug)]
 pub struct TransactionIndex {
     source: Arc<LoadedGenerator>,
-    pub occupancy: Occupancy,
+    pub occupancy: Arc<Occupancy>,
     intervals: Intervals,
     rows: Vec<RowData>,
     boundaries: Vec<u64>,
@@ -96,9 +96,17 @@ impl TransactionIndex {
         source: Arc<LoadedGenerator>,
         budget: Option<&MemoryBudget>,
     ) -> anyhow::Result<Self> {
+        let occupancy = Arc::new(Occupancy::build(source.transactions(), budget)?);
+        Self::with_occupancy(source, occupancy, budget)
+    }
+
+    pub(crate) fn with_occupancy(
+        source: Arc<LoadedGenerator>,
+        occupancy: Arc<Occupancy>,
+        budget: Option<&MemoryBudget>,
+    ) -> anyhow::Result<Self> {
         let mut storage = Storage::new("the transaction track index", size_of::<Self>(), budget)?;
         let records = source.transactions();
-        let occupancy = Occupancy::build(records, &mut storage)?;
         let intervals = Intervals::build(records, &mut storage)?;
         let mut counts = storage.vec(source.depth())?;
         counts.resize(source.depth(), [0usize; 2]);
@@ -166,6 +174,7 @@ impl TransactionIndex {
     #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         (size_of::<Self>()
+            + size_of::<Occupancy>()
             + self.occupancy.bytes()
             + self.intervals.bytes()
             + self.rows.capacity() * size_of::<RowData>()

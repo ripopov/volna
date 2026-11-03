@@ -2753,7 +2753,7 @@ fn pipeline_box_zoom_captures_outside_release_and_ignores_double_click_open(
         .update(&mut vcx, |ws, _, _| {
             assert!(matches!(
                 ws.app.panels.pipeline(id).unwrap().drag,
-                Some(volna_core::pipeline::model::Drag::BoxZoom { .. })
+                Some(volna_core::pipeline::model::Drag::BoxZoom(_))
             ));
             assert_eq!(ws.app.panels.focused_id(), id);
             assert_eq!(

@@ -83,6 +83,25 @@ eight; their horizontal position is not a time-picking coordinate. Unsampled
 records can be absent from this strip; the main canvas presence view remains
 exact. No additional source index or full-record scan is required for the strip.
 
+The bottom occupancy plot shows concurrent transaction lifetimes, independent of
+vertical scrolling and stage overlays. Its filled area is the time-weighted
+average per display column; its outline preserves the peak, and error indicators
+mark columns containing error records. Zero occupancy draws a minimal baseline in
+both panels, while reported counts remain zero. Positive-duration lifetimes are
+half-open; point records have no duration and do not increase concurrency. The
+plot follows the canvas time range, and clicking or dragging moves the cursor.
+Ctrl-drag (Command-drag on macOS) selects a time range to zoom into without
+changing the row axis. Escape cancels the selection.
+The top divider resizes the plot and toggles it on click; the panel toolbar and
+menu also control visibility. Height and visibility are saved with the panel.
+
+Waveform transaction tracks and pipeline panels use one occupancy painter and
+share demand-driven, memory-accounted summaries for the same immutable source.
+Occupancy construction runs independently of waveform row and navigation indexes.
+Multiple generators are merged at their lifetime boundaries before querying peaks.
+Analysis refusal leaves the source rows available and shows an unavailable state;
+changed memory limits retry the summary.
+
 Stream scrolling maps the viewport center between the old and new top records:
 it preserves distance before or after a lifetime, and fractional progress inside
 it. Instantaneous records use a virtual tick to preserve reversibility. Both

@@ -126,6 +126,12 @@ pub struct Document {
         std::sync::Weak<LoadedGenerator>,
     >,
     transaction_index_limits: Option<(u64, u64)>,
+    occupancies: AnalysisCache<
+        (TraceId, Vec<usize>),
+        crate::data::occupancy::Occupancy,
+        Vec<std::sync::Weak<LoadedGenerator>>,
+    >,
+    occupancy_limits: Option<(u64, u64)>,
     summaries: AnalysisCache<(Traced<SignalRef>, NumericKind, usize), AnalogSummary>,
     group_summaries: AnalysisCache<Vec<usize>, crate::wave::group::GroupSummary>,
     stack_totals: AnalysisCache<crate::wave::stack::Key, crate::wave::stack::TotalSummary>,
@@ -179,6 +185,8 @@ impl Document {
             copied_rows: Vec::new(),
             transaction_indexes: AnalysisCache::default(),
             transaction_index_limits: None,
+            occupancies: AnalysisCache::default(),
+            occupancy_limits: None,
             summaries: AnalysisCache::default(),
             group_summaries: AnalysisCache::default(),
             stack_totals: AnalysisCache::default(),
@@ -434,6 +442,7 @@ impl Document {
         self.trace_edits.clear();
         self.copied_rows.clear();
         self.transaction_indexes.clear();
+        self.occupancies.clear();
         self.summaries.clear();
         self.group_summaries.clear();
         self.stack_totals.clear();
@@ -511,6 +520,7 @@ impl Document {
         self.requests
             .retain(|r| !matches!(r, LoadRequest::Trace(TraceRequest::Signals { .. })));
         self.transaction_indexes.clear();
+        self.occupancies.clear();
         self.summaries.clear();
         self.group_summaries.clear();
         self.stack_totals.clear();
@@ -579,6 +589,7 @@ impl Document {
         self.requests.retain(|r| match r {
             LoadRequest::Open { trace: t, .. }
             | LoadRequest::Sizes { trace: t, .. }
+            | LoadRequest::Occupancy { trace: t, .. }
             | LoadRequest::ActivityCounter { trace: t, .. }
             | LoadRequest::Activity { trace: t, .. }
             | LoadRequest::Trace(
@@ -594,6 +605,7 @@ impl Document {
             | LoadRequest::StackTotal { .. } => true,
         });
         self.transaction_indexes.retain(|(t, _)| t.trace != trace);
+        self.occupancies.retain(|(t, _)| *t != trace);
         self.summaries.retain(|(s, _, _)| s.trace != trace);
         if self.selection.is_some_and(|s| s.track.trace == trace) {
             self.select(None);
@@ -656,6 +668,49 @@ impl Document {
     }
 
     #[must_use]
+    pub fn occupancy(
+        &self,
+        trace: TraceId,
+        sources: &[Arc<LoadedGenerator>],
+    ) -> Option<&AnalysisLoad<crate::data::occupancy::Occupancy>> {
+        self.occupancies.get(&(
+            trace,
+            sources.iter().map(|s| Arc::as_ptr(s) as usize).collect(),
+        ))
+    }
+
+    pub(crate) fn sync_occupancies(
+        &mut self,
+        wanted: HashMap<(TraceId, Vec<usize>), Vec<Arc<LoadedGenerator>>>,
+        budget: &volna_trace::remote::memory::MemoryBudget,
+    ) {
+        let limits = (budget.limit(), budget.object_limit());
+        if self.occupancy_limits != Some(limits) {
+            self.occupancies.retry_failed();
+            self.occupancy_limits = Some(limits);
+        }
+        self.occupancies
+            .sync(wanted, |&(trace, _), sources, request| {
+                let owners = sources.iter().map(Arc::downgrade).collect();
+                self.requests.push(LoadRequest::Occupancy {
+                    generation: self.epoch,
+                    request,
+                    trace,
+                    sources,
+                    budget: budget.clone(),
+                });
+                (owners, AnalysisLoad::Building(request))
+            });
+        self.requests.retain(|load| match load {
+            LoadRequest::Occupancy { trace, sources, request, .. } => {
+                let key = (*trace, sources.iter().map(|s| Arc::as_ptr(s) as usize).collect());
+                matches!(self.occupancies.get(&key), Some(AnalysisLoad::Building(current)) if current == request)
+            }
+            _ => true,
+        });
+    }
+
+    #[must_use]
     pub fn transaction_index(
         &self,
         track: Traced<TrackRef>,
@@ -677,16 +732,27 @@ impl Document {
         }
         let wanted = wanted
             .into_iter()
-            .map(|(track, source)| ((track, Arc::as_ptr(&source) as usize), source))
+            .filter_map(|(track, source)| {
+                let occupancy = match self.occupancy(track.trace, std::slice::from_ref(&source)) {
+                    Some(AnalysisLoad::Ready(occupancy)) => Some(occupancy.clone()),
+                    Some(AnalysisLoad::Failed) => None,
+                    _ => return None,
+                };
+                Some(((track, Arc::as_ptr(&source) as usize), (source, occupancy)))
+            })
             .collect();
         self.transaction_indexes
-            .sync(wanted, |&(track, _), source, request| {
+            .sync(wanted, |&(track, _), (source, occupancy), request| {
                 let owner = Arc::downgrade(&source);
+                let Some(occupancy) = occupancy else {
+                    return (owner, AnalysisLoad::Failed);
+                };
                 self.requests.push(LoadRequest::TransactionIndex {
                     generation: self.epoch,
                     request,
                     track,
                     source,
+                    occupancy,
                     budget: budget.clone(),
                 });
                 (owner, AnalysisLoad::Building(request))
@@ -1157,6 +1223,25 @@ impl Document {
                 }
                 self.traces.get_mut(trace)?.sizes = Some(result.ok()?);
                 Some(Delivered::Sizes)
+            }
+            LoadResult::Occupancy {
+                generation,
+                request,
+                trace,
+                sources,
+                limits,
+                result,
+            } => {
+                let outdated_refusal = result.is_err() && self.occupancy_limits != Some(limits);
+                if let Err(error) = &result {
+                    log::warn!("Occupancy unavailable: {error:#}");
+                }
+                let changed = generation == self.epoch
+                    && self.occupancies.deliver(&(trace, sources), request, result);
+                if changed && outdated_refusal {
+                    self.occupancies.retry_failed();
+                }
+                changed.then_some(Delivered::Summary)
             }
             LoadResult::TransactionIndex {
                 generation,

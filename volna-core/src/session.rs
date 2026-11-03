@@ -9,11 +9,19 @@ use volna_trace::session::{
 };
 
 pub enum LoadRequest {
+    Occupancy {
+        generation: u64,
+        request: u64,
+        trace: TraceId,
+        sources: Vec<Arc<crate::data::loaded_tracks::LoadedGenerator>>,
+        budget: MemoryBudget,
+    },
     TransactionIndex {
         generation: u64,
         request: u64,
         track: Traced<volna_trace::data::transactions::TrackRef>,
         source: Arc<crate::data::loaded_tracks::LoadedGenerator>,
+        occupancy: Arc<crate::data::occupancy::Occupancy>,
         budget: MemoryBudget,
     },
     Trace(TraceRequest<TraceId>),
@@ -83,7 +91,8 @@ impl LoadRequest {
     pub fn remote_id(&self) -> Option<u64> {
         match self {
             Self::Trace(request) => request.remote_id(),
-            Self::TransactionIndex { .. }
+            Self::Occupancy { .. }
+            | Self::TransactionIndex { .. }
             | Self::Projection { .. }
             | Self::Open { .. }
             | Self::Sizes { .. }
@@ -100,12 +109,27 @@ impl LoadRequest {
     pub fn fail(self, error: anyhow::Error) -> LoadResult {
         match self {
             Self::Trace(request) => LoadResult::from_trace(request.fail(error), None),
+            Self::Occupancy {
+                generation,
+                request,
+                trace,
+                sources,
+                budget,
+            } => LoadResult::Occupancy {
+                generation,
+                request,
+                trace,
+                sources: sources.iter().map(|s| Arc::as_ptr(s) as usize).collect(),
+                limits: (budget.limit(), budget.object_limit()),
+                result: Err(error),
+            },
             Self::TransactionIndex {
                 generation,
                 request,
                 track,
                 source,
                 budget,
+                ..
             } => LoadResult::TransactionIndex {
                 generation,
                 request,
@@ -205,11 +229,27 @@ impl LoadRequest {
 
     pub fn perform(self) -> LoadResult {
         match self {
+            Self::Occupancy {
+                generation,
+                request,
+                trace,
+                sources,
+                budget,
+            } => LoadResult::Occupancy {
+                generation,
+                request,
+                trace,
+                sources: sources.iter().map(|s| Arc::as_ptr(s) as usize).collect(),
+                limits: (budget.limit(), budget.object_limit()),
+                result: crate::data::occupancy::Occupancy::build_sources(&sources, &budget)
+                    .map(Arc::new),
+            },
             Self::TransactionIndex {
                 generation,
                 request,
                 track,
                 source,
+                occupancy,
                 budget,
             } => {
                 let identity = Arc::as_ptr(&source) as usize;
@@ -220,8 +260,9 @@ impl LoadRequest {
                     track,
                     source: identity,
                     limits,
-                    result: crate::data::transaction_index::TransactionIndex::build(
+                    result: crate::data::transaction_index::TransactionIndex::with_occupancy(
                         source,
+                        occupancy,
                         Some(&budget),
                     )
                     .map(Arc::new),
@@ -356,6 +397,14 @@ impl LoadRequest {
 }
 
 pub enum LoadResult {
+    Occupancy {
+        generation: u64,
+        request: u64,
+        trace: TraceId,
+        sources: Vec<usize>,
+        limits: (u64, u64),
+        result: anyhow::Result<Arc<crate::data::occupancy::Occupancy>>,
+    },
     TransactionIndex {
         generation: u64,
         request: u64,

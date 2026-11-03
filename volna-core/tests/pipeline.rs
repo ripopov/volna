@@ -1021,7 +1021,7 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
             .unwrap()
             .rows
             .set(RowView {
-                top: 0.0,
+                top: 20.0,
                 row_px: 8.0,
             });
         let cells = cells(&mut app, pipeline, &theme);
@@ -1085,7 +1085,12 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
         let p = app.panels.pipeline(pipeline).unwrap();
         let l = p.last_layout();
         assert!((l.time_at(&p.nav.viewport(&app.doc), pointer.x) - before.0).abs() < 1e-6);
-        assert!((l.rows.row_at(pointer.y - l.cells.top()) - before.1).abs() < 1e-5);
+        assert!(
+            (l.rows.row_at(pointer.y - l.cells.top()) - before.1).abs() < 1e-5,
+            "before {before:?}, after {:?}, pointer {pointer:?}, cells {:?}",
+            l.rows,
+            l.cells
+        );
     }
 }
 
@@ -4549,4 +4554,480 @@ fn saved_timeline_membership_uses_the_dock_tree_without_settings() {
         .unwrap();
     timeline_frames(&mut restored, waves, pipeline, 1200.0, &Theme::one_dark());
     aligned_metadata(&restored, waves, pipeline);
+}
+
+#[test]
+fn occupancy_is_independent_of_waveform_layout_and_shared_when_both_show_a_generator() {
+    use volna_core::analysis::AnalysisLoad;
+    let (mut app, session, waves, pipeline) = opened(100);
+    let mut builds = 0;
+    loop {
+        let requests = app.take_requests();
+        if requests.is_empty() {
+            break;
+        }
+        for request in requests {
+            assert!(!matches!(request, LoadRequest::TransactionIndex { .. }));
+            builds += usize::from(matches!(request, LoadRequest::Occupancy { .. }));
+            app.deliver(request.perform());
+        }
+    }
+    assert_eq!(builds, 1);
+    let track = app
+        .panels
+        .pipeline(pipeline)
+        .unwrap()
+        .track
+        .track()
+        .unwrap();
+    let source = app.doc.resident_generator(track).unwrap();
+    let Some(AnalysisLoad::Ready(summary)) =
+        app.doc.occupancy(TraceId::A, std::slice::from_ref(&source))
+    else {
+        panic!("pipeline occupancy ready");
+    };
+    let summary = summary.clone();
+    let member = Member::Generator(
+        session
+            .hierarchy()
+            .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
+    );
+    app.handle(Command::AddToWaves(vec![a(member)]));
+    for request in app.take_requests() {
+        assert!(!matches!(request, LoadRequest::Occupancy { .. }));
+        app.deliver(request.perform());
+    }
+    pump(&mut app);
+    let Some(AnalysisLoad::Ready(index)) = app.doc.transaction_index(track) else {
+        panic!("waveform index ready")
+    };
+    assert!(Arc::ptr_eq(&summary, &index.occupancy));
+    let theme = Theme::one_dark();
+    frame(&mut app, pipeline, &theme);
+    assert!(
+        app.scene()
+            .texts()
+            .any(|text| text.starts_with("occupancy · avg / peak"))
+    );
+    let plot_geometry = |app: &App| {
+        let area = app
+            .panels
+            .pipeline(pipeline)
+            .unwrap()
+            .last_layout()
+            .occupancy;
+        let start = app
+            .scene()
+            .prims
+            .iter()
+            .position(|p| *p == Prim::PushClip(area))
+            .unwrap()
+            + 1;
+        let end = app.scene().prims[start..]
+            .iter()
+            .position(|p| *p == Prim::PopClip)
+            .unwrap()
+            + start;
+        app.scene().prims[start..end].to_vec()
+    };
+    let before = plot_geometry(&app);
+    app.panels
+        .pipeline_mut(pipeline)
+        .unwrap()
+        .rows
+        .set(RowView {
+            top: 70.0,
+            row_px: 18.0,
+        });
+    frame(&mut app, pipeline, &theme);
+    assert_eq!(plot_geometry(&app), before);
+    app.handle(Command::PipelineOccupancy(
+        pipeline,
+        volna_core::pipeline::OccupancyCommand::Toggle,
+    ));
+    assert!(Arc::ptr_eq(&summary, &index_summary(&app, track)));
+    app.handle(Command::Panels(PanelsCommand::Close(waves)));
+    let weak = Arc::downgrade(&summary);
+    drop(summary);
+    assert!(weak.upgrade().is_none());
+    assert!(app.doc.resident_generator(track).is_some());
+}
+
+fn index_summary(
+    app: &App,
+    track: volna_core::trace::Traced<TrackRef>,
+) -> Arc<volna_core::data::occupancy::Occupancy> {
+    let Some(volna_core::analysis::AnalysisLoad::Ready(index)) = app.doc.transaction_index(track)
+    else {
+        panic!("index ready")
+    };
+    index.occupancy.clone()
+}
+
+#[test]
+fn occupancy_controls_preserve_rows_and_selection_and_persist_settings() {
+    use volna_core::pipeline::OccupancyCommand;
+    for theme in [Theme::one_dark(), Theme::islands_light().zoomed(2.0)] {
+        let (mut app, session, _, pipeline) = opened(500);
+        pump(&mut app);
+        frame(&mut app, pipeline, &theme);
+        app.handle(Command::Panels(PanelsCommand::ToggleLink {
+            panel: pipeline,
+            dim: LinkDim::Viewport,
+        }));
+        app.panels
+            .pipeline_mut(pipeline)
+            .unwrap()
+            .nav
+            .local_viewport
+            .set(volna_core::wave::viewport::Viewport {
+                start: 30.0,
+                end: 50.0,
+            });
+        frame(&mut app, pipeline, &theme);
+        let layout = app.panels.pipeline(pipeline).unwrap().last_layout().clone();
+        assert_eq!(layout.cells.bottom(), layout.occupancy_split.top());
+        assert_eq!(layout.occupancy.left(), layout.cells.left());
+        assert_eq!(layout.occupancy.right(), layout.cells.right());
+        let rows = app.panels.pipeline(pipeline).unwrap().rows.value;
+        let selection = app.doc.selection();
+        let click = |app: &mut App, p| {
+            app.handle(Command::Pointer(
+                pipeline,
+                PointerEvent::Down {
+                    position: p,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                },
+            ));
+            app.handle(Command::Pointer(pipeline, PointerEvent::Up));
+        };
+        click(
+            &mut app,
+            point(
+                layout.occupancy.left() + layout.occupancy.width() * 0.5,
+                layout.occupancy.top() + 30.0,
+            ),
+        );
+        assert_eq!(
+            app.panels.pipeline(pipeline).unwrap().nav.cursor(&app.doc),
+            Some(40)
+        );
+        app.panels
+            .pipeline_mut(pipeline)
+            .unwrap()
+            .nav
+            .local_viewport
+            .set(volna_core::wave::viewport::Viewport {
+                start: 130.0,
+                end: 150.0,
+            });
+        frame(&mut app, pipeline, &theme);
+        click(
+            &mut app,
+            point(
+                layout.occupancy.left() + layout.occupancy.width() * 0.75,
+                layout.occupancy.top() + 30.0,
+            ),
+        );
+        let p = app.panels.pipeline(pipeline).unwrap();
+        assert!((p.nav.viewport(&app.doc).width() - 20.0).abs() < 1e-6);
+        assert_eq!(p.nav.viewport(&app.doc).start, 130.0);
+        assert_eq!(p.nav.cursor(&app.doc), Some(145));
+        assert_eq!(p.rows.value, rows);
+        assert_eq!(app.doc.selection(), selection);
+        let split = layout.occupancy_split;
+        let anchor = point(
+            split.left() + split.width() * 0.5,
+            split.top() + split.height() * 0.5,
+        );
+        app.handle(Command::Pointer(
+            pipeline,
+            PointerEvent::Down {
+                position: anchor,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        ));
+        app.handle(Command::Pointer(
+            pipeline,
+            PointerEvent::Move {
+                position: point(anchor.x, anchor.y - 20.0 * theme.zoom),
+            },
+        ));
+        app.handle(Command::Pointer(pipeline, PointerEvent::Up));
+        assert_eq!(
+            app.panels.pipeline(pipeline).unwrap().occupancy.height,
+            116.0
+        );
+        let settings = app.panels.pipeline(pipeline).unwrap().occupancy;
+        assert_eq!(
+            app.panels
+                .pipeline(pipeline)
+                .unwrap()
+                .clone_view()
+                .occupancy,
+            settings
+        );
+        let saved =
+            Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+        let mut restored = App::new();
+        restored.set_session(session);
+        Workspace::parse(&saved.to_bytes().unwrap())
+            .unwrap()
+            .prepare(
+                &restored,
+                "file:///tmp/trace.vtr",
+                "file:///tmp/trace.vtr.volna.json",
+            )
+            .unwrap()
+            .commit(&mut restored)
+            .unwrap();
+        assert_eq!(
+            restored.panels.pipeline(pipeline).unwrap().occupancy,
+            settings
+        );
+        app.handle(Command::PipelineOccupancy(
+            pipeline,
+            OccupancyCommand::Toggle,
+        ));
+        for width in [360.0, 100.0] {
+            app.layout_panel(
+                pipeline,
+                Rect::from_xywh(0.0, 0.0, width, 120.0),
+                &theme,
+                1.0,
+                &mut MonoMeasure,
+            )
+            .unwrap();
+            app.render_panel(pipeline, &theme, &mut MonoMeasure);
+            let layout = app.panels.pipeline(pipeline).unwrap().last_layout();
+            assert_eq!(layout.occupancy.height(), 0.0);
+            assert!(layout.cells.height() >= 0.0);
+        }
+    }
+}
+
+#[test]
+fn occupancy_refusal_retries_and_hidden_plots_reject_stale_completions() {
+    use volna_core::{analysis::AnalysisLoad, pipeline::OccupancyCommand};
+    let (mut app, _, _, pipeline) = opened(40);
+    let mut pending = None;
+    loop {
+        let requests = app.take_requests();
+        if requests.is_empty() {
+            break;
+        }
+        for request in requests {
+            if matches!(request, LoadRequest::Occupancy { .. }) {
+                assert!(pending.replace(request).is_none());
+            } else {
+                app.deliver(request.perform());
+            }
+        }
+    }
+    let pending = pending.unwrap();
+    let LoadRequest::Occupancy {
+        budget, sources, ..
+    } = &pending
+    else {
+        unreachable!()
+    };
+    let sources = sources.clone();
+    let budget = budget.clone();
+    let limit = budget.object_limit();
+    budget.set_object_limit(1);
+    app.handle(Command::SetSidebarWidth(app.sidebar_width));
+    app.deliver(pending.perform());
+    assert!(matches!(
+        app.doc.occupancy(TraceId::A, &sources),
+        Some(AnalysisLoad::Failed)
+    ));
+    assert!(matches!(
+        app.panels.pipeline(pipeline).unwrap().rows(&app.doc),
+        Rows::Ready(_)
+    ));
+    frame(&mut app, pipeline, &Theme::one_dark());
+    assert!(app.scene().texts().any(|t| t == "Occupancy unavailable"));
+    budget.set_object_limit(limit);
+    app.handle(Command::SetSidebarWidth(app.sidebar_width));
+    let stale = app.take_requests().pop().unwrap();
+    app.handle(Command::PipelineOccupancy(
+        pipeline,
+        OccupancyCommand::Toggle,
+    ));
+    app.handle(Command::PipelineOccupancy(
+        pipeline,
+        OccupancyCommand::Toggle,
+    ));
+    let current = app.take_requests().pop().unwrap();
+    app.deliver(stale.perform());
+    assert!(matches!(
+        app.doc.occupancy(TraceId::A, &sources),
+        Some(AnalysisLoad::Building(_))
+    ));
+    app.deliver(current.perform());
+    let Some(AnalysisLoad::Ready(summary)) = app.doc.occupancy(TraceId::A, &sources) else {
+        panic!("replacement ready")
+    };
+    let weak = Arc::downgrade(summary);
+    app.handle(Command::PipelineOccupancy(
+        pipeline,
+        OccupancyCommand::Toggle,
+    ));
+    assert!(app.doc.occupancy(TraceId::A, &sources).is_none());
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn occupancy_drag_zoom_selects_time_without_changing_rows_cursor_or_selection() {
+    use volna_core::pipeline::model::Drag;
+    use volna_core::wave::viewport::Viewport;
+    for zoom in [1.0, 2.0] {
+        let theme = Theme::one_dark().zoomed(zoom);
+        for linked in [true, false] {
+            for modifiers in [
+                ctrl(),
+                Modifiers {
+                    platform: true,
+                    ..Default::default()
+                },
+            ] {
+                for (from, to) in [(0.2, 0.7), (0.7, 0.2), (0.8, 1.5)] {
+                    let (mut app, id, _) = box_view(&theme);
+                    if !linked {
+                        app.handle(Command::Panels(PanelsCommand::ToggleLink {
+                            panel: id,
+                            dim: LinkDim::Viewport,
+                        }));
+                    }
+                    app.panels
+                        .pipeline_mut(id)
+                        .unwrap()
+                        .select_row(&mut app.doc, id, 210);
+                    app.doc.shared.cursor = Some(211);
+                    frame(&mut app, id, &theme);
+                    let area = app.panels.pipeline(id).unwrap().last_layout().occupancy;
+                    let rows = app.panels.pipeline(id).unwrap().rows.target();
+                    let selected = app.doc.selection();
+                    let before = app.doc.shared.viewport.target();
+                    let now = Instant::now();
+                    box_press(&mut app, id, in_box(area, from, 0.5), modifiers, now);
+                    assert!(matches!(
+                        app.panels.pipeline(id).unwrap().drag,
+                        Some(Drag::BoxZoom(_))
+                    ));
+                    box_pointer(
+                        &mut app,
+                        id,
+                        PointerEvent::Move {
+                            position: in_box(area, to, 0.5),
+                        },
+                        now,
+                    );
+                    frame(&mut app, id, &theme);
+                    let rect = Rect::from_xywh(
+                        area.left() + area.width() * from.min(to),
+                        area.top(),
+                        area.width() * (from.max(to).min(1.0) - from.min(to)),
+                        area.height(),
+                    );
+                    assert!(app.scene().prims.iter().any(|p| matches!(p, Prim::Quad { rect: drawn, fill, .. } if (drawn.left() - rect.left()).abs() < 1e-3 && (drawn.width() - rect.width()).abs() < 1e-3 && drawn.top() == area.top() && drawn.height() == area.height() && *fill == theme.selection.bg.with_alpha(0.35))));
+                    box_pointer(&mut app, id, PointerEvent::Up, now);
+                    let p = app.panels.pipeline(id).unwrap();
+                    let target = p.nav.viewport_state(&app.doc).target();
+                    let expected = Viewport {
+                        start: 200.0 + 200.0 * f64::from(from.min(to)),
+                        end: 200.0 + 200.0 * f64::from(from.max(to).min(1.0)),
+                    };
+                    assert!((target.start - expected.start).abs() < 1e-3);
+                    assert!((target.end - expected.end).abs() < 1e-3);
+                    assert_eq!(p.rows.target(), rows);
+                    assert_eq!(app.doc.selection(), selected);
+                    assert_eq!(app.doc.shared.cursor, Some(211));
+                    if linked {
+                        assert_eq!(app.doc.shared.viewport.target(), target);
+                    } else {
+                        assert_eq!(app.doc.shared.viewport.target(), before);
+                    }
+                    assert!(p.drag.is_none());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn occupancy_drag_zoom_ignores_tiny_ranges_cancels_and_freezes_time_navigation() {
+    for zoom in [1.0, 2.0] {
+        let theme = Theme::one_dark().zoomed(zoom);
+        for cancel in 0..4 {
+            let (mut app, id, _) = box_view(&theme);
+            app.doc.shared.cursor = Some(211);
+            let before = app.doc.shared.viewport.value;
+            let rows = app.panels.pipeline(id).unwrap().rows.target();
+            let area = app.panels.pipeline(id).unwrap().last_layout().occupancy;
+            let start = in_box(area, 0.5, 0.5);
+            let now = Instant::now();
+            box_press(&mut app, id, start, ctrl(), now);
+            let dx = if cancel == 0 { 3.9 } else { 40.0 } * zoom;
+            box_pointer(
+                &mut app,
+                id,
+                PointerEvent::Move {
+                    position: point(start.x + dx, start.y),
+                },
+                now,
+            );
+            box_pointer(
+                &mut app,
+                id,
+                PointerEvent::Wheel {
+                    position: start,
+                    dx: 30.0,
+                    dy: 120.0,
+                    modifiers: ctrl(),
+                    precise: false,
+                },
+                now,
+            );
+            box_pointer(
+                &mut app,
+                id,
+                PointerEvent::Pinch {
+                    position: start,
+                    delta: 1.0,
+                },
+                now,
+            );
+            assert_eq!(app.doc.shared.viewport.value, before);
+            match cancel {
+                1 => app.handle_at(Command::Action(Action::ClearSelection), now),
+                2 => {
+                    app.layout_panel(
+                        id,
+                        Rect::from_xywh(30.0, 20.0, 1200.0, 600.0),
+                        &theme,
+                        1.0,
+                        &mut MonoMeasure,
+                    )
+                    .unwrap();
+                }
+                3 => {
+                    app.layout_panel(id, BOUNDS, &theme.zoomed(1.1), 1.0, &mut MonoMeasure)
+                        .unwrap();
+                }
+                _ => {}
+            }
+            box_pointer(&mut app, id, PointerEvent::Up, now);
+            assert_eq!(app.doc.shared.viewport.target(), before);
+            assert_eq!(app.panels.pipeline(id).unwrap().rows.target(), rows);
+            assert_eq!(app.doc.shared.cursor, Some(211));
+            assert!(app.panels.pipeline(id).unwrap().drag.is_none());
+        }
+    }
 }

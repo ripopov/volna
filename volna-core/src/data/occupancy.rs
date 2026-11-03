@@ -69,12 +69,31 @@ pub struct Occupancy {
     points: Vec<u64>,
     failed_counts: Vec<usize>,
     failed_integrals: Vec<u128>,
+    _reservation: Option<volna_trace::remote::memory::Reservation>,
 }
 
 impl Occupancy {
-    pub(crate) fn build(records: &[Transaction], storage: &mut Storage) -> anyhow::Result<Self> {
+    pub fn build(
+        records: &[Transaction],
+        budget: Option<&volna_trace::remote::memory::MemoryBudget>,
+    ) -> anyhow::Result<Self> {
+        Self::build_records(records.iter(), budget)
+    }
+
+    pub(crate) fn build_sources(
+        sources: &[std::sync::Arc<super::loaded_tracks::LoadedGenerator>],
+        budget: &volna_trace::remote::memory::MemoryBudget,
+    ) -> anyhow::Result<Self> {
+        Self::build_records(sources.iter().flat_map(|s| s.transactions()), Some(budget))
+    }
+
+    fn build_records<'a>(
+        records: impl Iterator<Item = &'a Transaction> + Clone,
+        budget: Option<&volna_trace::remote::memory::MemoryBudget>,
+    ) -> anyhow::Result<Self> {
+        let mut storage = Storage::new("the occupancy summary", size_of::<Self>(), budget)?;
         let (mut spans, mut points) = (0usize, 0usize);
-        for tx in records {
+        for tx in records.clone() {
             if tx.begin < tx.end {
                 spans += 1;
             } else if tx.status == Status::Error {
@@ -87,9 +106,9 @@ impl Occupancy {
                 .ok_or_else(|| anyhow::anyhow!("occupancy size overflow"))?,
         )?;
         let mut error_points = storage.vec(points)?;
-        let mut all_points = storage.vec(records.len() - spans)?;
+        let mut all_points = storage.vec(records.clone().count() - spans)?;
         let has_errors = records
-            .iter()
+            .clone()
             .any(|tx| tx.begin < tx.end && tx.status == Status::Error);
         for tx in records {
             if tx.begin == tx.end {
@@ -103,6 +122,8 @@ impl Occupancy {
                 error_points.push(tx.begin);
             }
         }
+        error_points.sort_unstable();
+        all_points.sort_unstable();
         events.sort_unstable_by_key(|event| event.0);
         let mut unique = 0;
         let mut last = None;
@@ -168,6 +189,7 @@ impl Occupancy {
             points: all_points,
             failed_counts,
             failed_integrals,
+            _reservation: storage.finish(),
         })
     }
 
@@ -315,4 +337,70 @@ fn at_or_before(time: u64, boundary: f64) -> bool {
 
 fn before(time: u64, boundary: f64) -> bool {
     boundary > 0.0 && (boundary >= u64::MAX as f64 || time < boundary.ceil() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::loaded_tracks::LoadedGenerator;
+    use std::sync::Arc;
+    use volna_trace::{data::transactions::*, remote::memory::MemoryBudget};
+
+    #[test]
+    fn multiple_sources_merge_concurrency_and_order_point_markers() {
+        let make = |generator, spans: &[(u64, u64)]| {
+            Arc::new(
+                LoadedGenerator::new(
+                    TrackRef(generator),
+                    spans
+                        .iter()
+                        .enumerate()
+                        .map(|(id, &(begin, end))| Transaction {
+                            id: TransactionRef(id as u64 + 1),
+                            generator: TrackRef(generator),
+                            begin,
+                            end,
+                            status: Status::Error,
+                            kind: SpanKind::Unspecified,
+                            parent: None,
+                            attributes: vec![],
+                            events: vec![],
+                            stages: vec![],
+                        })
+                        .collect(),
+                    Default::default(),
+                    vec![],
+                )
+                .unwrap(),
+            )
+        };
+        let sources = [
+            make(1, &[(0, 4), (0, 4), (10, 10)]),
+            make(2, &[(3, 7), (5, 7), (5, 7), (6, 6)]),
+        ];
+        let budget = MemoryBudget::new(1 << 20);
+        let summary = Occupancy::build_sources(&sources, &budget).unwrap();
+        assert_eq!(summary.maximum(), 3);
+        for start in 0..12 {
+            let count = sources
+                .iter()
+                .flat_map(|s| s.transactions())
+                .filter(|tx| tx.begin <= start && start < tx.end)
+                .count();
+            assert_eq!(summary.at(start).0, count);
+            let sample = summary.sample(start as f64, start as f64 + 1.0);
+            assert_eq!(sample.average, count as f64);
+            assert_eq!(sample.peak, count);
+        }
+        let bins: Vec<_> = summary.bins(0.0, 12.0, 12).collect();
+        assert!(bins[6].has_points);
+        assert!(bins[10].has_points);
+        assert!(!bins[9].has_points);
+        assert_eq!(
+            budget.used(),
+            (size_of::<Occupancy>() + summary.bytes()) as u64
+        );
+        drop(summary);
+        assert_eq!(budget.used(), 0);
+    }
 }

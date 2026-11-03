@@ -1361,8 +1361,10 @@ impl PanelCanvas {
                         !matches!(
                             pipeline.drag,
                             Some(
-                                volna_core::pipeline::model::Drag::BoxZoom { .. }
+                                volna_core::pipeline::model::Drag::BoxZoom(_)
                                     | volna_core::pipeline::model::Drag::NavigatorSplit { .. }
+                                    | volna_core::pipeline::model::Drag::OccupancySplit { .. }
+                                    | volna_core::pipeline::model::Drag::Occupancy
                             )
                         ) && layout.cells.contains(cpoint(ev.position))
                             && !layout.is_overview()

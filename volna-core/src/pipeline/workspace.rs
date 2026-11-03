@@ -10,7 +10,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-pub(crate) const VERSION: u32 = 3;
+pub(crate) const VERSION: u32 = 5;
 
 #[derive(Serialize, Deserialize)]
 struct PipelinePanel {
@@ -37,6 +37,7 @@ struct PipelinePanel {
     row_cap: Option<f32>,
     label_width: f32,
     navigator: super::NavigatorSettings,
+    occupancy: super::OccupancySettings,
     #[serde(default, skip_serializing_if = "ClockView::is_default")]
     clocks: ClockView,
 }
@@ -59,6 +60,7 @@ pub(crate) fn save(p: &PipelineModel, id: PanelId, title: Option<String>) -> Res
         row_cap: (p.row_cap != crate::pipeline::zoom::ROW_PX_CAP).then_some(p.row_cap),
         label_width: p.label_width,
         navigator: p.navigator,
+        occupancy: p.occupancy,
         clocks: p.nav.clocks().clone(),
     })?)
 }
@@ -94,6 +96,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         "local cursor must exist exactly when unlinked"
     );
     ensure!(saved.navigator.valid(), "invalid pipeline navigator width");
+    ensure!(saved.occupancy.valid(), "invalid pipeline occupancy height");
     let trace = saved.trace;
     let track = if let Some(t) = ctx
         .traces
@@ -127,6 +130,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     p.row_cap = saved.row_cap.unwrap_or(crate::pipeline::zoom::ROW_PX_CAP);
     p.label_width = saved.label_width;
     p.navigator = saved.navigator;
+    p.occupancy = saved.occupancy;
     Ok(Panel {
         id: saved.id,
         title: crate::history::Journaled::new(saved.title),
