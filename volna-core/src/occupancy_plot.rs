@@ -30,6 +30,7 @@ pub(crate) fn paint(
     let step = viewport.width() / columns as f64;
     let w = area.width() / columns as f32;
     let mut fills = Vec::with_capacity(columns);
+    let mut peak_bands = Vec::with_capacity(columns);
     let mut peaks = Vec::with_capacity(columns * 2);
     let mut errors = Vec::new();
     let mut previous = None;
@@ -40,6 +41,7 @@ pub(crate) fn paint(
         let h = (height * (sample.average / peak) as f32).max(minimum);
         append(&mut fills, Rect::from_xywh(left, bottom - h, w, h));
         let y = bottom - (height * (sample.peak as f64 / peak) as f32).max(minimum);
+        append(&mut peak_bands, Rect::from_xywh(left, y, w, bottom - h - y));
         if let Some(old) = previous.filter(|&old| old != y) {
             peaks.push([point(left, old), point(left, y)]);
         }
@@ -64,6 +66,8 @@ pub(crate) fn paint(
         Rect::from_xywh(area.left(), area.top(), area.width(), 1.0),
         t.border_variant,
     );
+    // Disjoint fills preserve the average's opacity when the peak rises above it.
+    scene.rects(peak_bands, t.wave_signal.with_alpha(0.12));
     if let (Some(first), Some(last)) = (fills.first(), fills.last()) {
         let mut points = Vec::with_capacity(fills.len() * 2 + 2);
         points.push(point(first.left(), bottom));
