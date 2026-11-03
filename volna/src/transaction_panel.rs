@@ -515,10 +515,22 @@ impl TransactionPanelView {
 
         let timing = &view.timing;
         let mut tiles = div().flex().min_w_0().gap_2();
-        for (label, text, time) in [
-            ("Begin", timing.begin_text.clone(), Some(timing.begin)),
-            ("End", timing.end_text.clone(), timing.end),
-            ("Duration", timing.duration_text.clone(), None),
+        for (label, text, command) in [
+            (
+                "Begin",
+                timing.begin_text.clone(),
+                Some(TransactionCommand::Cursor(timing.begin)),
+            ),
+            (
+                "End",
+                timing.end_text.clone(),
+                timing.end.map(TransactionCommand::Cursor),
+            ),
+            (
+                "Duration",
+                timing.duration_text.clone(),
+                Some(TransactionCommand::FitLifetime),
+            ),
         ] {
             if view.point_kind.is_none() || label == "Begin" {
                 tiles = tiles.child(Self::tile(
@@ -529,7 +541,7 @@ impl TransactionPanelView {
                         label
                     },
                     text,
-                    time,
+                    command,
                     cx,
                 ));
             }
@@ -578,20 +590,18 @@ impl TransactionPanelView {
                         })),
                     )
             })
-            .child(
-                Button::new("tx-fit")
-                    .label(if view.point_kind.is_some() {
-                        "Zoom here"
-                    } else {
-                        "Fit lifetime"
-                    })
-                    .ghost()
-                    .small()
-                    .tooltip("Fit the shared viewport to this record")
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.dispatch(TransactionCommand::FitLifetime, window, cx);
-                    })),
-            )
+            .when(view.point_kind.is_some(), |actions| {
+                actions.child(
+                    Button::new("tx-fit")
+                        .label("Zoom here")
+                        .ghost()
+                        .small()
+                        .tooltip("Fit the shared viewport to this record")
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.dispatch(TransactionCommand::FitLifetime, window, cx);
+                        })),
+                )
+            })
             .child(
                 Button::new("tx-copy")
                     .label("Copy")
@@ -1100,7 +1110,7 @@ impl TransactionPanelView {
         t: &crate::theme::Theme,
         label: &'static str,
         text: String,
-        time: Option<u64>,
+        command: Option<TransactionCommand>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tile = div()
@@ -1124,13 +1134,29 @@ impl TransactionPanelView {
             .child(
                 detail_text(cx, format!("tx-time-value-{label}"), text).font_family(t.mono_font),
             );
-        match time {
-            Some(time) => tile
+        match command {
+            Some(command) => tile
                 .id(SharedString::from(format!("tx-time-{label}")))
+                .debug_selector(move || format!("tx-time-{label}"))
+                .tab_stop(true)
                 .cursor_pointer()
                 .hover(|style| style.bg(t.hover.bg))
+                .focus_visible(|style| style.border_color(t.border_focused))
+                .when(label == "Duration", |tile| {
+                    tile.tooltip_show_delay(crate::ui::tooltip::delay(cx))
+                        .tooltip(|window, cx| Tooltip::new("Fit lifetime").build(window, cx))
+                })
+                .on_key_down({
+                    let command = command.clone();
+                    cx.listener(move |view, event: &gpui_kit::KeyDownEvent, window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            view.dispatch(command.clone(), window, cx);
+                            cx.stop_propagation();
+                        }
+                    })
+                })
                 .on_click(cx.listener(move |view, _, window, cx| {
-                    view.dispatch(TransactionCommand::Cursor(time), window, cx);
+                    view.dispatch(command.clone(), window, cx);
                 }))
                 .into_any_element(),
             None => tile.into_any_element(),

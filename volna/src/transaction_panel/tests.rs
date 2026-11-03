@@ -127,6 +127,16 @@ fn cursor_list_reveals_deep_selection_and_keeps_details_after_cursor_moves(
     }
     vcx.simulate_resize(size(px(1200.0), px(800.0)));
     vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let duration = vcx.debug_bounds("tx-time-Duration").unwrap();
+    vcx.simulate_click(duration.center(), gpui_kit::Modifiers::default());
+    vcx.run_until_parked();
+    host.update(&mut vcx, |ws, _, _| {
+        let viewport = ws.app.doc.shared.viewport.target();
+        assert_eq!(viewport.start, 5.5);
+        assert_eq!(viewport.end, 104.5);
+    })
+    .unwrap();
     vcx.update(|window, cx| window.click("tx-reveal-selected", cx));
     vcx.run_until_parked();
     host.update(&mut vcx, |ws, _, _| {
