@@ -99,3 +99,30 @@ test("volna.undo and volna.redo post their names to the active viewer only", asy
   assert.equal(background.posted.length, 1);
   assert.equal(active.posted.length, 2);
 });
+
+test("waveform navigation follows the active editor and stops when it loses focus", async () => {
+  const { commands, provider } = activated();
+  const first = panel(true);
+  const second = panel(false);
+  const uri = {
+    path: "/trace.vtr",
+    toString: () => "file:///trace.vtr",
+    with: () => uri,
+  };
+  await provider.resolveCustomEditor({ uri }, first);
+  await provider.resolveCustomEditor({ uri }, second);
+  await commands.get("volna.zoomIn")();
+  first.focus(false);
+  second.focus(true);
+  await commands.get("volna.panRight")();
+  await commands.get("volna.toggleSidebar")();
+  assert.deepEqual(first.posted, [{ type: "command", name: "zoomIn" }]);
+  assert.deepEqual(second.posted, [
+    { type: "command", name: "panRight" },
+    { type: "command", name: "toggleSidebar" },
+  ]);
+  second.focus(false);
+  await commands.get("volna.zoomFit")();
+  assert.equal(first.posted.length, 1);
+  assert.equal(second.posted.length, 2);
+});

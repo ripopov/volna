@@ -178,6 +178,42 @@
       {
         "command": "volna.saveWorkspaceAs",
         "title": "Volna: Save Workspace As…"
+      },
+      {
+        "command": "volna.zoomIn",
+        "title": "Volna: Zoom In"
+      },
+      {
+        "command": "volna.zoomOut",
+        "title": "Volna: Zoom Out"
+      },
+      {
+        "command": "volna.zoomFit",
+        "title": "Volna: Zoom to Fit"
+      },
+      {
+        "command": "volna.panLeft",
+        "title": "Volna: Pan Left"
+      },
+      {
+        "command": "volna.panRight",
+        "title": "Volna: Pan Right"
+      },
+      {
+        "command": "volna.prevEdge",
+        "title": "Volna: Previous Transition / Record"
+      },
+      {
+        "command": "volna.nextEdge",
+        "title": "Volna: Next Transition / Record"
+      },
+      {
+        "command": "volna.toggleSidebar",
+        "title": "Volna: Toggle Signal Sidebar"
+      },
+      {
+        "command": "volna.toggleRightSidebar",
+        "title": "Volna: Toggle Details Sidebar"
       }
     ],
     "customEditors": [
@@ -473,6 +509,71 @@
           "command": "volna.saveWorkspaceAs",
           "when": "activeCustomEditorId == volna.waveform",
           "group": "volna.workspace"
+        },
+        {
+          "command": "volna.zoomIn",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.navigation@0"
+        },
+        {
+          "command": "volna.zoomOut",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.navigation@1"
+        },
+        {
+          "command": "volna.zoomFit",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.navigation@2"
+        },
+        {
+          "command": "volna.prevEdge",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.navigation@3"
+        },
+        {
+          "command": "volna.nextEdge",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.navigation@4"
+        },
+        {
+          "command": "volna.panLeft",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.navigation@5"
+        },
+        {
+          "command": "volna.panRight",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.navigation@6"
+        },
+        {
+          "command": "volna.toggleSidebar",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.layout@0"
+        },
+        {
+          "command": "volna.toggleRightSidebar",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.layout@1"
+        },
+        {
+          "command": "volna.splitRight",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.layout@2"
+        },
+        {
+          "command": "volna.splitDown",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.layout@3"
+        },
+        {
+          "command": "volna.newPanel",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.layout@4"
+        },
+        {
+          "command": "volna.openSettings",
+          "when": "activeCustomEditorId == volna.waveform",
+          "group": "volna.settings@0"
         }
       ]
     }

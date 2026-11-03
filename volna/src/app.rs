@@ -7,6 +7,9 @@ mod tests;
 #[path = "window_actions.rs"]
 mod window_actions;
 
+#[path = "workspace_toolbar.rs"]
+mod workspace_toolbar;
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -1683,11 +1686,7 @@ impl Workspace {
                         }
                         ChromeDrag::ScopesSplit => {
                             let t = theme(cx);
-                            let top = if this.embedded {
-                                0.0
-                            } else {
-                                crate::theme::titlebar_height(cx)
-                            };
+                            let top = this.workspace_header_height(cx);
                             let total = (f32::from(window.viewport_size().height)
                                 - top
                                 - t.statusbar_height)
@@ -1711,103 +1710,6 @@ impl Workspace {
                 ),
         )
         .with_priority(100)
-    }
-
-    fn titlebar_divider(cx: &App) -> impl IntoElement {
-        let t = theme(cx);
-        div()
-            .flex_none()
-            .w(px(1.0))
-            .h(t.px(18.0))
-            .mx(t.px(4.0))
-            .bg(crate::theme::chrome_border(cx))
-    }
-
-    fn render_wave_toolbar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = *theme(cx);
-        let panel = self.app.panels.focused_id();
-        let waves = self.app.panels.focused().kind.waves();
-        let enabled = self.app.doc.is_loaded()
-            && waves.is_some()
-            && self
-                .panel_focus(panel, cx)
-                .is_some_and(|focus| focus.contains_focused(window, cx));
-        let transitions = waves.is_some_and(|waves| !waves.selected.is_empty());
-        let mut toolbar = div()
-            .id("wave-toolbar")
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap_1();
-        for (index, (id, icon, label, action, available)) in [
-            (
-                "wave-zoom-in",
-                IconName::ZoomIn,
-                "Zoom in (=)",
-                Action::ZoomIn,
-                enabled,
-            ),
-            (
-                "wave-zoom-out",
-                IconName::ZoomOut,
-                "Zoom out (-)",
-                Action::ZoomOut,
-                enabled,
-            ),
-            (
-                "wave-zoom-fit",
-                IconName::ZoomFit,
-                "Zoom to fit (F)",
-                Action::ZoomFit,
-                enabled,
-            ),
-            (
-                "wave-pan-left",
-                IconName::ArrowLeft,
-                "Pan left",
-                Action::PanPageLeft,
-                enabled,
-            ),
-            (
-                "wave-pan-right",
-                IconName::ArrowRight,
-                "Pan right",
-                Action::PanPageRight,
-                enabled,
-            ),
-            (
-                "wave-prev-transition",
-                IconName::StepBack,
-                "Previous transition / record",
-                Action::PrevEdge,
-                enabled && transitions,
-            ),
-            (
-                "wave-next-transition",
-                IconName::StepForward,
-                "Next transition / record",
-                Action::NextEdge,
-                enabled && transitions,
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if matches!(index, 3 | 5) {
-                toolbar = toolbar.child(Self::titlebar_divider(cx));
-            }
-            toolbar = toolbar.child(
-                icon_button(id, icon, t.bar, t.bar_hover, cx)
-                    .w(t.px(32.0))
-                    .h(t.px(32.0))
-                    .disabled(!available)
-                    .tooltip(label)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Command::Action(action), Some(window), cx);
-                    })),
-            );
-        }
-        toolbar
     }
 
     fn render_titlebar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1891,41 +1793,7 @@ impl Workspace {
             )
             .child(self.render_wave_toolbar(window, cx))
             .child(Self::titlebar_divider(cx))
-            .child(
-                icon_button(
-                    "toggle-sidebar",
-                    IconName::PanelLeft,
-                    t.bar,
-                    t.bar_hover,
-                    cx,
-                )
-                .selected(self.app.sidebar_visible)
-                .tooltip("Toggle sidebar (⌘B)")
-                .on_click(cx.listener(|this, _, w, cx| {
-                    this.dispatch(Command::ToggleSidebar, Some(w), cx);
-                })),
-            )
-            .when_some(self.app.panels.layout().right.as_ref(), |el, dock| {
-                el.child(
-                    icon_button(
-                        "toggle-right-sidebar",
-                        IconName::PanelRight,
-                        t.bar,
-                        t.bar_hover,
-                        cx,
-                    )
-                    .selected(dock.open)
-                    .tooltip("Toggle right sidebar")
-                    .debug_selector(|| "toggle-right-sidebar".into())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch(
-                            Command::Panels(volna_core::panels::PanelsCommand::ToggleRightDock),
-                            Some(window),
-                            cx,
-                        );
-                    })),
-                )
-            })
+            .child(self.render_sidebar_toggles(cx))
             .child(Self::titlebar_divider(cx))
             .child(
                 icon_button("open-file", IconName::FolderOpen, t.bar, t.bar_hover, cx)
@@ -2763,9 +2631,11 @@ impl Render for Workspace {
                 .bg(i.background)
                 .child(crate::islands::background());
         }
-        if !self.embedded {
-            root = root.child(self.render_titlebar(window, cx));
-        }
+        root = root.child(if self.embedded {
+            self.render_embedded_toolbar(window, cx).into_any_element()
+        } else {
+            self.render_titlebar(window, cx).into_any_element()
+        });
         let island_insets = t
             .islands
             .map(|i| crate::islands::insets(t.scale(i.gap), window.scale_factor()));

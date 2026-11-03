@@ -24,6 +24,146 @@ fn init(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn embedded_toolbar_routes_navigation_and_overflow_without_losing_panel_focus(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+    use volna_core::panels::PanelsCommand;
+    init(cx);
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        ws.update(cx, |ws, _| ws.embedded = true);
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let ws = workspace.unwrap();
+    let mut vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.simulate_resize(size(px(900.0), px(700.0)));
+    let (first, second) = ws.update(&mut vcx, |ws, cx| {
+        ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+        ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
+        ws.dispatch(Command::AddVars(a_all([0])), None, cx);
+        let first = ws.app.panels.focused_id();
+        ws.dispatch(Command::Action(Action::SplitRight), None, cx);
+        let second = ws.app.panels.focused_id();
+        ws.dispatch(Command::Action(Action::ToggleViewportLink), None, cx);
+        (first, second)
+    });
+    vcx.run_until_parked();
+    let viewport = |vcx: &mut gpui_kit::VisualTestContext, panel| {
+        ws.read_with(vcx, |ws, _| {
+            ws.app
+                .panels
+                .waves(panel)
+                .unwrap()
+                .nav
+                .viewport(&ws.app.doc)
+        })
+    };
+    let click = |vcx: &mut gpui_kit::VisualTestContext, selector| {
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let bounds = vcx.debug_bounds(selector).unwrap();
+        vcx.simulate_click(bounds.center(), Modifiers::default());
+        vcx.run_until_parked();
+    };
+    let before = viewport(&mut vcx, first);
+    root.update(&mut vcx, |_, window, cx| {
+        let focus = ws.read(cx).filter.read(cx).focus_handle(cx);
+        window.focus(&focus, cx);
+    })
+    .unwrap();
+    click(&mut vcx, "wave-zoom-in");
+    let second_zoomed = viewport(&mut vcx, second);
+    assert!(second_zoomed.width() < before.width());
+    assert_eq!(viewport(&mut vcx, first), before);
+    root.update(&mut vcx, |_, window, cx| {
+        let ws = ws.read(cx);
+        assert!(
+            ws.panel_focus(second, cx)
+                .unwrap()
+                .contains_focused(window, cx)
+        );
+    })
+    .unwrap();
+
+    ws.update(&mut vcx, |ws, cx| {
+        ws.dispatch(Command::Panels(PanelsCommand::Focus(first)), None, cx);
+    });
+    vcx.run_until_parked();
+    click(&mut vcx, "wave-zoom-in");
+    let first_zoomed = viewport(&mut vcx, first);
+    assert!(first_zoomed.width() < before.width());
+    assert_eq!(viewport(&mut vcx, second), second_zoomed);
+    click(&mut vcx, "wave-toolbar-more");
+    vcx.simulate_keystrokes("down down enter");
+    vcx.run_until_parked();
+    assert_ne!(viewport(&mut vcx, first), first_zoomed);
+    assert_eq!(viewport(&mut vcx, second), second_zoomed);
+
+    let first_panned = viewport(&mut vcx, first);
+    click(&mut vcx, "wave-toolbar-more");
+    ws.update(&mut vcx, |ws, cx| {
+        ws.dispatch(Command::Panels(PanelsCommand::Focus(second)), None, cx);
+    });
+    vcx.simulate_keystrokes("down enter");
+    vcx.run_until_parked();
+    assert_eq!(viewport(&mut vcx, first), first_panned);
+    assert_eq!(viewport(&mut vcx, second), second_zoomed);
+    ws.update(&mut vcx, |ws, cx| {
+        ws.dispatch(Command::Panels(PanelsCommand::Focus(first)), None, cx);
+    });
+    vcx.run_until_parked();
+
+    click(&mut vcx, "toggle-sidebar");
+    assert!(!ws.read_with(&vcx, |ws, _| ws.app.sidebar_visible));
+    click(&mut vcx, "toggle-sidebar");
+    assert!(ws.read_with(&vcx, |ws, _| ws.app.sidebar_visible));
+
+    for dark in [true, false] {
+        for (width, zoom) in [(900.0, 1.0), (360.0, 1.0), (360.0, 1.6), (360.0, 3.0)] {
+            vcx.simulate_resize(size(px(width), px(700.0)));
+            vcx.update(|_, cx| {
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                crate::theme::set_zoom(zoom, cx);
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let toolbar = vcx.debug_bounds("viewer-toolbar").unwrap();
+            for selector in [
+                "wave-zoom-fit",
+                "wave-toolbar-more",
+                "wave-zoom-in",
+                "wave-next-transition",
+                "toggle-sidebar",
+            ] {
+                if let Some(button) = vcx.debug_bounds(selector) {
+                    assert!(
+                        button.left() >= toolbar.left() && button.right() <= toolbar.right(),
+                        "{selector}: dark={dark} width={width} zoom={zoom}"
+                    );
+                    assert!(button.top() >= toolbar.top() && button.bottom() <= toolbar.bottom());
+                }
+            }
+            assert_eq!(
+                vcx.debug_bounds("wave-zoom-in").is_some(),
+                width / zoom >= 340.0
+            );
+            assert_eq!(
+                vcx.debug_bounds("wave-next-transition").is_some(),
+                width / zoom >= 240.0
+            );
+        }
+    }
+    let before = viewport(&mut vcx, first);
+    click(&mut vcx, "wave-toolbar-more");
+    vcx.simulate_keystrokes("down enter");
+    vcx.run_until_parked();
+    assert!(viewport(&mut vcx, first).width() < before.width());
+    assert_eq!(viewport(&mut vcx, second), second_zoomed);
+}
+
+#[gpui_kit::test]
 fn native_import_status_and_errors_remain_usable_across_themes_and_zoom(cx: &mut TestAppContext) {
     use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt as _;
