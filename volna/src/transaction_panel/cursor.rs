@@ -235,24 +235,27 @@ impl TransactionPanelView {
             .into_iter()
             .map(|record| {
                 let id = record.id;
+                let row_number = record.sub_row + 1;
+                let visibility = if record.hidden {
+                    "Outside displayed waveform rows"
+                } else {
+                    "Visible in waveform"
+                };
                 let hint = format!(
-                    "#{} · [{}, {}) ticks\n{}",
-                    id.0, record.begin, record.end, record.label
+                    "#{} · row {} · {}\n[{}, {}) ticks\n{}",
+                    id.0, row_number, visibility, record.begin, record.end, record.label
                 );
                 let is_selected = selected == Some(id);
                 div()
                     .id(("tx-active-record", id.0))
                     .role(gpui_kit::accesskit::Role::Button)
                     .aria_label(format!(
-                        "Transaction #{}: {}{}{}",
+                        "Transaction #{}: {}, row {}, {}{}",
                         id.0,
                         record.label,
+                        row_number,
+                        visibility,
                         if is_selected { ", selected" } else { "" },
-                        if record.hidden {
-                            ", hidden in waveform"
-                        } else {
-                            ""
-                        }
                     ))
                     .debug_selector(move || format!("tx-active-record-{}", id.0))
                     .h(t.px(34.0))
@@ -265,10 +268,12 @@ impl TransactionPanelView {
                     .cursor_pointer()
                     .bg(if is_selected {
                         t.selection.bg
-                    } else {
+                    } else if record.hidden {
                         t.panel.bg
+                    } else {
+                        t.panel.bg.blend(t.wave_row_hover)
                     })
-                    .hover(|style| style.bg(t.hover.bg))
+                    .when(!is_selected, |row| row.hover(|style| style.bg(t.hover.bg)))
                     .tooltip_show_delay(crate::ui::tooltip::delay(cx))
                     .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))
                     .on_click(cx.listener(move |view, _, window, cx| {
@@ -299,22 +304,10 @@ impl TransactionPanelView {
                             .text_size(px(t.ui_size_small))
                             .text_color(t.panel.text_muted)
                             .flex_none()
-                            .max_w(t.px(100.0))
+                            .w(t.px(100.0))
                             .text_ellipsis()
                             .child(SharedString::from(format!("#{}", id.0))),
                     )
-                    .when(record.hidden, |row| {
-                        row.child(
-                            div()
-                                .flex_none()
-                                .text_size(px(t.ui_size_small))
-                                .text_color(t.panel.text_muted)
-                                .child(SharedString::from(format!(
-                                    "Hidden · row {}",
-                                    record.sub_row + 1
-                                ))),
-                        )
-                    })
                     .child(
                         div()
                             .flex_1()
