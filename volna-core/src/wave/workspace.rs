@@ -603,7 +603,10 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             bus.is_none_or(|b| b.initialized || b.collapsed),
             "uninitialized bus must be collapsed"
         );
-        let requested = ctx.doc.translators.get(&format);
+        let requested = source
+            .formats(ctx.doc, shape, projection.is_some())
+            .into_iter()
+            .find(|t| t.id() == format);
         let translator = requested
             .clone()
             .unwrap_or_else(|| ctx.doc.translators.default_for(shape));

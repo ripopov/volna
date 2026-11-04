@@ -7,7 +7,7 @@ pub mod projection;
 pub mod sizes;
 pub mod translator;
 pub use activity::{ActivityCounter, ActivityCounts, ScopeActivity};
-pub use translator::{NumericKind, Translated, Translator, Translators};
+pub use translator::{DigitalStyle, NumericKind, Translated, Translator, Translators};
 mod intervals;
 pub mod loaded_tracks;
 pub mod occupancy;

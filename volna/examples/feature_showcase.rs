@@ -711,6 +711,23 @@ fn write(path: &Path) -> vtr::Result<()> {
         VarType::Enum,
         Direction::Output,
     )?;
+    let mut alias_options = SourceOptions::new("state_alias", Some(soc));
+    alias_options.attributes.push(Attribute {
+        key: enum_key,
+        value: Value::U64(u64::from(table.0)),
+    });
+    w.alias(state, alias_options, VarType::Enum, Direction::Output)?;
+    let mut probe_options = SourceOptions::new("state_probe", Some(soc));
+    probe_options.attributes.push(Attribute {
+        key: enum_key,
+        value: Value::U64(u64::from(table.0)),
+    });
+    let state_probe = w.signal(
+        probe_options,
+        SignalKind::bits(3, vtr::LogicStates::Four),
+        VarType::Enum,
+        Direction::Output,
+    )?;
     w.alias(
         clk,
         SourceOptions::new("clock_alias", Some(soc)),
@@ -1113,6 +1130,13 @@ fn write(path: &Path) -> vtr::Result<()> {
         w.emit_bytes(packet, &[0, cycle as u8, 0x80, 0xff])?;
         w.emit_u64(parameter, 32)?;
         w.emit_u64(state, phase as u64)?;
+        // The probe exercises numeric fallback and unknown logic alongside named states.
+        match t {
+            768..800 => w.emit_u64(state_probe, 7)?,
+            800..832 => w.emit_packed(state_probe, 4, &[0x2a])?,
+            832..864 => w.emit_packed(state_probe, 4, &[0x3f])?,
+            _ => w.emit_u64(state_probe, phase as u64)?,
+        }
         w.emit_u64(pc, 0x8000_0000 + 4 * cycle)?;
         if t.is_multiple_of(128) {
             w.emit_u64(event, 1)?;
@@ -1455,6 +1479,21 @@ fn verify(path: &Path, core_clock: u32, dma_clock: u32) -> vtr::Result<()> {
     let r = Reader::open(path)?;
     assert_eq!(r.find_generator("soc.clk"), Some(core_clock));
     assert_eq!(r.find_generator("soc.dma.dma_clk"), Some(dma_clock));
+    assert_eq!(r.find_signal("soc.state"), r.find_signal("soc.state_alias"));
+    let state = r.load_signal(r.find_signal("soc.state").unwrap())?;
+    for (time, value) in [(0, 0), (64, 1), (768, 2), (896, 3)] {
+        assert_eq!(
+            state
+                .get(state.times().partition_point(|&t| t <= time) - 1)
+                .as_u64(),
+            Some(value)
+        );
+    }
+    let probe = r.load_signal(r.find_signal("soc.state_probe").unwrap())?;
+    let at = |time| probe.get(probe.times().partition_point(|&t| t <= time) - 1);
+    assert_eq!(at(768).as_u64(), Some(7));
+    assert_eq!(at(800).as_u64(), None);
+    assert_eq!(at(832).as_u64(), None);
     let report = r.validate()?;
     assert!(report.missing.is_empty());
     assert_eq!(r.completion(), vtr::Completion::Complete);

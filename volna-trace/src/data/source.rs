@@ -95,8 +95,27 @@ pub struct Variable {
     pub enum_table: Option<u32>,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct EnumTable {
+    pub id: u32,
+    pub entries: Vec<(String, String)>,
+}
+
+impl EnumTable {
+    #[must_use]
+    pub fn resident_bytes(&self) -> u64 {
+        (self.entries.capacity() * std::mem::size_of::<(String, String)>()
+            + self
+                .entries
+                .iter()
+                .map(|(name, bits)| name.capacity() + bits.capacity())
+                .sum::<usize>()) as u64
+    }
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct HierarchyBuilder {
+    pub enum_tables: Vec<EnumTable>,
     pub scopes: Vec<Scope>,
     pub roots: Vec<ScopeId>,
     pub vars: Vec<Variable>,
@@ -228,6 +247,7 @@ pub(crate) trait HierarchySource: Send + Sync + std::fmt::Debug {
 
 #[derive(Clone, Debug)]
 pub struct Hierarchy {
+    pub(crate) enum_tables: std::sync::Arc<Vec<EnumTable>>,
     pub(crate) source: std::sync::Arc<dyn HierarchySource>,
     pub(crate) generators: std::sync::Arc<Vec<Generator>>,
 }
@@ -237,6 +257,15 @@ impl Default for Hierarchy {
     }
 }
 impl Hierarchy {
+    #[must_use]
+    pub fn enum_tables(&self) -> &[EnumTable] {
+        &self.enum_tables
+    }
+    #[must_use]
+    pub fn enum_table(&self, id: u32) -> Option<&EnumTable> {
+        self.enum_tables.iter().find(|table| table.id == id)
+    }
+
     #[must_use]
     pub fn generators(&self) -> &[Generator] {
         &self.generators
@@ -286,10 +315,17 @@ impl Hierarchy {
     #[must_use]
     pub fn resident_bytes(&self) -> u64 {
         self.source.resident_bytes()
+            + (self.enum_tables.capacity() * std::mem::size_of::<EnumTable>()) as u64
+            + self
+                .enum_tables
+                .iter()
+                .map(EnumTable::resident_bytes)
+                .sum::<u64>()
     }
     #[must_use]
     pub fn to_builder(&self) -> HierarchyBuilder {
         HierarchyBuilder {
+            enum_tables: self.enum_tables.as_ref().clone(),
             scopes: self
                 .scopes()
                 .map(|s| Scope {

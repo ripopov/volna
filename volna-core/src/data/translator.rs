@@ -1,5 +1,8 @@
 //! Value translators turn a [`WaveValue`] into display text.
 
+mod enums;
+pub(crate) use enums::EnumTranslators;
+
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -46,11 +49,21 @@ impl Translated {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DigitalStyle {
+    Levels,
+    Labels,
+}
+
 pub trait Translator: Send + Sync {
     fn id(&self) -> &'static str;
     fn name(&self) -> &'static str;
     fn badge(&self) -> &'static str;
     fn applies(&self, shape: SignalShape) -> bool;
+    /// Choose level traces or value labels for single-bit waveforms.
+    fn digital_style(&self) -> DigitalStyle {
+        DigitalStyle::Labels
+    }
     /// Format within a UTF-8 byte budget without materializing an unbounded input.
     fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated;
     fn translate(&self, value: &WaveValue) -> Translated {
@@ -241,6 +254,9 @@ fn not_applicable(value: &ValueView<'_>, limit: usize) -> Translated {
 
 struct BitTranslator;
 impl Translator for BitTranslator {
+    fn digital_style(&self) -> DigitalStyle {
+        DigitalStyle::Levels
+    }
     fn id(&self) -> &'static str {
         "bit"
     }

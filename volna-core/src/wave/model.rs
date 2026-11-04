@@ -56,6 +56,23 @@ pub enum RowSource {
 }
 
 impl RowSource {
+    pub(super) fn formats(
+        &self,
+        doc: &Document,
+        shape: SignalShape,
+        projected: bool,
+    ) -> Vec<Arc<dyn Translator>> {
+        let mut formats = doc.translators.applicable(shape);
+        if !projected
+            && let Some(var) = self.var()
+            && let Some(translator) = doc.enum_translator(var)
+            && translator.applies(shape)
+        {
+            formats.insert(0, translator);
+        }
+        formats
+    }
+
     #[must_use]
     pub fn trace(&self) -> TraceId {
         match self {
@@ -201,6 +218,11 @@ pub struct DisplayedSignal {
 }
 
 impl DisplayedSignal {
+    pub(super) fn formats(&self, doc: &Document) -> Vec<Arc<dyn Translator>> {
+        self.source
+            .formats(doc, self.shape, self.projection.is_some())
+    }
+
     pub(super) fn cursor_value(
         &self,
         cursor: Option<u64>,
@@ -2134,15 +2156,16 @@ impl WaveModel {
     }
 
     fn set_translator(&mut self, doc: &Document, rows: &[usize], id: &str) {
-        let Some(t) = doc.translators.get(id) else {
-            return;
-        };
-        let label = format!("Format {}", t.name());
+        let name = doc.translators.get(id).map_or("Enum", |t| t.name());
+        let label = format!("Format {name}");
         let merge = MergeKey::of("format", &rows);
         self.rewrite_rows(label, Some(merge), rows.iter().copied(), |e| {
             match e.row.signal_mut() {
-                Some(item) if t.applies(item.shape) && item.format_id() != t.id() => {
-                    item.translator = t.clone();
+                Some(item) if item.format_id() != id => {
+                    let Some(t) = item.formats(doc).into_iter().find(|t| t.id() == id) else {
+                        return false;
+                    };
+                    item.translator = t;
                     item.requested_format = None;
                     true
                 }
@@ -2159,7 +2182,7 @@ impl WaveModel {
             let Some(item) = e.row.signal_mut() else {
                 return false;
             };
-            let options = doc.translators.applicable(item.shape);
+            let options = item.formats(doc);
             if options.is_empty() {
                 return false;
             }
@@ -4599,7 +4622,9 @@ fn var_row(doc: &mut Document, var: Traced<VarId>, loaded: &Resident) -> Option<
     let h = session.hierarchy();
     let v = h.get_var(var.item)?;
     let signal = var.with(v.signal);
-    let translator = doc.translators.default_for(v.shape);
+    let translator = doc
+        .enum_translator(var)
+        .unwrap_or_else(|| doc.translators.default_for(v.shape));
     let history = loaded.get(&signal).cloned();
     let needs_load = history.is_none();
     let analog = (v.shape == SignalShape::Real && analog::supports(v.shape, translator.as_ref()))

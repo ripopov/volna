@@ -105,11 +105,15 @@ impl WaveModel {
             }
         }
         let format = shared(signals.iter().map(|s| s.translator.id()));
-        let formats: Vec<_> = doc
-            .translators
-            .applicable(first.shape)
+        let available: Vec<_> = signals.iter().map(|s| s.formats(doc)).collect();
+        let formats: Vec<_> = available[0]
+            .clone()
             .into_iter()
-            .filter(|t| signals.iter().all(|s| t.applies(s.shape)))
+            .filter(|t| {
+                available
+                    .iter()
+                    .all(|formats| formats.iter().any(|candidate| candidate.id() == t.id()))
+            })
             .map(|t| MenuItem {
                 action: MenuAction::Format(t.id().into()),
                 label: t.name().into(),

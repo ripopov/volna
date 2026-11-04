@@ -33,6 +33,11 @@ prepare layouts and toolkit-neutral `Scene` drawing commands; the frontend
 paints the scene and hosts native window controls and dialogs. Local and remote
 sessions use the same data contract.
 
+Each trace lazily prepares and shares its enum translators across rows, panels,
+and undo. Normalized literals use a sorted index that reads borrowed waveform
+bits directly. `Translator::digital_style()` selects levels or labels for
+single-bit waveforms; rendering does not depend on translator identifiers.
+
 After laying out a panel, hosts query `App::panel_measurement` and dispatch any
 returned command after the current layout/paint pass. New pipelines use this
 geometry report together with track and clock delivery to choose their opening

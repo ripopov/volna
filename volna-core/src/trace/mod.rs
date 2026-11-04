@@ -3,7 +3,7 @@
 mod names;
 mod placement;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use names::derive_names;
 pub use placement::Placement;
@@ -159,9 +159,22 @@ pub struct TraceSlot {
     pub(crate) generation: u64,
     pub(crate) placement: Placement,
     pub(crate) sizes: Option<Arc<volna_trace::data::ScopeSizes>>,
+    enum_translators: Arc<OnceLock<crate::data::translator::EnumTranslators>>,
 }
 
 impl TraceSlot {
+    pub(crate) fn enum_translator(
+        &self,
+        var: volna_trace::data::VarId,
+    ) -> Option<Arc<dyn crate::data::Translator>> {
+        let session = self.session()?;
+        self.enum_translators
+            .get_or_init(|| {
+                crate::data::translator::EnumTranslators::new(session.hierarchy().clone())
+            })
+            .get(var)
+    }
+
     pub(crate) fn new(id: TraceId, source: String, uri: Option<String>, generation: u64) -> Self {
         Self {
             id,
@@ -172,6 +185,7 @@ impl TraceSlot {
             generation,
             placement: Placement::IDENTITY,
             sizes: None,
+            enum_translators: Arc::default(),
         }
     }
 

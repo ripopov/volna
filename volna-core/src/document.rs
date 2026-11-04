@@ -273,6 +273,14 @@ impl Document {
     }
 
     #[must_use]
+    pub(crate) fn enum_translator(
+        &self,
+        var: Traced<volna_trace::data::VarId>,
+    ) -> Option<Arc<dyn crate::data::Translator>> {
+        self.traces.get(var.trace)?.enum_translator(var.item)
+    }
+
+    #[must_use]
     pub fn hierarchy(&self, trace: TraceId) -> Option<&Hierarchy> {
         self.session(trace).map(|s| s.hierarchy())
     }

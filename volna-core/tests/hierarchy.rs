@@ -13,6 +13,7 @@ use volna_trace::session::LoadRequest as TraceRequest;
 use volna_trace::session::{OpenSpec, Session};
 
 fn fixture() -> Arc<dyn Session> {
+    use vtr::Recorder;
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut w = vtr::Writer::create(file.path()).unwrap();
     let root = w
@@ -35,13 +36,14 @@ fn fixture() -> Arc<dyn Session> {
         key: w.intern("enum_table").unwrap(),
         value: vtr::Value::U64(u64::from(table.0)),
     });
-    w.signal(
-        signal,
-        vtr::SignalKind::bits(1, vtr::LogicStates::Four),
-        vtr::VarType::Wire,
-        vtr::Direction::Input,
-    )
-    .unwrap();
+    let state = w
+        .signal(
+            signal,
+            vtr::SignalKind::bits(1, vtr::LogicStates::Four),
+            vtr::VarType::Wire,
+            vtr::Direction::Input,
+        )
+        .unwrap();
     let cpu = w
         .scope_with(
             vtr::SourceOptions::new("cpu", Some(root)),
@@ -103,6 +105,10 @@ fn fixture() -> Arc<dyn Session> {
         "",
     )
     .unwrap();
+    w.emit_u64(state, 0).unwrap();
+    w.advance_time(10).unwrap();
+    w.emit_u64(state, 1).unwrap();
+    w.advance_time(20).unwrap();
     w.close().unwrap();
     if let Some(path) = std::env::var_os("VOLNA_HIERARCHY_FIXTURE") {
         std::fs::copy(file.path(), path).unwrap();
@@ -430,4 +436,280 @@ fn icons_have_assets_and_malformed_track_references_are_rejected() {
     builder.generators[0].kind = "wrong-kind".into();
     metadata.hierarchy = builder.finish();
     assert!(metadata.validate().is_err());
+}
+
+#[test]
+fn enum_format_is_default_selectable_and_restored_with_its_table() {
+    use volna_core::wave::model::MenuAction;
+    use volna_core::workspace::Workspace;
+    use volna_trace::data::WaveValue;
+
+    let mut app = App::new();
+    app.set_session(fixture());
+    app.handle(Command::AddVars(vec![a(0)]));
+    for request in app.take_requests() {
+        app.deliver(request.perform());
+    }
+    let panel = app.panels.focused_id();
+    for theme in [
+        volna_core::theme::Theme::volna(true),
+        volna_core::theme::Theme::volna(false),
+    ] {
+        app.layout_panel(
+            panel,
+            volna_core::geometry::Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
+            &theme,
+            1.0,
+            &mut volna_core::scene::MonoMeasure,
+        );
+        let scene = app.render_panel(panel, &theme, &mut volna_core::scene::MonoMeasure);
+        assert!(scene.texts().any(|text| text == "IDLE"));
+        assert!(scene.texts().any(|text| text == "BUSY"));
+    }
+    let translator = |app: &App| {
+        app.panels
+            .focused_waves()
+            .unwrap()
+            .signal(0)
+            .unwrap()
+            .translator
+            .clone()
+    };
+    let original = translator(&app);
+    assert_eq!(original.id(), "enum");
+    assert_eq!(
+        translator(&app)
+            .translate(&WaveValue::Bits("0".into()))
+            .text,
+        "IDLE"
+    );
+    let capture =
+        |app: &App| Workspace::capture(app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+    let saved = capture(&app);
+    let panel = app.panels.focused_id();
+    let choose = |app: &mut App, id: &str| {
+        app.panels.focused_waves_mut().unwrap().open_format_menu(
+            &app.doc,
+            0,
+            volna_core::geometry::point(0.0, 0.0),
+        );
+        assert!(
+            app.panels
+                .focused_waves()
+                .unwrap()
+                .menu
+                .as_ref()
+                .unwrap()
+                .items()
+                .any(|i| i.action == MenuAction::Format(id.into()))
+        );
+        app.handle(Command::MenuSelect(panel, MenuAction::Format(id.into())));
+    };
+    choose(&mut app, "bit");
+    assert_eq!(
+        translator(&app)
+            .translate(&WaveValue::Bits("0".into()))
+            .text,
+        "0"
+    );
+    choose(&mut app, "enum");
+    assert!(Arc::ptr_eq(&original, &translator(&app)));
+    assert_eq!(
+        translator(&app)
+            .translate(&WaveValue::Bits("1".into()))
+            .text,
+        "BUSY"
+    );
+    saved
+        .prepare(
+            &app,
+            "file:///tmp/trace.vtr",
+            "file:///tmp/trace.vtr.volna.json",
+        )
+        .unwrap()
+        .commit(&mut app)
+        .unwrap();
+    assert_eq!(translator(&app).id(), "enum");
+    assert!(Arc::ptr_eq(&original, &translator(&app)));
+    assert_eq!(
+        translator(&app)
+            .translate(&WaveValue::Bits("1".into()))
+            .text,
+        "BUSY"
+    );
+}
+
+#[test]
+fn showcase_enum_aliases_and_unmapped_values_use_the_recorded_table() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../volna/examples/feature_showcase.vtr");
+    let session = OpenSpec::Path(path).open().unwrap();
+    let mut app = App::new();
+    app.set_session(session.clone());
+    let var = |name: &str| {
+        session
+            .hierarchy()
+            .vars()
+            .position(|v| v.name == name)
+            .unwrap()
+    };
+    app.handle(Command::AddVars(vec![
+        a(var("state")),
+        a(var("state_alias")),
+        a(var("state_probe")),
+    ]));
+    for request in app.take_requests() {
+        app.deliver(request.perform());
+    }
+    let waves = app.panels.focused_waves().unwrap();
+    for row in [1, 2] {
+        assert!(Arc::ptr_eq(
+            &waves.signal(0).unwrap().translator,
+            &waves.signal(row).unwrap().translator
+        ));
+    }
+    for row in [0, 1] {
+        let signal = waves.signal(row).unwrap();
+        let history = signal.history.as_ref().unwrap();
+        for (time, label) in [(0, "BOOT"), (64, "RUN"), (768, "FAULT"), (896, "RECOVER")] {
+            let value = history.value_view(history.index_at(time));
+            assert_eq!(signal.translator.translate_view(&value, 64).text, label);
+        }
+    }
+    assert!(Arc::ptr_eq(
+        waves.signal(0).unwrap().history.as_ref().unwrap(),
+        waves.signal(1).unwrap().history.as_ref().unwrap()
+    ));
+    let probe = waves.signal(2).unwrap();
+    let history = probe.history.as_ref().unwrap();
+    for (time, label) in [
+        (64, "RUN"),
+        (768, "7"),
+        (800, "x"),
+        (832, "z"),
+        (896, "RECOVER"),
+    ] {
+        let value = history.value_view(history.index_at(time));
+        assert_eq!(probe.translator.translate_view(&value, 64).text, label);
+    }
+}
+
+#[test]
+fn enum_translators_are_isolated_by_trace_and_release_on_replacement() {
+    use volna_core::trace::Traced;
+    use volna_trace::data::WaveValue;
+
+    let mut app = App::new();
+    let first = fixture();
+    let mut other_hierarchy = first.hierarchy().to_builder();
+    other_hierarchy.enum_tables[0].entries[0].0 = "OTHER_IDLE".into();
+    let other = volna_core::testing::hierarchy_session(other_hierarchy);
+    app.set_session(first);
+    let (other_id, _) = app.doc.add_session(other).unwrap();
+    app.handle(Command::AddVars(vec![a(0), Traced::new(other_id, 0)]));
+    let (old_translator, other_translator) = {
+        let waves = app.panels.focused_waves().unwrap();
+        let first = &waves.signal(0).unwrap().translator;
+        let other = &waves.signal(1).unwrap().translator;
+        assert!(!Arc::ptr_eq(first, other));
+        assert_eq!(first.translate(&WaveValue::Bits("0".into())).text, "IDLE");
+        assert_eq!(
+            other.translate(&WaveValue::Bits("0".into())).text,
+            "OTHER_IDLE"
+        );
+        (Arc::downgrade(first), Arc::downgrade(other))
+    };
+    app.handle(Command::RemoveTrace(other_id));
+    app.handle(Command::Undo);
+    assert!(Arc::ptr_eq(
+        &other_translator.upgrade().unwrap(),
+        &app.panels
+            .focused_waves()
+            .unwrap()
+            .signal(1)
+            .unwrap()
+            .translator,
+    ));
+    app.set_session(fixture());
+    assert!(old_translator.upgrade().is_none());
+    assert!(other_translator.upgrade().is_none());
+    app.handle(Command::AddVars(vec![a(0)]));
+    assert_eq!(
+        app.panels
+            .focused_waves()
+            .unwrap()
+            .signal(0)
+            .unwrap()
+            .translator
+            .translate(&WaveValue::Bits("0".into()))
+            .text,
+        "IDLE"
+    );
+}
+
+#[test]
+fn bit_waveforms_follow_the_translators_digital_style() {
+    use volna_core::data::{Translated, Translator};
+    use volna_core::wave::model::MenuAction;
+    use volna_trace::data::value_view::ValueView;
+    use volna_trace::data::{SignalShape, ValueKind};
+
+    struct WordTranslator;
+    impl Translator for WordTranslator {
+        fn id(&self) -> &'static str {
+            "words"
+        }
+        fn name(&self) -> &'static str {
+            "Words"
+        }
+        fn badge(&self) -> &'static str {
+            "words"
+        }
+        fn applies(&self, shape: SignalShape) -> bool {
+            shape == SignalShape::Bit
+        }
+        fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
+            let text = match value {
+                ValueView::Logic(bits) if bits.to_u64() == Some(0) => "OFF",
+                _ => "ON",
+            };
+            Translated {
+                text: text[..limit.min(text.len())].into(),
+                kind: ValueKind::Normal,
+                truncated: limit < text.len(),
+            }
+        }
+    }
+    let mut app = App::new();
+    app.set_session(fixture());
+    app.doc.translators.register(Arc::new(WordTranslator));
+    app.handle(Command::AddVars(vec![a(0)]));
+    for request in app.take_requests() {
+        app.deliver(request.perform());
+    }
+    let panel = app.panels.focused_id();
+    app.panels.focused_waves_mut().unwrap().open_format_menu(
+        &app.doc,
+        0,
+        volna_core::geometry::point(0.0, 0.0),
+    );
+    app.handle(Command::MenuSelect(
+        panel,
+        MenuAction::Format("words".into()),
+    ));
+    for theme in [
+        volna_core::theme::Theme::volna(true),
+        volna_core::theme::Theme::volna(false),
+    ] {
+        app.layout_panel(
+            panel,
+            volna_core::geometry::Rect::from_xywh(0.0, 0.0, 1200.0, 600.0),
+            &theme,
+            1.0,
+            &mut volna_core::scene::MonoMeasure,
+        );
+        let scene = app.render_panel(panel, &theme, &mut volna_core::scene::MonoMeasure);
+        assert!(scene.texts().any(|text| text == "OFF"));
+        assert!(scene.texts().any(|text| text == "ON"));
+    }
 }

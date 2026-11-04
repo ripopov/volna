@@ -419,7 +419,32 @@ fn build_hierarchy(reader: Arc<LocalReader>) -> Hierarchy {
             .map(|&id| source.owner(source.reader.node(id).expect("declared variable"))),
         &generators,
     );
+    let enum_tables = source
+        .reader
+        .declarations()
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(id, node)| {
+            let NodeData::EnumTable { entries } = &node.data else {
+                return None;
+            };
+            Some(super::source::EnumTable {
+                id: id as u32,
+                entries: entries
+                    .iter()
+                    .map(|&(name, bits)| {
+                        (
+                            source.reader.string(name).expect("enum name").to_owned(),
+                            source.reader.string(bits).expect("enum bits").to_owned(),
+                        )
+                    })
+                    .collect(),
+            })
+        })
+        .collect();
     Hierarchy {
+        enum_tables: Arc::new(enum_tables),
         source: Arc::new(source),
         generators: Arc::new(generators),
     }

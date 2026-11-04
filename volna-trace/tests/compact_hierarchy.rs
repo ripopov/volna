@@ -119,6 +119,10 @@ fn roundtrip(session: Arc<dyn Session>, chunk: usize, budget: &MemoryBudget) -> 
     result.unwrap()
 }
 fn equal(a: &Hierarchy, b: &Hierarchy) {
+    assert_eq!(
+        bincode::serialize(&a.enum_tables()).unwrap(),
+        bincode::serialize(&b.enum_tables()).unwrap()
+    );
     assert_eq!(a.scope_count(), b.scope_count());
     assert_eq!(a.var_count(), b.var_count());
     assert_eq!(
@@ -200,6 +204,10 @@ fn every_fixture_roundtrips_column_for_column_with_shared_sizes() {
 
 fn wide(count: usize) -> Arc<dyn Session> {
     let mut h = volna_trace::data::HierarchyBuilder::default();
+    h.enum_tables.push(volna_trace::data::source::EnumTable {
+        id: 42,
+        entries: vec![("空闲.λ".into(), "0".into()), ("BUSY".into(), "1".into())],
+    });
     let root = h.push_scope("顶层.λ".into(), "module".into(), None);
     for i in 0..count {
         let scope = h.push_scope(format!("cell{i}"), "module".into(), Some(root));

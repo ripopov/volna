@@ -15,7 +15,7 @@ use sampling::{Samples, SamplingGrid};
 
 use crate::analysis::AnalysisLoad;
 use crate::color::Color;
-use crate::data::Translator;
+use crate::data::{DigitalStyle, Translator};
 use crate::document::Document;
 use crate::geometry::CursorIcon;
 use crate::geometry::{Point, Rect, point, size, snap};
@@ -592,23 +592,25 @@ pub(crate) fn paint(
                     });
                     paint_event_counts(&counts, wave_row, waves, &mut p);
                 }
-                SignalShape::Bit => p.scene.clipped(waves, |scene| {
-                    let grid = SamplingGrid::new(&viewport, f64::from(wave_row.width()));
-                    let samples = cache.sample(h, &grid, true, budget);
-                    let columns = 0..wave_row.width().ceil().max(0.0) as usize;
-                    paint_bits_sampled(
-                        DigitalRow {
-                            history: h.as_ref(),
-                            samples: samples.as_ref(),
-                        },
-                        &viewport,
-                        wave_row,
-                        t,
-                        scene,
-                        true,
-                        columns,
-                    );
-                }),
+                SignalShape::Bit if item.translator.digital_style() == DigitalStyle::Levels => {
+                    p.scene.clipped(waves, |scene| {
+                        let grid = SamplingGrid::new(&viewport, f64::from(wave_row.width()));
+                        let samples = cache.sample(h, &grid, true, budget);
+                        let columns = 0..wave_row.width().ceil().max(0.0) as usize;
+                        paint_bits_sampled(
+                            DigitalRow {
+                                history: h.as_ref(),
+                                samples: samples.as_ref(),
+                            },
+                            &viewport,
+                            wave_row,
+                            t,
+                            scene,
+                            true,
+                            columns,
+                        );
+                    });
+                }
                 _ => {
                     let grid = bus_grid(&viewport, f64::from(wave_row.width()), t);
                     let samples = cache.sample(h, &grid, false, budget);

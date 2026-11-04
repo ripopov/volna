@@ -85,6 +85,22 @@ async fn metadata(r: &Reader) -> anyhow::Result<super::hierarchy::Header> {
             })
         })
         .await?;
+    let enum_tables = r
+        .vector(12, || async {
+            Ok(crate::data::source::EnumTable {
+                id: r.u32().await?,
+                entries: r
+                    .vector(16, || async { Ok((r.string().await?, r.string().await?)) })
+                    .await?,
+            })
+        })
+        .await?;
+    let mut table_ids = std::collections::HashSet::new();
+    r.charge(enum_tables.len() * 32)?;
+    for table in &enum_tables {
+        r.checkpoint().await;
+        anyhow::ensure!(table_ids.insert(table.id), "duplicate enum table");
+    }
     let scopes = r.u32().await?;
     let vars = r.u32().await?;
     let activity = if r.boolean().await? {
@@ -110,6 +126,7 @@ async fn metadata(r: &Reader) -> anyhow::Result<super::hierarchy::Header> {
         capabilities,
         tracks,
         generators,
+        enum_tables,
         scopes,
         vars,
         activity,
@@ -273,6 +290,10 @@ mod tests {
         roundtrip(
             Header::from_session(crate::testing::ProceduralTrace::session(100).as_ref())
                 .map(|mut header| {
+                    header.enum_tables = vec![crate::data::source::EnumTable {
+                        id: 42,
+                        entries: vec![("空闲.λ".into(), "00".into()), ("BUSY".into(), "01".into())],
+                    }];
                     header.info = expected.info;
                     header.tracks = expected.tracks;
                     header.capabilities = expected.capabilities;
@@ -392,6 +413,7 @@ mod tests {
             capabilities: metadata.capabilities,
             tracks: metadata.tracks.clone(),
             generators: metadata.hierarchy.generators.as_ref().clone(),
+            enum_tables: metadata.hierarchy.enum_tables().to_vec(),
             scopes: metadata.hierarchy.scope_count() as u32,
             vars: metadata.hierarchy.var_count() as u32,
             activity: metadata.activity.clone(),

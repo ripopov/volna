@@ -1,4 +1,4 @@
-//! Protocol v6 bounded hierarchy pages.
+//! Bounded hierarchy pages and shared declaration tables.
 
 use super::decode::{Decoder, Reader, Step};
 use super::memory::{MemoryBudget, Reservation};
@@ -22,6 +22,7 @@ pub struct Header {
     pub capabilities: Capabilities,
     pub tracks: Vec<Track>,
     pub generators: Vec<Generator>,
+    pub enum_tables: Vec<crate::data::source::EnumTable>,
     pub scopes: u32,
     pub vars: u32,
     pub activity: Option<super::activity::Descriptor>,
@@ -33,6 +34,7 @@ pub struct HeaderView<'a> {
     capabilities: Capabilities,
     tracks: &'a [Track],
     generators: &'a [Generator],
+    enum_tables: &'a [crate::data::source::EnumTable],
     scopes: u32,
     vars: u32,
     activity: Option<super::activity::Descriptor>,
@@ -45,6 +47,7 @@ impl Header {
             capabilities: session.capabilities(),
             tracks: session.tracks(),
             generators: &session.hierarchy().generators,
+            enum_tables: session.hierarchy().enum_tables(),
             scopes: session.hierarchy().scope_count().try_into()?,
             vars: session.hierarchy().var_count().try_into()?,
             activity: super::activity::Descriptor::from_session(session),
@@ -57,6 +60,7 @@ impl Header {
             capabilities: session.capabilities(),
             tracks: session.tracks().to_vec(),
             generators: session.hierarchy().generators.as_ref().clone(),
+            enum_tables: session.hierarchy().enum_tables().to_vec(),
             scopes: session.hierarchy().scope_count().try_into()?,
             vars: session.hierarchy().var_count().try_into()?,
             activity: super::activity::Descriptor::from_session(session),
@@ -671,6 +675,7 @@ impl Assembly {
                 assembly.reservations.push(index_owner);
                 let ownership = Arc::new(assembly.reservations);
                 let hierarchy = Hierarchy {
+                    enum_tables: Arc::new(assembly.header.enum_tables),
                     source: Arc::new(RemoteHierarchy {
                         scopes: assembly.scopes,
                         vars: assembly.vars,

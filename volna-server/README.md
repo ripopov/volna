@@ -57,13 +57,13 @@ Files must remain unchanged throughout a session. Live recordings are unsupporte
 
 ## Framing and object limits
 
-Protocol **11** is independent of the VTR file-format version. Peers reject other
+Protocol **12** is independent of the VTR file-format version. Peers reject other
 protocol versions; there is no negotiation. Each packet has a 12-byte header:
 
 | Field | Encoding |
 | --- | --- |
 | Magic | Four bytes: `VLNA` |
-| Version | Little-endian `u32`, currently 10 |
+| Version | Little-endian `u32`, currently 12 |
 | Encoded body length | Little-endian `u32`, at most 1 MiB |
 
 The body is an independent checksummed LZ4 frame containing a fixed-width,
@@ -100,4 +100,5 @@ Process tests launch the actual executable with isolated temporary files and
 a watchdog. They compare local and remote VTR results, aliases, full
 transaction records, parallel relations, empty generators, explicit errors,
 size limits, recording-change detection, and sidecar reuse between processes.
-Hierarchy tests also exercise transfers across multiple metadata pages.
+Hierarchy tests also exercise transfers across multiple metadata pages and preserve
+shared enum tables for symbolic waveform values.

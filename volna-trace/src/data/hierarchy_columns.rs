@@ -292,6 +292,7 @@ impl ColumnBuilder {
         self.columns.names.bytes.shrink_to_fit();
         self.columns.names.offsets.shrink_to_fit();
         Hierarchy {
+            enum_tables: Default::default(),
             source: std::sync::Arc::new(self.columns),
             generators: std::sync::Arc::new(self.generators),
         }
@@ -316,7 +317,9 @@ impl HierarchyBuilder {
             });
         }
         out.generators = self.generators;
-        out.finish()
+        let mut hierarchy = out.finish();
+        hierarchy.enum_tables = std::sync::Arc::new(self.enum_tables);
+        hierarchy
     }
 }
 impl From<HierarchyBuilder> for Hierarchy {
