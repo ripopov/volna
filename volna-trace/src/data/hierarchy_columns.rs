@@ -8,8 +8,8 @@ use super::value::SignalShape;
 use std::collections::HashMap;
 
 pub(crate) const NONE: u32 = u32::MAX;
-pub(crate) const SCOPE_WORDS: usize = 4;
-pub(crate) const VAR_WORDS: usize = 8;
+pub(crate) const SCOPE_WORDS: usize = 5;
+pub(crate) const VAR_WORDS: usize = 9;
 
 #[derive(Debug, Default)]
 pub(crate) struct Names {
@@ -163,6 +163,7 @@ impl HierarchySource for Columns {
     fn scope(&self, id: usize) -> ScopeView<'_> {
         let c = &self.scopes;
         ScopeView {
+            description: self.names.get(c[4][id]),
             name: self.names.get(c[0][id]),
             kind: self.names.get(c[1][id]),
             component: self.names.get(c[2][id]),
@@ -175,6 +176,7 @@ impl HierarchySource for Columns {
     fn var(&self, id: usize) -> VariableView<'_> {
         let c = &self.vars;
         VariableView {
+            description: self.names.get(c[8][id]),
             name: self.names.get(c[0][id]),
             scope: c[1][id] as usize,
             shape: words_shape(c[2][id], c[3][id]).expect("validated shape"),
@@ -249,6 +251,7 @@ impl ColumnBuilder {
         kind: &str,
         component: &str,
         parent: Option<usize>,
+        description: &str,
     ) -> usize {
         let id = self.columns.scope_count();
         let row = [
@@ -256,6 +259,7 @@ impl ColumnBuilder {
             self.intern(kind),
             self.intern(component),
             parent.map_or(NONE, |p| p as u32),
+            self.intern(description),
         ];
         for (column, value) in self.columns.scopes.iter_mut().zip(row) {
             column.push(value);
@@ -274,6 +278,7 @@ impl ColumnBuilder {
             v.direction as u32 | (u32::from(v.enum_table.is_some()) << 2),
             v.signal.0,
             v.enum_table.unwrap_or(0),
+            self.intern(v.description),
         ];
         for (column, value) in self.columns.vars.iter_mut().zip(row) {
             column.push(value);
@@ -303,10 +308,17 @@ impl HierarchyBuilder {
     pub fn finish(self) -> Hierarchy {
         let mut out = ColumnBuilder::default();
         for scope in self.scopes {
-            out.push_scope(&scope.name, &scope.kind, &scope.component, scope.parent);
+            out.push_scope(
+                &scope.name,
+                &scope.kind,
+                &scope.component,
+                scope.parent,
+                &scope.description,
+            );
         }
         for v in self.vars {
             out.push_var(VariableView {
+                description: &v.description,
                 name: &v.name,
                 scope: v.scope,
                 shape: v.shape,

@@ -573,23 +573,22 @@ fn dma_active(t: u64) -> bool {
 
 fn bits(
     w: &mut Writer,
-    parent: NodeId,
-    name: &str,
+    options: SourceOptions,
     width: u32,
     states: u8,
     dir: Direction,
 ) -> vtr::Result<SignalId> {
     w.signal(
-        SourceOptions::new(name, Some(parent)),
+        options,
         SignalKind::Bits { width, states },
         VarType::Logic,
         dir,
     )
 }
 
-fn real(w: &mut Writer, parent: NodeId, name: &str) -> vtr::Result<SignalId> {
+fn real(w: &mut Writer, options: SourceOptions) -> vtr::Result<SignalId> {
     w.signal(
-        SourceOptions::new(name, Some(parent)),
+        options,
         SignalKind::Real,
         VarType::Real,
         Direction::Implicit,
@@ -635,41 +634,152 @@ fn write(path: &Path) -> vtr::Result<()> {
         value: Value::U64(2026),
     });
     w.set_metadata(metadata)?;
+    let description_key = w.intern("vtr.description")?;
+    let described = |name: &str, parent: Option<NodeId>, description: &str| SourceOptions {
+        attributes: vec![Attribute {
+            key: description_key,
+            value: Value::Text(description.into()),
+        }],
+        ..SourceOptions::new(name, parent)
+    };
     let attrs = attributes(&mut w)?;
-    let soc = w.scope_with(
-        SourceOptions {
-            name: "soc".into(),
-            parent: None,
-            attributes: attrs.clone(),
-        },
-        ScopeType::Module,
-        "debug_lab",
+    let mut soc_options = described(
+        "soc",
+        None,
+        "Synthetic system-on-chip debugging lab.\nThe two-microsecond recording covers boot, DMA traffic, an injected bus fault, and recovery.",
+    );
+    soc_options.attributes.extend(attrs.iter().cloned());
+    let soc = w.scope_with(soc_options, ScopeType::Module, "debug_lab")?;
+    let clk = bits(
+        &mut w,
+        described(
+            "clk",
+            Some(soc),
+            "Core clock waveform with an 8 ns period. The matching clock generator defines cycle-based navigation.",
+        ),
+        1,
+        2,
+        Direction::Input,
     )?;
-    let clk = bits(&mut w, soc, "clk", 1, 2, Direction::Input)?;
-    let reset = bits(&mut w, soc, "reset_n", 1, 4, Direction::Input)?;
-    let valid = bits(&mut w, soc, "valid", 1, 2, Direction::Output)?;
-    let ready = bits(&mut w, soc, "ready", 1, 4, Direction::Input)?;
-    let address = bits(&mut w, soc, "address", 32, 2, Direction::Output)?;
-    let data = bits(&mut w, soc, "data", 32, 4, Direction::InOut)?;
-    let wide = bits(&mut w, soc, "payload_128", 128, 2, Direction::Output)?;
-    let resolved = bits(&mut w, soc, "resolved_bus", 9, 9, Direction::InOut)?;
-    let temperature = real(&mut w, soc, "temperature_c")?;
-    let sine_fast = real(&mut w, soc, "sine_fast")?;
-    let sine_slow = real(&mut w, soc, "sine_slow")?;
+    let reset = bits(
+        &mut w,
+        described("reset_n", Some(soc), "Active-low reset. Released at 32 ns."),
+        1,
+        4,
+        Direction::Input,
+    )?;
+    let valid = bits(
+        &mut w,
+        described(
+            "valid",
+            Some(soc),
+            "Request-valid output. Asserted after boot except on every fourth core cycle.",
+        ),
+        1,
+        2,
+        Direction::Output,
+    )?;
+    let ready = bits(
+        &mut w,
+        described(
+            "ready",
+            Some(soc),
+            "Receiver readiness. Becomes unknown during the injected bus fault from 768 to 896 ns.",
+        ),
+        1,
+        4,
+        Direction::Input,
+    )?;
+    let address = bits(
+        &mut w,
+        described(
+            "address",
+            Some(soc),
+            "Byte address of the synthetic memory request. Advances through a 256-byte window starting at 0x1000.",
+        ),
+        32,
+        2,
+        Direction::Output,
+    )?;
+    let data = bits(
+        &mut w,
+        described(
+            "data",
+            Some(soc),
+            "Bidirectional data bus. Contains mixed logic states during the fault window.",
+        ),
+        32,
+        4,
+        Direction::InOut,
+    )?;
+    let wide = bits(
+        &mut w,
+        described(
+            "payload_128",
+            Some(soc),
+            "128-bit payload assembled from the cycle count and fixed diagnostic patterns.",
+        ),
+        128,
+        2,
+        Direction::Output,
+    )?;
+    let resolved = bits(
+        &mut w,
+        described(
+            "resolved_bus",
+            Some(soc),
+            "Nine-state logic gallery. Alternates patterns containing all VHDL logic states.",
+        ),
+        9,
+        9,
+        Direction::InOut,
+    )?;
+    let temperature = real(
+        &mut w,
+        described(
+            "temperature_c",
+            Some(soc),
+            "Synthetic die temperature in degrees Celsius. Sampled every 4 ns.",
+        ),
+    )?;
+    let sine_fast = real(
+        &mut w,
+        described(
+            "sine_fast",
+            Some(soc),
+            "Reference sine wave with amplitude 0.5 and period 128 ns. Sampled every 4 ns.",
+        ),
+    )?;
+    let sine_slow = real(
+        &mut w,
+        described(
+            "sine_slow",
+            Some(soc),
+            "Reference sine wave with amplitude 20 and period 1024 ns. Sampled every 4 ns.",
+        ),
+    )?;
     let message = w.signal(
-        SourceOptions::new("phase", Some(soc)),
+        described(
+            "phase",
+            Some(soc),
+            "Textual boot, run, fault, or recovery phase. Sampled every 4 ns.",
+        ),
         SignalKind::VarLen,
         VarType::String,
         Direction::Implicit,
     )?;
     let packet = w.signal(
-        SourceOptions::new("packet_bytes", Some(soc)),
+        described(
+            "packet_bytes",
+            Some(soc),
+            "Opaque packet payload with embedded zero and non-UTF-8 bytes.",
+        ),
         SignalKind::VarLen,
         VarType::Bytes,
         Direction::Implicit,
     )?;
     let event = w.signal(
-        SourceOptions::new("interrupt", Some(soc)),
+        described("interrupt", Some(soc), "Interrupt occurrences. Repeated timestamps and identical payloads represent distinct events."),
         SignalKind::Bits {
             width: 1,
             states: 2,
@@ -678,7 +788,11 @@ fn write(path: &Path) -> vtr::Result<()> {
         Direction::Output,
     )?;
     let parameter = w.signal(
-        SourceOptions::new("BUS_WIDTH", Some(soc)),
+        described(
+            "BUS_WIDTH",
+            Some(soc),
+            "Configured memory bus width in bits. Constant for the recording.",
+        ),
         SignalKind::Bits {
             width: 32,
             states: 2,
@@ -697,7 +811,11 @@ fn write(path: &Path) -> vtr::Result<()> {
     .collect::<vtr::Result<Vec<_>>>()?;
     let table = w.enum_table(SourceOptions::new("phase_t", Some(soc)), entries)?;
     let enum_key = w.intern("enum_table")?;
-    let mut state_options = SourceOptions::new("state", Some(soc));
+    let mut state_options = described(
+        "state",
+        Some(soc),
+        "Two-bit phase enumeration: BOOT, RUN, FAULT, and RECOVER.",
+    );
     state_options.attributes.push(Attribute {
         key: enum_key,
         value: Value::U64(u64::from(table.0)),
@@ -711,13 +829,21 @@ fn write(path: &Path) -> vtr::Result<()> {
         VarType::Enum,
         Direction::Output,
     )?;
-    let mut alias_options = SourceOptions::new("state_alias", Some(soc));
+    let mut alias_options = described(
+        "state_alias",
+        Some(soc),
+        "Alternate declaration of the phase signal, sharing its recorded history.",
+    );
     alias_options.attributes.push(Attribute {
         key: enum_key,
         value: Value::U64(u64::from(table.0)),
     });
     w.alias(state, alias_options, VarType::Enum, Direction::Output)?;
-    let mut probe_options = SourceOptions::new("state_probe", Some(soc));
+    let mut probe_options = described(
+        "state_probe",
+        Some(soc),
+        "Independent three-bit phase probe, including unknown values for enum-format inspection.",
+    );
     probe_options.attributes.push(Attribute {
         key: enum_key,
         value: Value::U64(u64::from(table.0)),
@@ -730,38 +856,106 @@ fn write(path: &Path) -> vtr::Result<()> {
     )?;
     w.alias(
         clk,
-        SourceOptions::new("clock_alias", Some(soc)),
+        described(
+            "clock_alias",
+            Some(soc),
+            "Alternate name for the core clock waveform, sharing the same signal history.",
+        ),
         VarType::Wire,
         Direction::Input,
     )?;
     let cpu = w.scope_with(
-        SourceOptions::new("cpu", Some(soc)),
+        described(
+            "cpu",
+            Some(soc),
+            "Simulated CPU with a five-stage pipeline and stage occupancy probes.",
+        ),
         ScopeType::Core,
         "tiny_cpu",
     )?;
-    let pc = bits(&mut w, cpu, "pc", 32, 2, Direction::Output)?;
-    let pipeline = w.scope("thread0", Some(cpu))?;
+    let pc = bits(
+        &mut w,
+        described(
+            "pc",
+            Some(cpu),
+            "Program counter of the simulated CPU instruction stream.",
+        ),
+        32,
+        2,
+        Direction::Output,
+    )?;
+    let pipeline = w.scope_with(
+        described(
+            "thread0",
+            Some(cpu),
+            "CPU instruction streams for one simulated hardware thread.",
+        ),
+        ScopeType::Module,
+        "",
+    )?;
     let instructions = w.transactions::<Instruction>(
-        SourceOptions::new("instructions", Some(pipeline)),
+        described("instructions", Some(pipeline), "Instruction lifetimes through fetch, decode, execute, memory, and writeback. Stall stages use a separate lane."),
         "PIPELINE",
     )?;
     let speculative = w.transactions::<Instruction>(
-        SourceOptions::new("speculative", Some(pipeline)),
+        described(
+            "speculative",
+            Some(pipeline),
+            "Wrong-path instructions that are aborted when the branch is resolved.",
+        ),
         "PIPELINE",
     )?;
     let dma = w.scope_with(
-        SourceOptions::new("dma", Some(soc)),
+        described("dma", Some(soc), "DMA engine with memory-bus transactions, descriptor queues, and a variable-rate clock."),
         ScopeType::ScModule,
         "dma_engine",
     )?;
-    let bus = w.scope("memory_bus", Some(dma))?;
-    let reads = w.transactions::<Label>(SourceOptions::new("read", Some(bus)), "MEMORY_BUS")?;
-    let writes = w.transactions::<Label>(SourceOptions::new("write", Some(bus)), "MEMORY_BUS")?;
-    let idle = w.transactions::<Label>(SourceOptions::new("idle", Some(bus)), "MEMORY_BUS")?;
-    w.scope("standby_bus", Some(dma))?;
-    let logs = w.logger(SourceOptions::new("log", Some(soc)))?;
-    let core_clk = w.clock(SourceOptions::new("clk", Some(soc)))?;
-    let dma_clk = w.clock(SourceOptions::new("dma_clk", Some(dma)))?;
+    let bus = w.scope_with(
+        described(
+            "memory_bus",
+            Some(dma),
+            "DMA memory traffic grouped into read, write, and idle streams.",
+        ),
+        ScopeType::Module,
+        "",
+    )?;
+    let reads = w.transactions::<Label>(
+        described(
+            "read",
+            Some(bus),
+            "DMA memory-read transactions, timed against the DMA clock.",
+        ),
+        "MEMORY_BUS",
+    )?;
+    let writes = w.transactions::<Label>(described("write", Some(bus), "DMA memory-write transactions. Includes an unfinished write at the end of the recording."), "MEMORY_BUS")?;
+    let idle = w.transactions::<Label>(
+        described(
+            "idle",
+            Some(bus),
+            "Intervals when the DMA memory bus is idle.",
+        ),
+        "MEMORY_BUS",
+    )?;
+    w.scope_with(
+        described(
+            "standby_bus",
+            Some(dma),
+            "Empty standby bus, demonstrating a scope with no observations.",
+        ),
+        ScopeType::Module,
+        "",
+    )?;
+    let logs = w.logger(described(
+        "log",
+        Some(soc),
+        "Diagnostic log stream containing cycle phases, severity examples, and typed arguments.",
+    ))?;
+    let core_clk = w.clock(described(
+        "clk",
+        Some(soc),
+        "Core clock definition with rising edges every 8 ns, starting at 4 ns.",
+    ))?;
+    let dma_clk = w.clock(described("dma_clk", Some(dma), "DMA clock definition. Stops during fault recovery and changes period from 12 ns to 6 ns, then 16 ns."))?;
     w.associate_clock(instructions, core_clk)?;
     w.associate_clock(speculative, core_clk)?;
     for source in [reads, writes, idle] {
@@ -803,20 +997,46 @@ fn write(path: &Path) -> vtr::Result<()> {
     )?;
 
     let type_gallery = w.scope_with(
-        SourceOptions::new("type_gallery", Some(soc)),
+        described(
+            "type_gallery",
+            Some(soc),
+            "Examples of scope kinds, variable declarations, enum formatting, and literal names.",
+        ),
         ScopeType::Package,
         "",
     )?;
     let scopes = w.scope_with(
-        SourceOptions::new("scopes", Some(type_gallery)),
+        described(
+            "scopes",
+            Some(type_gallery),
+            "Scope-kind gallery, including preserved application-defined codes.",
+        ),
         ScopeType::Generic,
         "",
     )?;
     let mut gallery = Vec::new();
     for code in (0..=22).chain(64..=68).chain([200]) {
         let kind = ScopeType::from_code(code);
-        let scope = w.scope_with(SourceOptions::new(kind.name(), Some(scopes)), kind, "")?;
-        let signal = bits(&mut w, scope, "active", 1, 2, Direction::Implicit)?;
+        let scope = w.scope_with(
+            described(
+                kind.name(),
+                Some(scopes),
+                &format!("Example of the {} scope kind (code {code}).", kind.name()),
+            ),
+            kind,
+            "",
+        )?;
+        let signal = bits(
+            &mut w,
+            described(
+                "active",
+                Some(scope),
+                "Activity probe for this scope-kind example.",
+            ),
+            1,
+            2,
+            Direction::Implicit,
+        )?;
         gallery.push((
             signal,
             SignalKind::Bits {
@@ -827,7 +1047,7 @@ fn write(path: &Path) -> vtr::Result<()> {
         ));
     }
     let declarations = w.scope_with(
-        SourceOptions::new("declarations", Some(type_gallery)),
+        described("declarations", Some(type_gallery), "Variable-type gallery. Declared variable types are shown alongside their actual payload encoding."),
         ScopeType::Generic,
         "",
     )?;
@@ -851,7 +1071,14 @@ fn write(path: &Path) -> vtr::Result<()> {
                 states: 4,
             },
         };
-        let mut signal_options = SourceOptions::new(typ.name(), Some(declarations));
+        let mut signal_options = described(
+            typ.name(),
+            Some(declarations),
+            &format!(
+                "Example of the {} variable type (code {code}). The payload encoding is selected independently of the declaration type.",
+                typ.name()
+            ),
+        );
         if typ == VarType::Enum {
             signal_options.attributes.push(Attribute {
                 key: enum_key,
@@ -867,69 +1094,173 @@ fn write(path: &Path) -> vtr::Result<()> {
         gallery.push((signal, kind, typ));
     }
     let literal_names = w.scope_with(
-        SourceOptions::new("literal.names", Some(type_gallery)),
+        described(
+            "literal.names",
+            Some(type_gallery),
+            "Literal-name examples. Dots and brackets are part of declaration names.",
+        ),
         ScopeType::Struct,
         "",
     )?;
     w.alias(
         data,
-        SourceOptions::new("escaped.signal[3]", Some(literal_names)),
+        described(
+            "escaped.signal[3]",
+            Some(literal_names),
+            "Literal-name alias of the system data bus. The brackets do not select a bit.",
+        ),
         VarType::Wire,
         Direction::Linkage,
     )?;
     let occupancy = w.scope_with(
-        SourceOptions::new("occupancy", Some(cpu)),
+        described(
+            "occupancy",
+            Some(cpu),
+            "Per-stage CPU occupancy. Summing the probes counts in-flight instructions.",
+        ),
         ScopeType::Generic,
         "",
     )?;
     let stage_busy = STAGES
         .iter()
-        .map(|stage| bits(&mut w, occupancy, stage, 1, 2, Direction::Output))
+        .map(|stage| {
+            let options = described(
+                stage,
+                Some(occupancy),
+                &format!("One while an instruction occupies the {stage} pipeline stage. Updated on core clock edges."),
+            );
+            bits(&mut w, options, 1, 2, Direction::Output)
+        })
         .collect::<vtr::Result<Vec<_>>>()?;
     let power = w.scope_with(
-        SourceOptions::new("power", Some(soc)),
+        described("power", Some(soc), "Synthetic power rails in milliwatts, sampled every nanosecond. Includes noise and fault-recovery behavior."),
         ScopeType::Module,
         "power_monitor",
     )?;
     let power_mode = w.signal(
-        SourceOptions::new("mode", Some(power)),
+        described(
+            "mode",
+            Some(power),
+            "Power-monitor operating mode: reset, run, fault, recovery, or halted.",
+        ),
         SignalKind::VarLen,
         VarType::String,
         Direction::Implicit,
     )?;
-    let io_mw = real(&mut w, power, "io_mw")?;
-    let sram_mw = real(&mut w, power, "sram_mw")?;
-    let dma_mw = real(&mut w, power, "dma_mw")?;
-    let core_mw = real(&mut w, power, "core_mw")?;
-    let leakage_mw = real(&mut w, power, "leakage_mw")?;
+    let io_mw = real(
+        &mut w,
+        described(
+            "io_mw",
+            Some(power),
+            "I/O power in milliwatts, including periodic bursts and synthetic noise. Sampled every 1 ns.",
+        ),
+    )?;
+    let sram_mw = real(
+        &mut w,
+        described(
+            "sram_mw",
+            Some(power),
+            "SRAM power in milliwatts. Includes CPU memory-stage activity and DMA accesses. Sampled every 1 ns.",
+        ),
+    )?;
+    let dma_mw = real(
+        &mut w,
+        described(
+            "dma_mw",
+            Some(power),
+            "DMA engine power in milliwatts. Drops during the bus fault. Sampled every 1 ns.",
+        ),
+    )?;
+    let core_mw = real(
+        &mut w,
+        described(
+            "core_mw",
+            Some(power),
+            "CPU core power in milliwatts. Includes reset inrush, pipeline activity, glitches, and halted idle power. Sampled every 1 ns.",
+        ),
+    )?;
+    let leakage_mw = real(
+        &mut w,
+        described(
+            "leakage_mw",
+            Some(power),
+            "Temperature-dependent leakage power in milliwatts. Sampled every 1 ns.",
+        ),
+    )?;
     let queue = w.scope_with(
-        SourceOptions::new("queue", Some(dma)),
+        described("queue", Some(dma), "Pending DMA descriptor counts by channel. Updated on DMA clock edges; values are capped at 15. Channel 2 becomes unknown during the fault window."),
         ScopeType::Module,
         "dma_queues",
     )?;
-    let channels =
-        ["ch0", "ch1", "ch2", "ch3"].map(|name| bits(&mut w, queue, name, 4, 4, Direction::Output));
+    let channels = ["ch0", "ch1", "ch2", "ch3"].map(|name| {
+        let options = described(
+            name,
+            Some(queue),
+            &format!("Pending descriptors in DMA channel {name}. Updated on DMA clock edges and capped at 15."),
+        );
+        bits(&mut w, options, 4, 4, Direction::Output)
+    });
     let [ch0, ch1, ch2, ch3] = channels;
     let channels = [ch0?, ch1?, ch2?, ch3?];
     let pmic = w.scope_with(
-        SourceOptions::new("pmic", Some(soc)),
+        described("pmic", Some(soc), "Signed current contributions in milliamperes. Inputs are positive and loads negative; their sum is net current."),
         ScopeType::Module,
         "pmic",
     )?;
-    let solar_ma = real(&mut w, pmic, "solar_ma")?;
-    let usb_ma = real(&mut w, pmic, "usb_ma")?;
-    let radio_ma = real(&mut w, pmic, "radio_ma")?;
-    let core_ma_draw = real(&mut w, pmic, "core_ma")?;
+    let solar_ma = real(
+        &mut w,
+        described(
+            "solar_ma",
+            Some(pmic),
+            "Solar input current in milliamperes. Positive values supply the system. Sampled every 8 ns.",
+        ),
+    )?;
+    let usb_ma = real(
+        &mut w,
+        described(
+            "usb_ma",
+            Some(pmic),
+            "USB input current in milliamperes. Positive values supply the system; the input ramps up at 1300 ns. Sampled every 8 ns.",
+        ),
+    )?;
+    let radio_ma = real(
+        &mut w,
+        described(
+            "radio_ma",
+            Some(pmic),
+            "Radio load current in milliamperes. Negative values consume current, including periodic transmit bursts. Sampled every 8 ns.",
+        ),
+    )?;
+    let core_ma_draw = real(
+        &mut w,
+        described(
+            "core_ma",
+            Some(pmic),
+            "CPU load current in milliamperes. Negative values consume current and follow pipeline occupancy. Sampled every 8 ns.",
+        ),
+    )?;
     let service_key = w.intern("service.name")?;
-    let mut resource_options = SourceOptions::new("firmware", None);
+    let mut resource_options = described(
+        "firmware",
+        None,
+        "Firmware resource for the synthetic DMA service.",
+    );
     resource_options.attributes.push(Attribute {
         key: service_key,
         value: Value::Text("dma-demo".into()),
     });
     let resource = w.scope_with(resource_options, ScopeType::Resource, "")?;
-    let otel = w.scope("driver", Some(resource))?;
+    let otel = w.scope_with(
+        described(
+            "driver",
+            Some(resource),
+            "DMA driver instrumentation scope containing submission spans.",
+        ),
+        ScopeType::Module,
+        "",
+    )?;
     let spans = w.transactions::<Label>(
-        SourceOptions::new("submit_transfer", Some(otel)),
+        described("submit_transfer", Some(otel), "Driver spans for DMA submission, including internal, server, client, producer, and consumer examples."),
         "otel.scope",
     )?;
     // The simulation advances through the recording gap so resuming capture
@@ -1169,21 +1500,28 @@ fn write(path: &Path) -> vtr::Result<()> {
         if t == 1024 {
             w.flush()?;
             let hotplug_sensor = w.scope_with(
-                SourceOptions::new("hotplug_sensor", None),
+                described("hotplug_sensor", None, "Sensor declared at 1024 ns after an explicit flush, demonstrating incremental hierarchy loading."),
                 ScopeType::ScModule,
                 "late_sensor",
             )?;
             reading = Some(bits(
                 &mut w,
-                hotplug_sensor,
-                "reading",
+                described(
+                    "reading",
+                    Some(hotplug_sensor),
+                    "Late sensor reading. The low eight bits of the core cycle count, recorded from 1024 ns onward.",
+                ),
                 8,
                 4,
                 Direction::Output,
             )?);
             w.alias(
                 data,
-                SourceOptions::new("sample", Some(hotplug_sensor)),
+                described(
+                    "sample",
+                    Some(hotplug_sensor),
+                    "Late alias of the existing system data bus. Shares its full recorded history.",
+                ),
                 VarType::Wire,
                 Direction::Output,
             )?;

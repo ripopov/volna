@@ -2,7 +2,6 @@
 
 use gpui_kit::component::Disableable;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Context, CursorStyle, Focusable, IntoElement, KeyDownEvent, SharedString, Window, div, px,
@@ -185,6 +184,8 @@ impl Workspace {
                                 "\nNo activity in the view"
                             });
                         }
+                        let description: SharedString =
+                            h.member_description(member).to_owned().into();
                         let track = h.member_track(member).map(|track| traced.with(track));
                         let clock = this.app.member_clock(traced).is_some();
                         let mut row = div()
@@ -226,7 +227,14 @@ impl Workspace {
                         }
                         let row = row
                             .tooltip_show_delay(crate::ui::tooltip::delay(cx))
-                            .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
+                            .tooltip(move |w, cx| {
+                                crate::ui::tooltip::hierarchy(
+                                    tooltip.clone(),
+                                    description.clone(),
+                                    w,
+                                    cx,
+                                )
+                            })
                             .when(letters, |row| {
                                 row.child(crate::traces::letter_badge(traced.trace, cx))
                             })

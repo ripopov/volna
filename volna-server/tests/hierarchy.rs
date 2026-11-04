@@ -16,6 +16,7 @@ fn wide(count: usize) -> Arc<dyn Session> {
         let scope = h.push_scope(format!("cell{i}"), "module".into(), Some(root));
         h.scopes[scope].component = "NAND2_X1".into();
         h.vars.push(volna_trace::data::Variable {
+            description: String::new(),
             name: "\\pin.λ".into(),
             scope,
             shape: volna_trace::data::SignalShape::Vector { width: 64 },

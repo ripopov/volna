@@ -166,7 +166,7 @@ pub fn scope_pages<'a>(h: &'a Hierarchy, sizes: &'a ScopeSizes) -> impl Iterator
         let mut builder = ColumnBuilder::default();
         for &id in &ids {
             let s = h.scope(id as usize);
-            builder.push_scope(s.name, s.kind, s.component, s.parent);
+            builder.push_scope(s.name, s.kind, s.component, s.parent, s.description);
         }
         let sizes = ids
             .iter()
@@ -255,7 +255,7 @@ impl PageDecoder {
                     "invalid hierarchy page column lengths"
                 );
                 let names = r.bytes().await?;
-                let max_names = count * if scopes { 3 } else { 2 };
+                let max_names = count * if scopes { 4 } else { 3 };
                 let offsets = r.bounded_vector(4, 2..=max_names + 1, || r.u32()).await?;
                 anyhow::ensure!(
                     offsets.len() >= 2
@@ -300,7 +300,7 @@ impl PageDecoder {
                         "invalid hierarchy declaration ID"
                     );
                     let c = &page.columns;
-                    let fields: &[usize] = if scopes { &[0, 1, 2] } else { &[0, 4] };
+                    let fields: &[usize] = if scopes { &[0, 1, 2, 4] } else { &[0, 4, 8] };
                     for &field in fields {
                         anyhow::ensure!(
                             (c[field][i] as usize) < page.offsets.len() - 1,
@@ -398,6 +398,7 @@ impl HierarchySource for RemoteHierarchy {
         let i = position % PAGE_ENTRIES;
         let c = &p.columns;
         ScopeView {
+            description: p.name(c[4][i]),
             name: p.name(c[0][i]),
             kind: p.name(c[1][i]),
             component: p.name(c[2][i]),
@@ -413,6 +414,7 @@ impl HierarchySource for RemoteHierarchy {
         let i = position % PAGE_ENTRIES;
         let c = &p.columns;
         VariableView {
+            description: p.name(c[8][i]),
             name: p.name(c[0][i]),
             scope: c[1][i] as usize,
             shape: words_shape(c[2][i], c[3][i]).expect("shape"),

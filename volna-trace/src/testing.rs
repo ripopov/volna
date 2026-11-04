@@ -155,6 +155,7 @@ impl ProceduralTrace {
             signals.push(Arc::new(hist));
             let vid = h.vars.len();
             h.vars.push(Variable {
+                description: String::new(),
                 name: name.into(),
                 scope,
                 shape,

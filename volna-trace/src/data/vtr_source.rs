@@ -236,6 +236,17 @@ impl std::fmt::Debug for ReaderHierarchy {
     }
 }
 impl ReaderHierarchy {
+    fn description<'a>(&'a self, node: &'a vtr::Node) -> &'a str {
+        node.attributes
+            .iter()
+            .find(|attr| self.reader.string(attr.key).ok() == Some("vtr.description"))
+            .and_then(|attr| match &attr.value {
+                vtr::Value::Text(text) => Some(text.as_str()),
+                vtr::Value::Str(id) => self.reader.string(*id).ok(),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
     fn node(&self, id: usize) -> vtr::NodeId {
         self.scopes[id - usize::from(self.top.is_some_and(|top| id > top))]
     }
@@ -263,8 +274,8 @@ impl super::source::HierarchySource for ReaderHierarchy {
         super::source::Ids::from_slice(&self.links.roots)
     }
     fn scope(&self, id: usize) -> super::source::ScopeView<'_> {
-        let (name, kind, component, parent) = if Some(id) == self.top {
-            ("(top)", "module", "", None)
+        let (name, kind, component, parent, description) = if Some(id) == self.top {
+            ("(top)", "module", "", None, "")
         } else {
             let node = self.reader.node(self.node(id)).expect("declared scope");
             let NodeData::Scope {
@@ -279,9 +290,11 @@ impl super::source::HierarchySource for ReaderHierarchy {
                 vtr::ScopeType::from_code(scope_type).name(),
                 self.reader.string(component).expect("scope component"),
                 node.parent.and_then(|parent| self.scope_id(parent)),
+                self.description(node),
             )
         };
         super::source::ScopeView {
+            description,
             name,
             kind,
             component,
@@ -307,6 +320,7 @@ impl super::source::HierarchySource for ReaderHierarchy {
         };
         let var_type = vtr::VarType::from_code(var_type);
         super::source::VariableView {
+            description: self.description(node),
             name: self.reader.string(node.name).expect("variable name"),
             scope: self.owner(node),
             shape: shape_of(

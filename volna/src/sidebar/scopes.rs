@@ -515,6 +515,7 @@ impl Workspace {
                         if let Some(a) = activity {
                             tooltip = format!("{tooltip}\n{}", a.detail());
                         }
+                        let description: SharedString = scope.description.to_owned().into();
                         let quiet = activity.is_some_and(|a| a.quiet());
                         let trace = node.trace;
                         let scope_menu = move |menu: gpui_kit::component::menu::PopupMenu,
@@ -568,7 +569,14 @@ impl Workspace {
                             row.relative()
                                 .children(guides)
                                 .tooltip_show_delay(crate::ui::tooltip::delay(cx))
-                                .tooltip(move |w, cx| Tooltip::new(tooltip.clone()).build(w, cx))
+                                .tooltip(move |w, cx| {
+                                    crate::ui::tooltip::hierarchy(
+                                        tooltip.clone(),
+                                        description.clone(),
+                                        w,
+                                        cx,
+                                    )
+                                })
                                 .child(chevron)
                                 .child(Icon::new(icon).size(t.px(14.0)).color(tint.color(&t)))
                                 .child(

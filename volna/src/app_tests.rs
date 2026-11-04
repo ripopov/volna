@@ -8159,3 +8159,103 @@ fn hierarchy_activation_shares_waves_and_explicit_views_remain_available(cx: &mu
         }
     }
 }
+
+#[gpui_kit::test]
+fn hovering_hierarchy_rows_shows_wrapped_descriptions_in_both_themes(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, VisualTestContext, size};
+    use volna_core::sidebar::TreeNode;
+    use volna_core::trace::Traced;
+    use vtr::{Attribute, Direction, ScopeType, SignalKind, SourceOptions, Value, VarType};
+    init(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("descriptions.vtr");
+    let mut writer = vtr::Writer::create(&path).unwrap();
+    let key = writer.intern("vtr.description").unwrap();
+    let description = "Number of requests waiting for dispatch. Excludes requests already executing. Sampled after each clock edge.\nОчередь λ — <plain text>.";
+    let options = |name: &str, parent| SourceOptions {
+        attributes: vec![Attribute {
+            key,
+            value: Value::Text(description.into()),
+        }],
+        ..SourceOptions::new(name, parent)
+    };
+    let top = writer
+        .scope_with(options("queue", None), ScopeType::Module, "Queue")
+        .unwrap();
+    writer
+        .signal(
+            options("depth", Some(top)),
+            SignalKind::Real,
+            VarType::Real,
+            Direction::Implicit,
+        )
+        .unwrap();
+    writer
+        .transactions::<()>(options("requests", Some(top)), "TX")
+        .unwrap();
+    writer
+        .signal(
+            SourceOptions::new("undocumented", Some(top)),
+            SignalKind::Real,
+            VarType::Real,
+            Direction::Implicit,
+        )
+        .unwrap();
+    writer.close().unwrap();
+    let mut workspace = None;
+    let root = cx.add_window(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(window, cx));
+        workspace = Some(ws.clone());
+        gpui_kit::component::Root::new(ws, window, cx)
+    });
+    let ws = workspace.unwrap();
+    let mut view = VisualTestContext::from_window(root.into(), cx);
+    view.simulate_resize(size(px(900.0), px(700.0)));
+    ws.update(&mut view, |ws, cx| {
+        ws.set_session(OpenSpec::Path(path).open().unwrap(), cx);
+        ws.app
+            .handle(Command::SelectScope(TreeNode::scope(Traced::new(
+                TraceId::A,
+                0,
+            ))));
+        ws.after(None, cx);
+        crate::ui::tooltip::set_delay(std::time::Duration::ZERO, cx);
+    });
+    for (width, dark) in [(900.0, true), (900.0, false), (360.0, true), (360.0, false)] {
+        view.simulate_resize(size(px(width), px(700.0)));
+        view.update(|_, cx| crate::theme::set(crate::theme::CoreTheme::volna(dark), cx));
+        for selector in [
+            "scope-row-A-0",
+            "member-row-A-0",
+            "member-row-A-2",
+            "member-row-A-1",
+        ] {
+            view.simulate_mouse_move(
+                gpui_kit::point(px(width - 20.0), px(650.0)),
+                None,
+                Modifiers::default(),
+            );
+            view.run_until_parked();
+            view.update(|window, cx| window.draw(cx).clear(cx));
+            let row = view.debug_bounds(selector).expect("hierarchy row");
+            view.simulate_mouse_move(row.center(), None, Modifiers::default());
+            view.run_until_parked();
+            view.update(|window, cx| window.draw(cx).clear(cx));
+            let description = view.debug_bounds("hierarchy-description");
+            if selector == "member-row-A-1" {
+                assert!(
+                    description.is_none(),
+                    "no description on undocumented signal"
+                );
+            } else {
+                let bounds = description.expect("hover displays description");
+                assert!(bounds.size.height > px(30.0), "multiline description wraps");
+                assert!(
+                    bounds.size.width <= px(480.0),
+                    "long descriptions have bounded width"
+                );
+                assert!(bounds.left() >= px(0.0) && bounds.right() <= px(width));
+            }
+        }
+    }
+}

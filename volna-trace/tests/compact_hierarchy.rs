@@ -213,6 +213,7 @@ fn wide(count: usize) -> Arc<dyn Session> {
         let scope = h.push_scope(format!("cell{i}"), "module".into(), Some(root));
         h.scopes[scope].component = "NAND2_X1".into();
         h.vars.push(volna_trace::data::Variable {
+            description: String::new(),
             name: "\\pin.λ".into(),
             scope,
             shape: volna_trace::data::SignalShape::Vector { width: 64 },
@@ -398,6 +399,7 @@ fn preorder_pages_preserve_declaration_ids_and_membership() {
     let child = b.push_scope("c".into(), "module".into(), Some(a));
     for scope in [sibling, a, child, a] {
         b.vars.push(volna_trace::data::Variable {
+            description: String::new(),
             name: "same".into(),
             scope,
             shape: volna_trace::data::SignalShape::Bit,
@@ -708,6 +710,7 @@ fn enum_presence_preserves_the_complete_raw_identity_range() {
         (Some(u32::MAX), Direction::InOut),
     ] {
         builder.vars.push(Variable {
+            description: String::new(),
             name: "alias".into(),
             scope: 0,
             shape: SignalShape::Bit,
@@ -815,4 +818,112 @@ fn root_generators_do_not_alias_members_of_a_real_top_scope() {
         assert_eq!(h.find_generator(&["(top)", "root_only"]), Lookup::Missing);
         assert_eq!(h.scope(0).generators.iter().collect::<Vec<_>>(), [0, 1, 2]);
     }
+}
+
+#[test]
+fn descriptions_survive_local_open_and_remote_transfer_without_alias_inheritance() {
+    use volna_trace::data::{Member, source::Lookup};
+    use vtr::{
+        Attribute, Direction, Recorder, ScopeType, SignalKind, SourceOptions, Value, VarType,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("descriptions.vtr");
+    let mut writer = vtr::Writer::create(&path).unwrap();
+    let key = writer.intern("vtr.description").unwrap();
+    let scope_text = "Dispatch queue.\nRequests waiting for execution — очередь.";
+    let signal_text = "Number of requests waiting for dispatch. Excludes executing requests.";
+    let generator_text = "Requests from acceptance through completion.\nIncludes retries.";
+    let interned = writer.intern(generator_text).unwrap();
+    let options = |name: &str, parent, value| SourceOptions {
+        attributes: vec![Attribute { key, value }],
+        ..SourceOptions::new(name, parent)
+    };
+    let top = writer
+        .scope_with(
+            options("queue", None, Value::Text(scope_text.into())),
+            ScopeType::Module,
+            "Queue",
+        )
+        .unwrap();
+    let child = writer.scope("worker", Some(top)).unwrap();
+    let signal = writer
+        .signal(
+            options("depth", Some(top), Value::Text(signal_text.into())),
+            SignalKind::Bits {
+                width: 8,
+                states: 2,
+            },
+            VarType::Wire,
+            Direction::Implicit,
+        )
+        .unwrap();
+    writer
+        .alias(
+            signal,
+            SourceOptions::new("alias", Some(child)),
+            VarType::Wire,
+            Direction::Implicit,
+        )
+        .unwrap();
+    writer
+        .alias(
+            signal,
+            options(
+                "local_alias",
+                Some(child),
+                Value::Text("Worker queue occupancy.".into()),
+            ),
+            VarType::Wire,
+            Direction::Implicit,
+        )
+        .unwrap();
+    writer
+        .signal(
+            options("malformed", Some(top), Value::U64(42)),
+            SignalKind::Real,
+            VarType::Real,
+            Direction::Implicit,
+        )
+        .unwrap();
+    writer
+        .transactions::<()>(options("requests", Some(top), Value::Str(interned)), "TX")
+        .unwrap();
+    writer.advance_time(0).unwrap();
+    writer.emit_u64(signal, 3).unwrap();
+    writer.close().unwrap();
+    let local = OpenSpec::Path(path).open().unwrap();
+    let budget = MemoryBudget::new(4 * 1024 * 1024);
+    let remote = roundtrip(local.clone(), 7, &budget);
+    for session in [&local, &remote] {
+        let h = session.hierarchy();
+        let Lookup::Found(scope) = h.find_scope(&["queue"]) else {
+            panic!("queue scope")
+        };
+        assert_eq!(h.scope(scope).description, scope_text);
+        let Lookup::Found(child) = h.find_scope(&["queue", "worker"]) else {
+            panic!("worker scope")
+        };
+        assert_eq!(h.scope(child).description, "");
+        let variable = |name| {
+            (0..h.var_count())
+                .find(|&id| h.var(id).name == name)
+                .unwrap()
+        };
+        let depth = variable("depth");
+        let alias = variable("alias");
+        assert_eq!(h.var(depth).signal, h.var(alias).signal);
+        assert_eq!(h.member_description(Member::Var(depth)), signal_text);
+        assert_eq!(h.member_description(Member::Var(alias)), "");
+        assert_eq!(
+            h.member_description(Member::Var(variable("local_alias"))),
+            "Worker queue occupancy."
+        );
+        assert_eq!(h.member_description(Member::Var(variable("malformed"))), "");
+        assert_eq!(h.member_description(Member::Generator(0)), generator_text);
+        let rebuilt = h.to_builder().finish();
+        assert_eq!(rebuilt.scope(scope).description, scope_text);
+        assert_eq!(rebuilt.member_description(Member::Var(depth)), signal_text);
+    }
+    drop(remote);
+    assert_eq!(budget.used(), 0);
 }

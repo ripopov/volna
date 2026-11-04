@@ -75,6 +75,7 @@ impl From<vtr::Direction> for Direction {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Scope {
+    pub description: String,
     pub name: String,
     pub kind: String,
     pub parent: Option<ScopeId>,
@@ -86,6 +87,7 @@ pub struct Scope {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Variable {
+    pub description: String,
     pub name: String,
     pub scope: ScopeId,
     pub shape: SignalShape,
@@ -126,6 +128,7 @@ impl HierarchyBuilder {
     pub fn push_scope(&mut self, name: String, kind: String, parent: Option<ScopeId>) -> ScopeId {
         let id = self.scopes.len();
         self.scopes.push(Scope {
+            description: String::new(),
             name,
             kind,
             parent,
@@ -155,6 +158,7 @@ pub struct TraceInfo {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ScopeView<'a> {
+    pub description: &'a str,
     pub name: &'a str,
     pub kind: &'a str,
     pub component: &'a str,
@@ -166,6 +170,7 @@ pub struct ScopeView<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct VariableView<'a> {
+    pub description: &'a str,
     pub name: &'a str,
     pub scope: ScopeId,
     pub shape: SignalShape,
@@ -329,6 +334,7 @@ impl Hierarchy {
             scopes: self
                 .scopes()
                 .map(|s| Scope {
+                    description: s.description.into(),
                     name: s.name.into(),
                     kind: s.kind.into(),
                     component: s.component.into(),
@@ -341,6 +347,7 @@ impl Hierarchy {
             vars: self
                 .vars()
                 .map(|v| Variable {
+                    description: v.description.into(),
                     name: v.name.into(),
                     scope: v.scope,
                     shape: v.shape,
@@ -383,6 +390,22 @@ impl Hierarchy {
         match member {
             Member::Var(id) => self.var_name(id),
             Member::Generator(id) => &self.generators[id].name,
+        }
+    }
+
+    #[must_use]
+    pub fn member_description(&self, member: Member) -> &str {
+        match member {
+            Member::Var(id) => self.var(id).description,
+            Member::Generator(id) => self.generators[id]
+                .attributes
+                .iter()
+                .find(|(key, _)| key == "vtr.description")
+                .and_then(|(_, value)| match value {
+                    super::transactions::AttributeValue::Text(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .unwrap_or_default(),
         }
     }
 
