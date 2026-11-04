@@ -424,6 +424,135 @@ fn analog_summaries_distinguish_a_slice_from_its_parent() {
 }
 
 #[test]
+fn copying_expanded_buses_reads_offscreen_bits_without_building_their_indexes() {
+    let (_file, mut app, id) = fixture();
+    select(&mut app, id, 2);
+    app.handle(Command::Action(Action::PanRight));
+    pump(&mut app);
+    assert!(waves(&app, id).signal(258).unwrap().history.is_none());
+    app.doc.shared.cursor = Some(15);
+    app.take_events();
+    app.handle(Command::Action(Action::CopySignals));
+    let text = app
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            volna_core::Event::CopyText(text) => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    let rows: Vec<_> = text.lines().collect();
+    assert_eq!(rows.len(), 258);
+    for (offset, row) in rows[2..].iter().enumerate() {
+        let bit = 255 - offset;
+        assert_eq!(
+            *row,
+            format!("top.wide[{bit}]\t{}", if bit == 0 { "z" } else { "0" })
+        );
+    }
+    assert!(app.take_requests().is_empty());
+    assert!(waves(&app, id).signal(258).unwrap().history.is_none());
+}
+
+#[test]
+fn collapsed_groups_load_projected_members_for_summaries_and_edges() {
+    for plot in [
+        None,
+        Some(MenuAction::Stack(true)),
+        Some(MenuAction::Overlaid),
+    ] {
+        let (_file, mut app, id) = fixture();
+        app.panels
+            .waves_mut(id)
+            .unwrap()
+            .add_slice(&app.doc, 0, "5:4")
+            .unwrap();
+        select(&mut app, id, 1);
+        app.handle(Command::Action(Action::GroupSelection));
+        let edit = app.text_edit().unwrap();
+        app.handle(Command::CommitText(edit.target, Some("Slice group".into())));
+        if let Some(action) = plot {
+            menu(&mut app, id, 1, action);
+        }
+        app.panels
+            .waves_mut(id)
+            .unwrap()
+            .set_folded(&app.doc, 1, true, false);
+        select(&mut app, id, 0);
+        pump(&mut app);
+        assert_eq!(waves(&app, id).numeric_members(1), [2]);
+        assert_eq!(waves(&app, id).group_histories(1).len(), 1);
+        select(&mut app, id, 1);
+        app.doc.shared.cursor = Some(10);
+        app.handle(Command::Action(Action::NextEdge));
+        assert_eq!(app.doc.shared.cursor, Some(15));
+        app.handle(Command::Action(Action::PrevEdge));
+        assert_eq!(app.doc.shared.cursor, Some(10));
+    }
+}
+
+#[test]
+fn copying_and_cutting_collapsed_buses_export_visible_rows_and_preserve_owned_bits() {
+    for action in [Action::CopySignals, Action::CutSignals] {
+        let (_file, mut app, id) = fixture();
+        app.panels
+            .waves_mut(id)
+            .unwrap()
+            .set_folded(&app.doc, 1, false, false);
+        pump(&mut app);
+        app.panels.waves_mut(id).unwrap().selected = (0..8).collect();
+        app.take_events();
+        app.handle(Command::Action(Action::CopySignals));
+        let expanded = app
+            .take_events()
+            .into_iter()
+            .find_map(|event| match event {
+                volna_core::Event::CopyText(text) => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(expanded.lines().count(), 9);
+        assert!(expanded.contains("top.ascending[4]\t"));
+
+        app.panels
+            .waves_mut(id)
+            .unwrap()
+            .set_folded(&app.doc, 1, true, false);
+        app.handle(Command::Action(action));
+        let text = app
+            .take_events()
+            .into_iter()
+            .find_map(|event| match event {
+                volna_core::Event::CopyText(text) => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            text.lines()
+                .skip(1)
+                .map(|line| line.split('\t').next().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "top.data [7:4]",
+                "top.ascending [4:7]",
+                "top.wide",
+                "top.ready"
+            ]
+        );
+        assert_eq!(app.doc.copied_rows.len(), 8);
+        let original_len = waves(&app, id).items().len();
+        app.handle(Command::Action(Action::PasteSignals));
+        pump(&mut app);
+        let pasted = &waves(&app, id).items()[original_len..];
+        assert_eq!(pasted.len(), 8);
+        assert_eq!(pasted[1].collapsed(), Some(true));
+        assert_eq!(pasted[2].name(), "ascending[4]");
+        assert_eq!(pasted[5].name(), "ascending[7]");
+        tree::validate(waves(&app, id).items()).unwrap();
+    }
+}
+
+#[test]
 fn expansion_clipboard_and_workspace_round_trip_preserve_owned_bits() {
     let (_file, mut app, id) = fixture();
     select(&mut app, id, 0);

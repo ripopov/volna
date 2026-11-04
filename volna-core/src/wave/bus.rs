@@ -261,7 +261,7 @@ impl WaveModel {
             32.0 * row_h
         };
         let mut top = 0.0;
-        let wanted: BTreeSet<_> = self
+        let mut wanted: BTreeSet<_> = self
             .visible()
             .iter()
             .filter_map(|&i| {
@@ -272,6 +272,17 @@ impl WaveModel {
             })
             .chain(self.selected.iter().copied())
             .collect();
+        let members: Vec<_> = wanted
+            .iter()
+            .copied()
+            .filter(|&i| {
+                self.items[i]
+                    .group()
+                    .is_some_and(|g| g.collapsed || g.is_plot() || self.selected.contains(&i))
+            })
+            .flat_map(|i| tree::leaves(&self.items, i))
+            .collect();
+        wanted.extend(members);
         self.items
             .iter()
             .enumerate()

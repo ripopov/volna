@@ -210,10 +210,19 @@ impl DisplayedSignal {
         use volna_trace::data::value_view::ValueView;
         use volna_trace::data::{ValueKind, WaveValue};
 
-        match (&self.history, cursor) {
+        let history = self.history.as_ref().or_else(|| {
+            self.projection_source
+                .as_ref()
+                .filter(|_| self.error.is_none())
+        });
+        match (history, cursor) {
             (Some(history), Some(time)) => {
                 let index = history.index_at(time);
-                let value = if self.shape == SignalShape::Event {
+                let value = if self.history.is_none()
+                    && let Some(slice) = self.projection
+                {
+                    ValueView::owned(slice.value(history.value_view(index)))
+                } else if self.shape == SignalShape::Event {
                     ValueView::owned(WaveValue::Bits(
                         if index.is_some_and(|i| history.time(i) == time) {
                             "1"

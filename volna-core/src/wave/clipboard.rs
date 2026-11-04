@@ -3,7 +3,7 @@
 use super::lane::{self, LaneData};
 use super::model::{WaveModel, WaveRow};
 use super::timeline::TimeBase;
-use super::tree::Entry;
+use super::tree::{self, Entry};
 use crate::data::text::{COPY_BYTES, append_exact};
 use crate::document::Document;
 
@@ -18,7 +18,8 @@ impl WaveModel {
         let time = cursor.map_or_else(|| "–".into(), |t| timestamp(t, base));
         let mut text = String::from("Time\t");
         append_cell(&mut text, &[&time])?;
-        for entry in rows {
+        for &index in tree::visible(rows).iter() {
+            let entry = &rows[index as usize];
             let row = &entry.row;
             append_exact(&mut text, "\n", COPY_BYTES)?;
             if row.scope().is_empty() {
@@ -138,6 +139,61 @@ mod tests {
         app.panels.focused_waves_mut().unwrap().selected = [0].into();
         app.take_events();
         app
+    }
+
+    #[test]
+    fn raw_slice_readouts_match_indexed_readouts_across_values_directions_and_limits() {
+        use crate::data::projection::{BitSlice, ProjectedHistory};
+        use volna_trace::data::history::VecHistory;
+        use volna_trace::remote::memory::MemoryBudget;
+
+        let app = app();
+        let mut source = app
+            .panels
+            .focused_waves()
+            .unwrap()
+            .signal(0)
+            .unwrap()
+            .clone();
+        source.shape = SignalShape::Vector { width: 4 };
+        source.source_shape = source.shape;
+        source.history = Some(Arc::new(VecHistory {
+            shape: source.shape,
+            times: vec![5, 10, 15, 20],
+            values: ["0011", "0010", "xz01", "1010"]
+                .map(|bits| WaveValue::Bits(bits.into()))
+                .into(),
+            initial: WaveValue::Unavailable,
+        }));
+        let budget = MemoryBudget::new(4096);
+        for slice in [
+            BitSlice { first: 0, last: 0 },
+            BitSlice { first: 1, last: 3 },
+            BitSlice { first: 3, last: 1 },
+        ] {
+            let raw = source.projected(slice, &app.doc.translators);
+            let mut indexed = raw.clone();
+            indexed.history = Some(Arc::new(
+                ProjectedHistory::build(raw.raw_history().unwrap().clone(), slice, &budget)
+                    .unwrap(),
+            ));
+            for time in [
+                None,
+                Some(0),
+                Some(5),
+                Some(10),
+                Some(15),
+                Some(20),
+                Some(25),
+            ] {
+                for limit in [0, 1, 2, 256] {
+                    assert_eq!(
+                        raw.cursor_value(time, limit),
+                        indexed.cursor_value(time, limit)
+                    );
+                }
+            }
+        }
     }
 
     #[test]
