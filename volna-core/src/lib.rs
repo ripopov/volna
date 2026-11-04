@@ -12,6 +12,7 @@ pub mod history;
 pub mod icons;
 pub mod marker;
 pub mod measure;
+pub mod moving_average;
 pub mod nav;
 mod occupancy_plot;
 pub mod panels;

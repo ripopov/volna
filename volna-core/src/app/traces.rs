@@ -175,6 +175,8 @@ impl App {
     }
 
     fn refine(&mut self, factor: u64, now: Instant) {
+        self.moving_average_editor = None;
+        self.averages.clear();
         let by = Rescale::Finer(factor);
         self.history.retime(by);
         let Self { panels, doc, .. } = self;

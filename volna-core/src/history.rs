@@ -550,7 +550,12 @@ impl History {
                         panel.kind.retime(by);
                     }
                 }
-                Edit::Rows { .. } | Edit::Traces(_) => {}
+                Edit::Rows { splices, .. } => {
+                    for entry in splices.iter_mut().flat_map(|s| s.insert.iter_mut()) {
+                        entry.retime_moving_average(by);
+                    }
+                }
+                Edit::Traces(_) => {}
             }
         }
     }

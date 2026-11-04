@@ -9,6 +9,13 @@ use volna_trace::session::{
 };
 
 pub enum LoadRequest {
+    MovingAverage {
+        key: crate::moving_average::Key,
+        request: u64,
+        source: Arc<dyn volna_trace::data::SignalHistory>,
+        budget: MemoryBudget,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    },
     Occupancy {
         generation: u64,
         request: u64,
@@ -91,7 +98,8 @@ impl LoadRequest {
     pub fn remote_id(&self) -> Option<u64> {
         match self {
             Self::Trace(request) => request.remote_id(),
-            Self::Occupancy { .. }
+            Self::MovingAverage { .. }
+            | Self::Occupancy { .. }
             | Self::TransactionIndex { .. }
             | Self::Projection { .. }
             | Self::Open { .. }
@@ -108,6 +116,11 @@ impl LoadRequest {
     #[must_use]
     pub fn fail(self, error: anyhow::Error) -> LoadResult {
         match self {
+            Self::MovingAverage { key, request, .. } => LoadResult::MovingAverage {
+                key,
+                request,
+                result: Err(error),
+            },
             Self::Trace(request) => LoadResult::from_trace(request.fail(error), None),
             Self::Occupancy {
                 generation,
@@ -229,6 +242,24 @@ impl LoadRequest {
 
     pub fn perform(self) -> LoadResult {
         match self {
+            Self::MovingAverage {
+                key,
+                request,
+                source,
+                budget,
+                cancelled,
+            } => LoadResult::MovingAverage {
+                key,
+                request,
+                result: crate::moving_average::MeanHistory::build(
+                    source.as_ref(),
+                    key.interpretation,
+                    key.settings,
+                    &budget,
+                    &cancelled,
+                )
+                .map(Arc::new),
+            },
             Self::Occupancy {
                 generation,
                 request,
@@ -397,6 +428,11 @@ impl LoadRequest {
 }
 
 pub enum LoadResult {
+    MovingAverage {
+        key: crate::moving_average::Key,
+        request: u64,
+        result: anyhow::Result<Arc<crate::moving_average::MeanHistory>>,
+    },
     Occupancy {
         generation: u64,
         request: u64,

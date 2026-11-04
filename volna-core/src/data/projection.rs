@@ -73,13 +73,15 @@ impl BitSlice {
         }
     }
 
-    fn value(self, value: ValueView<'_>) -> WaveValue {
+    pub(crate) fn value(self, value: ValueView<'_>) -> WaveValue {
         match value {
-            ValueView::Logic(bits) => WaveValue::Bits(
-                (0..self.width())
-                    .map(|i| char::from(bits.bit(self.offset(i))))
-                    .collect(),
-            ),
+            ValueView::Logic(bits) => {
+                let mut value = String::with_capacity(self.width() as usize);
+                for i in 0..self.width() {
+                    value.push(char::from(bits.bit(self.offset(i))));
+                }
+                WaveValue::Bits(value)
+            }
             _ => WaveValue::Unavailable,
         }
     }

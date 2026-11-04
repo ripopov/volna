@@ -83,7 +83,7 @@ pub(super) fn paint_row(
             continue;
         };
         let kind = item.numeric_kind()?;
-        let series = Series::of(doc, item.source.signal(), history, kind);
+        let series = Series::of(doc, item.source.input_signal(), history, kind);
         let geometry = analog::geometry(&series, draw, &cells.viewport, &plot, t.zoom);
         waiting |= geometry.waiting;
         if let Some(pt) = reading {
@@ -246,7 +246,7 @@ pub(super) fn paint_probes(
                 let Some(h) = &s.history else {
                     continue;
                 };
-                let series = Series::of(doc, s.source.signal(), h, s.numeric_kind().unwrap());
+                let series = Series::of(doc, s.source.input_signal(), h, s.numeric_kind().unwrap());
                 let Some(y) = analog::y_at(&series, row.draw, &row.plot, time) else {
                     continue;
                 };

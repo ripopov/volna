@@ -532,6 +532,9 @@ impl Document {
     }
 
     pub(crate) fn retime(&mut self, by: Rescale) {
+        for entry in &mut self.copied_rows {
+            entry.retime_moving_average(by);
+        }
         self.shared.viewport.retime(by);
         self.shared.cursor.retime(by);
         self.selection_range.retime(by);
@@ -604,7 +607,8 @@ impl Document {
             LoadRequest::Projection { .. }
             | LoadRequest::GroupSummary { .. }
             | LoadRequest::Integral { .. }
-            | LoadRequest::StackTotal { .. } => true,
+            | LoadRequest::StackTotal { .. }
+            | LoadRequest::MovingAverage { .. } => true,
         });
         self.transaction_indexes.retain(|(t, _)| t.trace != trace);
         self.occupancies.retain(|(t, _)| *t != trace);
@@ -1145,7 +1149,8 @@ impl Document {
 
     pub fn deliver(&mut self, result: LoadResult) -> Option<Delivered> {
         match result {
-            LoadResult::Projection { .. }
+            LoadResult::MovingAverage { .. }
+            | LoadResult::Projection { .. }
             | LoadResult::ActivityBuilt { .. }
             | LoadResult::ActivityCounter { .. }
             | LoadResult::Activity { .. } => None,

@@ -39,6 +39,7 @@ pub struct WaveLayout {
     pub shared_metadata: bool,
     pub rows: Range<usize>,
     pub visible: Arc<[u32]>,
+    positions: Arc<[(u32, u32)]>,
     pub row_h: f32,
     tops: Arc<[f64]>,
     pub zoom: f32,
@@ -214,7 +215,15 @@ impl WaveLayout {
             )
         };
 
+        let mut positions: Vec<_> = input
+            .visible
+            .iter()
+            .enumerate()
+            .map(|(pos, &entry)| (entry, pos as u32))
+            .collect();
+        positions.sort_unstable_by_key(|&(entry, _)| entry);
         WaveLayout {
+            positions: positions.into(),
             shared_metadata: input.margins.metadata_width.is_some(),
             bounds: input.bounds,
             header,
@@ -291,7 +300,12 @@ impl WaveLayout {
 
     #[must_use]
     pub fn position(&self, entry: usize) -> Option<usize> {
-        self.visible.binary_search(&(entry as u32)).ok()
+        let entry = u32::try_from(entry).ok()?;
+        let at = self
+            .positions
+            .binary_search_by_key(&entry, |&(row, _)| row)
+            .ok()?;
+        Some(self.positions[at].1 as usize)
     }
 
     #[must_use]

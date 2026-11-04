@@ -33,6 +33,7 @@ struct Columns {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Row {
     Signal {
+        moving_average: Option<crate::moving_average::Definition>,
         shape: volna_trace::data::SignalShape,
         projection: Option<crate::data::projection::BitSlice>,
         bus: Option<super::bus::BusExpansion>,
@@ -253,7 +254,7 @@ struct SavedAnalog {
     range: AnalogRange,
 }
 
-pub(crate) const VERSION: u32 = 13;
+pub(crate) const VERSION: u32 = 15;
 
 #[derive(Serialize, Deserialize)]
 struct WavePanel {
@@ -288,6 +289,7 @@ pub(crate) fn save(
         WaveRow::Signal(item) => {
             let (signal, nth) = item.source.locator(doc);
             Row::Signal {
+                moving_average: item.source.moving_average().cloned(),
                 shape: item.source_shape,
                 projection: item.projection,
                 bus: item.bus,
@@ -398,8 +400,10 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             saved_shape,
             projection,
             bus,
+            moving_average,
         ) = match row {
             Row::Signal {
+                moving_average,
                 shape,
                 projection,
                 bus,
@@ -424,6 +428,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 shape,
                 projection,
                 bus,
+                moving_average,
             ),
             Row::Lane {
                 trace,
@@ -521,7 +526,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         ensure!(!row_signal.is_empty(), "empty signal path");
         let h = ctx.traces.hierarchy(trace);
         let found = h.map_or(Lookup::Missing, |h| h.find_var(&row_signal, nth));
-        let (source, mut name, scope, shape) = match (found, h) {
+        let (mut source, mut name, scope, shape) = match (found, h) {
             (Lookup::Found(var), Some(h)) => {
                 let v = h.var(var);
                 (
@@ -567,7 +572,23 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
         let resolved = source.signal().is_some();
         let source_shape = if resolved { shape } else { saved_shape };
         ensure!(source_shape == saved_shape, "signal shape changed");
-        let shape = if let Some(slice) = projection {
+        let derived = moving_average.is_some();
+        if let Some(definition) = moving_average {
+            definition.validate()?;
+            definition.interpretation.validate(source_shape)?;
+            ensure!(
+                projection.is_none() && bus.is_none(),
+                "moving-average output must be an unprojected real row"
+            );
+            name.clone_from(&definition.name);
+            source = RowSource::MovingAverage {
+                input: Box::new(source),
+                definition,
+            };
+        }
+        let shape = if derived {
+            volna_trace::data::SignalShape::Real
+        } else if let Some(slice) = projection {
             slice.validate(source_shape)?;
             name = super::bus::BusIndices::new(&name, source_shape.width()).label(slice);
             slice.shape()

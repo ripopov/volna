@@ -16,6 +16,16 @@ pub struct Entry {
 }
 
 impl Entry {
+    pub(crate) fn retime_moving_average(&mut self, by: crate::trace::Rescale) {
+        use crate::trace::Retime;
+        if let Some(row) = self.row.signal_mut()
+            && let super::model::RowSource::MovingAverage { definition, .. } = &mut row.source
+        {
+            definition.settings.retime(by);
+            row.history = None;
+            row.error = None;
+        }
+    }
     #[must_use]
     pub fn new(depth: u8, row: WaveRow) -> Self {
         Self { depth, row }
@@ -255,6 +265,14 @@ pub struct Moved {
     pub splices: Vec<Splice>,
     pub roots: BTreeSet<usize>,
     pub first: usize,
+    order: Vec<(usize, u8)>,
+}
+
+impl Moved {
+    #[must_use]
+    pub fn position(&self, row: usize) -> Option<usize> {
+        self.order.iter().position(|&(original, _)| original == row)
+    }
 }
 
 #[must_use]
@@ -329,6 +347,7 @@ pub fn plan_move(items: &[Entry], sel: &BTreeSet<usize>, to: Place) -> Option<Mo
         splices,
         roots,
         first,
+        order,
     })
 }
 

@@ -36,8 +36,12 @@ const ROW_DRAG_EDGE_ROWS: f32 = 1.0;
 const ROW_DRAG_SCROLL_RATE: f32 = 12.0;
 const TOTAL_EDGE_TRIES: usize = 100_000;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RowSource {
+    MovingAverage {
+        input: Box<RowSource>,
+        definition: crate::moving_average::Definition,
+    },
     Resolved {
         trace: TraceId,
         var: VarId,
@@ -55,6 +59,7 @@ impl RowSource {
     #[must_use]
     pub fn trace(&self) -> TraceId {
         match self {
+            Self::MovingAverage { input, .. } => input.trace(),
             Self::Resolved { trace, .. } | Self::Unresolved { trace, .. } => *trace,
         }
     }
@@ -63,7 +68,7 @@ impl RowSource {
     pub fn signal(&self) -> Option<Traced<SignalRef>> {
         match self {
             Self::Resolved { trace, signal, .. } => Some(Traced::new(*trace, *signal)),
-            Self::Unresolved { .. } => None,
+            Self::Unresolved { .. } | Self::MovingAverage { .. } => None,
         }
     }
 
@@ -71,17 +76,34 @@ impl RowSource {
     pub fn var(&self) -> Option<Traced<VarId>> {
         match self {
             Self::Resolved { trace, var, .. } => Some(Traced::new(*trace, *var)),
-            Self::Unresolved { .. } => None,
+            Self::Unresolved { .. } | Self::MovingAverage { .. } => None,
         }
     }
 
     #[must_use]
     pub fn locator(&self, doc: &Document) -> (Vec<String>, Option<usize>) {
         match self {
+            Self::MovingAverage { input, .. } => input.locator(doc),
             Self::Resolved { trace, var, .. } => doc
                 .hierarchy(*trace)
                 .map_or_else(|| (Vec::new(), None), |h| h.var_path(*var)),
             Self::Unresolved { path, nth, .. } => (path.clone(), *nth),
+        }
+    }
+
+    #[must_use]
+    pub fn input_signal(&self) -> Option<Traced<SignalRef>> {
+        match self {
+            Self::MovingAverage { input, .. } => input.signal(),
+            other => other.signal(),
+        }
+    }
+
+    #[must_use]
+    pub fn moving_average(&self) -> Option<&crate::moving_average::Definition> {
+        match self {
+            Self::MovingAverage { definition, .. } => Some(definition),
+            _ => None,
         }
     }
 }
@@ -205,7 +227,7 @@ impl DisplayedSignal {
                 };
                 self.translator.translate_view(&value, limit)
             }
-            (None, _) if self.source.signal().is_none() => {
+            (None, _) if self.source.input_signal().is_none() => {
                 Translated::bounded("not in trace", ValueKind::Normal, limit)
             }
             (None, _) if self.error.is_none() => {
@@ -589,7 +611,7 @@ impl WaveRow {
         if let Self::Signal(item) = &mut row {
             item.history = None;
             item.projection_source = None;
-            if item.source.signal().is_some() {
+            if item.source.input_signal().is_some() {
                 item.error = None;
             }
         }
@@ -701,6 +723,7 @@ pub enum Drag {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
+    MovingAverage,
     OpenFormat,
     Format(String),
     RetryLoad,
@@ -855,7 +878,19 @@ impl RowEdit {
     }
 }
 
+// Draft presentation stays outside the row tree used by persistence and undo.
+pub(crate) struct PreviewRow {
+    pub source_row: usize,
+    pub revision: u64,
+    pub index: usize,
+    pub before: usize,
+    pub entry: Entry,
+    pub status: String,
+    pub stale: bool,
+}
+
 pub struct WaveModel {
+    pub(crate) preview: Option<PreviewRow>,
     pub(super) transaction_detail: std::cell::RefCell<lane::DetailCache>,
     transaction_scroll: Option<(usize, f32)>,
     pub(super) items: Vec<Entry>,
@@ -938,6 +973,7 @@ impl WaveModel {
     #[must_use]
     pub fn new() -> Self {
         WaveModel {
+            preview: None,
             transaction_detail: Default::default(),
             transaction_scroll: None,
             items: Vec::new(),
@@ -971,6 +1007,7 @@ impl WaveModel {
     }
 
     pub fn reset(&mut self, limits: Option<(u64, u64)>) {
+        self.preview = None;
         self.nav.reset(limits);
         self.items.clear();
         self.journal = RowJournal::default();
@@ -1038,6 +1075,17 @@ impl WaveModel {
                 .or_default()
                 .update(&signals, range, doc, &vp);
         }
+        if let Some(preview) = &mut self.preview
+            && let Some(item) = preview.entry.signal_mut()
+            && let (Some(a), Some(h), Some(kind)) = (
+                &mut item.analog,
+                &item.history,
+                item.translator.numeric_kind(),
+            )
+        {
+            let series = analog::Series::of(doc, item.source.input_signal(), h, kind);
+            a.update_target(&series, item.translator.as_ref(), item.shape, &vp);
+        }
         let Self { layout, items, .. } = self;
         for i in layout.rows.clone().filter_map(|pos| layout.entry(pos)) {
             let Some(item) = items.get_mut(i).and_then(|e| e.row.signal_mut()) else {
@@ -1046,7 +1094,7 @@ impl WaveModel {
             if let (Some(a), Some(h)) = (&mut item.analog, &item.history)
                 && let Some(kind) = item.translator.numeric_kind()
             {
-                let series = analog::Series::of(doc, item.source.signal(), h, kind);
+                let series = analog::Series::of(doc, item.source.input_signal(), h, kind);
                 a.update_target(&series, item.translator.as_ref(), item.shape, &vp);
             }
         }
@@ -1080,7 +1128,7 @@ impl WaveModel {
 
     #[must_use]
     pub fn row_trace(&self, ix: usize) -> Option<TraceId> {
-        let entry = self.items.get(ix)?;
+        let entry = self.display_entry(ix)?;
         if !entry.is_group() {
             return entry.row.trace();
         }
@@ -1102,6 +1150,52 @@ impl WaveModel {
     #[must_use]
     pub fn items(&self) -> &[Entry] {
         &self.items
+    }
+
+    pub(crate) fn display_entry(&self, row: usize) -> Option<&Entry> {
+        self.preview_at(row)
+            .map(|p| &p.entry)
+            .or_else(|| self.items.get(row))
+    }
+
+    pub(crate) fn display_signal(&self, row: usize) -> Option<&DisplayedSignal> {
+        self.display_entry(row)?.signal()
+    }
+
+    pub(crate) fn preview_at(&self, row: usize) -> Option<&PreviewRow> {
+        self.preview
+            .as_ref()
+            .filter(|p| p.revision == self.revision && p.index == row)
+    }
+
+    fn display_visible(&self) -> Arc<[u32]> {
+        let visible = self.visible();
+        let Some(preview) = self
+            .preview
+            .as_ref()
+            .filter(|p| p.revision == self.revision && p.index == self.items.len())
+        else {
+            return visible;
+        };
+        let mut visible = visible.to_vec();
+        let at = visible.partition_point(|&i| (i as usize) < preview.before);
+        visible.insert(at, preview.index as u32);
+        visible.into()
+    }
+
+    pub(crate) fn reveal_preview(&mut self) {
+        let Some(preview) = &self.preview else {
+            return;
+        };
+        let Some((top, height)) = self.layout.entry_span(preview.index) else {
+            return;
+        };
+        let bottom = top + height;
+        if top < self.layout.names.top() {
+            self.scroll_y = (self.scroll_y + top - self.layout.names.top()).max(0.0);
+        } else if bottom > self.layout.names.bottom() {
+            self.scroll_y += bottom - self.layout.names.bottom();
+        }
     }
 
     pub(crate) fn splice(&mut self, mut splices: Vec<Splice>) -> Result<Vec<Splice>, String> {
@@ -1458,6 +1552,142 @@ impl WaveModel {
         self.revision
     }
 
+    pub(crate) fn apply_moving_average(
+        &mut self,
+        row: usize,
+        revision: u64,
+        definition: crate::moving_average::Definition,
+        history: Arc<dyn SignalHistory>,
+        translators: &crate::data::Translators,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.revision == revision,
+            "Rows changed while editing; reopen the moving-average editor."
+        );
+        let (at, entry, editing) =
+            self.moving_average_row(row, definition, Some(history), translators)?;
+        self.edit_rows(
+            if editing {
+                "Edit moving average"
+            } else {
+                "Add moving average"
+            }
+            .into(),
+            vec![Splice {
+                at,
+                remove: usize::from(editing),
+                insert: vec![entry],
+            }],
+            RowSelection {
+                selected: BTreeSet::from([at]),
+                anchor: Some(at),
+            },
+        );
+        self.reveal_row = Some(at);
+        Ok(())
+    }
+
+    pub(crate) fn moving_average_row(
+        &self,
+        row: usize,
+        definition: crate::moving_average::Definition,
+        history: Option<Arc<dyn SignalHistory>>,
+        translators: &crate::data::Translators,
+    ) -> anyhow::Result<(usize, Entry, bool)> {
+        let entry = self
+            .items
+            .get(row)
+            .ok_or_else(|| anyhow::anyhow!("Source row was removed."))?;
+        let mut signal = entry
+            .signal()
+            .ok_or_else(|| anyhow::anyhow!("Select a numeric source."))?
+            .clone();
+        let editing = signal.source.moving_average().is_some();
+        let input = match &signal.source {
+            RowSource::MovingAverage { input, .. } => input.as_ref().clone(),
+            source => source.clone(),
+        };
+        signal.name.clone_from(&definition.name);
+        signal.source = RowSource::MovingAverage {
+            input: Box::new(input),
+            definition,
+        };
+        signal.history = history;
+        if let Some(analog) = &mut signal.analog {
+            analog.shown = None;
+            analog.target = None;
+        }
+        signal.shape = SignalShape::Real;
+        signal.projection = None;
+        signal.projection_source = None;
+        signal.bus = None;
+        signal.translator = translators.default_for(SignalShape::Real);
+        signal.requested_format = None;
+        signal.error = None;
+        if !editing {
+            signal.height = RowHeight::ANALOG;
+            signal.analog = Some(Analog::new(AnalogDraw::Step, AnalogRange::Trace));
+            signal.tint = Some(Tint::Violet);
+        }
+        let mut root = row;
+        while let Some(parent) =
+            tree::parent(&self.items, root).filter(|&p| self.items[p].signal().is_some())
+        {
+            root = parent;
+        }
+        let at = if editing {
+            row
+        } else {
+            tree::subtree_end(&self.items, root)
+        };
+        let depth = self.items[root].depth;
+        Ok((at, Entry::new(depth, WaveRow::from(signal)), editing))
+    }
+
+    pub(crate) fn sync_moving_averages(
+        &mut self,
+        generation: u64,
+        computations: &crate::moving_average::Computations,
+    ) {
+        for row in self.signals_mut() {
+            let RowSource::MovingAverage { input, definition } = &row.source else {
+                continue;
+            };
+            let Some(signal) = input.signal() else {
+                row.history = None;
+                row.error =
+                    Some("Moving-average input is missing or ambiguous in this trace.".into());
+                continue;
+            };
+            let key = crate::moving_average::Key {
+                generation,
+                signal,
+                settings: definition.settings,
+                interpretation: definition.interpretation,
+            };
+            match computations.status(&key) {
+                Some(crate::moving_average::ComputationStatus::Ready(history)) => {
+                    row.history = Some(history.clone());
+                    row.error = None;
+                }
+                Some(crate::moving_average::ComputationStatus::Failed(error)) => {
+                    row.history = None;
+                    row.error = Some(error.clone());
+                }
+                _ => {
+                    row.history = None;
+                    row.error = None;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn retime_moving_averages(&mut self, by: crate::trace::Rescale) {
+        for entry in &mut self.items {
+            entry.retime_moving_average(by);
+        }
+    }
+
     pub fn remove_selected(&mut self) {
         self.remove_selected_as("Remove");
     }
@@ -1526,6 +1756,10 @@ impl WaveModel {
                 .iter()
                 .position(|r| *r == a)
         });
+        let preview_source = self
+            .preview
+            .as_ref()
+            .and_then(|p| moved.position(p.source_row));
         let roots = moved.roots;
         let anchor = rank
             .and_then(|k| roots.iter().nth(k).copied())
@@ -1545,6 +1779,10 @@ impl WaveModel {
                 anchor,
             },
         );
+        if let (Some(preview), Some(source_row)) = (&mut self.preview, preview_source) {
+            preview.source_row = source_row;
+            preview.revision = self.revision;
+        }
         true
     }
 
@@ -1855,7 +2093,9 @@ impl WaveModel {
 
     #[must_use]
     pub fn ink(&self, ix: usize) -> Option<Tint> {
-        tint::ink(&self.items, ix)
+        self.preview_at(ix)
+            .and_then(|p| p.entry.row.tint())
+            .or_else(|| tint::ink(&self.items, ix))
     }
 
     pub fn tint_selected(&mut self, tint: Option<Tint>) -> bool {
@@ -2297,7 +2537,12 @@ impl WaveModel {
             entries: vec![
                 MenuEntry::Item(MenuItem::plain(
                     MenuAction::OpenTable,
-                    if self.signal(row).is_some_and(|s| s.projection.is_some()) {
+                    if self
+                        .signal(row)
+                        .is_some_and(|s| s.source.moving_average().is_some())
+                    {
+                        "Open input signal in table"
+                    } else if self.signal(row).is_some_and(|s| s.projection.is_some()) {
                         "Open source signal in table"
                     } else {
                         "Open in table"
@@ -2309,6 +2554,22 @@ impl WaveModel {
             ],
         });
         let menu = self.menu.as_mut().expect("just opened");
+        if let Some(signal) = self.items[row]
+            .signal()
+            .filter(|s| s.numeric_kind().is_some())
+        {
+            menu.entries.insert(
+                0,
+                MenuEntry::Item(MenuItem::plain(
+                    MenuAction::MovingAverage,
+                    if signal.source.moving_average().is_some() {
+                        "Edit derived signal…"
+                    } else {
+                        "Derive signal…"
+                    },
+                )),
+            );
+        }
         if let Some(lane) = self.items[row]
             .lane()
             .filter(|lane| lane.generator(doc).is_some_and(|g| g.points().is_none()))
@@ -2598,7 +2859,8 @@ impl WaveModel {
         }
         if matches!(
             action,
-            MenuAction::OpenTable
+            MenuAction::MovingAverage
+                | MenuAction::OpenTable
                 | MenuAction::OpenPipeline(_)
                 | MenuAction::CopySignals
                 | MenuAction::CutSignals
@@ -2792,11 +3054,12 @@ impl WaveModel {
     }
 
     fn row_top(&self, doc: &Document, row: usize) -> f64 {
-        self.visible()
+        self.display_visible()
             .iter()
-            .take_while(|&&i| (i as usize) < row)
-            .map(|&i| {
-                self.items[i as usize]
+            .take_while(|&&i| i as usize != row)
+            .filter_map(|&i| self.display_entry(i as usize))
+            .map(|entry| {
+                entry
                     .row
                     .layout_height(doc, self.layout.row_h, self.layout.zoom)
             })
@@ -2974,7 +3237,7 @@ impl WaveModel {
     }
 
     fn edge_source<'a>(&self, doc: &'a Document, row: usize) -> Option<EdgeSource<'a>> {
-        match &self.items.get(row)?.row {
+        match &self.display_entry(row)?.row {
             WaveRow::Signal(s) => s.history.clone().map(EdgeSource::History),
             WaveRow::Lane(l) => lane::edges(l, doc).map(EdgeSource::Lane),
             WaveRow::Clock(c) => c.timeline(doc).cloned().map(EdgeSource::Clock),
@@ -3061,8 +3324,7 @@ impl WaveModel {
         }
         let rulers = self.nav.clocks().rulers(&doc.clocks);
         let spans = SpanClocks::of(&rulers, self.nav.clocks(), &doc.clocks, doc.time_base());
-        let visible = self.visible();
-        let items = &self.items;
+        let visible = self.display_visible();
         let layout = WaveLayout::compute(LayoutInput {
             bounds,
             margins,
@@ -3075,7 +3337,8 @@ impl WaveModel {
             values_width: self.values_width,
             trace_gutter: doc.traces().is_combined(),
             row_tops: super::layout::row_tops(visible.iter().map(|&i| {
-                items[i as usize]
+                self.display_entry(i as usize)
+                    .expect("visible row")
                     .row
                     .layout_height(doc, theme.row_height, theme.zoom)
             })),
@@ -3094,15 +3357,17 @@ impl WaveModel {
         self.scroll_y = layout.scroll_y;
         self.wave_width = layout.waves.width();
         self.layout = layout;
+        let preview_index = self.preview.as_ref().map(|p| p.index);
         let items = &self.items;
-        self.layout
-            .badges
-            .retain(|(ix, _)| items.get(*ix).is_some_and(|row| row.signal().is_some()));
+        self.layout.badges.retain(|(ix, _)| {
+            Some(*ix) != preview_index && items.get(*ix).is_some_and(|row| row.signal().is_some())
+        });
         for pos in self.layout.rows.clone() {
             let Some(row) = self.layout.entry(pos) else {
                 continue;
             };
-            if self.signal(row).is_none_or(|s| s.analog.is_none())
+            if Some(row) == preview_index
+                || self.signal(row).is_none_or(|s| s.analog.is_none())
                 || self.layout.row_height(pos) < 2.0 * self.layout.row_h - 0.5
             {
                 continue;
@@ -3172,7 +3437,13 @@ impl WaveModel {
             let group = visible[pos] as usize;
             let (top, h) = (layout.row_y(pos), layout.row_height(pos));
             let f = (y - top) / h.max(1.0);
-            if (0.25..0.75).contains(&f) && self.items[group].group().is_some_and(|g| g.collapsed) {
+            if (0.25..0.75).contains(&f)
+                && self
+                    .items
+                    .get(group)
+                    .and_then(|e| e.group())
+                    .is_some_and(|g| g.collapsed)
+            {
                 let to = Place::into(&self.items, group);
                 if tree::plan_move(&self.items, &self.selected, to).is_some() {
                     return Some((pos, to.depth, Some(group)));
@@ -3180,22 +3451,32 @@ impl WaveModel {
             }
         }
         let gap = self.gap_at(y);
-        let depths = tree::gap_depths(&self.items, visible, gap);
+        let (saved_visible, saved_gap) = self.saved_row_gap(gap);
+        let depths = tree::gap_depths(&self.items, &saved_visible, saved_gap);
         let indent = super::layout::INDENT * layout.zoom;
         let want = ((p.x - super::layout::indent_x(layout.name_left, 0, layout.zoom)) / indent)
             .floor()
             .max(0.0)
             .min(f32::from(tree::MAX_DEPTH)) as u8;
         let depth = want.clamp(*depths.start(), *depths.end());
-        let to = Place::gap(&self.items, visible, gap, depth);
+        let to = Place::gap(&self.items, &saved_visible, saved_gap, depth);
         tree::plan_move(&self.items, &self.selected, to).map(|_| (gap, depth, None))
     }
 
     fn drag_place(&self, gap: usize, depth: u8, into: Option<usize>) -> Place {
-        match into {
-            Some(group) => Place::into(&self.items, group),
-            None => Place::gap(&self.items, &self.layout.visible, gap, depth),
+        if let Some(group) = into {
+            Place::into(&self.items, group)
+        } else {
+            let (visible, gap) = self.saved_row_gap(gap);
+            Place::gap(&self.items, &visible, gap, depth)
         }
+    }
+
+    fn saved_row_gap(&self, displayed_gap: usize) -> (Vec<u32>, usize) {
+        let visible = &self.layout.visible;
+        let saved = |&&row: &&u32| (row as usize) < self.items.len();
+        let gap = visible.iter().take(displayed_gap).filter(saved).count();
+        (visible.iter().filter(saved).copied().collect(), gap)
     }
 
     fn gap_at(&self, y: f32) -> usize {
@@ -3238,7 +3519,7 @@ impl WaveModel {
         let cursor = self.cursor(doc);
         layout.rows.clone().filter_map(move |pos| {
             let entry = layout.entry(pos)?;
-            let e = &self.items[entry];
+            let e = self.display_entry(entry)?;
             let (label, expanded) = match &e.row {
                 WaveRow::Group(g) if g.is_stacked() => {
                     let layers = self.stack_layers(entry);
@@ -3537,6 +3818,7 @@ impl WaveModel {
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .and_then(|(r, _)| layout.entry(r))
+            .filter(|&r| self.preview_at(r).is_none() && r < self.items.len())
     }
 
     fn update_hover(&mut self) {
@@ -3547,7 +3829,10 @@ impl WaveModel {
                     && !self.layout.gutter.contains(p)
                     && p.y >= self.layout.names.top() =>
             {
-                let row = self.entry_under(&self.layout, p.y);
+                let row = self
+                    .layout
+                    .entry_at(p.y)
+                    .filter(|&r| self.display_entry(r).is_some());
                 let format_row = self.layout.format_at(p).map(|(ix, _)| ix);
                 (row, format_row)
             }
@@ -3852,7 +4137,10 @@ impl WaveModel {
                     let clock = self.nav.selected_clock(doc);
                     let mut t = snapped_time(
                         &self.viewport(doc),
-                        row.and_then(|r| self.edge_source(doc, r)).as_ref(),
+                        layout
+                            .entry_at(p.y)
+                            .and_then(|r| self.edge_source(doc, r))
+                            .as_ref(),
                         clock.as_deref(),
                         x,
                         wave_wf,
@@ -3998,7 +4286,7 @@ impl WaveModel {
             }
             Some(Drag::Cursor) => {
                 let x = f64::from(p.x - layout.waves.left()).clamp(0.0, wave_wf);
-                let row = self.entry_under(layout, p.y);
+                let row = layout.entry_at(p.y);
                 let clock = self.nav.selected_clock(doc);
                 let t = snapped_time(
                     &self.viewport(doc),
@@ -4143,7 +4431,7 @@ impl WaveModel {
                 }
                 let reading = p.x >= self.layout.waves.left()
                     && self.hover_row.is_some_and(|r| {
-                        self.signal(r).is_some_and(|s| s.analog.is_some())
+                        self.display_signal(r).is_some_and(|s| s.analog.is_some())
                             || self.items.get(r).is_some_and(Entry::is_group)
                     });
                 self.hover_row != prev_row
@@ -4173,7 +4461,7 @@ impl WaveModel {
         let Some(row) = self.layout.entry_at(p.y) else {
             return false;
         };
-        let Some(lane) = self.items[row].lane() else {
+        let Some(lane) = self.items.get(row).and_then(|e| e.lane()) else {
             return false;
         };
         let Some(g) = lane.generator(doc).filter(|g| g.points().is_none()) else {

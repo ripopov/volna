@@ -171,7 +171,7 @@ To inspect the bands, open `volna/examples/analog_showcase.vtr` and add
 to inspect the same boundaries in the rail.
 
 The compact state and expanded width are saved per panel; waveform panel schema
-is v13, within workspace format v11. Linked timelines derive their width from a
+is v15, within workspace format v13. Linked timelines derive their width from a
 saved reference, so collapse/expand cycles preserve the divider even when the
 available space constrains it. Scope bands use hierarchy identities; distinct
 scopes with identical paths remain separate. To compare repeated names, add
@@ -195,6 +195,59 @@ applies that setting to the selection. Waveform controls identify the applicable
 numeric subset when a selection also contains signals that cannot be plotted.
 Value-format choices must support every target. The menu uses the native theme,
 keyboard navigation, and window bounds at each interface zoom.
+
+## Moving-average signals
+
+Select one numeric waveform and choose **Derive**, or right-click it and
+choose **Derive signal…**. The docked inspector shows **Operation · Moving
+average**, the currently available operation, and accepts a name, trailing
+window, and output interval. Enter durations such as `4 us` or `250 ns`, or an
+integer number of timeline ticks. Durations must resolve to whole ticks.
+A temporary **Draft** row previews the result directly on the waveform timeline,
+sharing its zoom, markers, cursor, and value readout. The initial settings compute
+automatically; typing updates after a 300 ms pause, while policy toggles and Enter
+update immediately. Renaming does not recompute the result. The last successful
+waveform remains visible, dimmed and labeled as outdated, while settings change.
+**Add waveform** keeps the successful draft as an ordinary analog row. Select
+that row and choose **Derive** again to edit it, or use **Edit derived signal…**
+from its menu. Edits preview in the existing row; **Apply changes** commits them.
+**Cancel** discards the draft and restores the applied waveform. Reordering rows
+keeps the editor attached to its source. Drafts are not
+saved and do not enter undo history; applying creates one undo step.
+**Remove definition** removes the row; ordinary row removal, copy/paste, and
+undo/redo also work.
+
+The mean weights each held input value by its duration in the half-open window
+`[t − window, t)`. Warm-up can wait for a complete window or use the available
+history since the output origin. Missing, NaN, and infinite inputs propagate a
+gap by default; **skip unknown time** divides by the known duration instead.
+A window with no known duration is unavailable in both modes. Values retain the
+input's numerical scale. The definition captures its source row's numeric
+interpretation (unsigned, signed, IEEE floating point, or real) and any selected
+bus slice. The inspector shows this interpretation, which is preserved when
+editing or reopening the average, independently of subsequent source display
+format changes. Bit inputs are interpreted as 0 and 1; X/Z and other undefined
+logic values follow the missing-data policy. Text and event signals cannot be
+averaged. The result is always real-valued.
+
+Output samples cover the input trace's time domain on
+the chosen fixed grid and are held between samples; zoom does not recompute or
+resample the definition. The grid is limited to 1,000,000 samples.
+
+Preview work runs on the native/background Web Worker executor, with memory
+admission before scanning the input or allocating the output. **Stop**, cancelling
+the editor, and changing calculation settings cancel abandoned work. **Resume**
+and **Retry** restart stopped or failed work. Late completions cannot replace a
+newer preview. Invalid drafts and failed previews preserve the applied row. Workspace files store source paths and duplicate-path ordinals, names,
+window policies, numeric interpretations, slices, and output time settings;
+results are recomputed on reopening. Each definition belongs to its waveform row.
+**Open input signal in table** opens the recorded input.
+
+For a native control specimen, open `volna/examples/analog_showcase.vtr`, add
+`analog.waves.noise`, derive a `4 us` mean with a `250 ns` output interval, then
+edit the window to `8 us`. Inspect the live row and apply each change, save/reopen the
+workspace, and remove the row. The inspector uses the current theme and native
+text fields and buttons.
 
 ## Feature, pipeline, and landing examples
 

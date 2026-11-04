@@ -10,6 +10,7 @@ pub mod desktop;
 mod dock;
 mod frame_stats;
 mod islands;
+mod moving_average;
 #[cfg(not(target_family = "wasm"))]
 mod native_import;
 #[cfg(not(target_family = "wasm"))]

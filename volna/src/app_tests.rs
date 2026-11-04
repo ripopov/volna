@@ -2543,7 +2543,7 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
             .unwrap(),
         "the popup is hosted"
     );
-    vcx.simulate_keystrokes("down down down down enter");
+    vcx.simulate_keystrokes("down down down down down enter");
     vcx.run_until_parked();
     vcx.simulate_keystrokes("up right down enter");
     vcx.run_until_parked();
@@ -3212,7 +3212,7 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
         })
         .unwrap();
     vcx.run_until_parked();
-    vcx.simulate_keystrokes("down down down down enter");
+    vcx.simulate_keystrokes("down down down down down enter");
     vcx.run_until_parked();
     window
         .update(&mut vcx, |ws, _, _| {

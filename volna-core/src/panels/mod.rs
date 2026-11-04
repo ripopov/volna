@@ -225,6 +225,9 @@ impl PanelKind {
 
 impl crate::trace::Retime for PanelKind {
     fn retime(&mut self, by: crate::trace::Rescale) {
+        if let Self::Waves(w) = self {
+            w.retime_moving_averages(by);
+        }
         if let Some(nav) = self.nav_mut() {
             nav.retime(by);
         }

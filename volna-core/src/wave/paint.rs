@@ -220,9 +220,23 @@ pub(crate) fn paint(
         let Some(ix) = layout.entry(pos) else {
             continue;
         };
-        let entry = &model.items()[ix];
+        let Some(entry) = model.display_entry(ix) else {
+            continue;
+        };
         let row = &entry.row;
-        let ink = plots.ink(ix, inks.ink(model.items(), ix), theme);
+        let preview = model.preview_at(ix);
+        let inherited = if preview.is_some() {
+            model.ink(ix)
+        } else {
+            inks.ink(model.items(), ix)
+        };
+        let ink = plots.ink(ix, inherited, theme).map(|color| {
+            if preview.is_some_and(|p| p.stale) {
+                color.with_alpha(0.45)
+            } else {
+                color
+            }
+        });
         let inked;
         let t: &Theme = match ink {
             Some(color) => {
@@ -240,7 +254,7 @@ pub(crate) fn paint(
         let y = layout.row_y(pos);
         let full_h = layout.row_height(pos);
         let name_x = indent_x(layout.name_left, entry.depth, t.zoom);
-        let is_selected = model.selected.contains(&ix);
+        let is_selected = preview.is_some() || model.selected.contains(&ix);
         let is_hover = model.hover_row == Some(ix);
         let left_row = Rect::new(
             point(bounds.left(), y),
@@ -383,6 +397,21 @@ pub(crate) fn paint(
             None => name_x,
         };
 
+        let name_x = if item.source.moving_average().is_some() {
+            p.scene.clipped(layout.names, |scene| {
+                scene.text(
+                    point(name_x, y),
+                    row_h,
+                    "ƒ",
+                    FontRole::Ui,
+                    t.ui_size,
+                    colors.text_muted,
+                );
+            });
+            name_x + z(14.0)
+        } else {
+            name_x
+        };
         {
             let pad = z(if item.projection.is_some() { 4.0 } else { 12.0 });
             let avail = layout.names.right() - name_x - pad;
@@ -398,7 +427,7 @@ pub(crate) fn paint(
             } else {
                 p.width(&dims, FontRole::Mono, t.mono_size) + char_w
             };
-            let name_color = if item.source.signal().is_some() {
+            let name_color = if item.source.input_signal().is_some() {
                 colors.text
             } else {
                 colors.text_placeholder
@@ -434,7 +463,10 @@ pub(crate) fn paint(
         if let Some(a) = &item.analog
             && full_h >= 2.0 * row_h - 0.5
         {
-            let label = format!("{} · {}", a.draw.label(), a.range.label());
+            let label = model.preview_at(ix).map_or_else(
+                || format!("{} · {}", a.draw.label(), a.range.label()),
+                |preview| format!("Draft · {}", preview.status),
+            );
             let hovered = model.format_hover == Some(ix);
             let color = if hovered {
                 colors.text
@@ -451,16 +483,18 @@ pub(crate) fn paint(
                     t.ui_size_small,
                     color,
                 );
-                scene.icon(
-                    IconName::ChevronDown,
-                    Rect::from_xywh(
-                        name_x + label_w + z(3.0),
-                        y + row_h - z(4.0) + (row_h - z(12.0)) / 2.0,
-                        z(12.0),
-                        z(12.0),
-                    ),
-                    color,
-                );
+                if preview.is_none() {
+                    scene.icon(
+                        IconName::ChevronDown,
+                        Rect::from_xywh(
+                            name_x + label_w + z(3.0),
+                            y + row_h - z(4.0) + (row_h - z(12.0)) / 2.0,
+                            z(12.0),
+                            z(12.0),
+                        ),
+                        color,
+                    );
+                }
             });
         }
 
@@ -546,7 +580,7 @@ pub(crate) fn paint(
                     && analog::supports(item.shape, item.translator.as_ref())
                     && let Some(kind) = item.translator.numeric_kind() =>
             {
-                let series = Series::of(doc, item.source.signal(), h, kind);
+                let series = Series::of(doc, item.source.input_signal(), h, kind);
                 paint_analog_row(item, a, &series, &viewport, wave_row, waves, row_h, &mut p);
             }
             (Some(_), _) if wave_row.width() <= 0.0 || viewport.width() <= 0.0 => {}
@@ -605,7 +639,7 @@ pub(crate) fn paint(
                     );
                 });
             }
-            (None, None) if item.source.signal().is_none() => {
+            (None, None) if item.source.input_signal().is_none() => {
                 let label = match item.source {
                     RowSource::Unresolved {
                         ambiguous: true, ..
@@ -634,7 +668,7 @@ pub(crate) fn paint(
     }
 
     let scope_bands = super::scope::bands(layout.rows.clone().filter_map(|pos| {
-        let row = &model.items().get(layout.entry(pos)?)?.row;
+        let row = &model.display_entry(layout.entry(pos)?)?.row;
         Some((
             row.trace()
                 .map(|trace| super::scope::Scope::new(trace, row.scope_identity(doc), row.scope())),
@@ -982,6 +1016,12 @@ pub(crate) fn paint(
         if bottom <= layout.names.top() {
             continue;
         }
+        if layout
+            .entry(pos)
+            .is_some_and(|row| model.preview_at(row).is_some())
+        {
+            continue;
+        }
         let grab = z(crate::wave::model::ROW_EDGE_GRAB_PX);
         p.scene.cursors.push((
             Rect::from_xywh(
@@ -1075,7 +1115,7 @@ pub(crate) fn paint(
                 && !layout.near_split(*p)
         })
         .and_then(|pointer| {
-            let scope = model.items().get(layout.entry_at(pointer.y)?)?.scope();
+            let scope = model.display_entry(layout.entry_at(pointer.y)?)?.scope();
             (!scope.is_empty()).then_some((scope, pointer))
         });
     let ruler_scope_hint = model
@@ -1325,7 +1365,7 @@ fn paint_analog_overlays(
         let Some(ix) = layout.entry(pos) else {
             continue;
         };
-        let Some(item) = model.signal(ix) else {
+        let Some(item) = model.display_signal(ix) else {
             continue;
         };
         let (Some(a), Some(h)) = (&item.analog, &item.history) else {
@@ -1347,7 +1387,7 @@ fn paint_analog_overlays(
         let Some(kind) = tr.numeric_kind() else {
             continue;
         };
-        let series = Series::of(doc, item.source.signal(), h, kind);
+        let series = Series::of(doc, item.source.input_signal(), h, kind);
         let clip = intersect(wave_row, waves);
         if let Some(c) = cursor
             && (c as f64) >= vp.start

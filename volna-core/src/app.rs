@@ -1,5 +1,6 @@
 //! `App`: the whole viewer with no toolkit attached.
 
+mod moving_average;
 mod opening;
 mod tooltip;
 mod traces;
@@ -208,6 +209,7 @@ pub enum ChromeDrag {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
+    MovingAverage(PanelId, crate::moving_average::Command),
     Notice(String),
     BuildActivity(TraceId),
     DismissActivity(TraceId),
@@ -541,6 +543,9 @@ pub enum PanelLayout<'a> {
 }
 
 pub struct App {
+    pub moving_average_editor: Option<crate::moving_average::Editor>,
+    averages: crate::moving_average::Computations,
+    next_average_editor: u64,
     pub doc: Document,
     pub workspace: crate::workspace::State,
     pub panels: Panels,
@@ -579,6 +584,9 @@ impl App {
     #[must_use]
     pub fn new() -> Self {
         App {
+            moving_average_editor: None,
+            averages: crate::moving_average::Computations::default(),
+            next_average_editor: 0,
             doc: Document::new(),
             workspace: crate::workspace::State::default(),
             panels: Panels::new(),
@@ -654,6 +662,8 @@ impl App {
     }
 
     fn on_session_changed(&mut self) {
+        self.moving_average_editor = None;
+        self.averages.clear();
         self.projections.clear();
         self.activity = ActivityModel::default();
         self.reset_recent_view();
@@ -675,6 +685,8 @@ impl App {
     }
 
     pub(crate) fn workspace_restored(&mut self) {
+        self.moving_average_editor = None;
+        self.averages.clear();
         self.history.clear();
         self.announcement = None;
         self.marker_edit = None;
@@ -688,6 +700,7 @@ impl App {
     }
 
     pub fn take_requests(&mut self) -> Vec<LoadRequest> {
+        let average_requests = self.sync_moving_averages();
         let budget = self.viewer_memory_budget();
         let wanted = self
             .panels
@@ -715,6 +728,7 @@ impl App {
             })
             .collect();
         let mut requests = self.projections.sync(retained, wanted, &budget);
+        requests.extend(average_requests);
         for w in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
             w.sync_projections(&self.projections);
         }
@@ -760,6 +774,7 @@ impl App {
             .filter_map(|panel| panel.kind.waves())
             .flat_map(|waves| waves.items().iter().map(|e| &e.row))
             .filter_map(WaveRow::signal_ref)
+            .chain(self.moving_average_demand().into_iter().map(|k| k.signal))
             .chain(
                 self.panels
                     .iter()
@@ -826,6 +841,21 @@ impl App {
     }
 
     pub fn deliver(&mut self, mut result: LoadResult) {
+        if let LoadResult::MovingAverage {
+            key,
+            request,
+            result,
+        } = result
+        {
+            if key.generation == self.doc.generation()
+                && self.averages.deliver(key, request, result)
+            {
+                self.attach_moving_averages();
+                self.sync_analog_summaries();
+                self.changed();
+            }
+            return;
+        }
         if let LoadResult::Projection { request, result } = result {
             if self.projections.deliver(request, result) {
                 for w in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
@@ -888,6 +918,7 @@ impl App {
                 for (signal, result) in results {
                     let signal = Traced::new(trace, signal);
                     let result = result.map_err(|e| e.to_string());
+                    self.averages.deliver_source(signal, result.clone());
                     for panel in self.panels.iter_mut() {
                         if let Some(w) = panel.kind.waves_mut() {
                             w.finish_signal(signal, result.clone().map_err(anyhow::Error::msg));
@@ -1184,7 +1215,9 @@ impl App {
         self.cancel_pipeline_opening(&command);
         self.update_marker_tooltip(&command, now);
         self.dispatch(command, now);
+        self.sync_moving_average_source();
         if !pointer {
+            self.averages.retain(&self.moving_average_demand());
             self.digital_cache.prune();
         }
         for waves in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
@@ -1534,6 +1567,15 @@ impl App {
                     }
                     return;
                 }
+                if action == MenuAction::MovingAverage {
+                    let row = self
+                        .panels
+                        .waves(panel)
+                        .and_then(|w| w.menu.as_ref())
+                        .map(|m| m.row);
+                    self.moving_average_command(panel, crate::moving_average::Command::Open(row));
+                    return;
+                }
                 if matches!(action, MenuAction::OpenTable) {
                     let row = self
                         .panels
@@ -1647,6 +1689,7 @@ impl App {
                 self.changed();
             }
             Command::Recent(command) => self.recent_command(command),
+            Command::MovingAverage(panel, command) => self.moving_average_command(panel, command),
         }
     }
 
@@ -1912,6 +1955,11 @@ impl App {
             .filter_map(WaveRow::signal)
             .filter_map(|row| Some((row.source.signal()?, row.raw_history()?.clone())))
             .chain(
+                self.moving_average_demand()
+                    .into_iter()
+                    .filter_map(|k| Some((k.signal, self.averages.source(k.signal)?.clone()))),
+            )
+            .chain(
                 self.panels
                     .iter()
                     .filter_map(|panel| panel.kind.table())
@@ -2026,7 +2074,13 @@ impl App {
             let rows = crate::wave::tree::selected_leaves(waves.items(), &rows);
             let vars = rows
                 .iter()
-                .filter_map(|&index| waves.signal(index)?.source.var())
+                .filter_map(|&index| {
+                    let source = &waves.signal(index)?.source;
+                    match source {
+                        crate::wave::model::RowSource::MovingAverage { input, .. } => input.var(),
+                        source => source.var(),
+                    }
+                })
                 .collect::<Vec<_>>();
             let lane = rows
                 .iter()
@@ -2324,9 +2378,11 @@ impl App {
             }
             for i in rows {
                 let s = waves.signal(i).unwrap();
-                let (Some(kind), Some(history), Some(signal)) =
-                    (s.numeric_kind(), s.history.as_ref(), s.source.signal())
-                else {
+                let (Some(kind), Some(history), Some(signal)) = (
+                    s.numeric_kind(),
+                    s.history.as_ref(),
+                    s.source.input_signal(),
+                ) else {
                     continue;
                 };
                 if history.len() >= crate::wave::analog::SUMMARY_MIN_CHANGES {
@@ -2922,7 +2978,17 @@ impl App {
         let doc = &self.doc;
         Some(match &mut self.panels.get_mut(id)?.kind {
             PanelKind::Waves(w) => {
-                let layout = w.layout(bounds, doc, theme, margins);
+                w.layout(bounds, doc, theme, margins);
+                if let Some(editor) = self
+                    .moving_average_editor
+                    .as_mut()
+                    .filter(|e| e.panel == id && e.reveal_preview)
+                {
+                    w.reveal_preview();
+                    editor.reveal_preview = false;
+                    w.layout(bounds, doc, theme, margins);
+                }
+                let layout = w.last_layout();
                 self.marker_tooltip
                     .relayout(id, &layout.marker_lane, tooltip_delay);
                 PanelLayout::Waves(layout)

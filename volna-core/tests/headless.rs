@@ -1176,6 +1176,7 @@ fn signal_name_menu_opens_and_removes_the_selected_signal_group() {
             .map(|item| (&item.action, item.label.as_str()))
             .collect::<Vec<_>>(),
         [
+            (&MenuAction::MovingAverage, "Derive signal…"),
             (&MenuAction::OpenTable, "Open in table"),
             (&MenuAction::CutSignals, "Cut"),
             (&MenuAction::CopySignals, "Copy"),

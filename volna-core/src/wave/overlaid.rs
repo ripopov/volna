@@ -45,7 +45,8 @@ impl Ranges {
                 .entry(key)
                 .or_insert_with(|| Analog::new(AnalogDraw::Step, range));
             a.range = range;
-            let series = super::analog::Series::of(doc, signal.source.signal(), history, kind);
+            let series =
+                super::analog::Series::of(doc, signal.source.input_signal(), history, kind);
             if let Some(bounds) =
                 a.raw_target(&series, signal.translator.as_ref(), signal.shape, vp)
             {
