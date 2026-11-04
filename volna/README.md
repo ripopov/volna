@@ -157,7 +157,9 @@ bands show the fitted full path. Labels stay visible while scrolling through a
 band. Scope bands preserve row ordering and break at groups or unscoped rows.
 Long paths retain their trailing portion, and hovering shows the full scope.
 Drag the column dividers to resize Scope, Name, and Value. Column widths are saved
-in the workspace. Collapse Scope with the chevron in its header or **Shift+S**;
+in the workspace. Choose the starting Scope state and width for new panels in
+Settings → Waves; splits and tabs of an existing waveform panel inherit its state
+instead. Collapse Scope with the chevron in its header or **Shift+S**;
 it becomes a 20 px color rail. Drag its divider below 48 px to snap it closed,
 or drag outward to expand it. The chevron and shortcut restore the last expanded
 width. Scope bands use stable colors from the current theme, independently of

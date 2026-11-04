@@ -18,17 +18,28 @@ struct Saved {
 
 impl Default for ScopeColumn {
     fn default() -> Self {
-        Self {
-            collapsed: false,
-            expanded_width: 160.0,
-        }
+        Self::new(false, Self::DEFAULT_WIDTH)
     }
 }
 
 impl ScopeColumn {
     pub const RAIL_WIDTH: f32 = 20.0;
+    pub const DEFAULT_WIDTH: f32 = 160.0;
+    pub const MIN_EXPANDED_WIDTH: f32 = 72.0;
     const SNAP_WIDTH: f32 = 48.0;
-    const MIN_EXPANDED_WIDTH: f32 = 72.0;
+
+    #[must_use]
+    pub fn new(collapsed: bool, expanded_width: f32) -> Self {
+        let expanded_width = if expanded_width.is_finite() {
+            expanded_width.max(Self::MIN_EXPANDED_WIDTH)
+        } else {
+            Self::DEFAULT_WIDTH
+        };
+        Self {
+            collapsed,
+            expanded_width,
+        }
+    }
 
     #[must_use]
     pub fn width(self) -> f32 {

@@ -984,7 +984,9 @@ impl App {
     fn fresh_waves(&self) -> PanelKind {
         let mut waves = crate::wave::model::WaveModel::new();
         waves.reset(self.doc.is_loaded().then(|| self.doc.limits()));
-        waves.nav.link = self.settings.resolved().link_by_default();
+        let settings = self.settings.resolved();
+        waves.nav.link = settings.link_by_default();
+        waves.scope = settings.waves.default_scope;
         PanelKind::Waves(Box::new(waves))
     }
 
@@ -1068,6 +1070,18 @@ impl App {
                     .map(|p| format!("Split {}", p.title()));
                 self.restructure(label, |panels| {
                     Ok((panels.create(panel, Some(axis))?, Vec::new()))
+                })
+                .map(|_| ())
+            }
+            PanelsCommand::NewTab { group_of }
+                if self
+                    .panels
+                    .get(group_of)
+                    .is_some_and(|p| p.kind.waves().is_none()) =>
+            {
+                let waves = self.fresh_waves();
+                self.restructure(Some("New panel".into()), |panels| {
+                    Ok((panels.open(waves, group_of, None)?, Vec::new()))
                 })
                 .map(|_| ())
             }

@@ -474,6 +474,78 @@ fn memory_menu_offers_checked_presets_and_respects_host_owned_values() {
 }
 
 #[test]
+fn new_panel_scope_column_defaults_leave_existing_and_cloned_panels_alone() {
+    use volna_core::wave::ScopeColumn;
+
+    let mut app = app();
+    app.open_bytes("t.vtr".into(), Vec::new());
+    complete_open(&mut app, ProceduralTrace::session(10));
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.newPanelScopeCollapsed".into(),
+        value: Value::Bool(true),
+    }));
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.newPanelScopeWidth".into(),
+        value: Value::Number(240.0),
+    }));
+
+    app.handle(Command::Action(Action::NewPanel));
+    let fresh_id = app.panels.focused_id();
+    let fresh = app.panels.waves(fresh_id).unwrap();
+    assert!(fresh.scope.is_collapsed());
+    assert_eq!(fresh.scope.width(), ScopeColumn::RAIL_WIDTH);
+
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.newPanelScopeCollapsed".into(),
+        value: Value::Bool(false),
+    }));
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.newPanelScopeWidth".into(),
+        value: Value::Number(320.0),
+    }));
+    let existing = app.panels.waves(fresh_id).unwrap();
+    assert!(existing.scope.is_collapsed());
+    assert_eq!(existing.scope.width(), ScopeColumn::RAIL_WIDTH);
+
+    app.handle(Command::Action(Action::ToggleScopes));
+    assert_eq!(app.panels.waves(fresh_id).unwrap().scope.width(), 240.0);
+
+    app.handle(Command::Action(Action::NewPanel));
+    let cloned = app.panels.focused_waves().unwrap();
+    assert!(!cloned.scope.is_collapsed());
+    assert_eq!(cloned.scope.width(), 240.0);
+}
+
+#[test]
+fn new_tab_from_a_non_wave_panel_uses_scope_defaults() {
+    use volna_core::wave::ScopeColumn;
+
+    let mut app = app();
+    app.open_bytes("t.vtr".into(), Vec::new());
+    complete_open(&mut app, ProceduralTrace::session(10));
+    app.handle_at(Command::Settings(SettingsCommand::Open), Instant::now());
+    let settings = app.panels.settings_id().unwrap();
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.newPanelScopeCollapsed".into(),
+        value: Value::Bool(true),
+    }));
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.newPanelScopeWidth".into(),
+        value: Value::Number(210.0),
+    }));
+
+    app.handle(Command::Panels(PanelsCommand::NewTab {
+        group_of: settings,
+    }));
+    let waves_id = app.panels.focused_id();
+    let waves = app.panels.waves(waves_id).unwrap();
+    assert!(waves.scope.is_collapsed());
+    assert_eq!(waves.scope.width(), ScopeColumn::RAIL_WIDTH);
+    app.handle(Command::Action(Action::ToggleScopes));
+    assert_eq!(app.panels.waves(waves_id).unwrap().scope.width(), 210.0);
+}
+
+#[test]
 fn waveform_spacing_validates_persists_and_resets() {
     let mut app = app();
     assert_eq!(app.settings.resolved().appearance.wave_spacing, 5.0);

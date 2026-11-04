@@ -430,6 +430,38 @@ pub static REGISTRY: &[Spec] = &[
         hosts: Hosts::ALL,
     },
     Spec {
+        id: "waves.newPanelScopeCollapsed",
+        page: Page::Waves,
+        group: "Scope column",
+        title: "Collapse Scope column by default",
+        description: "Start new waveform panels with the Scope column collapsed to its color rail. Splits and tabs created from an existing waveform panel inherit that panel instead. Existing and saved panels keep their own state.",
+        keywords: &[
+            "scope", "column", "collapse", "expand", "new", "panel", "default",
+        ],
+        kind: Kind::Bool,
+        default: Literal::Bool(false),
+        apply: Apply::Live,
+        hosts: Hosts::ALL,
+    },
+    Spec {
+        id: "waves.newPanelScopeWidth",
+        page: Page::Waves,
+        group: "Scope column",
+        title: "Scope column width",
+        description: "Expanded width of the Scope column in new waveform panels, in logical pixels. Splits and tabs created from an existing waveform panel inherit that panel instead. Existing and saved panels keep their own width.",
+        keywords: &[
+            "scope", "column", "width", "size", "new", "panel", "default",
+        ],
+        kind: Kind::Number {
+            min: crate::wave::ScopeColumn::MIN_EXPANDED_WIDTH as f64,
+            max: 2000.0,
+            step: 1.0,
+        },
+        default: Literal::Number(crate::wave::ScopeColumn::DEFAULT_WIDTH as f64),
+        apply: Apply::Live,
+        hosts: Hosts::ALL,
+    },
+    Spec {
         id: "waves.animation",
         page: Page::Waves,
         group: "Navigation",

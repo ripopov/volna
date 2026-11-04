@@ -177,10 +177,11 @@ fn normalize_zoom(zoom: f64) -> f64 {
 pub struct PanelSettings {
     pub link_by_default: bool,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WaveSettings {
     pub animation: Animation,
     pub snap_pixels: u32,
+    pub default_scope: crate::wave::ScopeColumn,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceSettings {
@@ -260,6 +261,15 @@ impl Settings {
             waves: WaveSettings {
                 animation: Animation::parse(&text("waves.animation")),
                 snap_pixels: int("waves.snapPixels").max(0) as u32,
+                default_scope: crate::wave::ScopeColumn::new(
+                    value("waves.newPanelScopeCollapsed")
+                        .as_bool()
+                        .unwrap_or(false),
+                    value("waves.newPanelScopeWidth")
+                        .as_f64()
+                        .unwrap_or(f64::from(crate::wave::ScopeColumn::DEFAULT_WIDTH))
+                        as f32,
+                ),
             },
             workspace: WorkspaceSettings {
                 autosave: Autosave::parse(&text("workspace.autosave")),

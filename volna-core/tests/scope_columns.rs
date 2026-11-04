@@ -156,7 +156,66 @@ fn resizing_a_shared_divider_while_collapsed_sets_a_new_reversible_reference() {
 }
 
 #[test]
+fn global_scope_defaults_do_not_rewrite_saved_workspace_panels() {
+    use volna_core::app::SettingsCommand;
+    use volna_core::settings::Value;
+
+    let mut app = app();
+    let saved_id = app.panels.focused_id();
+    let untouched_id = app
+        .panels
+        .iter()
+        .find(|panel| panel.id != saved_id && panel.kind.waves().is_some())
+        .unwrap()
+        .id;
+    app.panels.waves_mut(saved_id).unwrap().scope.resize(235.0);
+    app.handle(Command::Action(Action::ToggleScopes));
+    let saved = Workspace::capture(&app, paths("trace.vtr"), None)
+        .unwrap()
+        .to_bytes()
+        .unwrap();
+
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.newPanelScopeCollapsed".into(),
+        value: Value::Bool(false),
+    }));
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.newPanelScopeWidth".into(),
+        value: Value::Number(500.0),
+    }));
+    Workspace::parse(&saved)
+        .unwrap()
+        .prepare(
+            &app,
+            "file:///tmp/trace.vtr",
+            "file:///tmp/trace.volna.json",
+        )
+        .unwrap()
+        .commit(&mut app)
+        .unwrap();
+
+    assert!(app.panels.waves(saved_id).unwrap().scope.is_collapsed());
+    assert!(!app.panels.waves(untouched_id).unwrap().scope.is_collapsed());
+    assert_eq!(
+        app.panels.waves(untouched_id).unwrap().scope.width(),
+        ScopeColumn::DEFAULT_WIDTH
+    );
+    app.handle(Command::Panels(volna_core::panels::PanelsCommand::Focus(
+        saved_id,
+    )));
+    app.handle(Command::Action(Action::ToggleScopes));
+    assert_eq!(app.panels.waves(saved_id).unwrap().scope.width(), 235.0);
+}
+
+#[test]
 fn scope_column_validates_saved_state_and_keeps_its_expanded_width_when_snapping() {
+    let collapsed = ScopeColumn::new(true, f32::NAN);
+    assert!(collapsed.is_collapsed());
+    assert_eq!(collapsed.width(), ScopeColumn::RAIL_WIDTH);
+    assert_eq!(
+        ScopeColumn::new(false, 10.0).width(),
+        ScopeColumn::MIN_EXPANDED_WIDTH
+    );
     let mut column = ScopeColumn::default();
     column.resize(235.0);
     column.resize(30.0);
