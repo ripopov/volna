@@ -187,6 +187,14 @@ Color and row height are grouped under **Appearance**.
 Value format is omitted when only one representation is supported. Scalar bits
 keep their bit representation, including when cycling formats with the keyboard.
 
+Cursor values and digital waveform labels keep their selected format when it
+fits. Overflowing decimal and real values use scientific notation, preserving
+the sign and complete exponent; `≈` marks rounding. Hexadecimal and binary
+overflows retain both ends with a `0x` or `0b` prefix, such as `0xab…34`.
+Text retains its beginning. Numeric values show `…` when the available width
+cannot hold a meaningful representation. These compact labels do not change
+recorded values or clipboard contents.
+
 For a native control specimen, open `volna/examples/analog_showcase.vtr` and add
 `analog.waves.sine` and `analog.waves.cosine`. The format badge and the
 `linear · whole trace` status line both have dropdown chevrons. Select both rows

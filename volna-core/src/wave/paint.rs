@@ -507,10 +507,11 @@ pub(crate) fn paint(
                 .map(|(_, b)| *b);
             let text_right = badge.map_or(layout.values.right() - pad, |b| b.left() - pad);
             let avail = text_right - layout.values.left() - pad;
-            let (value_text, color) = if let Some(label) = cells.left_out {
-                (label.to_owned(), colors.text_placeholder)
+            let max_chars = (avail / char_w).floor().max(0.0) as usize;
+            let (text, color) = if let Some(label) = cells.left_out {
+                (fit_label(label, max_chars), colors.text_placeholder)
             } else {
-                let value = item.cursor_value(cursor, crate::data::text::PREVIEW_BYTES);
+                let value = item.cursor_label(cursor, max_chars);
                 let color = if item.history.is_none() || cursor.is_none() {
                     colors.text_placeholder
                 } else if value.kind == ValueKind::Normal {
@@ -518,12 +519,10 @@ pub(crate) fn paint(
                 } else {
                     colors.value_color(value.kind)
                 };
-                (value.text, color)
+                ((!value.text.is_empty()).then_some(value.text), color)
             };
-            let max_chars = (avail / char_w).floor().max(0.0) as usize;
             let values_rect = layout.values;
-            let number = item.history.is_some() && item.translator.numeric_kind().is_some();
-            if let Some(text) = fit_label(&value_text, max_chars, number) {
+            if let Some(text) = text {
                 p.scene.clipped(values_rect, |scene| {
                     scene.text(
                         point(values_rect.left() + pad, y),
@@ -1835,7 +1834,7 @@ fn bus_look(value: &WaveValue, numeric: bool) -> BusLook {
     }
 }
 
-pub(crate) fn fit_label(text: &str, max_chars: usize, number: bool) -> Option<String> {
+fn fit_label(text: &str, max_chars: usize) -> Option<String> {
     let n = text.chars().count();
     if n <= max_chars {
         return (n > 0).then(|| text.to_owned());
@@ -1844,21 +1843,12 @@ pub(crate) fn fit_label(text: &str, max_chars: usize, number: bool) -> Option<St
         return None;
     }
     let keep = max_chars - 1;
-    Some(if number {
-        std::iter::once('…')
-            .chain(text.chars().skip(n - keep))
-            .collect()
-    } else {
-        text.chars()
-            .take(keep)
-            .chain(std::iter::once('…'))
-            .collect()
-    })
+    Some(text.chars().take(keep).chain(['…']).collect())
 }
 
 fn fit_mono_prefix(p: &mut TextPainter<'_>, text: &str, size: f32, max_w: f32) -> Option<String> {
     let char_w = p.width("0", FontRole::Mono, size).max(1.0);
-    fit_label(text, (max_w / char_w).floor().max(0.0) as usize, false)
+    fit_label(text, (max_w / char_w).floor().max(0.0) as usize)
 }
 
 fn label_runs(label: &str, t: &Theme, text: Color) -> Vec<(usize, String, Color)> {
@@ -2199,8 +2189,12 @@ fn paint_bus_row_sampled(
             let avail = rb - la - 2.0 * LABEL_GAP_PX * t.zoom;
             if avail >= char_w {
                 let max_chars = (avail / char_w).floor() as usize;
-                let tr = translator.translate(&value);
-                if let Some(text) = fit_label(&tr.text, max_chars, numeric) {
+                let tr = translator.translate_label(
+                    &volna_trace::data::value_view::ValueView::borrowed(&value),
+                    max_chars,
+                );
+                if !tr.text.is_empty() {
+                    let text = tr.text;
                     let x = la + LABEL_GAP_PX * t.zoom;
                     let plain = match look {
                         BusLook::Unknown => t.wave_undef,
@@ -3843,19 +3837,6 @@ mod tests {
     }
 
     #[test]
-    fn labels_keep_a_numbers_last_digits_and_texts_beginning() {
-        assert_eq!(fit_label("80000210", 8, true).as_deref(), Some("80000210"));
-        assert_eq!(fit_label("80000210", 5, true).as_deref(), Some("…0210"));
-        assert_eq!(
-            fit_label("dot product loop", 6, false).as_deref(),
-            Some("dot p…")
-        );
-        assert_eq!(fit_label("80000210", 2, true), None);
-        assert_eq!(fit_label("5", 1, true).as_deref(), Some("5"));
-        assert_eq!(fit_label("", 4, false), None);
-    }
-
-    #[test]
     fn a_bus_value_picks_its_shape() {
         let bits = |s: &str| WaveValue::Bits(s.into());
         assert_eq!(bus_look(&bits("0000"), true), BusLook::Zero);
@@ -3917,6 +3898,79 @@ mod tests {
         let char_w = MonoMeasure.text_width("0", FontRole::Mono, t.mono_size);
         paint_bus_row(h, translator.as_ref(), &vp, area, area, char_w, &mut p);
         scene
+    }
+
+    #[test]
+    fn narrow_waveform_segments_keep_meaningful_value_labels() {
+        let bits = |n: u64| WaveValue::Bits(format!("{n:064b}"));
+        for dark in [false, true] {
+            for zoom in [0.75, 1.0, 1.5] {
+                let theme = Theme::volna(dark).zoomed(zoom);
+                for (format, value, width, expected) in [
+                    ("real", WaveValue::Real(-1_234_567.89), 8, "≈-1.23e6"),
+                    ("real", WaveValue::Real(0.125), 4, "…"),
+                    ("real", WaveValue::Real(f64::INFINITY), 3, "…"),
+                    ("real", WaveValue::Real(f64::NAN), 2, "…"),
+                    ("float", bits((-1_234_567.89_f64).to_bits()), 8, "≈-1.23e6"),
+                    ("udec", bits(u64::MAX), 8, "≈1.84e19"),
+                    (
+                        "sdec",
+                        WaveValue::Bits(format!("1{}", "0".repeat(1023))),
+                        10,
+                        "≈-8.99e307",
+                    ),
+                    (
+                        "udec",
+                        WaveValue::Bits(format!("1{}", "0".repeat(1023))),
+                        9,
+                        "≈8.99e307",
+                    ),
+                    ("hex", bits(0xabcd_1234), 7, "0x00…34"),
+                    ("bin", bits(0xabcd_1234), 7, "0b00…00"),
+                    ("text", WaveValue::Text("αβγδεζηθ".into()), 6, "αβγδε…"),
+                ] {
+                    let history = VecHistory {
+                        shape: match &value {
+                            WaveValue::Bits(bits) => SignalShape::Vector {
+                                width: bits.len() as u32,
+                            },
+                            WaveValue::Text(_) => SignalShape::Text,
+                            _ => SignalShape::Real,
+                        },
+                        times: vec![],
+                        values: vec![],
+                        initial: value,
+                    };
+                    let translator = crate::data::Translators::builtin().get(format).unwrap();
+                    let char_w = MonoMeasure.text_width("0", FontRole::Mono, theme.mono_size);
+                    let area = Rect::from_xywh(
+                        0.0,
+                        0.0,
+                        8.0 * zoom + (width as f32 + 0.25) * char_w,
+                        24.0 * zoom,
+                    );
+                    let mut scene = Scene::default();
+                    paint_bus_row(
+                        &history,
+                        translator.as_ref(),
+                        &Viewport {
+                            start: 0.0,
+                            end: 100.0,
+                        },
+                        area,
+                        area,
+                        char_w,
+                        &mut TextPainter {
+                            theme: &theme,
+                            text: &mut TextCache::default(),
+                            measure: &mut MonoMeasure,
+                            scene: &mut scene,
+                        },
+                    );
+                    assert_eq!(scene.texts().collect::<Vec<_>>(), [expected], "{format}");
+                }
+            }
+        }
     }
 
     #[test]

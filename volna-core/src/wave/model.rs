@@ -229,43 +229,67 @@ impl DisplayedSignal {
         limit: usize,
     ) -> crate::data::Translated {
         use crate::data::Translated;
-        use volna_trace::data::value_view::ValueView;
-        use volna_trace::data::{ValueKind, WaveValue};
+        use volna_trace::data::ValueKind;
+        if let Some(value) = self.cursor_value_view(cursor) {
+            return self.translator.translate_view(&value, limit);
+        }
+        let text = if self.cursor_history().is_none() && self.source.input_signal().is_none() {
+            "not in trace"
+        } else if self.cursor_history().is_none() && self.error.is_none() {
+            "loading…"
+        } else {
+            "–"
+        };
+        Translated::bounded(text, ValueKind::Normal, limit)
+    }
 
-        let history = self.history.as_ref().or_else(|| {
+    pub(super) fn cursor_label(
+        &self,
+        cursor: Option<u64>,
+        width: usize,
+    ) -> crate::data::Translated {
+        match self.cursor_value_view(cursor) {
+            Some(value) => self.translator.translate_label(&value, width),
+            None => self
+                .cursor_value(cursor, crate::data::text::PREVIEW_BYTES)
+                .fit_text(width),
+        }
+    }
+
+    fn cursor_value_view(
+        &self,
+        cursor: Option<u64>,
+    ) -> Option<volna_trace::data::value_view::ValueView<'_>> {
+        use volna_trace::data::{WaveValue, value_view::ValueView};
+        let history = self.cursor_history()?;
+        let time = cursor?;
+        let index = history.index_at(time);
+        Some(
+            if self.history.is_none()
+                && let Some(slice) = self.projection
+            {
+                ValueView::owned(slice.value(history.value_view(index)))
+            } else if self.shape == SignalShape::Event {
+                ValueView::owned(WaveValue::Bits(
+                    if index.is_some_and(|i| history.time(i) == time) {
+                        "1"
+                    } else {
+                        "0"
+                    }
+                    .into(),
+                ))
+            } else {
+                history.value_view(index)
+            },
+        )
+    }
+
+    fn cursor_history(&self) -> Option<&Arc<dyn SignalHistory>> {
+        self.history.as_ref().or_else(|| {
             self.projection_source
                 .as_ref()
                 .filter(|_| self.error.is_none())
-        });
-        match (history, cursor) {
-            (Some(history), Some(time)) => {
-                let index = history.index_at(time);
-                let value = if self.history.is_none()
-                    && let Some(slice) = self.projection
-                {
-                    ValueView::owned(slice.value(history.value_view(index)))
-                } else if self.shape == SignalShape::Event {
-                    ValueView::owned(WaveValue::Bits(
-                        if index.is_some_and(|i| history.time(i) == time) {
-                            "1"
-                        } else {
-                            "0"
-                        }
-                        .into(),
-                    ))
-                } else {
-                    history.value_view(index)
-                };
-                self.translator.translate_view(&value, limit)
-            }
-            (None, _) if self.source.input_signal().is_none() => {
-                Translated::bounded("not in trace", ValueKind::Normal, limit)
-            }
-            (None, _) if self.error.is_none() => {
-                Translated::bounded("loading…", ValueKind::Normal, limit)
-            }
-            _ => Translated::bounded("–", ValueKind::Normal, limit),
-        }
+        })
     }
 
     pub(crate) fn attach(&mut self, raw: Option<Arc<dyn SignalHistory>>) {

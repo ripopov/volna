@@ -76,12 +76,9 @@ fn landing_waveforms_render_at_full_range_and_saved_zoom() {
         "state rows are tinted"
     );
     assert!(
-        texts.iter().any(|t| t.starts_with('…') && t.len() > 3),
-        "a number keeps its last digits: {texts:?}"
+        texts.iter().any(|t| t == "…"),
+        "very narrow values show overflow: {texts:?}"
     );
-    for text in &texts {
-        assert_ne!(text, "…", "a clipped value must retain a digit");
-    }
     app.doc.shared.viewport.value = saved_viewport;
     let (texts, _) = render(&mut app);
     assert!(

@@ -1,6 +1,7 @@
 //! Value translators turn a [`WaveValue`] into display text.
 
 mod enums;
+mod labels;
 pub(crate) use enums::EnumTranslators;
 
 use std::fmt::Write as _;
@@ -19,6 +20,18 @@ pub struct Translated {
 }
 
 impl Translated {
+    pub(crate) fn fit_text(mut self, width: usize) -> Self {
+        if self.text.chars().count() > width {
+            self.text = if width == 0 {
+                String::new()
+            } else {
+                self.text.chars().take(width - 1).chain(['…']).collect()
+            };
+            self.truncated = true;
+        }
+        self
+    }
+
     pub(crate) fn bounded(text: &str, kind: ValueKind, limit: usize) -> Self {
         Self {
             text: truncate_ref(text, limit),
@@ -66,6 +79,11 @@ pub trait Translator: Send + Sync {
     }
     /// Format within a UTF-8 byte budget without materializing an unbounded input.
     fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated;
+    /// Format a display label within a character budget; copying uses `translate_view`.
+    fn translate_label(&self, value: &ValueView<'_>, width: usize) -> Translated {
+        self.translate_view(value, width.saturating_mul(4))
+            .fit_text(width)
+    }
     fn translate(&self, value: &WaveValue) -> Translated {
         self.translate_view(&ValueView::borrowed(value), usize::MAX)
     }
@@ -307,6 +325,9 @@ fn raw_bits(value: &ValueView<'_>, limit: usize) -> Translated {
 
 struct BinaryTranslator;
 impl Translator for BinaryTranslator {
+    fn translate_label(&self, value: &ValueView<'_>, width: usize) -> Translated {
+        labels::radix(self, value, width, super::text::Radix::Bin)
+    }
     fn prefix(&self) -> &'static str {
         "0b"
     }
@@ -332,6 +353,9 @@ impl Translator for BinaryTranslator {
 
 struct HexTranslator;
 impl Translator for HexTranslator {
+    fn translate_label(&self, value: &ValueView<'_>, width: usize) -> Translated {
+        labels::radix(self, value, width, super::text::Radix::Hex)
+    }
     fn prefix(&self) -> &'static str {
         "0x"
     }
@@ -380,6 +404,13 @@ impl Translator for HexTranslator {
 }
 
 fn decimal(bits: &LogicView<'_>, signed: bool, limit: usize) -> Translated {
+    let mut translated = decimal_digits(bits, signed, limit);
+    translated.truncated |= translated.text.len() > limit;
+    translated.text = truncate(translated.text, limit);
+    translated
+}
+
+fn decimal_digits(bits: &LogicView<'_>, signed: bool, limit: usize) -> Translated {
     if let Some(value) = non_binary_word(bits, limit) {
         return value;
     }
@@ -422,11 +453,18 @@ fn decimal(bits: &LogicView<'_>, signed: bool, limit: usize) -> Translated {
             write!(text, "{limb:09}").unwrap();
         }
     }
-    Translated::bounded(&text, ValueKind::Normal, limit)
+    Translated {
+        text,
+        kind: ValueKind::Normal,
+        truncated: false,
+    }
 }
 
 struct UnsignedTranslator;
 impl Translator for UnsignedTranslator {
+    fn translate_label(&self, value: &ValueView<'_>, width: usize) -> Translated {
+        labels::decimal(value, width, false)
+    }
     fn id(&self) -> &'static str {
         "udec"
     }
@@ -452,6 +490,9 @@ impl Translator for UnsignedTranslator {
 
 struct SignedTranslator;
 impl Translator for SignedTranslator {
+    fn translate_label(&self, value: &ValueView<'_>, width: usize) -> Translated {
+        labels::decimal(value, width, true)
+    }
     fn id(&self) -> &'static str {
         "sdec"
     }
@@ -518,6 +559,9 @@ fn format_float(v: f64) -> String {
 
 struct FloatTranslator;
 impl Translator for FloatTranslator {
+    fn translate_label(&self, value: &ValueView<'_>, width: usize) -> Translated {
+        labels::real(self, value, width)
+    }
     fn id(&self) -> &'static str {
         "float"
     }
@@ -560,6 +604,9 @@ impl Translator for FloatTranslator {
 
 struct RealTranslator;
 impl Translator for RealTranslator {
+    fn translate_label(&self, value: &ValueView<'_>, width: usize) -> Translated {
+        labels::real(self, value, width)
+    }
     fn id(&self) -> &'static str {
         "real"
     }
