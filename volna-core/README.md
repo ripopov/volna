@@ -38,6 +38,14 @@ and undo. Normalized literals use a sorted index that reads borrowed waveform
 bits directly. `Translator::digital_style()` selects levels or labels for
 single-bit waveforms; rendering does not depend on translator identifiers.
 
+New waveform rows use signed decimal for `integer`, `int`, `shortint`, `longint`,
+and `byte`, and unsigned decimal for `time` or integer types qualified as
+`unsigned`. Wire, reg, logic, and other packed vectors default to hexadecimal;
+single bits retain bit format. Enum tables take precedence over numeric defaults.
+Explicit row formats are saved with the workspace. VTR's current HDL imports
+retain the base variable type but omit explicit signedness qualifiers, so an
+imported `int unsigned` currently receives the `int` default.
+
 After laying out a panel, hosts query `App::panel_measurement` and dispatch any
 returned command after the current layout/paint pass. New pipelines use this
 geometry report together with track and clock delivery to choose their opening

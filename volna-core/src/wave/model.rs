@@ -4624,7 +4624,7 @@ fn var_row(doc: &mut Document, var: Traced<VarId>, loaded: &Resident) -> Option<
     let signal = var.with(v.signal);
     let translator = doc
         .enum_translator(var)
-        .unwrap_or_else(|| doc.translators.default_for(v.shape));
+        .unwrap_or_else(|| doc.translators.default_for_variable(v));
     let history = loaded.get(&signal).cloned();
     let needs_load = history.is_none();
     let analog = (v.shape == SignalShape::Real && analog::supports(v.shape, translator.as_ref()))

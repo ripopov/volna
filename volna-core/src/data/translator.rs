@@ -226,6 +226,26 @@ impl Translators {
         };
         self.get(id).expect("built-in translator")
     }
+
+    #[must_use]
+    pub fn default_for_variable(
+        &self,
+        var: volna_trace::data::source::VariableView<'_>,
+    ) -> Arc<dyn Translator> {
+        if !matches!(var.shape, SignalShape::Vector { .. }) {
+            return self.default_for(var.shape);
+        }
+        let (base, qualifier) = var.var_type.split_once(' ').unwrap_or((var.var_type, ""));
+        let signed = match (base, qualifier) {
+            ("integer" | "int" | "shortint" | "longint" | "byte", "" | "signed")
+            | ("time", "signed") => true,
+            ("integer" | "int" | "shortint" | "longint" | "byte" | "time", "unsigned")
+            | ("time", "") => false,
+            _ => return self.default_for(var.shape),
+        };
+        self.get(if signed { "sdec" } else { "udec" })
+            .expect("built-in translator")
+    }
 }
 
 fn non_binary_word(bits: &LogicView<'_>, limit: usize) -> Option<Translated> {
