@@ -470,7 +470,7 @@ fn the_tooltip_of_a_chip_has_the_full_name() {
         now,
     );
     assert!(!frame(&mut app).texts().any(|t| t == long));
-    app.tick(deadline - Duration::from_millis(1));
+    app.tick(deadline.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(!frame(&mut app).texts().any(|t| t == long));
     app.tick(deadline);
     let texts: Vec<String> = frame(&mut app).texts().map(str::to_owned).collect();
@@ -528,7 +528,11 @@ fn tooltip_hover_waits_per_target_and_cancels_on_leave_or_click() {
         first_deadline,
     );
     let second_deadline = first_deadline + delay;
-    app.tick(second_deadline - Duration::from_millis(1));
+    app.tick(
+        second_deadline
+            .checked_sub(Duration::from_millis(1))
+            .unwrap(),
+    );
     assert!(!tooltip(&mut app, "Marker 2"));
     app.tick(second_deadline);
     assert!(tooltip(&mut app, "Marker 2"));
@@ -597,7 +601,7 @@ fn tooltip_waits_expose_a_deadline_without_requesting_animation_frames() {
     );
     assert_eq!(app.tooltip_deadline(), Some(deadline));
     assert!(!app.is_animating());
-    assert!(!app.tick(deadline - Duration::from_millis(1)));
+    assert!(!app.tick(deadline.checked_sub(Duration::from_millis(1)).unwrap()));
     assert!(!app.is_animating());
     app.take_events();
     assert!(!app.tick(deadline));
@@ -658,7 +662,7 @@ fn viewport_motion_restarts_tooltip_delay_for_the_new_target() {
         );
         let deadline = arrived + delay;
         assert_eq!(app.tooltip_deadline(), Some(deadline));
-        app.tick(deadline - Duration::from_millis(1));
+        app.tick(deadline.checked_sub(Duration::from_millis(1)).unwrap());
         assert!(!frame(&mut app).texts().any(|text| text == "Marker 2"));
         app.tick(deadline);
         assert!(frame(&mut app).texts().any(|text| text == "Marker 2"));
@@ -693,7 +697,7 @@ fn tooltip_delay_edits_apply_to_the_next_hover_and_survive_settings_reload() {
     );
     let custom_delay = Duration::from_millis(900);
     let deadline = now + custom_delay;
-    app.tick(deadline - Duration::from_millis(1));
+    app.tick(deadline.checked_sub(Duration::from_millis(1)).unwrap());
     assert!(!frame(&mut app).texts().any(|text| text == "Marker 1"));
     app.tick(deadline);
     assert!(frame(&mut app).texts().any(|text| text == "Marker 1"));
