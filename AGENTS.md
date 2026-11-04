@@ -52,6 +52,11 @@ total.
 Stage completed changes. Commit only when explicitly requested by the user.
 Include only task-related changes; preserve unrelated work and its staging state.
 
+After staging, review the patch for architectural integrity, existing code quality
+standards, and maintainer acceptance. Do not trade code quality for new features.
+If the patch falls short, refactor, stage again, and repeat the review. Finish only
+when the final staged patch passes these quality gates.
+
 When committing changes to VTR, also update and commit Volna's `vtr` submodule pin.
 Keep VTR on `main` and make changes on that branch. Stay current with
 `origin/main`; when the remote advances, rebase local changes onto it.
