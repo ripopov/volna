@@ -467,6 +467,18 @@
           "markdownDescription": "Animate pan and zoom. `reduced` keeps the motion but shortens it; `off` jumps.",
           "type": "string"
         },
+        "volna.waves.newPanelScopeCollapsed": {
+          "default": false,
+          "markdownDescription": "Start new waveform panels with the Scope column collapsed to its color rail. Splits and tabs created from an existing waveform panel inherit that panel instead. Existing and saved panels keep their own state.",
+          "type": "boolean"
+        },
+        "volna.waves.newPanelScopeWidth": {
+          "default": 160,
+          "markdownDescription": "Expanded width of the Scope column in new waveform panels, in logical pixels. Splits and tabs created from an existing waveform panel inherit that panel instead. Existing and saved panels keep their own width.",
+          "maximum": 2000,
+          "minimum": 72,
+          "type": "number"
+        },
         "volna.waves.snapPixels": {
           "default": 6,
           "markdownDescription": "Clicks in the waves snap the cursor to an edge within this many pixels. 0 disables snapping.",
