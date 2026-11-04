@@ -72,7 +72,7 @@ function openSettings(vscode) {
   );
 }
 
-function attachViewer(vscode, panel, context, uri) {
+function attachViewer(vscode, panel, context, uri, onCanvasFocus) {
   const workspace = createWorkspaceHost(vscode, context, panel, uri);
   const trace = createTraceHost(vscode, context, panel, uri);
   const configuration = vscode.workspace.onDidChangeConfiguration((event) => {
@@ -84,6 +84,8 @@ function attachViewer(vscode, panel, context, uri) {
   const messages = panel.webview.onDidReceiveMessage(async (message) => {
     try {
       if (message.type === "pickFile") await pickTrace(vscode);
+      else if (message.type === "canvasFocus")
+        onCanvasFocus(message.focused === true);
       else if (message.type === "openSettings") await openSettings(vscode);
       else if (
         ["traceStart", "traceRequest", "traceStop"].includes(message.type)
@@ -110,6 +112,16 @@ function attachViewer(vscode, panel, context, uri) {
 
 function activate(context, vscode = require("vscode")) {
   let activePanel;
+  let focusedPanel;
+  function setCanvasFocus(panel, focused) {
+    if (focused && panel.active) focusedPanel = panel;
+    else if (focusedPanel === panel) focusedPanel = undefined;
+    return vscode.commands.executeCommand(
+      "setContext",
+      "volna.canvasFocus",
+      focusedPanel !== undefined,
+    );
+  }
   context.subscriptions.push(
     vscode.commands.registerCommand("volna.open", () => pickTrace(vscode)),
   );
@@ -137,11 +149,15 @@ function activate(context, vscode = require("vscode")) {
           panel.onDidChangeViewState(() => {
             if (panel.active) activePanel = panel;
             else if (activePanel === panel) activePanel = undefined;
+            if (!panel.active) setCanvasFocus(panel, false);
           });
           panel.onDidDispose(() => {
             if (activePanel === panel) activePanel = undefined;
+            setCanvasFocus(panel, false);
           });
-          attachViewer(vscode, panel, context, document.uri);
+          attachViewer(vscode, panel, context, document.uri, (focused) =>
+            setCanvasFocus(panel, focused),
+          );
         },
       },
       {

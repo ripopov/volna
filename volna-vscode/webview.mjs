@@ -5,10 +5,28 @@ const host = acquireVsCodeApi();
 const status = document.getElementById("viewer-status");
 const send = (message) => host.postMessage(message);
 
+let panelFocused = false;
+let canvasFocused;
+function updateCanvasFocus() {
+  const focused = document.hasFocus() && panelFocused;
+  if (focused === canvasFocused) return;
+  canvasFocused = focused;
+  send({ type: "canvasFocus", focused });
+}
+window.volnaCanvasFocus = (focused) => {
+  panelFocused = focused;
+  updateCanvasFocus();
+};
+window.addEventListener("focus", updateCanvasFocus);
+window.addEventListener("blur", updateCanvasFocus);
+document.addEventListener("focusin", updateCanvasFocus);
+document.addEventListener("focusout", () => queueMicrotask(updateCanvasFocus));
+
 window.volnaEmbedded = true;
 window.volnaOpen = () => send({ type: "pickFile" });
 window.volnaReady = () => {
   status.hidden = true;
+  updateCanvasFocus();
   send({ type: "ready" });
 };
 window.volnaWorkspace = (envelope) => send(JSON.parse(envelope));

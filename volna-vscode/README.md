@@ -24,6 +24,15 @@ the toolbar's dropdown, which appears whenever controls do not fit. VS Code's
 editor overflow menu and Command Palette also expose navigation, layout,
 workspace, and settings commands.
 
+Waveform navigation with `1`–`9`, panel selection with `Ctrl+1`–`Ctrl+9`
+(`Cmd+1`–`Cmd+9` on macOS), undo/redo, and workspace save shortcuts apply
+while the viewer canvas has keyboard focus. Text fields retain their editing
+shortcuts. VS Code keeps its shortcuts for creating, closing, switching, and
+splitting editors, including `Ctrl+N`, `Ctrl+W`, `Ctrl+Tab`, and `Ctrl+\`
+(and their macOS equivalents). Volna panel commands remain available through
+the Command Palette and viewer controls. Use VS Code's Keyboard Shortcuts editor
+to customize the extension's bindings.
+
 ## Build and install
 
 Use Node 24, Python 3, the repository Rust toolchain, and a C compiler that

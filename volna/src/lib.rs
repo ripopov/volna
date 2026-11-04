@@ -391,6 +391,15 @@ pub mod web {
         }
     }
 
+    pub fn canvas_focus(focused: bool) {
+        let global = js_sys::global();
+        if let Ok(callback) = js_sys::Reflect::get(&global, &JsValue::from_str("volnaCanvasFocus"))
+            && let Some(callback) = callback.dyn_ref::<js_sys::Function>()
+        {
+            callback.call1(&global, &JsValue::from_bool(focused)).ok();
+        }
+    }
+
     pub fn announce(text: &str) {
         use js_sys::{Array, Function, Reflect};
         let call = |target: &JsValue, name: &str, args: &Array| {

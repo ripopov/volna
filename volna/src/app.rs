@@ -2669,6 +2669,10 @@ impl Render for Workspace {
         } else {
             center
         };
+        #[cfg(target_family = "wasm")]
+        if self.embedded {
+            crate::web::canvas_focus(self.waves_focus.is_focused(window));
+        }
         root.child(
             div()
                 .flex()

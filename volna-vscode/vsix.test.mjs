@@ -293,6 +293,23 @@ test(
         }, `${name} nonblank viewer pixels`);
         await writeFile(join(results, `${name}-canvas.png`), rendered);
         await page.screenshot({ path: join(results, `${name}.png`) });
+        if (index === 0) {
+          await viewer.locator("canvas").click();
+          await page.keyboard.press("Control+n");
+          await page.getByRole("tab", { name: /Untitled-1/ }).waitFor();
+          await page.keyboard.press("Control+w");
+          await page.getByRole("tab", { name: /Untitled-1/ }).waitFor({
+            state: "detached",
+          });
+          await viewer.locator("canvas").click();
+          await page.keyboard.down("Control");
+          await page.keyboard.press("Tab");
+          await page
+            .locator(".quick-input-widget")
+            .waitFor({ state: "visible" });
+          await page.keyboard.press("Escape");
+          await page.keyboard.up("Control");
+        }
         await writeFile(join(root, `passed-${index}`), "ok");
       } catch (error) {
         const hostText = await page
