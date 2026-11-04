@@ -28,8 +28,24 @@ requests it or provides links to those locations.
 
 # Testing
 
-Do not add trivial unit tests that merely mirror static declarations or
-configuration. Focus tests on meaningful behavior, edge cases, and nontrivial invariants.
+Write tests around observable user behavior and integration scenarios. Each test
+should describe meaningful user actions and verify the resulting visible output
+or externally observable state. Derive expected outcomes from requirements or
+acceptance criteria, independently of the implementation.
+
+Exercise the real application components involved; mock only boundaries outside
+the application, such as external services. Avoid tests that reproduce
+implementation logic, enumerate internal mappings, assert private state, or
+verify internal call sequences. Tests should remain valid after refactoring that
+preserves user-visible behavior.
+
+Before writing each test, state the user scenario and the requirement it protects.
+If no meaningful observable outcome can be identified independently of the
+implementation, omit the test. Do not add tests solely to increase coverage.
+
+Example: a user selects three products, changes one quantity, and checks out;
+the order summary shows the selected products, correct quantities, and expected
+total.
 
 # Staging and commits
 
