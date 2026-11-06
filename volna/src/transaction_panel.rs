@@ -3,8 +3,6 @@
 mod cursor;
 mod split;
 
-#[cfg(not(target_arch = "wasm32"))]
-use gpui_kit::ClipboardItem;
 use gpui_kit::base::dock as base;
 use gpui_kit::component::{
     Disableable, Selectable, Sizable,
@@ -140,10 +138,7 @@ impl TransactionPanelView {
         };
         match result {
             Some(Ok(text)) => {
-                #[cfg(target_arch = "wasm32")]
-                crate::clipboard::copy(&text);
-                #[cfg(not(target_arch = "wasm32"))]
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                crate::clipboard::copy(text, cx);
             }
             Some(Err(error)) => {
                 owner.update(cx, |ws, cx| {

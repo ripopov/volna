@@ -215,12 +215,7 @@ impl Workspace {
                         let path = chip.source.clone();
                         let workspace = copy_workspace.clone();
                         move |_, _, cx| {
-                            #[cfg(target_family = "wasm")]
-                            crate::clipboard::copy(&path);
-                            #[cfg(not(target_family = "wasm"))]
-                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                path.clone(),
-                            ));
+                            crate::clipboard::copy(path.as_str(), cx);
                             workspace
                                 .update(cx, |this, cx| {
                                     this.status_menu = None;

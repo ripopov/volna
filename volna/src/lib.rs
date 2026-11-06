@@ -3,7 +3,6 @@
 pub mod app;
 pub mod assets;
 mod canvas;
-#[cfg(target_arch = "wasm32")]
 mod clipboard;
 mod derived;
 #[cfg(not(target_family = "wasm"))]

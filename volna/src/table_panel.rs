@@ -3,8 +3,6 @@
 use crate::dock::CanvasPanelView;
 use crate::theme::theme;
 use crate::ui::action_button;
-#[cfg(not(target_arch = "wasm32"))]
-use gpui_kit::ClipboardItem;
 use gpui_kit::component::{
     Disableable, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
@@ -446,10 +444,7 @@ impl CanvasPanelView {
             .map(volna_core::table::TableModel::copy_tsv)
         {
             Some(Ok(text)) => {
-                #[cfg(target_arch = "wasm32")]
-                crate::clipboard::copy(&text);
-                #[cfg(not(target_arch = "wasm32"))]
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                crate::clipboard::copy(text, cx);
             }
             Some(Err(error)) => {
                 owner.update(cx, |ws, cx| {

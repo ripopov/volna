@@ -20,9 +20,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, ClipboardItem, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, Subscription,
-    WeakEntity, Window, canvas, div, px,
+    AnyElement, Context, Entity, FocusHandle, Focusable, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, Subscription, WeakEntity, Window,
+    canvas, div, px,
 };
 use volna_core::{
     Command,
@@ -1073,15 +1073,7 @@ impl Render for DerivedEditor {
                                 .label("Copy error")
                                 .xsmall()
                                 .on_click(move |_, _, cx| {
-                                    #[cfg(target_family = "wasm")]
-                                    {
-                                        crate::clipboard::copy(&for_copy);
-                                        let _ = cx;
-                                    }
-                                    #[cfg(not(target_family = "wasm"))]
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        for_copy.clone(),
-                                    ));
+                                    crate::clipboard::copy(for_copy.as_str(), cx);
                                 }),
                         )
                         .child(

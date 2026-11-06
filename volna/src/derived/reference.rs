@@ -251,15 +251,7 @@ pub(super) fn render(
                                     .ghost()
                                     .xsmall()
                                     .on_click(move |_, _, cx| {
-                                        #[cfg(target_family = "wasm")]
-                                        {
-                                            crate::clipboard::copy(formula);
-                                            let _ = cx;
-                                        }
-                                        #[cfg(not(target_family = "wasm"))]
-                                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                            formula.to_owned(),
-                                        ));
+                                        crate::clipboard::copy(formula, cx);
                                     }),
                             )
                             .child(

@@ -1024,10 +1024,7 @@ impl Workspace {
                         }
                     }
                     Event::CopyText(text) => {
-                        #[cfg(target_family = "wasm")]
-                        crate::clipboard::copy(&text);
-                        #[cfg(not(target_family = "wasm"))]
-                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+                        crate::clipboard::copy(text, cx);
                     }
                     Event::FocusSettingsSearch => {
                         if let (Some(window), Some(id)) =
