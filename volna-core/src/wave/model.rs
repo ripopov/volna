@@ -4369,7 +4369,9 @@ impl WaveModel {
             }
             return;
         }
-        if button == MouseButton::Right && (layout.names.contains(p) || layout.scopes.contains(p)) {
+        if button == MouseButton::Right
+            && (layout.names.contains(p) || layout.scopes.contains(p) || layout.values.contains(p))
+        {
             if let Some(row) = row {
                 self.open_signal_menu(doc, row, p);
             }

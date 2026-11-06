@@ -178,7 +178,9 @@ scopes with identical paths remain separate. To compare repeated names, add
 `soc.cpu0.pc` and `soc.cpu1.pc`
 from `volna/examples/pipeline_showcase.vtr`.
 
-Right-click a signal and choose **Format signal…**. **Waveform** offers
+Right-click a signal in Scope, Name, or Values and choose **Format signal…**.
+Right-clicking a selected signal keeps the selection; right-clicking an unselected
+signal targets that signal alone. **Waveform** offers
 Digital, Analog steps (hold each sample), and Analog lines (interpolate between
 samples), with waveform icons and hover descriptions. **Vertical scale** controls
 the analog value axis; **Value format** controls numeric or text representation.

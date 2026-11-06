@@ -1202,6 +1202,68 @@ fn signal_name_menu_opens_and_removes_the_selected_signal_group() {
     assert!(panel.menu.is_none());
 }
 
+#[test]
+fn signal_context_menu_targets_the_same_rows_from_every_metadata_column() {
+    use volna_core::wave::model::MenuAction;
+
+    for column in 0..3 {
+        for target in [1, 2] {
+            let (mut app, _) = loaded_app(100);
+            app.handle(Command::AddVars(a_all(vec![0, 1, 2])));
+            complete_pending(&mut app);
+            frame(&mut app, &Theme::one_dark());
+            let waves = app.panels.focused_id();
+            let names = row_names(&app, waves);
+
+            press_row(&mut app, 0, 0.5, Modifiers::default());
+            release(&mut app);
+            press_row(
+                &mut app,
+                1,
+                0.5,
+                Modifiers {
+                    shift: true,
+                    ..Modifiers::default()
+                },
+            );
+            release(&mut app);
+
+            let layout = app.panels.waves(waves).unwrap().last_layout();
+            let rect = [layout.scopes, layout.names, layout.values][column];
+            let position = point(
+                rect.left() + rect.width() / 2.0,
+                layout.row_y(target) + layout.row_height(target) / 2.0,
+            );
+            app.handle(Command::Pointer(
+                waves,
+                PointerEvent::Down {
+                    position,
+                    button: MouseButton::Right,
+                    modifiers: Modifiers::default(),
+                },
+            ));
+            let menu = app
+                .panels
+                .waves(waves)
+                .unwrap()
+                .menu
+                .as_ref()
+                .expect("signal menu");
+            assert!(
+                menu.items()
+                    .any(|item| item.action == MenuAction::OpenFormat)
+            );
+            app.handle(Command::MenuSelect(waves, MenuAction::RemoveSignals));
+            let expected = if target == 1 {
+                vec![names[2].clone()]
+            } else {
+                names[..2].to_vec()
+            };
+            assert_eq!(row_names(&app, waves), expected);
+        }
+    }
+}
+
 fn height_checks(app: &App) -> Vec<u8> {
     app.panels
         .focused_waves()
