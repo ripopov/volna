@@ -442,16 +442,8 @@ fn point_group_search_and_pagination_keep_the_inspector_selection(cx: &mut TestA
     };
     init(cx);
     for (dark, width) in [(true, 900.0), (false, 360.0)] {
-        let mut workspace = None;
-        let root = cx.add_window(|window, cx| {
-            let ws = cx.new(|cx| Workspace::new(window, cx));
-            workspace = Some(ws.clone());
-            gpui_kit::component::Root::new(ws, window, cx)
-        });
-        let window = RootWindow {
-            root,
-            workspace: workspace.unwrap(),
-        };
+        let window = RootWindow::new(cx);
+        let root = window.root;
         let mut view = VisualTestContext::from_window(root.into(), cx);
         view.simulate_resize(size(px(width), px(1000.0)));
         let (detail, selected) = window
@@ -551,16 +543,8 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
     init(cx);
     for dark in [true, false] {
         for width in [900.0, 360.0] {
-            let mut workspace = None;
-            let root = cx.add_window(|window, cx| {
-                let ws = cx.new(|cx| Workspace::new(window, cx));
-                workspace = Some(ws.clone());
-                gpui_kit::component::Root::new(ws, window, cx)
-            });
-            let window = RootWindow {
-                root,
-                workspace: workspace.unwrap(),
-            };
+            let window = RootWindow::new(cx);
+            let root = window.root;
             let mut vcx = VisualTestContext::from_window(root.into(), cx);
             vcx.simulate_resize(size(px(width), px(1000.0)));
             let (panel, request, instruction) = window
@@ -1800,16 +1784,7 @@ fn tooltip_delay_can_be_edited_in_settings_and_reset_live(cx: &mut TestAppContex
 fn settings_tab_results_json_view_and_palette_render(cx: &mut TestAppContext) {
     use volna_core::app::SettingsCommand;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
     window
         .update(cx, |ws, window, cx| {
             ws.app
@@ -1916,16 +1891,8 @@ fn activity_index_settings_menu_disables_and_reenables_automatic_builds(cx: &mut
     use gpui_kit::test::TestWindowExt as _;
     use volna_core::settings::ActivityIndexPolicy;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.dispatch(
@@ -1979,16 +1946,7 @@ fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
     use volna_core::panels::PanelsCommand;
     use volna_core::settings::{Value, ZoomStep};
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
     let source: Arc<dyn Session> = Arc::new(ProceduralTrace::new(100));
     window
         .update(cx, |ws, window, cx| {
@@ -2124,16 +2082,8 @@ fn tab_close_buttons_and_middle_click_close_their_own_tab(cx: &mut TestAppContex
     use volna_core::app::SettingsCommand;
     use volna_core::panels::PanelsCommand;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let (first, second, settings) = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -2503,16 +2453,8 @@ fn tab_context_rename_and_close_work_for_every_panel_kind(cx: &mut TestAppContex
 fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -2577,16 +2519,8 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
 fn wave_copy_paste_keys_duplicate_rows(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -2658,16 +2592,8 @@ fn wave_copy_paste_keys_duplicate_rows(cx: &mut TestAppContext) {
 fn status_bar_memory_meter_tracks_the_budget(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let mut vcx = VisualTestContext::from_window(root.into(), cx);
     let bounds = |vcx: &mut VisualTestContext, selector: &'static str| {
         vcx.run_until_parked();
@@ -2751,16 +2677,8 @@ fn status_bar_groups_stay_put_under_long_messages(cx: &mut TestAppContext) {
     use gpui_kit::{VisualTestContext, px, size};
     init(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let mut vcx = VisualTestContext::from_window(root.into(), cx);
     let bounds = |vcx: &mut VisualTestContext, selector: &'static str| {
         vcx.run_until_parked();
@@ -2845,16 +2763,8 @@ fn pipeline_box_zoom_captures_outside_release_and_ignores_double_click_open(
     use volna_core::pipeline::{FollowActivity, RowView};
     use volna_core::wave::viewport::Viewport;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, _, cx| {
             ws.open_path(
@@ -2970,16 +2880,8 @@ fn pipeline_label_double_click_pans_and_cell_double_click_opens_details(cx: &mut
     use volna_core::pipeline::FollowActivity;
     use volna_core::wave::viewport::Viewport;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, _, cx| {
             ws.open_path(
@@ -3088,6 +2990,19 @@ fn pipeline_label_double_click_pans_and_cell_double_click_opens_details(cx: &mut
 }
 
 impl RootWindow {
+    fn new(cx: &mut TestAppContext) -> Self {
+        let mut workspace = None;
+        let root = cx.add_window(|window, cx| {
+            let ws = cx.new(|cx| Workspace::new(window, cx));
+            workspace = Some(ws.clone());
+            gpui_kit::component::Root::new(ws, window, cx)
+        });
+        Self {
+            root,
+            workspace: workspace.unwrap(),
+        }
+    }
+
     fn update<R>(
         &self,
         cx: &mut TestAppContext,
@@ -3108,16 +3023,8 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
     use volna_core::wave::PointerEvent;
     use volna_trace::data::SignalShape;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             let session = Arc::new(ProceduralTrace::new(100));
@@ -3243,16 +3150,8 @@ fn signal_format_menu_fits_narrow_windows_in_both_themes(cx: &mut TestAppContext
     init(cx);
     for dark in [true, false] {
         for (width, zoom) in [(1000.0, 1.0), (360.0, 1.0), (1000.0, 1.5), (360.0, 1.5)] {
-            let mut workspace = None;
-            let root = cx.add_window(|window, cx| {
-                let ws = cx.new(|cx| Workspace::new(window, cx));
-                workspace = Some(ws.clone());
-                gpui_kit::component::Root::new(ws, window, cx)
-            });
-            let window = RootWindow {
-                root,
-                workspace: workspace.unwrap(),
-            };
+            let window = RootWindow::new(cx);
+            let root = window.root;
             let mut vcx = VisualTestContext::from_window(root.into(), cx);
             vcx.simulate_resize(size(px(width), px(700.0)));
             window
@@ -3316,16 +3215,8 @@ fn color_submenu_and_palette_commands_colour_the_selection(cx: &mut TestAppConte
     use gpui_kit::VisualTestContext;
     use volna_core::wave::{MenuEntry, Tint};
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -3408,16 +3299,8 @@ fn shift_a_and_the_group_menu_stack_and_unstack_a_group(cx: &mut TestAppContext)
     use volna_core::wave::model::MenuAction;
     use volna_core::wave::{GroupStyle, MenuEntry};
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -3508,16 +3391,8 @@ fn bus_keys_and_the_hosted_slice_editor(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     use volna_core::wave::model::MenuAction;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -3598,16 +3473,8 @@ fn bus_keys_and_the_hosted_slice_editor(cx: &mut TestAppContext) {
 fn group_keys_and_the_hosted_name_editor(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -3787,16 +3654,8 @@ fn wave_rows_are_tree_items() {
 fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -3978,16 +3837,8 @@ fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppCo
 fn marker_walk_keys_move_the_cursor(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let (near, far) = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4031,16 +3882,8 @@ fn ctrl_digits_place_and_move_markers_while_bare_digits_jump(cx: &mut TestAppCon
     use gpui_kit::VisualTestContext;
     use volna_core::panels::{Axis, PanelsCommand};
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let (a, b, start, step) = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4120,16 +3963,8 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
         Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, VisualTestContext, point,
     };
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let (near, far) = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4270,16 +4105,8 @@ fn double_click_on_a_span_zooms_to_it(cx: &mut TestAppContext) {
         Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, VisualTestContext, point,
     };
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let (a, b) = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4339,16 +4166,8 @@ fn reference_keys_and_a_double_click_on_the_live_span(cx: &mut TestAppContext) {
     };
     use volna_core::marker::Reference;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let (a, b) = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4462,16 +4281,8 @@ fn marker_chips_drag_open_menus_copy_and_double_click_adds(cx: &mut TestAppConte
     use volna_core::marker::LaneVerb;
     use volna_core::wave::model::MenuAction;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let a = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4605,16 +4416,8 @@ fn the_marker_navigator_lists_filters_and_acts_on_markers(cx: &mut TestAppContex
     use gpui_kit::VisualTestContext;
     use volna_core::marker::Reference;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let (start, times) = window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4720,16 +4523,8 @@ fn the_marker_navigator_lists_filters_and_acts_on_markers(cx: &mut TestAppContex
 fn the_palette_offers_markers_when_the_query_asks_for_them(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4803,16 +4598,8 @@ fn the_palette_offers_markers_when_the_query_asks_for_them(cx: &mut TestAppConte
 fn palette_commands_chosen_by_keyboard_reach_the_panel(cx: &mut TestAppContext) {
     use gpui_kit::VisualTestContext;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -4880,16 +4667,8 @@ fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
     let config = temporary.path().join("config");
     let mut store = Store::new(Some(config.clone())).unwrap();
     store.data_dir = temporary.path().join("fallback");
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let mut vcx = VisualTestContext::from_window(root.into(), cx);
     let draw = |vcx: &mut VisualTestContext| {
         vcx.run_until_parked();
@@ -5035,16 +4814,8 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
     );
     std::fs::copy(example, &a).unwrap();
     std::fs::copy(example, &b).unwrap();
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, _, cx| {
             ws.app.handle(Command::Settings(SettingsCommand::Set {
@@ -5250,16 +5021,8 @@ fn settings_search_takes_wave_keys_while_a_trace_is_open(cx: &mut TestAppContext
     use gpui_kit::VisualTestContext;
     use volna_core::app::SettingsCommand;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -5452,16 +5215,8 @@ fn clicking_waveform_appearance_steppers_repaints_visible_panels(cx: &mut TestAp
     use gpui_kit::{Modifiers, VisualTestContext, size};
     use volna_core::app::SettingsCommand;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let mut vcx = VisualTestContext::from_window(root.into(), cx);
     vcx.simulate_resize(size(px(2200.0), px(900.0)));
     let waves = window
@@ -5555,16 +5310,8 @@ fn shift_o_toggles_group_overlays_and_hosts_their_menu(cx: &mut TestAppContext) 
     use volna_core::wave::model::MenuAction;
     use volna_core::wave::{GroupStyle, MenuEntry};
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     window
         .update(cx, |ws, window, cx| {
             ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
@@ -5649,16 +5396,8 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
     use volna_trace::data::Member;
     init(cx);
     for dark in [true, false] {
-        let mut workspace = None;
-        let root = cx.add_window(|window, cx| {
-            let ws = cx.new(|cx| Workspace::new(window, cx));
-            workspace = Some(ws.clone());
-            gpui_kit::component::Root::new(ws, window, cx)
-        });
-        let window = RootWindow {
-            root,
-            workspace: workspace.unwrap(),
-        };
+        let window = RootWindow::new(cx);
+        let root = window.root;
         let mut vcx = VisualTestContext::from_window(root.into(), cx);
         vcx.simulate_resize(size(px(1600.0), px(700.0)));
         let panel = window
@@ -6040,16 +5779,8 @@ fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut T
     use volna_core::{panels::PanelsCommand, table::TableCommand, transaction::TransactionCommand};
     use volna_trace::data::Member;
     init(cx);
-    let mut workspace = None;
-    let root = cx.add_window(|window, cx| {
-        let ws = cx.new(|cx| Workspace::new(window, cx));
-        workspace = Some(ws.clone());
-        gpui_kit::component::Root::new(ws, window, cx)
-    });
-    let window = RootWindow {
-        root,
-        workspace: workspace.unwrap(),
-    };
+    let window = RootWindow::new(cx);
+    let root = window.root;
     let table = window
         .update(cx, |ws, window, cx| {
             let session = OpenSpec::Path(
@@ -6897,16 +6628,8 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
     init(cx);
     for dark in [true, false] {
         for (width, zoom) in [(1000.0, 1.0), (360.0, 1.0), (1000.0, 1.5), (360.0, 1.5)] {
-            let mut workspace = None;
-            let root = cx.add_window(|window, cx| {
-                let ws = cx.new(|cx| Workspace::new(window, cx));
-                workspace = Some(ws.clone());
-                gpui_kit::component::Root::new(ws, window, cx)
-            });
-            let window = RootWindow {
-                root,
-                workspace: workspace.unwrap(),
-            };
+            let window = RootWindow::new(cx);
+            let root = window.root;
             let mut vcx = VisualTestContext::from_window(root.into(), cx);
             vcx.simulate_resize(size(px(width), px(700.0)));
             let panel = window
@@ -7060,16 +6783,8 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
     init(cx);
     for dark in [true, false] {
         for width in [1000.0, 360.0] {
-            let mut workspace = None;
-            let root = cx.add_window(|window, cx| {
-                let ws = cx.new(|cx| Workspace::new(window, cx));
-                workspace = Some(ws.clone());
-                gpui_kit::component::Root::new(ws, window, cx)
-            });
-            let window = RootWindow {
-                root,
-                workspace: workspace.unwrap(),
-            };
+            let window = RootWindow::new(cx);
+            let root = window.root;
             let mut vcx = VisualTestContext::from_window(root.into(), cx);
             vcx.simulate_resize(size(px(width), px(700.0)));
             let panel = window
@@ -7323,16 +7038,8 @@ fn column_filters_keep_input_focus_and_table_shortcuts_out_of_edits(cx: &mut Tes
     init(cx);
     for dark in [true, false] {
         for width in [900.0, 360.0] {
-            let mut workspace = None;
-            let root = cx.add_window(|window, cx| {
-                let ws = cx.new(|cx| Workspace::new(window, cx));
-                workspace = Some(ws.clone());
-                gpui_kit::component::Root::new(ws, window, cx)
-            });
-            let window = RootWindow {
-                root,
-                workspace: workspace.unwrap(),
-            };
+            let window = RootWindow::new(cx);
+            let root = window.root;
             let mut vcx = VisualTestContext::from_window(root.into(), cx);
             vcx.simulate_resize(size(px(width), px(700.0)));
             let panel = window
