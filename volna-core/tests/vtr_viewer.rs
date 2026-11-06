@@ -3,8 +3,8 @@
 use vtr::Recorder;
 
 use std::sync::Arc;
-use volna_trace::data::{SignalRef, WaveValue};
 use volna_trace::session::OpenSpec;
+use volna_trace::testing::{assert_byte_round_trip, assert_value_fixture};
 
 #[test]
 fn raw_bytes_reals_nine_states_and_time_boundaries() {
@@ -14,48 +14,9 @@ fn raw_bytes_reals_nine_states_and_time_boundaries() {
     }
     .open()
     .unwrap();
-    assert_eq!(session.info().timescale, -12);
-    assert_eq!(session.info().time_range, (5, 20));
-    let vars: Vec<_> = session.hierarchy().vars().collect();
-    let signals: Vec<_> = vars.iter().map(|v| v.signal).collect();
-    let loaded = session.load_signals(&signals);
+    let loaded = assert_value_fixture(session.as_ref());
     let bytes = loaded[0].1.as_ref().unwrap();
-    assert_eq!(bytes.index_at(4), None);
-    for result in &loaded[..4] {
-        let history = result.1.as_ref().unwrap();
-        assert_eq!(history.index_at(4), None);
-    }
-    assert_eq!(
-        bytes.value(bytes.index_at(5)),
-        WaveValue::Bytes(vec![b'a', 0, 255, b'\\', b'\n', 128])
-    );
-    assert_eq!(bytes.value(bytes.index_at(10)), WaveValue::Bytes(vec![]));
-    assert_eq!(bytes.value(bytes.index_at(20)), WaveValue::Bytes(vec![]));
-    let real = loaded[1].1.as_ref().unwrap();
-    assert_eq!(real.value(real.index_at(5)), WaveValue::Real(1.25));
-    assert_eq!(real.value(real.index_at(10)), WaveValue::Real(-2.5));
-    let logic = loaded[2].1.as_ref().unwrap();
-    assert_eq!(
-        logic.value(logic.index_at(5)),
-        WaveValue::Bits("01xzuwlh-".into())
-    );
-    assert_eq!(
-        logic.value(logic.index_at(9)),
-        WaveValue::Bits("01xzuwlh-".into())
-    );
-    assert_eq!(
-        logic.value(logic.index_at(10)),
-        WaveValue::Bits("111111111".into())
-    );
-    assert!(Arc::ptr_eq(logic, loaded[3].1.as_ref().unwrap()));
-    assert!(session.load_signal(SignalRef(u32::MAX)).is_err());
-    assert!(session.load_signals(&[]).is_empty());
     let event = loaded[4].1.as_ref().unwrap();
-    assert_eq!(event.shape(), volna_trace::data::SignalShape::Event);
-    assert_eq!(
-        (0..event.len()).map(|i| event.time(i)).collect::<Vec<_>>(),
-        vec![5, 10]
-    );
     use volna_core::{
         scene::Scene,
         theme::Theme,
@@ -109,37 +70,7 @@ fn raw_bytes_reals_nine_states_and_time_boundaries() {
     assert!(scene.prims.is_empty(), "no held event level");
 
     let file = tempfile::NamedTempFile::new().unwrap();
-    let mut writer = vtr::Writer::create(file.path()).unwrap();
-    let signal = writer
-        .signal(
-            vtr::SourceOptions::new("bytes", None),
-            vtr::SignalKind::VarLen,
-            vtr::VarType::String,
-            vtr::Direction::Implicit,
-        )
-        .unwrap();
-    writer.advance_time(5).unwrap();
-    writer
-        .emit_bytes(signal, &[b'a', 0, 255, b'\\', b'\n', 128])
-        .unwrap();
-    writer.advance_time(10).unwrap();
-    writer.emit_bytes(signal, &[]).unwrap();
-    writer.close().unwrap();
-    let vtr = OpenSpec::Path(file.path().into()).open().unwrap();
-    let twin = vtr.load_signal(vtr.hierarchy().var(0).signal).unwrap();
-    let signal = vtr.hierarchy().var(0).signal;
-    let repeated = vtr.load_signals(&[signal, SignalRef(u32::MAX), signal]);
-    assert!(repeated[1].1.is_err());
-    assert!(Arc::ptr_eq(
-        repeated[0].1.as_ref().unwrap(),
-        repeated[2].1.as_ref().unwrap()
-    ));
-    for time in [5, 9, 10, 20] {
-        assert_eq!(
-            bytes.value(bytes.index_at(time)),
-            twin.value(twin.index_at(time))
-        );
-    }
+    assert_byte_round_trip(file.path(), bytes.as_ref());
 }
 
 #[test]
