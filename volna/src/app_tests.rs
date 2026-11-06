@@ -2547,9 +2547,9 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
             .unwrap(),
         "the popup is hosted"
     );
-    vcx.simulate_keystrokes("down down down down down enter");
+    vcx.simulate_keystrokes("down down down right");
     vcx.run_until_parked();
-    vcx.simulate_keystrokes("up right down enter");
+    vcx.simulate_keystrokes("down enter");
     vcx.run_until_parked();
     assert_eq!(heights(&mut vcx), [2, 2, 2]);
     window
@@ -3144,11 +3144,6 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
                 Some(window),
                 cx,
             );
-            ws.dispatch(
-                Command::MenuSelect(panel, volna_core::wave::model::MenuAction::OpenFormat),
-                Some(window),
-                cx,
-            );
         })
         .unwrap();
     vcx.run_until_parked();
@@ -3190,21 +3185,9 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
         })
         .unwrap();
     vcx.run_until_parked();
-    vcx.simulate_keystrokes("down down down down down enter");
+    vcx.simulate_keystrokes("down down down right");
     vcx.run_until_parked();
-    window
-        .update(&mut vcx, |ws, _, _| {
-            assert_eq!(
-                ws.app.menu().unwrap().kind,
-                volna_core::wave::WaveMenuKind::Format
-            );
-            assert!(
-                ws.wave_menu.is_some(),
-                "dismissing the context menu preserves its replacement"
-            );
-        })
-        .unwrap();
-    vcx.simulate_keystrokes("down down down down enter");
+    vcx.simulate_keystrokes("down down enter");
     vcx.run_until_parked();
     assert_eq!(
         row(&mut vcx),
@@ -3215,7 +3198,7 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn signal_format_menu_fits_narrow_windows_in_both_themes(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
-    use volna_core::wave::{analog::AnalogDraw, model::MenuAction};
+    use volna_core::wave::analog::AnalogDraw;
     use volna_trace::data::SignalShape;
 
     init(cx);
@@ -3246,13 +3229,11 @@ fn signal_format_menu_fits_narrow_windows_in_both_themes(cx: &mut TestAppContext
                 .update(&mut vcx, |ws, window, cx| {
                     let panel = ws.app.panels.focused_id();
                     ws.dispatch(Command::OpenSignalMenu(panel), Some(window), cx);
-                    ws.dispatch(
-                        Command::MenuSelect(panel, MenuAction::OpenFormat),
-                        Some(window),
-                        cx,
-                    );
                 })
                 .unwrap();
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            vcx.simulate_keystrokes("down down down");
             vcx.run_until_parked();
             vcx.update(|window, cx| window.draw(cx).clear(cx));
             let choice = vcx.debug_bounds("waveform-steps").unwrap();
@@ -3302,11 +3283,6 @@ fn color_submenu_and_palette_commands_colour_the_selection(cx: &mut TestAppConte
             ws.app.panels.focused_waves_mut().unwrap().selected = [0, 1].into();
             let panel = ws.app.panels.focused_id();
             ws.dispatch(Command::OpenSignalMenu(panel), Some(window), cx);
-            ws.dispatch(
-                Command::MenuSelect(panel, volna_core::wave::model::MenuAction::OpenFormat),
-                Some(window),
-                cx,
-            );
         })
         .unwrap();
     vcx.run_until_parked();
@@ -3316,7 +3292,7 @@ fn color_submenu_and_palette_commands_colour_the_selection(cx: &mut TestAppConte
             assert!(ws.wave_menu.is_some(), "the popup is hosted");
             let menu = ws.app.panels.focused_waves().unwrap().menu.as_ref().unwrap();
             assert!(menu.entries.iter().any(
-                |e| matches!(e, MenuEntry::Submenu { label, items } if label.starts_with("Color") && items.len() == 6)
+                |e| matches!(e, MenuEntry::Submenu { label, items, .. } if label.starts_with("Color") && items.len() == 6)
             ));
         })
         .unwrap();
@@ -3420,17 +3396,17 @@ fn shift_a_and_the_group_menu_stack_and_unstack_a_group(cx: &mut TestAppContext)
                 .find(|i| i.action == MenuAction::Stack(true))
                 .unwrap();
             assert_eq!(
-                (stacked.label.as_str(), stacked.checked),
+                (stacked.label.as_str(), stacked.is_checked()),
                 ("Stacked area", true)
             );
             assert!(
                 menu.entries
                     .iter()
-                    .any(|e| matches!(e, MenuEntry::Label(l) if l == "Draw"))
+                    .any(|e| matches!(e, MenuEntry::Submenu { label, .. } if label.starts_with("Group display")))
             );
             let peak = menu.items().find(|i| i.label == "Peak of total").unwrap();
             assert_eq!(
-                (&peak.action, peak.checked),
+                (&peak.action, peak.is_checked()),
                 (&MenuAction::Peak(false), true)
             );
             let panel = ws.app.panels.focused_id();
@@ -5338,12 +5314,12 @@ fn shift_o_toggles_group_overlays_and_hosts_their_menu(cx: &mut TestAppContext) 
                 menu.items()
                     .find(|i| i.action == MenuAction::Overlaid)
                     .unwrap()
-                    .checked
+                    .is_checked()
             );
             assert!(
                 menu.entries
                     .iter()
-                    .any(|e| matches!(e, MenuEntry::Label(l) if l == "Shared range"))
+                    .any(|e| matches!(e, MenuEntry::Submenu { label, .. } if label.starts_with("Group vertical scale")))
             );
             let panel = ws.app.panels.focused_id();
             ws.dispatch(

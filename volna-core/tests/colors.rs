@@ -132,14 +132,14 @@ fn color_menu(app: &App, id: PanelId) -> Vec<(Option<Tint>, bool)> {
         .entries
         .iter()
         .find_map(|e| match e {
-            MenuEntry::Submenu { label, items } if label.starts_with("Color") => Some(items),
+            MenuEntry::Submenu { label, items, .. } if label.starts_with("Color") => Some(items),
             _ => None,
         })
         .expect("Color submenu");
     items
         .iter()
         .map(|item| match item.action {
-            MenuAction::Tint(t) => (t, item.checked),
+            MenuAction::Tint(t) => (t, item.is_checked()),
             _ => panic!("only colours in the Color submenu"),
         })
         .collect()
@@ -154,7 +154,6 @@ fn the_menu_colours_the_selection_in_one_step_and_checks_only_shared_colours() {
     let (_f, mut app, id) = app();
     select(&mut app, id, &[VALID, DATA]);
     app.handle(Command::OpenSignalMenu(id));
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
     let choices = color_menu(&app, id);
     assert_eq!(
         choices,
@@ -183,12 +182,10 @@ fn the_menu_colours_the_selection_in_one_step_and_checks_only_shared_colours() {
 
     select(&mut app, id, &[CLK, VALID]);
     app.handle(Command::OpenSignalMenu(id));
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
     assert!(color_menu(&app, id).iter().all(|(_, checked)| !checked));
     app.handle(Command::MenuDismiss(id));
     select(&mut app, id, &[VALID, DATA]);
     app.handle(Command::OpenSignalMenu(id));
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
     assert_eq!(
         color_menu(&app, id)
             .into_iter()

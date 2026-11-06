@@ -59,6 +59,11 @@ pub(crate) fn commands(app: &CoreApp, query: &str) -> Vec<(String, Box<dyn Actio
             Box::new(app::Redo),
         ),
     ];
+    all.push(("Expand All Groups".into(), Box::new(app::ExpandAllGroups)));
+    all.push((
+        "Collapse All Groups".into(),
+        Box::new(app::CollapseAllGroups),
+    ));
     all.extend(
         fixed_commands()
             .into_iter()

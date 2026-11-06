@@ -146,7 +146,7 @@ fn draws(app: &App, id: PanelId) -> Vec<Option<AnalogDraw>> {
 
 fn set_format(app: &mut App, id: PanelId, row: usize, format: &str) {
     let w = app.panels.waves_mut(id).unwrap();
-    w.open_format_menu(&app.doc, row, volna_core::geometry::Point::default());
+    w.open_signal_menu(&app.doc, row, volna_core::geometry::Point::default());
     w.menu.as_mut().unwrap().row = row;
     let (selected, anchor) = (std::mem::take(&mut w.selected), w.anchor);
     w.menu_select(
@@ -285,7 +285,7 @@ fn the_shared_format_menu_changes_waveforms_and_vertical_scale() {
             .as_ref()
             .unwrap()
             .items()
-            .filter(|i| i.checked)
+            .filter(|i| i.is_checked())
             .map(|i| i.action.clone())
             .collect()
     };
@@ -309,14 +309,11 @@ fn the_shared_format_menu_changes_waveforms_and_vertical_scale() {
             .1
             .origin;
         let doc = &app.doc;
-        w.open_format_menu(doc, row, p);
+        w.open_signal_menu(doc, row, p);
     };
 
     open_format(&mut app, BUS);
-    assert_eq!(
-        labels(&app),
-        ["Format signal", "Waveform · Digital", "Appearance"]
-    );
+    assert!(app.panels.waves(id).unwrap().menu.as_ref().unwrap().entries.iter().any(|entry| matches!(entry, MenuEntry::Submenu { label, value, .. } if label == "Waveform" && value.as_deref() == Some("Digital"))));
     assert!(checked(&app).contains(&MenuAction::Draw(None)));
     app.handle(Command::MenuSelect(
         id,
@@ -325,10 +322,7 @@ fn the_shared_format_menu_changes_waveforms_and_vertical_scale() {
     assert_eq!(draws(&app, id)[BUS], Some(AnalogDraw::Linear));
 
     open_format(&mut app, BUS);
-    assert_eq!(
-        labels(&app),
-        ["Format signal", "Waveform · Analog lines", "Appearance"]
-    );
+    assert!(app.panels.waves(id).unwrap().menu.as_ref().unwrap().entries.iter().any(|entry| matches!(entry, MenuEntry::Submenu { label, value, .. } if label == "Waveform" && value.as_deref() == Some("Analog — interpolated"))));
     let items: Vec<_> = app
         .panels
         .waves(id)
@@ -367,7 +361,7 @@ fn the_shared_format_menu_changes_waveforms_and_vertical_scale() {
         .collect();
     assert!(!items.contains(&MenuAction::Range(AnalogRange::Type)));
     open_format(&mut app, BIT);
-    assert_eq!(labels(&app), ["Format signal", "Appearance"]);
+    assert_eq!(labels(&app), ["(top).valid"]);
     app.handle(Command::MenuDismiss(id));
 
     select(&mut app, id, &[BUS, REAL, BIT]);
@@ -380,10 +374,9 @@ fn the_shared_format_menu_changes_waveforms_and_vertical_scale() {
             .as_ref()
             .unwrap()
             .items()
-            .any(|i| i.action == MenuAction::OpenFormat)
+            .any(|i| matches!(i.action, MenuAction::Draw(_)))
     );
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
-    assert_eq!(labels(&app)[0], "Format 3 signals");
+    assert_eq!(labels(&app)[0], "3 signals selected");
     app.handle(Command::MenuSelect(id, MenuAction::Draw(None)));
     assert_eq!(draws(&app, id), [None, None, None]);
     assert_eq!(heights(&app, id), [1, 1, 1], "grown rows get their 1× back");
@@ -403,7 +396,7 @@ fn bulk_formatting_reports_mixed_settings_and_changes_only_the_chosen_setting() 
         w.set_tint(&[BUS], Some(Tint::Pink));
         w.set_tint(&[REAL], Some(Tint::Cyan));
         w.set_analog_range(&[BUS], AnalogRange::Window);
-        w.open_format_menu(&app.doc, BUS, Point::default());
+        w.open_signal_menu(&app.doc, BUS, Point::default());
         w.menu_select(&app.doc, &MenuAction::RowHeight(RowHeight::PRESETS[3]));
     }
     let settings = |app: &App| {
@@ -426,30 +419,23 @@ fn bulk_formatting_reports_mixed_settings_and_changes_only_the_chosen_setting() 
     let before = settings(&app);
     select(&mut app, id, &[BUS, REAL, BIT]);
     app.handle(Command::OpenSignalMenu(id));
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
     let menu = app.panels.waves(id).unwrap().menu.as_ref().unwrap();
     assert!(
         menu.entries
-            .contains(&MenuEntry::Label("Format 3 signals".into()))
+            .contains(&MenuEntry::Label("3 signals selected".into()))
     );
+    assert!(menu.entries.iter().any(
+        |entry| matches!(entry, MenuEntry::Submenu { label, value, .. } if label == "Waveform" && value.as_deref() == Some("Mixed"))
+    ));
+    assert!(menu.entries.iter().any(
+        |entry| matches!(entry, MenuEntry::Submenu { label, value, .. } if label == "Value format" && value.as_deref() == Some("Mixed"))
+    ));
     assert!(
         menu.entries
-            .contains(&MenuEntry::Label("Waveform · Mixed".into()))
+            .iter().any(|entry| matches!(entry, MenuEntry::Submenu { label, description: Some(reason), items, .. } if label.starts_with("Value format") && items.is_empty() && reason.contains("every selected signal")))
     );
-    assert!(
-        menu.entries
-            .contains(&MenuEntry::Label("Value format · Mixed".into()))
-    );
-    assert!(
-        menu.entries
-            .contains(&MenuEntry::Label("No shared value format".into()))
-    );
-    for setting in [
-        "Vertical scale · Mixed",
-        "Color · Mixed",
-        "Row height · Mixed",
-    ] {
-        assert!(menu.entries.iter().any(|entry| matches!(entry, MenuEntry::Submenu { label, items } if label == setting && items.iter().all(|i| !i.checked))));
+    for setting in ["Vertical scale", "Color", "Row height"] {
+        assert!(menu.entries.iter().any(|entry| matches!(entry, MenuEntry::Submenu { label, value, items, .. } if label == setting && value.as_deref() == Some("Mixed") && items.iter().all(|i| !i.is_checked()))));
     }
     app.handle(Command::MenuSelect(
         id,
@@ -462,7 +448,6 @@ fn bulk_formatting_reports_mixed_settings_and_changes_only_the_chosen_setting() 
     assert_eq!(settings(&app), before);
 
     app.handle(Command::OpenSignalMenu(id));
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
     app.handle(Command::MenuSelect(id, MenuAction::Tint(Some(Tint::Grey))));
     for (i, (format, tint, height, range)) in settings(&app).into_iter().enumerate() {
         assert_eq!(tint, Some(Tint::Grey));
@@ -481,7 +466,6 @@ fn scalar_bits_keep_appearance_controls_without_value_format_choices() {
     select(&mut app, id, &[BIT]);
     let undo_before = app.undo_label().map(str::to_owned);
     app.handle(Command::OpenSignalMenu(id));
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
     let menu = app.panels.waves(id).unwrap().menu.as_ref().unwrap();
     assert!(!menu.entries.iter().any(|entry| match entry {
         MenuEntry::Label(label) | MenuEntry::Submenu { label, .. } =>
@@ -503,7 +487,6 @@ fn scalar_bits_keep_appearance_controls_without_value_format_choices() {
     assert_eq!(app.panels.waves(id).unwrap().items()[BIT].tint(), None);
 
     app.handle(Command::OpenSignalMenu(id));
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
     app.handle(Command::MenuSelect(
         id,
         MenuAction::RowHeight(RowHeight::PRESETS[1]),
@@ -530,7 +513,6 @@ fn mixed_bits_and_buses_have_no_shared_format_and_cycling_changes_only_the_bus()
     let (_file, mut app, id) = app();
     select(&mut app, id, &[BUS, BIT]);
     app.handle(Command::OpenSignalMenu(id));
-    app.handle(Command::MenuSelect(id, MenuAction::OpenFormat));
     let menu = app.panels.waves(id).unwrap().menu.as_ref().unwrap();
     assert!(
         !menu
@@ -539,7 +521,7 @@ fn mixed_bits_and_buses_have_no_shared_format_and_cycling_changes_only_the_bus()
     );
     assert!(
         menu.entries
-            .contains(&MenuEntry::Label("No shared value format".into()))
+            .iter().any(|entry| matches!(entry, MenuEntry::Submenu { label, description: Some(reason), items, .. } if label.starts_with("Value format") && items.is_empty() && reason.contains("every selected signal")))
     );
     let initial_draws = draws(&app, id);
     let initial_heights = heights(&app, id);
@@ -1098,4 +1080,93 @@ fn waveform_spacing_applies_live_without_changing_row_geometry() {
         assert_eq!(row_rect(&app, id, REAL), real);
         assert_eq!(row_rect(&app, id, BIT), bit);
     }
+}
+
+#[test]
+fn a_group_and_a_standalone_signal_keep_independent_display_controls() {
+    use volna_core::wave::model::GroupStyle;
+
+    let (_file, mut app, id) = app();
+    select(&mut app, id, &[BUS]);
+    app.handle(Command::Action(Action::ToggleAnalog));
+    app.handle(Command::Action(Action::GroupSelection));
+    frame(&mut app, id);
+    let click = |app: &mut App, row, modifiers| {
+        let layout = app.panels.waves(id).unwrap().last_layout();
+        let position = point(
+            layout.names.left() + 60.0,
+            layout.row_y(row) + layout.row_height(row) / 2.0,
+        );
+        app.handle(Command::Pointer(
+            id,
+            PointerEvent::Down {
+                position,
+                button: MouseButton::Left,
+                modifiers,
+            },
+        ));
+        app.handle(Command::Pointer(id, PointerEvent::Up));
+    };
+    click(&mut app, 0, Modifiers::default());
+    click(
+        &mut app,
+        2,
+        Modifiers {
+            control: !cfg!(target_os = "macos"),
+            platform: cfg!(target_os = "macos"),
+            ..Modifiers::default()
+        },
+    );
+    app.handle(Command::OpenSignalMenu(id));
+    let menu = app.panels.waves(id).unwrap().menu.as_ref().unwrap();
+    for setting in ["Signal waveform", "Signal vertical scale", "Group display"] {
+        assert!(
+            menu.entries
+                .iter()
+                .any(|entry| matches!(entry, MenuEntry::Submenu { label, .. } if label == setting)),
+            "missing {setting}"
+        );
+    }
+    app.handle(Command::MenuSelect(
+        id,
+        MenuAction::Draw(Some(AnalogDraw::Linear)),
+    ));
+    app.handle(Command::OpenSignalMenu(id));
+    app.handle(Command::MenuSelect(
+        id,
+        MenuAction::Range(AnalogRange::Window),
+    ));
+    let waves = app.panels.waves(id).unwrap();
+    let standalone = waves.signal(2).unwrap().analog.as_ref().unwrap();
+    assert_eq!(
+        (standalone.draw, standalone.range),
+        (AnalogDraw::Linear, AnalogRange::Window)
+    );
+    let contained = waves.signal(1).unwrap().analog.as_ref().unwrap();
+    assert_eq!(
+        (contained.draw, contained.range),
+        (AnalogDraw::Step, AnalogRange::Trace)
+    );
+    assert_eq!(
+        waves.items()[0].group().unwrap().style,
+        GroupStyle::Activity
+    );
+
+    app.handle(Command::OpenSignalMenu(id));
+    app.handle(Command::MenuSelect(id, MenuAction::Overlaid));
+    let waves = app.panels.waves(id).unwrap();
+    assert!(waves.items()[0].group().unwrap().is_overlaid());
+    let standalone = waves.signal(2).unwrap().analog.as_ref().unwrap();
+    assert_eq!(
+        (standalone.draw, standalone.range),
+        (AnalogDraw::Linear, AnalogRange::Window)
+    );
+    app.handle(Command::Undo);
+    app.handle(Command::Undo);
+    let waves = app.panels.waves(id).unwrap();
+    let standalone = waves.signal(2).unwrap().analog.as_ref().unwrap();
+    assert_eq!(
+        (standalone.draw, standalone.range),
+        (AnalogDraw::Step, AnalogRange::Trace)
+    );
 }

@@ -139,8 +139,9 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
             4000
         );
     });
-    vcx.simulate_keystrokes("shift-f10 down enter");
+    vcx.simulate_keystrokes("shift-f10");
     vcx.run_until_parked();
+    click(&mut vcx, "wave-menu-derived");
     ws.read_with(&vcx, |ws, _| {
         assert!(ws.app.derived_editor.as_ref().unwrap().editing);
     });

@@ -25,7 +25,6 @@ use volna_core::app::{Action, ChromeDrag, Command, Event, SettingsCommand};
 use volna_core::document::TraceState;
 use volna_core::settings::ZoomStep;
 use volna_core::trace::{TraceId, Traced};
-use volna_core::wave::MenuEntry;
 use volna_core::workspace::recent::{RecentCommand, RecentKey, RecentKind};
 use volna_core::{App as CoreApp, FontRole, Instant};
 use volna_trace::data::transactions::TrackRef;
@@ -139,6 +138,8 @@ actions!(
         RenameGroup,
         FoldGroupDeep,
         UnfoldGroupDeep,
+        CollapseAllGroups,
+        ExpandAllGroups,
     ]
 );
 
@@ -671,6 +672,8 @@ pub(crate) fn menus(
                 MenuItem::action("Follow Shared Viewport", ToggleViewportLink),
                 MenuItem::action("Follow Shared Cursor", ToggleCursorLink),
                 MenuItem::action("Collapse / Expand Scopes", ToggleScopes),
+                MenuItem::action("Expand All Groups", ExpandAllGroups),
+                MenuItem::action("Collapse All Groups", CollapseAllGroups),
                 MenuItem::separator(),
                 MenuItem::action("Zoom In", ZoomIn),
                 MenuItem::action("Zoom Out", ZoomOut),
@@ -1193,104 +1196,20 @@ impl Workspace {
         let generation = self.app.doc.generation();
         let position = point(px(m.position.x), px(m.position.y));
         let workspace = cx.entity().downgrade();
-        let item = move |item: &volna_core::wave::MenuItem| {
-            let workspace = workspace.clone();
-            let id = item.action.clone();
-            let label = match &item.badge {
-                Some(badge) => format!("{} ({badge})", item.label),
-                None => item.label.clone(),
-            };
-            let entry = match &item.action {
-                volna_core::wave::model::MenuAction::Draw(draw) => {
-                    let draw = *draw;
-                    let (selector, icon, hint) = match draw {
-                        None => (
-                            "waveform-digital",
-                            IconName::WaveDigital,
-                            "Show digital states and values",
-                        ),
-                        Some(volna_core::wave::analog::AnalogDraw::Step) => (
-                            "waveform-steps",
-                            IconName::WaveStep,
-                            "Hold each sample until the next sample",
-                        ),
-                        Some(volna_core::wave::analog::AnalogDraw::Linear) => (
-                            "waveform-lines",
-                            IconName::WaveLinear,
-                            "Interpolate between samples with straight lines",
-                        ),
-                    };
-                    PopupMenuItem::element(move |_, cx| {
-                        div()
-                            .id(selector)
-                            .debug_selector(move || selector.into())
-                            .flex()
-                            .items_center()
-                            .gap(theme(cx).px(8.0))
-                            .aria_label(label.clone())
-                            .aria_description(hint)
-                            .child(Icon::new(icon).inherit_color())
-                            .child(label.clone())
-                            .tooltip_show_delay(crate::ui::tooltip::delay(cx))
-                            .tooltip(move |window, cx| Tooltip::new(hint).build(window, cx))
-                    })
-                }
-                volna_core::wave::model::MenuAction::Tint(tint) => {
-                    let tint = *tint;
-                    PopupMenuItem::element(move |_, cx| {
-                        let t = theme(cx);
-                        let swatch = t.px(10.0);
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(t.px(8.0))
-                            .child(div().size(swatch).rounded(t.px(2.0)).bg(t.ink(tint)))
-                            .child(label.clone())
-                    })
-                }
-                _ => PopupMenuItem::new(label),
-            };
-            entry.checked(item.checked).on_click(move |_, window, cx| {
-                let command = Command::MenuSelect(panel, id.clone());
-                workspace
-                    .update(cx, |this, cx| {
-                        this.dispatch_if_current(generation, command, Some(window), cx);
-                    })
-                    .ok();
-            })
-        };
-        let entries = m.entries.clone();
         let focus = self
             .panel_focus(panel, cx)
             .unwrap_or_else(|| self.waves_focus.clone());
-        let min_w = theme(cx).px(200.0);
-        let format_width = (m.kind == volna_core::wave::WaveMenuKind::Format).then(|| {
-            theme(cx)
-                .px(300.0)
-                .min((window.viewport_size().width - theme(cx).px(16.0)).max(px(0.0)))
-        });
-        let menu = PopupMenu::build(window, cx, move |mut menu, window, cx| {
-            for entry in &entries {
-                menu = match entry {
-                    MenuEntry::Item(entry) => menu.item(item(entry)),
-                    MenuEntry::Separator => menu.separator(),
-                    MenuEntry::Label(label) => menu.label(label.clone()),
-                    MenuEntry::Submenu { label, items } => {
-                        let (items, item, focus) = (items.clone(), item.clone(), focus.clone());
-                        menu.submenu(label.clone(), window, cx, move |mut sub, _, _| {
-                            for entry in &items {
-                                sub = sub.item(item(entry));
-                            }
-                            sub.action_context(focus.clone())
-                        })
-                    }
-                };
-            }
-            menu = match format_width {
-                Some(width) => menu.min_w(width).max_w(width),
-                None => menu.min_w(min_w),
-            };
-            menu.action_context(focus.clone())
+        let menu = crate::wave_menu::build(m, focus, window, cx, move |action, window, cx| {
+            workspace
+                .update(cx, |this, cx| {
+                    this.dispatch_if_current(
+                        generation,
+                        Command::MenuSelect(panel, action),
+                        Some(window),
+                        cx,
+                    );
+                })
+                .ok();
         });
         cx.subscribe(&menu, move |this, popup, _: &gpui_kit::DismissEvent, cx| {
             if this

@@ -12,6 +12,7 @@ pub mod lane;
 pub mod layout;
 pub mod marks;
 mod measurement;
+mod menu;
 pub mod model;
 pub mod overlaid;
 pub mod overlay;
@@ -26,8 +27,8 @@ pub mod viewport;
 
 pub use layout::WaveLayout;
 pub use model::{
-    DisplayedSignal, Drag, GroupRow, GroupStyle, MenuEntry, MenuItem, PointerEvent, RowHeight,
-    WaveMenu, WaveMenuKind, WaveModel, WaveRow,
+    DisplayedSignal, Drag, GroupRow, GroupStyle, MenuEntry, MenuItem, MenuItemState, PointerEvent,
+    RowHeight, WaveMenu, WaveMenuKind, WaveModel, WaveRow,
 };
 pub use tint::Tint;
 pub use tree::Entry;

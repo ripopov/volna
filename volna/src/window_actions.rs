@@ -298,6 +298,8 @@ impl Workspace {
                 RenameGroup,
                 FoldGroupDeep,
                 UnfoldGroupDeep,
+                CollapseAllGroups,
+                ExpandAllGroups,
             ]
         );
         #[cfg(not(target_family = "wasm"))]

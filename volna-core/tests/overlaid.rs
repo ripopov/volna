@@ -251,7 +251,7 @@ fn menus_hide_isolate_restore_and_undo_without_removing_member_rows() {
         (
             overlay.label.as_str(),
             overlay.badge.as_deref(),
-            overlay.checked
+            overlay.is_checked()
         ),
         ("Overlaid lines", Some("⇧O"), true)
     );
@@ -260,9 +260,9 @@ fn menus_hide_isolate_restore_and_undo_without_removing_member_rows() {
             .items()
             .find(|i| i.action == MenuAction::Stack(false))
             .unwrap()
-            .checked
+            .is_checked()
     );
-    assert!(menu.items().any(|i| i.label == "Visible window"));
+    assert!(menu.items().any(|i| i.label == "Visible time window"));
     w.selected.clear();
     choose(&mut app, id, 2, MenuAction::OverlayHidden(true));
     assert!(

@@ -324,7 +324,7 @@ impl DisplayedSignal {
         }
     }
 
-    fn cursor_value_view(
+    pub(super) fn cursor_value_view(
         &self,
         cursor: Option<u64>,
     ) -> Option<volna_trace::data::value_view::ValueView<'_>> {
@@ -855,7 +855,8 @@ pub enum Drag {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
     Derived,
-    OpenFormat,
+    CopyValues,
+    CopyPaths,
     Format(String),
     RetryLoad,
     OpenTable,
@@ -874,7 +875,6 @@ pub enum MenuAction {
     Ungroup,
     Rename,
     Fold(bool),
-    FoldAll(bool),
     ReverseBits,
     AddSlice,
     AddIndependent,
@@ -891,18 +891,31 @@ pub enum MenuAction {
     ShowAllOverlay,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuItemState {
+    Command,
+    Choice { selected: bool },
+    Toggle { checked: bool },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuItem {
     pub action: MenuAction,
     pub label: String,
     pub badge: Option<String>,
-    pub checked: bool,
+    pub state: MenuItemState,
+    pub disabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuEntry {
     Item(MenuItem),
-    Submenu { label: String, items: Vec<MenuItem> },
+    Submenu {
+        label: String,
+        value: Option<String>,
+        description: Option<String>,
+        items: Vec<MenuItem>,
+    },
     Label(String),
     Separator,
 }
@@ -913,14 +926,37 @@ impl MenuItem {
             action,
             label: label.into(),
             badge: None,
-            checked: false,
+            state: MenuItemState::Command,
+            disabled: false,
+        }
+    }
+
+    pub(super) fn choice(action: MenuAction, label: &str, selected: bool) -> Self {
+        Self {
+            state: MenuItemState::Choice { selected },
+            ..Self::plain(action, label)
+        }
+    }
+
+    pub(super) fn toggle(action: MenuAction, label: &str, checked: bool) -> Self {
+        Self {
+            state: MenuItemState::Toggle { checked },
+            ..Self::plain(action, label)
+        }
+    }
+
+    #[must_use]
+    pub fn is_checked(&self) -> bool {
+        match self.state {
+            MenuItemState::Command => false,
+            MenuItemState::Choice { selected } => selected,
+            MenuItemState::Toggle { checked } => checked,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WaveMenuKind {
-    Format,
     Signal,
     Ruler,
     Lane,
@@ -2047,7 +2083,7 @@ impl WaveModel {
         }
     }
 
-    fn select_row(&mut self, row: usize, modifiers: Modifiers) {
+    pub(super) fn select_row(&mut self, row: usize, modifiers: Modifiers) {
         if row >= self.items.len() {
             return;
         }
@@ -2707,293 +2743,6 @@ impl WaveModel {
         self.set_stacked(&groups, on)
     }
 
-    pub fn open_signal_menu(&mut self, doc: &Document, row: usize, position: Point) {
-        if row >= self.items.len() {
-            return;
-        }
-        if !self.selected.contains(&row) {
-            self.select_row(row, Modifiers::default());
-        }
-        let targets = self.menu_rows(row);
-        let pipeline_track = self.items[row].row.lane_track().filter(|&track| {
-            !doc.clocks.is_clock_track(track)
-                && doc.session(track.trace).is_some_and(|session| {
-                    session.capabilities().transactions
-                        && session.tracks().iter().any(|t| t.id == track.item)
-                })
-        });
-        self.menu = Some(WaveMenu {
-            kind: WaveMenuKind::Signal,
-            row,
-            position,
-            entries: vec![
-                MenuEntry::Item(MenuItem::plain(
-                    MenuAction::OpenTable,
-                    if self
-                        .signal(row)
-                        .is_some_and(|s| s.source.computed().is_some())
-                    {
-                        "Open recorded inputs in table"
-                    } else if self.signal(row).is_some_and(|s| s.projection.is_some()) {
-                        "Open source signal in table"
-                    } else {
-                        "Open in table"
-                    },
-                )),
-                MenuEntry::Separator,
-                MenuEntry::Item(MenuItem::plain(MenuAction::CutSignals, "Cut")),
-                MenuEntry::Item(MenuItem::plain(MenuAction::CopySignals, "Copy")),
-            ],
-        });
-        let menu = self.menu.as_mut().expect("just opened");
-        if let Some(signal) = self.items[row]
-            .signal()
-            .filter(|s| s.numeric_kind().is_some() || s.source.computed().is_some())
-        {
-            menu.entries.insert(
-                0,
-                MenuEntry::Item(MenuItem::plain(
-                    MenuAction::Derived,
-                    if signal.source.computed().is_some() {
-                        "Edit derived signal…"
-                    } else {
-                        "Derive signal…"
-                    },
-                )),
-            );
-        }
-        if let Some(lane) = self.items[row]
-            .lane()
-            .filter(|lane| lane.generator(doc).is_some_and(|g| g.points().is_none()))
-        {
-            menu.entries.extend([
-                MenuEntry::Item(MenuItem {
-                    checked: lane.occupancy,
-                    ..MenuItem::plain(MenuAction::Occupancy(!lane.occupancy), "Occupancy")
-                }),
-                MenuEntry::Item(MenuItem::plain(MenuAction::FitHeight, "Fit height")),
-            ]);
-        }
-        if let Some(track) = pipeline_track {
-            menu.entries.insert(
-                1,
-                MenuEntry::Item(MenuItem::plain(
-                    MenuAction::OpenPipeline(track),
-                    "Open in Pipeline view",
-                )),
-            );
-        }
-        if !doc.copied_rows.is_empty() {
-            menu.entries.push(MenuEntry::Item(MenuItem::plain(
-                MenuAction::PasteSignals,
-                "Paste",
-            )));
-        }
-        let format_count = self.format_rows(row).len();
-        if format_count > 0 {
-            self.menu.as_mut().expect("just opened").entries.extend([
-                MenuEntry::Separator,
-                MenuEntry::Item(MenuItem::plain(
-                    MenuAction::OpenFormat,
-                    if format_count == 1 {
-                        "Format signal…"
-                    } else {
-                        "Format signals…"
-                    },
-                )),
-            ]);
-        }
-        let group = self.items[row].group();
-        let any_group = targets.iter().any(|&r| self.items[r].is_group());
-        let overlay_member = self.overlaid_of(row).is_some()
-            && self.signal(row).is_some_and(|s| s.numeric_kind().is_some());
-        let overlay_hidden = self.signal(row).is_some_and(|s| s.overlay_hidden);
-        let menu = self.menu.as_mut().expect("just opened");
-        if overlay_member {
-            menu.entries.extend([
-                MenuEntry::Separator,
-                MenuEntry::Label("Overlay".into()),
-                MenuEntry::Item(MenuItem {
-                    checked: !overlay_hidden,
-                    ..MenuItem::plain(
-                        MenuAction::OverlayHidden(!overlay_hidden),
-                        "Show in overlay",
-                    )
-                }),
-                MenuEntry::Item(MenuItem::plain(
-                    MenuAction::IsolateOverlay,
-                    "Isolate in overlay",
-                )),
-                MenuEntry::Item(MenuItem::plain(
-                    MenuAction::ShowAllOverlay,
-                    "Show all overlay lines",
-                )),
-            ]);
-        }
-        if any_group {
-            let groups: Vec<&GroupRow> = targets
-                .iter()
-                .filter_map(|&r| self.items[r].group())
-                .collect();
-            let all = |style: GroupStyle| {
-                groups.iter().all(|g| match style {
-                    GroupStyle::Stack { .. } => g.is_stacked(),
-                    GroupStyle::Overlaid { .. } => g.is_overlaid(),
-                    GroupStyle::Activity => g.style == GroupStyle::Activity,
-                })
-            };
-            menu.entries.extend([
-                MenuEntry::Separator,
-                MenuEntry::Label("Draw".into()),
-                MenuEntry::Item(MenuItem {
-                    checked: all(GroupStyle::Activity),
-                    ..MenuItem::plain(MenuAction::Stack(false), "Activity")
-                }),
-                MenuEntry::Item(MenuItem {
-                    badge: Some("⇧A".into()),
-                    checked: all(GroupStyle::Stack { peak: true }),
-                    ..MenuItem::plain(MenuAction::Stack(true), "Stacked area")
-                }),
-                MenuEntry::Item(MenuItem {
-                    badge: Some("⇧O".into()),
-                    checked: groups.iter().all(|g| g.is_overlaid()),
-                    ..MenuItem::plain(MenuAction::Overlaid, "Overlaid lines")
-                }),
-            ]);
-            let overlays: Vec<&GroupRow> =
-                groups.iter().copied().filter(|g| g.is_overlaid()).collect();
-            if !overlays.is_empty() {
-                menu.entries
-                    .extend([MenuEntry::Separator, MenuEntry::Label("Lines".into())]);
-                for (draw, label) in [(AnalogDraw::Step, "Step"), (AnalogDraw::Linear, "Linear")] {
-                    menu.entries.push(MenuEntry::Item(MenuItem {
-                        checked: overlays.iter().all(|g| matches!(g.style, GroupStyle::Overlaid { draw: d, .. } if d == draw)),
-                        ..MenuItem::plain(MenuAction::OverlaidDraw(draw), label)
-                    }));
-                }
-                menu.entries.extend([
-                    MenuEntry::Separator,
-                    MenuEntry::Label("Shared range".into()),
-                ]);
-                for (range, label) in [
-                    (AnalogRange::Trace, "Whole trace"),
-                    (AnalogRange::Window, "Visible window"),
-                    (AnalogRange::Type, "Type limits"),
-                ] {
-                    menu.entries.push(MenuEntry::Item(MenuItem {
-                        checked: overlays.iter().all(|g| matches!(g.style, GroupStyle::Overlaid { range: r, .. } if r == range)),
-                        ..MenuItem::plain(MenuAction::OverlaidRange(range), label)
-                    }));
-                }
-                menu.entries.push(MenuEntry::Item(MenuItem::plain(
-                    MenuAction::ShowAllOverlay,
-                    "Show all overlay lines",
-                )));
-            }
-            let stacked: Vec<&&GroupRow> = groups.iter().filter(|g| g.is_stacked()).collect();
-            if !stacked.is_empty() {
-                let checked = stacked.iter().all(|g| g.shows_peak());
-                menu.entries.push(MenuEntry::Item(MenuItem {
-                    checked,
-                    ..MenuItem::plain(MenuAction::Peak(!checked), "Peak of total")
-                }));
-            }
-        }
-        menu.entries.extend([
-            MenuEntry::Separator,
-            MenuEntry::Item(MenuItem {
-                badge: Some("G".into()),
-                ..MenuItem::plain(MenuAction::Group, "Group selection")
-            }),
-        ]);
-        if any_group {
-            menu.entries.push(MenuEntry::Item(MenuItem {
-                badge: Some("⇧G".into()),
-                ..MenuItem::plain(MenuAction::Ungroup, "Ungroup")
-            }));
-        }
-        if let Some(signal) = self.items[row].signal() {
-            if let Some(bus) = signal.bus {
-                menu.entries.push(MenuEntry::Item(MenuItem::plain(
-                    MenuAction::Fold(!bus.collapsed),
-                    if bus.collapsed {
-                        "Expand bits"
-                    } else {
-                        "Collapse bits"
-                    },
-                )));
-                menu.entries.push(MenuEntry::Item(MenuItem::plain(
-                    MenuAction::AddSlice,
-                    "Add bit or slice…",
-                )));
-                if bus.initialized {
-                    menu.entries.push(MenuEntry::Item(MenuItem::plain(
-                        MenuAction::ReverseBits,
-                        "Reverse bit order",
-                    )));
-                }
-            }
-            if signal.projection.is_some() {
-                menu.entries.push(MenuEntry::Item(MenuItem::plain(
-                    MenuAction::AddIndependent,
-                    "Add as independent trace",
-                )));
-            }
-        }
-        if let Some(g) = group {
-            menu.entries.extend([
-                MenuEntry::Item(MenuItem {
-                    badge: Some("F2".into()),
-                    ..MenuItem::plain(MenuAction::Rename, "Rename…")
-                }),
-                MenuEntry::Item(if g.collapsed {
-                    MenuItem {
-                        badge: Some("→".into()),
-                        ..MenuItem::plain(MenuAction::Fold(false), "Unfold")
-                    }
-                } else {
-                    MenuItem {
-                        badge: Some("←".into()),
-                        ..MenuItem::plain(MenuAction::Fold(true), "Fold")
-                    }
-                }),
-            ]);
-        }
-        if self.items.iter().any(Entry::is_group) {
-            menu.entries.extend([
-                MenuEntry::Item(MenuItem::plain(MenuAction::FoldAll(true), "Fold all")),
-                MenuEntry::Item(MenuItem::plain(MenuAction::FoldAll(false), "Unfold all")),
-            ]);
-        }
-        if any_group || format_count == 0 {
-            let appearance = self.appearance_menu(&targets, false);
-            self.menu
-                .as_mut()
-                .expect("just opened")
-                .entries
-                .push(MenuEntry::Separator);
-            self.menu
-                .as_mut()
-                .expect("just opened")
-                .entries
-                .extend(appearance);
-        }
-        let menu = self.menu.as_mut().expect("just opened");
-        menu.entries.extend([
-            MenuEntry::Separator,
-            MenuEntry::Item(MenuItem::plain(
-                MenuAction::RemoveSignals,
-                if any_group {
-                    "Remove with contents"
-                } else if self.items[row].lane().is_some() {
-                    "Remove lane"
-                } else {
-                    "Remove signal"
-                },
-            )),
-        ]);
-    }
-
     pub fn open_selected_signal_menu(&mut self, doc: &Document) {
         let Some(row) = self
             .anchor
@@ -3054,6 +2803,8 @@ impl WaveModel {
             MenuAction::Derived
                 | MenuAction::OpenTable
                 | MenuAction::OpenPipeline(_)
+                | MenuAction::CopyValues
+                | MenuAction::CopyPaths
                 | MenuAction::CopySignals
                 | MenuAction::CutSignals
                 | MenuAction::PasteSignals
@@ -3061,15 +2812,7 @@ impl WaveModel {
         ) {
             return None;
         }
-        if *action == MenuAction::OpenFormat {
-            self.open_format_menu(doc, menu.row, menu.position);
-            return None;
-        }
-        let rows = if menu.kind == WaveMenuKind::Format {
-            self.format_rows(menu.row)
-        } else {
-            self.menu_rows(menu.row)
-        };
+        let rows = self.menu_rows(menu.row);
         let leaves = self.leaves_of(&rows);
         match action {
             MenuAction::Format(id) => self.set_translator(doc, &leaves, id),
@@ -3090,8 +2833,14 @@ impl WaveModel {
                 });
             }
             MenuAction::Tint(tint) => _ = self.set_tint(&rows, *tint),
-            MenuAction::Draw(draw) => self.set_analog(&leaves, *draw),
-            MenuAction::Range(range) => self.set_analog_range(&leaves, *range),
+            MenuAction::Draw(draw) => {
+                let signals = self.waveform_rows(menu.row);
+                self.set_analog(&signals, *draw);
+            }
+            MenuAction::Range(range) => {
+                let signals = self.waveform_rows(menu.row);
+                self.set_analog_range(&signals, *range);
+            }
             MenuAction::Group => _ = self.group_selected(),
             MenuAction::Ungroup => _ = self.ungroup_selected(),
             MenuAction::Rename => {
@@ -3125,7 +2874,6 @@ impl WaveModel {
                 self.row_edit = Some(RowEdit::Slice(menu.row));
             }
             MenuAction::AddIndependent => _ = self.add_independent(menu.row),
-            MenuAction::FoldAll(collapsed) => _ = self.fold_all(doc, *collapsed),
             _ => {
                 let row = self.signal(menu.row)?;
                 return row.error.as_ref().and_then(|_| row.source.signal());

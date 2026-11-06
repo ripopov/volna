@@ -756,7 +756,7 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
     app.panels.waves_mut(other).unwrap().selected = [0].into();
     app.handle(Command::OpenSignalMenu(other));
     let menu = app.panels.waves(other).unwrap().menu.clone().unwrap();
-    assert!(menu.items().any(|i| i.label == "Remove lane"));
+    assert!(menu.items().any(|i| i.label == "Remove from view"));
     app.handle(Command::MenuSelect(
         other,
         MenuAction::RowHeight(RowHeight::DEFAULT),

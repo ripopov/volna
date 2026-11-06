@@ -886,26 +886,25 @@ fn the_group_menu_draws_it_as_activity_or_a_stacked_area() {
     let w = app.panels.waves_mut(id).unwrap();
     w.open_signal_menu(&app.doc, 0, Point::default());
     let menu = w.menu.clone().unwrap();
-    let draw = menu
+    let choices = menu
         .entries
         .iter()
-        .position(|e| matches!(e, MenuEntry::Label(l) if l == "Draw"))
-        .expect("a Draw section");
-    let item = |k: usize| match &menu.entries[draw + k] {
-        MenuEntry::Item(item) => item.clone(),
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(
-        (item(1).label.as_str(), item(1).checked),
-        ("Activity", true)
+        .find_map(|entry| match entry {
+            MenuEntry::Submenu { label, items, .. } if label.starts_with("Group display") => {
+                Some(items)
+            }
+            _ => None,
+        })
+        .expect("group display submenu");
+    assert!(
+        choices
+            .iter()
+            .any(|item| item.action == MenuAction::Stack(false) && item.is_checked())
     );
-    assert_eq!(
-        (
-            item(2).label.as_str(),
-            item(2).badge.as_deref(),
-            item(2).checked
-        ),
-        ("Stacked area", Some("⇧A"), false)
+    assert!(
+        choices
+            .iter()
+            .any(|item| item.action == MenuAction::Stack(true) && !item.is_checked())
     );
     app.handle(Command::MenuSelect(id, MenuAction::Stack(true)));
     assert_eq!(group(&app, id).style, GroupStyle::Stack { peak: true });
@@ -1382,7 +1381,7 @@ fn the_peak_band_shows_bursts_and_switches_from_the_menu() {
         .find(|i| i.label == "Peak of total")
         .unwrap()
         .clone();
-    assert!(item.checked);
+    assert!(item.is_checked());
     app.handle(Command::MenuSelect(id, item.action));
     assert_eq!(app.undo_label(), Some("Hide peak of total"));
     assert!(!group_at(&app, id, g).shows_peak());

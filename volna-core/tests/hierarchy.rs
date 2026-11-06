@@ -488,7 +488,7 @@ fn enum_format_is_default_selectable_and_restored_with_its_table() {
     let saved = capture(&app);
     let panel = app.panels.focused_id();
     let choose = |app: &mut App, id: &str| {
-        app.panels.focused_waves_mut().unwrap().open_format_menu(
+        app.panels.focused_waves_mut().unwrap().open_signal_menu(
             &app.doc,
             0,
             volna_core::geometry::point(0.0, 0.0),
@@ -688,7 +688,7 @@ fn bit_waveforms_follow_the_translators_digital_style() {
         app.deliver(request.perform());
     }
     let panel = app.panels.focused_id();
-    app.panels.focused_waves_mut().unwrap().open_format_menu(
+    app.panels.focused_waves_mut().unwrap().open_signal_menu(
         &app.doc,
         0,
         volna_core::geometry::point(0.0, 0.0),

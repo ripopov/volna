@@ -283,7 +283,8 @@ fn item(verb: LaneVerb, label: impl Into<String>, badge: Option<&str>) -> MenuEn
         action: MenuAction::Lane(verb),
         label: label.into(),
         badge: badge.map(str::to_owned),
-        checked: false,
+        state: crate::wave::model::MenuItemState::Command,
+        disabled: false,
     })
 }
 

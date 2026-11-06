@@ -258,10 +258,6 @@ fn reopening_a_workspace_preserves_one_signals_hex_override() {
     app.handle(Command::OpenSignalMenu(app.panels.focused_id()));
     app.handle(Command::MenuSelect(
         app.panels.focused_id(),
-        MenuAction::OpenFormat,
-    ));
-    app.handle(Command::MenuSelect(
-        app.panels.focused_id(),
         MenuAction::Format("hex".into()),
     ));
     assert_values(&mut app, &["ffffff85", "18446744073709551615"]);
@@ -373,10 +369,6 @@ fn overflowing_buses_keep_their_base_and_both_ends() {
     app.handle(Command::OpenSignalMenu(app.panels.focused_id()));
     app.handle(Command::MenuSelect(
         app.panels.focused_id(),
-        MenuAction::OpenFormat,
-    ));
-    app.handle(Command::MenuSelect(
-        app.panels.focused_id(),
         MenuAction::Format("bin".into()),
     ));
     fit_value_characters(&mut app, 0, 7);
@@ -410,4 +402,85 @@ fn narrowing_large_decimal_values_retains_sign_and_magnitude() {
     place_cursor(&mut app, 25);
     fit_value_characters(&mut app, 0, 10);
     assert_values(&mut app, &["≈-8.99e307"]);
+}
+
+#[test]
+fn copying_a_narrowed_value_keeps_the_complete_number_and_full_path() {
+    use volna_core::app::Event;
+
+    let file = recording();
+    let mut app = open(file.path());
+    add_signals(&mut app, &["temperature"]);
+    place_cursor(&mut app, 177);
+    fit_value_characters(&mut app, 0, 8);
+    assert_values(&mut app, &["≈-1.23e8"]);
+    let panel = app.panels.focused_id();
+    app.take_events();
+    app.handle(Command::OpenSignalMenu(panel));
+    app.handle(Command::MenuSelect(panel, MenuAction::CopyValues));
+    assert!(
+        app.take_events()
+            .contains(&Event::CopyText("-123456789".into()))
+    );
+    app.handle(Command::OpenSignalMenu(panel));
+    app.handle(Command::MenuSelect(panel, MenuAction::CopyPaths));
+    assert!(
+        app.take_events()
+            .contains(&Event::CopyText("sensor.temperature".into()))
+    );
+}
+
+#[test]
+fn copying_selected_values_and_paths_follows_the_displayed_order() {
+    use volna_core::app::Event;
+
+    let file = recording();
+    let mut app = open(file.path());
+    add_signals(&mut app, &["elapsed", "temperature"]);
+    place_cursor(&mut app, 25);
+    let layout = app.panels.focused_waves().unwrap().last_layout();
+    let first = point(layout.names.left() + 60.0, layout.row_y(0) + 12.0);
+    let second = point(first.x, layout.row_y(1) + 12.0);
+    press(&mut app, first);
+    release(&mut app);
+    let panel = app.panels.focused_id();
+    app.handle(Command::Pointer(
+        panel,
+        PointerEvent::Down {
+            position: second,
+            button: MouseButton::Left,
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+        },
+    ));
+    release(&mut app);
+    app.take_events();
+    app.handle(Command::OpenSignalMenu(panel));
+    app.handle(Command::MenuSelect(panel, MenuAction::CopySignals));
+    app.take_events();
+    app.handle(Command::OpenSignalMenu(panel));
+    app.handle(Command::MenuSelect(panel, MenuAction::CopyValues));
+    assert!(
+        app.take_events()
+            .contains(&Event::CopyText("18446744073709551615\n-123".into()))
+    );
+    app.handle(Command::OpenSignalMenu(panel));
+    app.handle(Command::MenuSelect(panel, MenuAction::CopyPaths));
+    assert!(app.take_events().contains(&Event::CopyText(
+        "sensor.elapsed\nsensor.temperature".into()
+    )));
+    app.handle(Command::OpenSignalMenu(panel));
+    app.handle(Command::MenuSelect(panel, MenuAction::PasteSignals));
+    assert_eq!(
+        app.panels
+            .focused_waves()
+            .unwrap()
+            .items()
+            .iter()
+            .map(|row| row.name())
+            .collect::<Vec<_>>(),
+        ["elapsed", "temperature", "elapsed", "temperature"]
+    );
 }

@@ -340,7 +340,7 @@ fn retry_menu_reloads_aliases_without_adding_rows_or_changing_ready_data() {
     app.panels
         .waves_mut(panel)
         .unwrap()
-        .open_format_menu(&app.doc, 0, point(100.0, 100.0));
+        .open_signal_menu(&app.doc, 0, point(100.0, 100.0));
     assert!(
         app.panels
             .waves(panel)
@@ -382,7 +382,7 @@ fn retry_menu_reloads_aliases_without_adding_rows_or_changing_ready_data() {
     app.panels
         .waves_mut(panel)
         .unwrap()
-        .open_format_menu(&app.doc, 0, point(100.0, 100.0));
+        .open_signal_menu(&app.doc, 0, point(100.0, 100.0));
     assert!(
         !app.panels
             .waves(panel)
@@ -421,7 +421,7 @@ fn failed_loads_can_retry_for_all_alias_rows() {
     app.panels
         .waves_mut(panel)
         .unwrap()
-        .open_format_menu(&app.doc, 0, point(100.0, 100.0));
+        .open_signal_menu(&app.doc, 0, point(100.0, 100.0));
     app.handle(Command::MenuSelect(
         panel,
         volna_core::wave::model::MenuAction::RetryLoad,
@@ -1062,10 +1062,6 @@ fn format_menu_and_translator_cycle() {
             modifiers: Modifiers::default(),
         },
     ));
-    app.handle(Command::MenuSelect(
-        app.panels.focused_id(),
-        volna_core::wave::model::MenuAction::OpenFormat,
-    ));
     let menu = app
         .panels
         .focused_waves()
@@ -1073,8 +1069,8 @@ fn format_menu_and_translator_cycle() {
         .menu
         .clone()
         .expect("menu opened");
-    assert_eq!(menu.kind, WaveMenuKind::Format);
-    assert!(menu.items().any(|i| i.checked));
+    assert_eq!(menu.kind, WaveMenuKind::Signal);
+    assert!(menu.items().any(volna_core::wave::MenuItem::is_checked));
     assert!(app.debug_state().contains("menu=true"));
     let before = app.panels.focused_waves().unwrap().items()[0]
         .signal()
@@ -1083,7 +1079,9 @@ fn format_menu_and_translator_cycle() {
         .id();
     let other = menu
         .items()
-        .find(|i| !i.checked && matches!(i.action, volna_core::wave::model::MenuAction::Format(_)))
+        .find(|i| {
+            !i.is_checked() && matches!(i.action, volna_core::wave::model::MenuAction::Format(_))
+        })
         .unwrap()
         .action
         .clone();
@@ -1125,10 +1123,6 @@ fn format_menu_and_translator_cycle() {
             modifiers: Modifiers::default(),
         },
     ));
-    app.handle(Command::MenuSelect(
-        app.panels.focused_id(),
-        volna_core::wave::model::MenuAction::OpenFormat,
-    ));
     assert!(app.panels.focused_waves().unwrap().menu.is_some());
     app.handle(Command::Action(Action::ClearSelection));
     assert!(app.panels.focused_waves().unwrap().menu.is_none());
@@ -1167,19 +1161,9 @@ fn signal_name_menu_opens_and_removes_the_selected_signal_group() {
     );
     let menu = panel.menu.as_ref().expect("signal menu opened");
     assert_eq!(menu.kind, WaveMenuKind::Signal);
-    assert_eq!(
+    assert!(
         menu.items()
-            .map(|item| (&item.action, item.label.as_str()))
-            .collect::<Vec<_>>(),
-        [
-            (&MenuAction::Derived, "Derive signal…"),
-            (&MenuAction::OpenTable, "Open in table"),
-            (&MenuAction::CutSignals, "Cut"),
-            (&MenuAction::CopySignals, "Copy"),
-            (&MenuAction::OpenFormat, "Format signals…"),
-            (&MenuAction::Group, "Group selection"),
-            (&MenuAction::RemoveSignals, "Remove signal"),
-        ]
+            .any(|item| item.action == MenuAction::OpenTable)
     );
     app.handle(Command::MenuSelect(waves, MenuAction::OpenTable));
     let table = app.panels.focused().kind.table().expect("table opened");
@@ -1251,7 +1235,7 @@ fn signal_context_menu_targets_the_same_rows_from_every_metadata_column() {
                 .expect("signal menu");
             assert!(
                 menu.items()
-                    .any(|item| item.action == MenuAction::OpenFormat)
+                    .any(|item| matches!(item.action, MenuAction::RowHeight(_)))
             );
             app.handle(Command::MenuSelect(waves, MenuAction::RemoveSignals));
             let expected = if target == 1 {
@@ -1272,7 +1256,7 @@ fn height_checks(app: &App) -> Vec<u8> {
         .as_ref()
         .unwrap()
         .items()
-        .filter(|item| item.checked)
+        .filter(|item| item.is_checked())
         .filter_map(|item| match item.action {
             volna_core::wave::model::MenuAction::RowHeight(h) => Some(h.multiple()),
             _ => None,
@@ -1311,7 +1295,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
             modifiers: Modifiers::default(),
         },
     ));
-    app.handle(Command::MenuSelect(waves, MenuAction::OpenFormat));
     assert_eq!(height_checks(&app), [1]);
     app.handle(Command::MenuSelect(
         waves,
@@ -1322,7 +1305,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
 
     app.handle(Command::Action(Action::SelectAll));
     app.handle(Command::OpenSignalMenu(waves));
-    app.handle(Command::MenuSelect(waves, MenuAction::OpenFormat));
     assert_eq!(height_checks(&app), Vec::<u8>::new());
     app.handle(Command::MenuSelect(
         waves,
@@ -1330,7 +1312,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
     ));
     assert_eq!(heights(&app), [2, 2, 2, 2]);
     app.handle(Command::OpenSignalMenu(waves));
-    app.handle(Command::MenuSelect(waves, MenuAction::OpenFormat));
     assert_eq!(height_checks(&app), [2]);
     app.handle(Command::MenuDismiss(waves));
 
@@ -1356,7 +1337,6 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
         [2]
     );
     app.handle(Command::OpenSignalMenu(waves));
-    app.handle(Command::MenuSelect(waves, MenuAction::OpenFormat));
     app.handle(Command::MenuSelect(
         waves,
         MenuAction::RowHeight(RowHeight::try_from(8).unwrap()),

@@ -97,6 +97,8 @@ pub enum Action {
     RenameGroup,
     FoldGroupDeep,
     UnfoldGroupDeep,
+    CollapseAllGroups,
+    ExpandAllGroups,
     NextCycle,
     PrevCycle,
     ToggleCycleOrigin,
@@ -1594,6 +1596,35 @@ impl App {
                     self.changed();
                     return;
                 }
+                if matches!(action, MenuAction::CopyValues | MenuAction::CopyPaths) {
+                    let Some(waves) = self.panels.waves_mut(panel) else {
+                        return;
+                    };
+                    let Some(row) = waves
+                        .menu
+                        .as_ref()
+                        .filter(|menu| {
+                            menu.kind == WaveMenuKind::Signal
+                                && menu
+                                    .items()
+                                    .any(|item| item.action == action && !item.disabled)
+                        })
+                        .map(|menu| menu.row)
+                    else {
+                        return;
+                    };
+                    let text =
+                        waves.copy_signal_text(&self.doc, row, action == MenuAction::CopyValues);
+                    waves.menu_dismiss();
+                    match text {
+                        Ok(text) => self.events.push(Event::CopyText(text)),
+                        Err(error) => self
+                            .events
+                            .push(Event::Notice(format!("Could not copy: {error}"))),
+                    }
+                    self.changed();
+                    return;
+                }
                 if let Some(clipboard) = match action {
                     MenuAction::CopySignals => Some(Action::CopySignals),
                     MenuAction::CutSignals => Some(Action::CutSignals),
@@ -2786,7 +2817,9 @@ impl App {
                 | Action::Ungroup
                 | Action::RenameGroup
                 | Action::FoldGroupDeep
-                | Action::UnfoldGroupDeep => return,
+                | Action::UnfoldGroupDeep
+                | Action::CollapseAllGroups
+                | Action::ExpandAllGroups => return,
                 Action::SplitRight
                 | Action::SplitDown
                 | Action::NewPanel
@@ -2834,6 +2867,10 @@ impl App {
                 }
                 Action::FoldGroupDeep => _ = w.fold_key(doc, false, true),
                 Action::UnfoldGroupDeep => _ = w.fold_key(doc, true, true),
+                Action::CollapseAllGroups | Action::ExpandAllGroups => {
+                    w.menu_dismiss();
+                    w.fold_all(doc, action == Action::CollapseAllGroups);
+                }
                 Action::GroupSelection => _ = w.group_selected(),
                 Action::Ungroup => _ = w.ungroup_selected(),
                 Action::RenameGroup => _ = w.start_rename(),
@@ -2920,7 +2957,9 @@ impl App {
                 | Action::Ungroup
                 | Action::RenameGroup
                 | Action::FoldGroupDeep
-                | Action::UnfoldGroupDeep => return,
+                | Action::UnfoldGroupDeep
+                | Action::CollapseAllGroups
+                | Action::ExpandAllGroups => return,
                 Action::SplitRight
                 | Action::SplitDown
                 | Action::NewPanel
@@ -3366,7 +3405,8 @@ impl App {
                     action: MenuAction::PipelineStart(row),
                     label: "Go to start".into(),
                     badge: Some("double-click".into()),
-                    checked: false,
+                    state: crate::wave::model::MenuItemState::Command,
+                    disabled: false,
                 })],
             },
         ));

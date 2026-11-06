@@ -178,13 +178,32 @@ scopes with identical paths remain separate. To compare repeated names, add
 `soc.cpu0.pc` and `soc.cpu1.pc`
 from `volna/examples/pipeline_showcase.vtr`.
 
-Right-click a signal in Scope, Name, or Values and choose **Format signal…**.
-Right-clicking a selected signal keeps the selection; right-clicking an unselected
-signal targets that signal alone. **Waveform** offers
-Digital, Analog steps (hold each sample), and Analog lines (interpolate between
-samples), with waveform icons and hover descriptions. **Vertical scale** controls
-the analog value axis; **Value format** controls numeric or text representation.
-Color and row height are grouped under **Appearance**.
+Right-click a signal in Scope, Name, or Values to change **Value format**,
+**Waveform**, **Vertical scale**, **Color**, or **Row height** directly from the
+context menu. The heading identifies the signal or selected rows. Right-clicking
+a selected signal keeps the selection; right-clicking an unselected signal
+targets that signal alone. Left-dragging the format badge or analog status line
+reorders rows.
+
+**Waveform** offers Digital, Analog — steps (hold each sample), and
+Analog — interpolated (straight lines between samples). **Vertical scale** offers
+Whole trace, Visible time window, and Type limits where supported. Group rendering
+has separate **Group display**, **Interpolation**, and **Group vertical scale**
+controls. In mixed group/signal selections, **Signal waveform** and
+**Signal vertical scale** affect only directly selected signals; selecting a group
+does not implicitly change its contained signals through those controls.
+**View → Expand All Groups / Collapse All Groups** operates on all groups.
+
+**Copy value at cursor** copies the complete selected representation, even when the
+cell is shortened. **Copy full signal path** copies the scope and signal name.
+For several signals, each command copies one TSV-escaped cell per line in row
+order. Single-signal copying produces the value or path directly. Value copying
+is unavailable until a cursor value is loaded for every target. These commands
+leave the signal-row clipboard intact; **Cut signals**, **Copy signals**, and
+**Paste rows** manage rows between waveform panels. **Remove from view** removes
+displayed rows without changing the recording; groups explicitly say
+**Remove group and contents**.
+
 Value format is omitted when only one representation is supported. Scalar bits
 keep their bit representation, including when cycling formats with the keyboard.
 
@@ -197,13 +216,13 @@ cannot hold a meaningful representation. These compact labels do not change
 recorded values or clipboard contents.
 
 For a native control specimen, open `volna/examples/analog_showcase.vtr` and add
-`analog.waves.sine` and `analog.waves.cosine`. The format badge and analog status
-line show the current settings; left-dragging either reorders signals. Select both
-rows and choose **Format signals…** from the context menu to open **Format 2 signals**.
-Differing settings show **Mixed**; changing a setting applies that setting to the selection. Waveform controls identify the applicable
-numeric subset when a selection also contains signals that cannot be plotted.
-Value-format choices must support every target. The menu uses the native theme,
-keyboard navigation, and window bounds at each interface zoom.
+`analog.waves.sine` and `analog.waves.cosine`. Select both rows and right-click
+in any metadata column. Differing settings show **Mixed**; changing a setting
+applies that setting to the selection. Waveform and scale submenus identify the
+applicable subset when some selected signals cannot use the setting. Value-format
+choices must support every target; an explanation appears when no common format
+exists. Menus use the native theme, keyboard navigation, and window bounds at each
+interface zoom.
 
 ## Derived signals and measurements
 

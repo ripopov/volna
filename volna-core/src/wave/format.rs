@@ -1,18 +1,13 @@
 //! Shared formatting controls for a signal selection.
 
 use super::analog::{AnalogDraw, AnalogRange};
-use super::model::{MenuAction, MenuEntry, MenuItem, RowHeight, WaveMenu, WaveMenuKind, WaveModel};
+use super::model::{MenuAction, MenuEntry, MenuItem, RowHeight, WaveModel};
 use super::tint::Tint;
 use crate::document::Document;
-use crate::geometry::Point;
 
-fn shared<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<T> {
+pub(super) fn shared<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<T> {
     let first = values.next()?;
     values.all(|value| value == first).then_some(first)
-}
-
-fn setting_label(setting: &str, value: Option<&str>) -> String {
-    format!("{setting} · {}", value.unwrap_or("Mixed"))
 }
 
 impl WaveModel {
@@ -26,17 +21,73 @@ impl WaveModel {
             .collect()
     }
 
-    pub fn open_format_menu(&mut self, doc: &Document, row: usize, position: Point) {
+    pub(super) fn waveform_rows(&self, row: usize) -> Vec<usize> {
+        if row >= self.items().len() {
+            return Vec::new();
+        }
+        let rows = self.menu_rows(row);
+        if rows.iter().any(|&r| self.items()[r].is_group()) {
+            // Group selection must not implicitly apply the separate signal controls to its contents.
+            rows.into_iter()
+                .filter(|&r| self.signal(r).is_some())
+                .collect()
+        } else {
+            self.format_rows(row)
+        }
+    }
+
+    pub(super) fn signal_display_menu(&self, doc: &Document, row: usize) -> Vec<MenuEntry> {
         let rows = self.format_rows(row);
         let signals: Vec<_> = rows.iter().filter_map(|&r| self.signal(r)).collect();
-        let Some(first) = signals.first() else { return };
-        let heading = if signals.len() == 1 {
-            "Format signal".into()
-        } else {
-            format!("Format {} signals", signals.len())
+        let Some(first) = signals.first() else {
+            return Vec::new();
         };
-        let mut entries = vec![MenuEntry::Label(heading)];
-        let plottable: Vec<_> = signals
+        let mut entries = Vec::new();
+        let includes_groups = self
+            .menu_rows(row)
+            .iter()
+            .any(|&r| self.items()[r].is_group());
+        let format = shared(signals.iter().map(|s| s.translator.id()));
+        let available: Vec<_> = signals.iter().map(|s| s.formats(doc)).collect();
+        let formats: Vec<_> = available[0]
+            .iter()
+            .filter(|t| {
+                available
+                    .iter()
+                    .all(|formats| formats.iter().any(|candidate| candidate.id() == t.id()))
+            })
+            .map(|t| {
+                MenuItem::choice(
+                    MenuAction::Format(t.id().into()),
+                    t.name(),
+                    format == Some(t.id()),
+                )
+            })
+            .collect();
+        if formats.len() != 1 {
+            let description = if formats.is_empty() {
+                Some("No value format supports every selected signal. Select signals of the same type to change their format.".into())
+            } else {
+                includes_groups.then(|| {
+                    format!(
+                        "Applies to {} signals, including group contents",
+                        signals.len()
+                    )
+                })
+            };
+            entries.push(MenuEntry::Submenu {
+                label: "Value format".into(),
+                value: Some(format.map_or("Mixed", |_| first.translator.name()).into()),
+                description,
+                items: formats,
+            });
+        }
+        let waveform_rows = self.waveform_rows(row);
+        let waveform_signals: Vec<_> = waveform_rows
+            .iter()
+            .filter_map(|&r| self.signal(r))
+            .collect();
+        let plottable: Vec<_> = waveform_signals
             .iter()
             .copied()
             .filter(|s| super::analog::supports(s.shape, s.translator.as_ref()))
@@ -45,30 +96,37 @@ impl WaveModel {
             let draw = shared(plottable.iter().map(|s| s.analog.as_ref().map(|a| a.draw)));
             let label = draw.map(|draw| match draw {
                 None => "Digital",
-                Some(AnalogDraw::Step) => "Analog steps",
-                Some(AnalogDraw::Linear) => "Analog lines",
+                Some(AnalogDraw::Step) => "Analog — steps",
+                Some(AnalogDraw::Linear) => "Analog — interpolated",
             });
-            entries.extend([
-                MenuEntry::Separator,
-                MenuEntry::Label(setting_label("Waveform", label)),
-            ]);
-            if plottable.len() != signals.len() {
-                entries.push(MenuEntry::Label(format!(
-                    "Applies to {} numeric signal{}",
-                    plottable.len(),
-                    if plottable.len() == 1 { "" } else { "s" }
-                )));
-            }
-            for (mode, label) in [
-                (None, "Digital"),
-                (Some(AnalogDraw::Step), "Analog steps"),
-                (Some(AnalogDraw::Linear), "Analog lines"),
-            ] {
-                entries.push(MenuEntry::Item(MenuItem {
-                    checked: draw == Some(mode),
-                    ..MenuItem::plain(MenuAction::Draw(mode), label)
-                }));
-            }
+            entries.push(MenuEntry::Submenu {
+                label: if includes_groups {
+                    "Signal waveform"
+                } else {
+                    "Waveform"
+                }
+                .into(),
+                value: Some(label.unwrap_or("Mixed").into()),
+                description: (includes_groups || plottable.len() != waveform_signals.len()).then(
+                    || {
+                        format!(
+                            "Applies to {} of {} selected signals",
+                            plottable.len(),
+                            waveform_signals.len()
+                        )
+                    },
+                ),
+                items: [
+                    (None, "Digital"),
+                    (Some(AnalogDraw::Step), "Analog — steps"),
+                    (Some(AnalogDraw::Linear), "Analog — interpolated"),
+                ]
+                .into_iter()
+                .map(|(mode, label)| {
+                    MenuItem::choice(MenuAction::Draw(mode), label, draw == Some(mode))
+                })
+                .collect(),
+            });
             let analog_signals: Vec<_> = plottable
                 .iter()
                 .copied()
@@ -78,7 +136,7 @@ impl WaveModel {
                 let range = shared(analog_signals.iter().map(|(_, analog)| analog.range));
                 let mut ranges = vec![
                     (AnalogRange::Trace, "Whole trace"),
-                    (AnalogRange::Window, "Visible window"),
+                    (AnalogRange::Window, "Visible time window"),
                 ];
                 if analog_signals
                     .iter()
@@ -93,92 +151,52 @@ impl WaveModel {
                         .map(|(_, label)| *label)
                 });
                 entries.push(MenuEntry::Submenu {
-                    label: setting_label("Vertical scale", label),
+                    label: if includes_groups {
+                        "Signal vertical scale"
+                    } else {
+                        "Vertical scale"
+                    }
+                    .into(),
+                    value: Some(label.unwrap_or("Mixed").into()),
+                    description: (includes_groups
+                        || analog_signals.len() != waveform_signals.len())
+                    .then(|| {
+                        format!(
+                            "Applies to {} of {} selected signals",
+                            analog_signals.len(),
+                            waveform_signals.len()
+                        )
+                    }),
                     items: ranges
                         .into_iter()
-                        .map(|(r, label)| MenuItem {
-                            checked: range == Some(r),
-                            ..MenuItem::plain(MenuAction::Range(r), label)
+                        .map(|(r, label)| {
+                            MenuItem::choice(MenuAction::Range(r), label, range == Some(r))
                         })
                         .collect(),
                 });
             }
         }
-        let format = shared(signals.iter().map(|s| s.translator.id()));
-        let available: Vec<_> = signals.iter().map(|s| s.formats(doc)).collect();
-        let formats: Vec<_> = available[0]
-            .clone()
-            .into_iter()
-            .filter(|t| {
-                available
-                    .iter()
-                    .all(|formats| formats.iter().any(|candidate| candidate.id() == t.id()))
-            })
-            .map(|t| MenuItem {
-                action: MenuAction::Format(t.id().into()),
-                label: t.name().into(),
-                badge: Some(t.badge().into()),
-                checked: format == Some(t.id()),
-            })
-            .collect();
-        if formats.len() != 1 {
-            let label = setting_label("Value format", format.map(|_| first.translator.name()));
-            entries.push(MenuEntry::Separator);
-            if formats.is_empty() {
-                entries.push(MenuEntry::Label(label));
-                entries.push(MenuEntry::Label("No shared value format".into()));
-            } else {
-                entries.push(MenuEntry::Submenu {
-                    label,
-                    items: formats,
-                });
-            }
-        }
-        entries.extend([MenuEntry::Separator, MenuEntry::Label("Appearance".into())]);
-        entries.extend(self.appearance_menu(&rows, true));
-        if self
-            .signal(row)
-            .is_some_and(|s| s.error.is_some() && s.source.signal().is_some())
-        {
-            entries.push(MenuEntry::Separator);
-            entries.push(MenuEntry::Item(MenuItem::plain(
-                MenuAction::RetryLoad,
-                "Retry loading",
-            )));
-        }
-        self.menu = Some(WaveMenu {
-            kind: WaveMenuKind::Format,
-            row,
-            position,
-            entries,
-        });
+        entries
     }
 
-    pub(super) fn appearance_menu(&self, rows: &[usize], summary: bool) -> [MenuEntry; 2] {
+    pub(super) fn appearance_menu(&self, rows: &[usize]) -> [MenuEntry; 2] {
         let tint = shared(rows.iter().map(|&r| self.items()[r].tint()));
         let height = shared(rows.iter().map(|&r| self.items()[r].height()));
         let height_label = height.map(|h| format!("{}×", h.multiple()));
         [
             MenuEntry::Submenu {
-                label: if summary {
-                    setting_label("Color", tint.map(Tint::label))
-                } else {
-                    "Color".into()
-                },
+                label: "Color".into(),
+                value: Some(tint.map_or("Mixed", Tint::label).into()),
+                description: None,
                 items: std::iter::once(None)
                     .chain(Tint::ALL.map(Some))
-                    .map(|t| MenuItem {
-                        checked: tint == Some(t),
-                        ..MenuItem::plain(MenuAction::Tint(t), Tint::label(t))
-                    })
+                    .map(|t| MenuItem::choice(MenuAction::Tint(t), Tint::label(t), tint == Some(t)))
                     .collect(),
             },
             MenuEntry::Submenu {
-                label: if summary {
-                    setting_label("Row height", height_label.as_deref())
-                } else {
-                    "Height".into()
-                },
+                label: "Row height".into(),
+                value: Some(height_label.unwrap_or_else(|| "Mixed".into())),
+                description: None,
                 items: (if rows.iter().any(|&r| self.items()[r].lane().is_some()) {
                     RowHeight::ALL.as_slice()
                 } else {
@@ -186,15 +204,16 @@ impl WaveModel {
                 })
                 .iter()
                 .copied()
-                .map(|h| MenuItem {
-                    action: MenuAction::RowHeight(h),
-                    label: if h.is_default() {
-                        "1× (Default)".into()
-                    } else {
-                        format!("{}×", h.multiple())
-                    },
-                    badge: None,
-                    checked: height == Some(h),
+                .map(|h| {
+                    MenuItem::choice(
+                        MenuAction::RowHeight(h),
+                        &if h.is_default() {
+                            "1× (Default)".into()
+                        } else {
+                            format!("{}×", h.multiple())
+                        },
+                        height == Some(h),
+                    )
                 })
                 .collect(),
             },

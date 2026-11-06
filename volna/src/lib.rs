@@ -30,6 +30,7 @@ pub mod theme;
 mod traces;
 mod transaction_panel;
 mod ui;
+mod wave_menu;
 #[cfg(target_family = "wasm")]
 mod web_remote;
 

@@ -8,6 +8,45 @@ use crate::data::text::{COPY_BYTES, append_exact};
 use crate::document::Document;
 
 impl WaveModel {
+    pub(crate) fn copy_signal_text(
+        &self,
+        doc: &Document,
+        row: usize,
+        values: bool,
+    ) -> anyhow::Result<String> {
+        let rows = self.format_rows(row);
+        let mut text = String::new();
+        for (index, row) in rows.iter().enumerate() {
+            let signal = self.signal(*row).expect("format rows are signals");
+            if index > 0 {
+                append_exact(&mut text, "\n", COPY_BYTES)?;
+            }
+            let value = if values {
+                anyhow::ensure!(
+                    signal.cursor_value_view(self.cursor(doc)).is_some(),
+                    "A cursor value is not available for every selected signal."
+                );
+                let value =
+                    signal.cursor_value(self.cursor(doc), COPY_BYTES.saturating_sub(text.len()));
+                anyhow::ensure!(
+                    !value.truncated,
+                    "Values exceed the 64 KiB clipboard limit."
+                );
+                value.text
+            } else if signal.scope.is_empty() {
+                signal.name.clone()
+            } else {
+                format!("{}.{}", signal.scope, signal.name)
+            };
+            if rows.len() == 1 {
+                append_exact(&mut text, &value, COPY_BYTES)?;
+            } else {
+                append_cell(&mut text, &[&value])?;
+            }
+        }
+        Ok(text)
+    }
+
     pub(super) fn rows_tsv(&self, rows: &[Entry], doc: &Document) -> anyhow::Result<String> {
         let cursor = self.cursor(doc);
         let base = doc.time_base();

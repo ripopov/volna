@@ -380,10 +380,10 @@ fn folding_hides_rows_and_moves_their_selection_to_the_group() {
     );
     app.handle(Command::Pointer(id, PointerEvent::Up));
     assert_eq!(selected(&app, id), [0, 1, 2, 9]);
-    app.handle(Command::MenuSelect(id, MenuAction::FoldAll(false)));
+    app.handle(Command::Action(Action::ExpandAllGroups));
     let at = name_at(&app, id, 0, 60.0, 0.5);
     press(&mut app, id, at, MouseButton::Right, Modifiers::default());
-    app.handle(Command::MenuSelect(id, MenuAction::FoldAll(false)));
+    app.handle(Command::Action(Action::ExpandAllGroups));
     assert!(outline(&app, id).iter().all(|row| !row.contains('+')));
 }
 
@@ -410,11 +410,9 @@ fn ungroup_keeps_rows_in_place_and_remove_takes_them() {
     for label in [
         "Group selection",
         "Ungroup",
-        "Rename…",
-        "Fold",
-        "Fold all",
-        "Unfold all",
-        "Remove with contents",
+        "Rename group…",
+        "Collapse group",
+        "Remove group and contents",
     ] {
         assert!(labels.contains(&label), "{label} in {labels:?}");
     }
