@@ -1,25 +1,21 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { resolve, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { base, builtFile } from './built-file.mjs';
 import AxeBuilder from '@axe-core/playwright';
 
 const sampleWorkspace = JSON.parse(await readFile(new URL('../../volna/examples/landing-page.volna.json', import.meta.url), 'utf8'));
 const sampleRecord = sampleWorkspace.panels.find(panel => panel.id === 37).record;
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const results = fileURLToPath(new URL('../test-results/', import.meta.url));
-const base = `/${(process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/')}`.replace(/\/$/, '') + '/';
 const mime = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.json': 'application/json' };
 const server = createServer(async (req, res) => {
   try {
-    const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-    if (!path.startsWith(base)) throw new Error('outside base');
-    let file = resolve(root, path.slice(base.length));
-    if (file !== root && !file.startsWith(root + '/')) throw new Error('outside output');
-    if ((await stat(file)).isDirectory()) file += '/index.html';
+    const file = await builtFile(root, decodeURIComponent(new URL(req.url, 'http://localhost').pathname));
     const content = await readFile(file);
     res.writeHead(200, { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp', 'Content-Type': mime[extname(file)] || 'application/octet-stream' });
     res.end(content);

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, stat } from 'node:fs/promises';
-import { extname, resolve } from 'node:path';
+import { mkdir, readFile } from 'node:fs/promises';
+import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { chromium } from 'playwright';
+import { base, builtFile } from './built-file.mjs';
 
 const root = fileURLToPath(new URL('../dist/', import.meta.url));
 const results = fileURLToPath(new URL('../test-results/imports/', import.meta.url));
@@ -13,9 +14,6 @@ const fixtures = new URL('../../vtr/vtr-convert/tests/fixtures/', import.meta.ur
 const sampleWorkspace = JSON.parse(
   await readFile(new URL('../../volna/examples/landing-page.volna.json', import.meta.url))
 );
-const base =
-  `/${(process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/')}`.replace(/\/$/, '') +
-  '/';
 const mime = {
   '.html': 'text/html',
   '.js': 'text/javascript',
@@ -24,13 +22,7 @@ const mime = {
 };
 const server = createServer(async (request, response) => {
   try {
-    const path = new URL(request.url, 'http://localhost').pathname;
-    assert.ok(path.startsWith(base));
-    let file = resolve(root, path.slice(base.length));
-    assert.ok(
-      file.startsWith(root) && (file === root || file.startsWith(root.replace(/\/$/, '') + '/'))
-    );
-    if ((await stat(file)).isDirectory()) file += '/index.html';
+    const file = await builtFile(root, new URL(request.url, 'http://localhost').pathname);
     response.writeHead(200, {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',

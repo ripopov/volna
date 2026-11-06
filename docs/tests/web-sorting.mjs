@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { readFile, stat, mkdir } from 'node:fs/promises';
+import { readFile, mkdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { base, builtFile } from './built-file.mjs';
 
 const root = resolve(fileURLToPath(new URL('../dist/', import.meta.url)));
 const results = fileURLToPath(new URL('../test-results/sorting/', import.meta.url));
@@ -15,16 +16,11 @@ const generated = spawnSync('cargo', ['run', '-q', '-p', 'volna-core', '--exampl
   cwd: fileURLToPath(new URL('../../', import.meta.url)), stdio: 'inherit',
 });
 assert.equal(generated.status, 0);
-const base = `/${(process.env.DOCS_BASE || '/').split('/').filter(Boolean).join('/')}`.replace(/\/$/, '') + '/';
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' };
 let headers = true;
 const server = createServer(async (req, res) => {
   try {
-    const path = new URL(req.url, 'http://localhost').pathname;
-    assert.ok(path.startsWith(base));
-    let file = resolve(root, path.slice(base.length));
-    assert.ok(file.startsWith(root + '/') || file === root);
-    if ((await stat(file)).isDirectory()) file += '/index.html';
+    const file = await builtFile(root, new URL(req.url, 'http://localhost').pathname);
     if (headers) {
       res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
       res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
