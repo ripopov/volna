@@ -16,27 +16,8 @@ fn reply<R: Read, W: Write, T: Serialize>(
     object: ObjectId,
     result: anyhow::Result<T>,
     limit: u64,
-) -> anyhow::Result<()> {
-    let result = result.and_then(|value| writer.object(object, &value, limit));
-    if let Err(error) = result {
-        if writer.is_failed() {
-            return Err(error);
-        }
-        writer.send(Body::Error {
-            object,
-            message: format!("{error:#}").chars().take(1024).collect(),
-        })?;
-    }
-    Ok(())
-}
-
-fn open_object<R: Read, W: Write, T: Serialize>(
-    writer: &mut ResponseWriter<R, W>,
-    object: ObjectId,
-    value: &T,
-    limit: u64,
 ) -> anyhow::Result<bool> {
-    match writer.object(object, value, limit) {
+    match result.and_then(|value| writer.object(object, &value, limit)) {
         Ok(()) => Ok(true),
         Err(error) if writer.is_failed() => Err(error),
         Err(error) => {
@@ -79,7 +60,8 @@ pub fn serve(
                     ObjectId::Metadata,
                     Err(error),
                     max_object_bytes,
-                );
+                )
+                .map(|_| ());
             }
         };
         let header = Header::borrowed(
@@ -89,7 +71,12 @@ pub fn serve(
         let sizes = session
             .scope_sizes()
             .unwrap_or_else(|| Arc::new(volna_trace::data::ScopeSizes::count(session.hierarchy())));
-        if !open_object(&mut writer, ObjectId::Metadata, &header, max_object_bytes)? {
+        if !reply(
+            &mut writer,
+            ObjectId::Metadata,
+            Ok(&header),
+            max_object_bytes,
+        )? {
             return Ok(());
         }
         let hierarchy = session.hierarchy();
@@ -99,10 +86,10 @@ pub fn serve(
             volna_trace::remote::hierarchy::scope_pages(hierarchy, &sizes).enumerate()
         {
             sent += 1;
-            if !open_object(
+            if !reply(
                 &mut writer,
                 ObjectId::Scopes(page as u32),
-                &buffer,
+                Ok(&buffer),
                 max_object_bytes,
             )? {
                 return Ok(());
@@ -115,10 +102,10 @@ pub fn serve(
         let mut sent = 0;
         for (page, buffer) in volna_trace::remote::hierarchy::var_pages(hierarchy).enumerate() {
             sent += 1;
-            if !open_object(
+            if !reply(
                 &mut writer,
                 ObjectId::Variables(page as u32),
-                &buffer,
+                Ok(&buffer),
                 max_object_bytes,
             )? {
                 return Ok(());
