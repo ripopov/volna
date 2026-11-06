@@ -23,6 +23,45 @@ fn init(cx: &mut TestAppContext) {
     cx.update(crate::init_app);
 }
 
+fn open_pipeline_table(
+    ws: &mut Workspace,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::Context<Workspace>,
+) -> volna_core::panels::PanelId {
+    use volna_core::panels::PanelsCommand;
+    use volna_trace::data::Member;
+
+    ws.set_session(
+        OpenSpec::Path(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/examples/pipeline_showcase.vtr"
+            )
+            .into(),
+        )
+        .open()
+        .unwrap(),
+        cx,
+    );
+    ws.app.sidebar_visible = false;
+    let origin = ws.app.panels.focused_id();
+    ws.dispatch(
+        Command::OpenTable {
+            selected: a_all(vec![Member::Generator(0)]),
+            clicked: None,
+        },
+        Some(window),
+        cx,
+    );
+    let panel = ws.app.panels.focused_id();
+    ws.dispatch(
+        Command::Panels(PanelsCommand::Close(origin)),
+        Some(window),
+        cx,
+    );
+    panel
+}
+
 #[gpui_kit::test]
 fn embedded_toolbar_routes_navigation_and_overflow_without_losing_panel_focus(
     cx: &mut TestAppContext,
@@ -6620,11 +6659,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
     cx: &mut TestAppContext,
 ) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
-    use volna_core::{
-        panels::PanelsCommand,
-        table::{TableCommand, columns::TransactionColumn},
-    };
-    use volna_trace::data::Member;
+    use volna_core::table::{TableCommand, columns::TransactionColumn};
     init(cx);
     for dark in [true, false] {
         for (width, zoom) in [(1000.0, 1.0), (360.0, 1.0), (1000.0, 1.5), (360.0, 1.5)] {
@@ -6634,34 +6669,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
             vcx.simulate_resize(size(px(width), px(700.0)));
             let panel = window
                 .update(&mut vcx, |ws, window, cx| {
-                    ws.set_session(
-                        OpenSpec::Path(
-                            concat!(
-                                env!("CARGO_MANIFEST_DIR"),
-                                "/examples/pipeline_showcase.vtr"
-                            )
-                            .into(),
-                        )
-                        .open()
-                        .unwrap(),
-                        cx,
-                    );
-                    ws.app.sidebar_visible = false;
-                    let origin = ws.app.panels.focused_id();
-                    ws.dispatch(
-                        Command::OpenTable {
-                            selected: a_all(vec![Member::Generator(0)]),
-                            clicked: None,
-                        },
-                        Some(window),
-                        cx,
-                    );
-                    let panel = ws.app.panels.focused_id();
-                    ws.dispatch(
-                        Command::Panels(PanelsCommand::Close(origin)),
-                        Some(window),
-                        cx,
-                    );
+                    let panel = open_pipeline_table(ws, window, cx);
                     for command in [
                         TableCommand::ShowTransactionColumn(TransactionColumn::Id),
                         TableCommand::MoveColumn {
@@ -6775,11 +6783,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
 #[gpui_kit::test]
 fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
-    use volna_core::{
-        panels::PanelsCommand,
-        table::{TableCommand, columns::TransactionColumn},
-    };
-    use volna_trace::data::Member;
+    use volna_core::table::{TableCommand, columns::TransactionColumn};
     init(cx);
     for dark in [true, false] {
         for width in [1000.0, 360.0] {
@@ -6789,34 +6793,7 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
             vcx.simulate_resize(size(px(width), px(700.0)));
             let panel = window
                 .update(&mut vcx, |ws, window, cx| {
-                    ws.set_session(
-                        OpenSpec::Path(
-                            concat!(
-                                env!("CARGO_MANIFEST_DIR"),
-                                "/examples/pipeline_showcase.vtr"
-                            )
-                            .into(),
-                        )
-                        .open()
-                        .unwrap(),
-                        cx,
-                    );
-                    ws.app.sidebar_visible = false;
-                    let origin = ws.app.panels.focused_id();
-                    ws.dispatch(
-                        Command::OpenTable {
-                            selected: a_all(vec![Member::Generator(0)]),
-                            clicked: None,
-                        },
-                        Some(window),
-                        cx,
-                    );
-                    let panel = ws.app.panels.focused_id();
-                    ws.dispatch(
-                        Command::Panels(PanelsCommand::Close(origin)),
-                        Some(window),
-                        cx,
-                    );
+                    let panel = open_pipeline_table(ws, window, cx);
                     crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
                     panel
                 })
@@ -7033,8 +7010,7 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
 fn column_filters_keep_input_focus_and_table_shortcuts_out_of_edits(cx: &mut TestAppContext) {
     use gpui_kit::component::WindowExt;
     use gpui_kit::{Modifiers, VisualTestContext, point, size};
-    use volna_core::{panels::PanelsCommand, table::TableCommand};
-    use volna_trace::data::Member;
+    use volna_core::table::TableCommand;
     init(cx);
     for dark in [true, false] {
         for width in [900.0, 360.0] {
@@ -7044,34 +7020,7 @@ fn column_filters_keep_input_focus_and_table_shortcuts_out_of_edits(cx: &mut Tes
             vcx.simulate_resize(size(px(width), px(700.0)));
             let panel = window
                 .update(&mut vcx, |ws, window, cx| {
-                    ws.set_session(
-                        OpenSpec::Path(
-                            concat!(
-                                env!("CARGO_MANIFEST_DIR"),
-                                "/examples/pipeline_showcase.vtr"
-                            )
-                            .into(),
-                        )
-                        .open()
-                        .unwrap(),
-                        cx,
-                    );
-                    ws.app.sidebar_visible = false;
-                    let origin = ws.app.panels.focused_id();
-                    ws.dispatch(
-                        Command::OpenTable {
-                            selected: a_all(vec![Member::Generator(0)]),
-                            clicked: None,
-                        },
-                        Some(window),
-                        cx,
-                    );
-                    let panel = ws.app.panels.focused_id();
-                    ws.dispatch(
-                        Command::Panels(PanelsCommand::Close(origin)),
-                        Some(window),
-                        cx,
-                    );
+                    let panel = open_pipeline_table(ws, window, cx);
                     crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
                     panel
                 })
