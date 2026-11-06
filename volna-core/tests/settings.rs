@@ -4,7 +4,7 @@
 use vtr::Recorder;
 
 use std::time::Duration;
-use volna_core::testing::a_all;
+use volna_core::testing::{a_all, complete_pending};
 
 use volna_core::Instant;
 use volna_core::app::{Action, App, Command, Event, SettingsCommand};
@@ -13,18 +13,6 @@ use volna_core::settings::{Animation, Host, Value, WRITE_IDLE, ZoomStep};
 use volna_core::testing::{ProceduralTrace, complete_open};
 use volna_core::workspace::persistence::{Candidate, Content, Persistence, Target};
 use volna_trace::session::OpenSpec;
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for r in requests {
-            app.deliver(r.perform());
-        }
-    }
-}
 
 fn app() -> App {
     let mut app = App::new();
@@ -398,13 +386,13 @@ fn memory_limits_apply_live_so_a_failed_load_succeeds_on_retry() {
     let retry = |app: &mut App| {
         app.handle(Command::Action(volna_core::Action::RemoveSelected));
         app.handle(Command::AddVars(a_all(vec![0])));
-        pump(app);
+        complete_pending(app);
     };
 
     set(&mut app, "memory.budgetMiB", 1);
     assert_eq!(app.status().memory.unwrap().limit, 1024 * 1024);
     app.handle(Command::AddVars(a_all(vec![0])));
-    pump(&mut app);
+    complete_pending(&mut app);
     let error = row_error(&app).expect("over budget");
     assert!(error.contains("memory budget exceeded"), "{error}");
     assert_eq!(app.status().memory.unwrap().used, resident);

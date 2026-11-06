@@ -5,7 +5,7 @@ use volna_core::Theme;
 use volna_core::app::{App, Command};
 use volna_core::geometry::{Modifiers, MouseButton, Point, Rect, point};
 use volna_core::scene::{FontRole, MonoMeasure, Prim, TextMeasure};
-use volna_core::testing::a;
+use volna_core::testing::{a, complete_pending};
 use volna_core::trace::TraceId;
 use volna_core::wave::PointerEvent;
 use volna_core::wave::model::MenuAction;
@@ -125,22 +125,10 @@ fn recording() -> tempfile::NamedTempFile {
     file
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
-}
-
 fn open(path: &Path) -> App {
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(path.into())));
-    pump(&mut app);
+    complete_pending(&mut app);
     app
 }
 
@@ -156,7 +144,7 @@ fn add_signals(app: &mut App, names: &[&str]) {
         })
         .collect();
     app.handle(Command::AddVars(vars));
-    pump(app);
+    complete_pending(app);
     frame(app);
 }
 
@@ -291,7 +279,7 @@ fn reopening_a_workspace_preserves_one_signals_hex_override() {
         .unwrap()
         .commit(&mut reopened)
         .unwrap();
-    pump(&mut reopened);
+    complete_pending(&mut reopened);
     frame(&mut reopened);
     place_cursor(&mut reopened, 25);
     assert_values(&mut reopened, &["ffffff85", "18446744073709551615"]);

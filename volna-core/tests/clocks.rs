@@ -7,7 +7,7 @@
 mod server;
 
 use std::sync::Arc;
-use volna_core::testing::{a, a_all};
+use volna_core::testing::{a, a_all, complete_pending};
 use volna_core::trace::TraceId;
 use vtr::Recorder as _;
 
@@ -121,18 +121,6 @@ fn open_pipeline(app: &App, member: Member) -> Command {
     }
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for r in requests {
-            app.deliver(r.perform());
-        }
-    }
-}
-
 fn frame(app: &mut App, id: PanelId, theme: &Theme) {
     app.layout_panel(id, BOUNDS, theme, 1.0, &mut MonoMeasure)
         .unwrap();
@@ -151,7 +139,7 @@ fn waves() -> (App, Arc<dyn Session>, PanelId) {
     let mut app = App::new();
     app.set_session(session.clone());
     app.handle(Command::AddVars(a_all(vec![0])));
-    pump(&mut app);
+    complete_pending(&mut app);
     let panel = app.panels.focused_id();
     assert!(
         app.doc.clocks.iter().all(|c| c.timeline().is_some()),
@@ -381,7 +369,7 @@ fn ruler_labels_use_separate_scope_and_name_cells() {
     w.close().unwrap();
     let mut app = App::new();
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::AddClockRulers(a_all([
         Member::Generator(0),
         Member::Generator(1),
@@ -613,7 +601,7 @@ fn pipeline_ruler_selection_clears_when_selecting_transactions() {
         .next()
         .unwrap();
     app.handle(open_pipeline(&app, Member::Generator(generator)));
-    pump(&mut app);
+    complete_pending(&mut app);
     let panel = app.panels.focused_id();
     let theme = Theme::one_dark();
     app.handle(Command::PipelineActivity(
@@ -799,7 +787,7 @@ fn a_clock_row_draws_from_stretches_and_survives_a_workspace() {
     );
     let mut restored = App::new();
     restored.set_session(session.clone());
-    pump(&mut restored);
+    complete_pending(&mut restored);
     let plan = Workspace::parse(&saved.to_bytes().unwrap())
         .unwrap()
         .prepare(
@@ -840,7 +828,7 @@ fn a_pipeline_counts_in_its_stream_clock_and_its_clock_becomes_the_default_ruler
                 .unwrap(),
         ),
     ));
-    pump(&mut app);
+    complete_pending(&mut app);
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, waves);
     app.handle(Command::PipelineActivity(
@@ -911,7 +899,7 @@ fn a_kanata_import_counts_its_pipeline_in_the_cycle_clock() {
     let session = OpenSpec::Path(out).open().unwrap();
     let mut app = App::new();
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     let clock = app
         .doc
         .clocks
@@ -929,7 +917,7 @@ fn a_kanata_import_counts_its_pipeline_in_the_cycle_clock() {
         other => panic!("{other:?}"),
     };
     app.handle(open_pipeline(&app, Member::Generator(thread)));
-    pump(&mut app);
+    complete_pending(&mut app);
     let pipeline = app.panels.focused_id();
     app.handle(Command::PipelineActivity(
         pipeline,
@@ -1051,7 +1039,7 @@ fn clocks_load_through_the_remote_protocol_like_any_track() {
         .clone();
     let mut local_app = App::new();
     local_app.set_session(local);
-    pump(&mut local_app);
+    complete_pending(&mut local_app);
     let expected = local_app
         .doc
         .clocks
@@ -1101,9 +1089,9 @@ fn added_lanes_share_rulers_without_changing_clock_navigation() {
 
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(file.path().into())));
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::AddTrace(OpenSpec::Path(file.path().into())));
-    pump(&mut app);
+    complete_pending(&mut app);
     let traces = [TraceId::A, TraceId::from_letter('B').unwrap()];
     let members = |name: &str| {
         traces
@@ -1506,11 +1494,11 @@ fn sub_pixel_bursts_of_a_gated_clock_draw_a_band() {
     };
     let mut app = App::new();
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::AddToWaves(a_all(vec![Member::Generator(
         generator,
     )])));
-    pump(&mut app);
+    complete_pending(&mut app);
     let panel = app.panels.focused_id();
     let theme = Theme::one_dark();
     frame(&mut app, panel, &theme);

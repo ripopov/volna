@@ -8,7 +8,7 @@ use volna_core::geometry::{Modifiers, Rect};
 use volna_core::panels::{PanelId, PanelKind, PanelsCommand, Placement};
 use volna_core::scene::MonoMeasure;
 use volna_core::sidebar::Key;
-use volna_core::testing::{a, a_all};
+use volna_core::testing::{a, a_all, complete_pending};
 use volna_core::trace::{TraceId, Traced};
 use volna_core::wave::model::WaveRow;
 use volna_core::workspace::Workspace;
@@ -26,20 +26,8 @@ fn opened() -> (App, Arc<dyn Session>) {
     let session = OpenSpec::Path(path()).open().unwrap();
     let mut app = App::new();
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     (app, session)
-}
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
 }
 
 fn generator(session: &dyn Session, kind: &str) -> Member {
@@ -88,7 +76,7 @@ fn mixed_activation_and_add_to_waves_share_order_deduplication_and_one_undo_step
     repeated.extend(members.clone());
     app.handle(Command::ActivateMembers(repeated));
     let waves = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, waves);
     assert_eq!(app.panels.len(), 1);
     let w = app.panels.waves(waves).unwrap();
@@ -132,7 +120,7 @@ fn mixed_activation_and_add_to_waves_share_order_deduplication_and_one_undo_step
 
     let mut shared = opened().0;
     shared.handle(Command::AddToWaves(members));
-    pump(&mut shared);
+    complete_pending(&mut shared);
     frame(&mut shared, waves);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&capture(&app)).unwrap(),
@@ -259,7 +247,7 @@ fn explicit_views_and_restored_layout_survive_default_activation() {
     app.handle(Command::ActivateMembers(vec![member]));
     let waves = app.panels.focused_id();
     let count = app.panels.len();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, waves);
     let saved = capture(&app);
     let plan = Workspace::parse(&saved)
@@ -284,7 +272,7 @@ fn explicit_views_and_restored_layout_survive_default_activation() {
 fn identical_members_from_different_traces_remain_distinct() {
     let (mut app, session) = opened();
     app.handle(Command::AddTrace(OpenSpec::Path(path())));
-    pump(&mut app);
+    complete_pending(&mut app);
     let second = TraceId::new(1).unwrap();
     let generator = generator(session.as_ref(), "LOG");
     let members = vec![
@@ -295,7 +283,7 @@ fn identical_members_from_different_traces_remain_distinct() {
     ];
     app.handle(Command::ActivateMembers(members.clone()));
     let waves = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::AddToWaves(members));
     assert_eq!(app.panels.waves(waves).unwrap().items().len(), 4);
     assert_eq!(app.panels.len(), 1);
@@ -448,7 +436,7 @@ fn scope_addition_includes_every_member_kind_and_preserves_group_depths() {
                 } else {
                     Command::AddScopeFlat(a(id))
                 });
-                pump(&mut app);
+                complete_pending(&mut app);
                 let items = app.panels.focused_waves().unwrap().items();
                 let actual: Vec<_> = items
                     .iter()

@@ -10,7 +10,7 @@ use volna_core::app::{Action, App, Command};
 use volna_core::geometry::{Point, Rect};
 use volna_core::panels::PanelId;
 use volna_core::scene::{MonoMeasure, Prim, Scene};
-use volna_core::testing::a_all;
+use volna_core::testing::{a_all, complete_pending};
 use volna_core::wave::model::{MenuAction, WaveModel};
 use volna_core::wave::{MenuEntry, Tint};
 use volna_core::workspace::Workspace;
@@ -83,24 +83,12 @@ fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     (file, session)
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
-}
-
 fn app() -> (tempfile::NamedTempFile, App, PanelId) {
     let (file, session) = trace();
     let mut app = App::new();
     app.set_session(session);
     app.handle(Command::AddVars(a_all(0..4)));
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id);
     (file, app, id)
@@ -265,7 +253,7 @@ fn groups_pass_their_colour_down_and_ungrouping_keeps_it() {
     app.handle(Command::Action(Action::CopySignals));
     select(&mut app, id, &[4]);
     app.handle(Command::Action(Action::PasteSignals));
-    pump(&mut app);
+    complete_pending(&mut app);
     let w = waves(&app, id);
     assert_eq!(w.items()[5].name(), "valid");
     assert_eq!(w.items()[5].depth, 0);

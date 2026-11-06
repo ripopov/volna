@@ -3,7 +3,7 @@
 use vtr::Recorder;
 
 use std::sync::Arc;
-use volna_core::testing::{a, a_all};
+use volna_core::testing::{a, a_all, complete_pending};
 use volna_core::trace::TraceId;
 
 use web_time::Instant;
@@ -118,25 +118,13 @@ fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     (file, session)
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
-}
-
 fn app() -> (tempfile::NamedTempFile, App, PanelId) {
     let (file, session) = trace();
     let mut app = App::new();
     app.set_session(session);
     let vars = 0..app.doc.hierarchy(TraceId::A).unwrap().var_count();
     app.handle(Command::AddVars(a_all(vars)));
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id);
     (file, app, id)
@@ -688,7 +676,7 @@ fn copying_rows_exports_cursor_time_and_values_without_changing_row_paste() {
     app.doc.shared.cursor = Some(200);
     select(&mut app, id, &[9]);
     app.handle(Command::Action(Action::PasteSignals));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(
         outline(&app, id)[10..],
         ["clk", "-Read", "  rvalid", "  rdata"]
@@ -737,7 +725,7 @@ fn the_clipboard_keeps_structure_and_pastes_under_the_last_selected_row() {
     );
     select(&mut app, id, &[3]);
     app.handle(Command::Action(Action::PasteSignals));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(
         outline(&app, id)[3..7],
         ["  awvalid", "  -Read", "    rvalid", "    rdata"]
@@ -781,7 +769,7 @@ fn add_scope_as_group_nests_child_scopes_folded() {
         scope: a(top),
         recursive: true,
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(
         outline(&app, id)[4..],
         [
@@ -862,7 +850,7 @@ fn workspaces_store_groups_as_a_tree_and_refuse_deeper_nesting() {
         .id;
     assert_eq!(outline(&app, id), before);
     assert_eq!(waves(&app, id).items()[2].height().multiple(), 2);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(
         waves(&app, id)
             .items()

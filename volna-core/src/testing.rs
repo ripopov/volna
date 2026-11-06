@@ -6,26 +6,36 @@ pub use volna_trace::testing::{ProceduralTrace, hierarchy_session};
 
 use crate::session::{LoadRequest, LoadResult};
 use volna_trace::Session;
+
+pub fn complete_pending(app: &mut App) {
+    complete_with(app, LoadRequest::perform);
+}
+
 pub fn complete_open(app: &mut App, session: Arc<dyn Session>) {
+    complete_with(app, |request| match request {
+        LoadRequest::Open {
+            trace, generation, ..
+        } => LoadResult::Opened {
+            trace,
+            generation,
+            result: Ok(session.clone()),
+        },
+        request => request.perform(),
+    });
+}
+
+fn complete_with(app: &mut App, mut perform: impl FnMut(LoadRequest) -> LoadResult) {
     loop {
         let requests = app.take_requests();
         if requests.is_empty() {
             return;
         }
         for request in requests {
-            app.deliver(match request {
-                LoadRequest::Open {
-                    trace, generation, ..
-                } => LoadResult::Opened {
-                    trace,
-                    generation,
-                    result: Ok(session.clone()),
-                },
-                request => request.perform(),
-            });
+            app.deliver(perform(request));
         }
     }
 }
+
 pub fn hierarchy_document(hierarchy: impl Into<volna_trace::data::Hierarchy>) -> crate::Document {
     let mut doc = crate::Document::new();
     doc.set_session(hierarchy_session(hierarchy));

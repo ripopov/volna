@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use volna_core::testing::{a, a_all};
+use volna_core::testing::{a, a_all, complete_pending};
 
 use volna_core::Theme;
 use volna_core::app::{Action, App, Command};
@@ -28,18 +28,6 @@ fn example(name: &str) -> Arc<dyn Session> {
         .join("../volna/examples")
         .join(name);
     OpenSpec::Path(path).open().unwrap()
-}
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
 }
 
 fn frame(app: &mut App, id: PanelId) -> &volna_core::scene::Scene {
@@ -96,7 +84,7 @@ fn with_lanes(paths: &[&str]) -> (App, Arc<dyn Session>, PanelId, Vec<TrackRef>)
         tracks.iter().map(|t| generator(session.as_ref(), *t)),
     )));
     let waves = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, waves);
     (app, session, waves, tracks)
 }
@@ -152,7 +140,7 @@ fn click(app: &mut App, waves: PanelId, p: Point) {
 fn mixed_tx_and_signal_heights_step_in_the_correct_direction_between_presets() {
     let (mut app, _, waves, _) = with_lanes(&[CPU0]);
     app.handle(Command::AddVars(a_all(vec![0])));
-    pump(&mut app);
+    complete_pending(&mut app);
     for multiple in [5, 6, 7] {
         let model = app.panels.waves_mut(waves).unwrap();
         model.selected = [0, 1].into();
@@ -559,7 +547,7 @@ fn overflow_controls_scroll_resize_reveal_and_restore_without_repacking() {
         .unwrap()
         .commit(&mut app)
         .unwrap();
-    pump(&mut app);
+    complete_pending(&mut app);
     let lane = app.panels.waves(waves).unwrap().items()[0].lane().unwrap();
     assert!(lane.occupancy);
     assert_eq!(lane.visible_rows(), visible);
@@ -581,7 +569,7 @@ fn add_to_waves_loads_shares_and_releases_generator_records() {
     app.handle(Command::OpenPipeline {
         track: a(tracks[0]),
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     let pipeline = app.panels.focused_id();
     let shared = |app: &App| match app.doc.track(a(tracks[0])) {
         Some(TrackLoadState::Ready(loaded)) => loaded.generators[0].clone(),
@@ -758,7 +746,7 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
     app.handle(Command::Action(Action::SplitRight));
     let other = app.panels.focused_id();
     app.handle(Command::Action(Action::PasteSignals));
-    pump(&mut app);
+    complete_pending(&mut app);
     let w = app.panels.waves(other).unwrap();
     assert!(matches!(w.items()[0].row, WaveRow::Lane(_)));
     assert_eq!(w.items()[0].height().multiple(), 4);
@@ -808,7 +796,7 @@ fn lanes_cut_paste_resize_and_round_trip_through_the_workspace() {
             .unwrap()
     };
     restore(&mut app, &saved);
-    pump(&mut app);
+    complete_pending(&mut app);
     let w = app.panels.waves(other).unwrap();
     let lane = w.items()[0].lane().unwrap();
     assert_eq!(lane.height, RowHeight::DEFAULT);
@@ -1047,7 +1035,7 @@ fn a_failed_record_is_red_in_bars_and_values() {
         read,
     )])));
     let waves = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     let failed = {
         let g = app.panels.waves(waves).unwrap().items()[0]
             .lane()
@@ -1194,7 +1182,7 @@ fn optional_index_refusal_keeps_records_available_retries_and_rejects_stale_resu
     ));
     budget.set_object_limit(object_limit);
     app.handle(Command::SetSidebarWidth(app.sidebar_width));
-    pump(&mut app);
+    complete_pending(&mut app);
     let Some(AnalysisLoad::Ready(index)) = app.doc.transaction_index(track) else {
         panic!("index retried")
     };
@@ -1235,7 +1223,7 @@ fn optional_index_refusal_keeps_records_available_retries_and_rejects_stale_resu
     budget.set_object_limit(object_limit);
     app.handle(Command::SetSidebarWidth(app.sidebar_width));
     app.deliver(failure);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(matches!(
         app.doc.transaction_index(track),
         Some(AnalysisLoad::Ready(_))
@@ -1316,7 +1304,7 @@ fn revealed_sub_rows_autosave_round_trip_and_follow_undo() {
         .unwrap()
         .commit(&mut app)
         .unwrap();
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(
         app.panels.waves(waves).unwrap().items()[0]
             .lane()

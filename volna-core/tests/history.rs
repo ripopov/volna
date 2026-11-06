@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use volna_core::testing::{a, a_all};
+use volna_core::testing::{a, a_all, complete_pending};
 use volna_core::trace::TraceId;
 
 use serde_json::Value;
@@ -32,18 +32,6 @@ fn landing() -> Arc<dyn Session> {
     OpenSpec::Path(landing_path()).open().unwrap()
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
-}
-
 fn frame(app: &mut App, id: PanelId) {
     let theme = Theme::one_dark();
     if app
@@ -63,7 +51,7 @@ fn frame(app: &mut App, id: PanelId) {
 fn opened(session: Arc<dyn Session>) -> App {
     let mut app = App::new();
     app.set_session(session);
-    pump(&mut app);
+    complete_pending(&mut app);
     app
 }
 
@@ -284,7 +272,7 @@ impl Driver {
         let ms = if self.rng.chance(3) { 200 } else { 1500 };
         self.now += Duration::from_millis(ms);
         self.app.handle_at(command, self.now);
-        pump(&mut self.app);
+        complete_pending(&mut self.app);
         let focused = self.app.panels.focused_id();
         frame(&mut self.app, focused);
     }
@@ -854,7 +842,7 @@ fn every_panel_kind_adopts_and_retires_through_restore_split_close_and_undo() {
         "preparation must not admit live panel memory"
     );
     assert!(plan.commit(&mut d.app).unwrap().notices.is_empty());
-    pump(&mut d.app);
+    complete_pending(&mut d.app);
     assert_eq!(
         budget.used(),
         used,
@@ -963,7 +951,7 @@ fn four_rows() -> (App, PanelId, Instant) {
     let mut app = opened(landing());
     let now = Instant::now();
     app.handle_at(Command::AddVars(a_all(vec![0, 1, 2, 3])), now);
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id);
     (app, id, now)
@@ -1011,7 +999,7 @@ fn repeated_format_presses_merge_within_the_window_only() {
     assert_eq!(buses.len(), 2);
     let now = Instant::now();
     app.handle_at(Command::AddVars(a_all(buses)), now);
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id);
     select(&mut app, id, &[0]);
@@ -1268,7 +1256,7 @@ fn removed_rows_come_back_sharing_resident_histories() {
     assert_eq!(app.panels.len(), 1);
     select(&mut app, id, &[3]);
     app.handle(Command::Action(Action::RemoveSelected));
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::Undo);
     let row = app.panels.waves(id).unwrap().items()[3].signal().unwrap();
     assert!(
@@ -1291,7 +1279,7 @@ fn an_add_undone_before_its_load_ignores_the_late_delivery() {
     }
     assert!(app.panels.get(id).is_none(), "the start panel came back");
     app.handle(Command::Redo);
-    pump(&mut app);
+    complete_pending(&mut app);
     let w = app.panels.waves(id).unwrap();
     assert_eq!(w.items().len(), 2);
     assert_eq!(w.loaded_count(), 2);
@@ -1302,25 +1290,25 @@ fn closing_a_table_returns_its_memory_and_undo_reserves_it_again() {
     let mut app = opened(landing());
     let budget = |app: &App| app.status().memory.unwrap().used;
     app.handle(Command::AddVars(a_all(vec![0])));
-    pump(&mut app);
+    complete_pending(&mut app);
     let base = budget(&app);
     app.handle(Command::OpenTable {
         selected: a_all(vec![Member::Var(0), Member::Var(1)]),
         clicked: None,
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     let table = app.panels.focused_id();
     assert!(app.panels.get(table).unwrap().kind.table().is_some());
     let open = budget(&app);
     assert!(open >= base + volna_core::table::model::PANEL_BYTES);
     app.handle(Command::Action(Action::ClosePanel));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(
         budget(&app) <= open - volna_core::table::model::PANEL_BYTES,
         "the journal holds no ledger bytes"
     );
     app.handle(Command::Undo);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(
         app.panels.focused_id(),
         table,
@@ -1345,7 +1333,7 @@ fn a_closed_panel_comes_back_with_its_rows_and_title() {
     assert!(app.panels.get(right).is_none());
     assert_eq!(app.undo_label(), Some("Close bus"));
     app.handle(Command::Undo);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(names(&app, right), rows);
     assert_eq!(app.panels.get(right).unwrap().title(), "bus");
     assert_eq!(app.panels.waves(right).unwrap().loaded_count(), 4);
@@ -1429,7 +1417,7 @@ fn markers_rulers_titles_columns_and_pins_round_trip() {
         selected: a_all(vec![generator]),
         clicked: None,
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     let table = app.panels.focused_id();
     let columns = |app: &App| {
         app.panels
@@ -1452,7 +1440,7 @@ fn markers_rulers_titles_columns_and_pins_round_trip() {
     app.handle(Command::Undo);
     assert_eq!(columns(&app), before);
 
-    pump(&mut app);
+    complete_pending(&mut app);
     let track = app
         .doc
         .hierarchy(TraceId::A)
@@ -1503,7 +1491,7 @@ fn the_history_is_cleared_with_the_trace_and_never_saved() {
     let mut plain = App::new();
     plain.set_session(landing());
     plain.handle(Command::AddVars(a_all(vec![0, 1, 2, 3])));
-    pump(&mut plain);
+    complete_pending(&mut plain);
     plain.history.clear();
     let without = Workspace::capture(&plain, volna_core::testing::paths(TRACE), None)
         .unwrap()
@@ -1544,7 +1532,7 @@ fn a_context_menu_edit_is_its_own_step() {
     let (mut app, id, now) = four_rows();
     let t = now + Duration::from_secs(10);
     app.handle_at(Command::AddVars(a_all(vec![4, 5])), t);
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, id);
     let six = names(&app, id);
     select(&mut app, id, &[1, 2]);

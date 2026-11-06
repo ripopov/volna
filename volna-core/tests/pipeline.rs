@@ -7,7 +7,7 @@ use vtr::Recorder;
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
-use volna_core::testing::{a, a_all};
+use volna_core::testing::{a, a_all, complete_pending};
 use volna_core::trace::TraceId;
 
 use volna_core::app::{Action, App, Command, Event, PanelLayout};
@@ -165,18 +165,6 @@ fn open_pipeline(app: &App, member: Member) -> Command {
     }
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for r in requests {
-            app.deliver(r.perform());
-        }
-    }
-}
-
 const BOUNDS: Rect = Rect::from_xywh(0.0, 0.0, 1200.0, 600.0);
 
 fn frame(app: &mut App, id: PanelId, theme: &Theme) {
@@ -231,7 +219,7 @@ fn waveform_menu_opens_the_clicked_generator_in_pipeline_view() {
     });
     app.handle(Command::AddToWaves(members.to_vec()));
     let waves = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     app.panels.waves_mut(waves).unwrap().select_all();
 
     for name in ["thread0", "bus", "thread0"] {
@@ -326,7 +314,7 @@ fn new_pipelines_start_at_the_first_record_with_readable_cells_once() {
                 let theme = Theme::one_dark().zoomed(zoom);
                 frame(&mut app, panel, &theme);
                 assert_eq!(app.doc.shared.viewport.value, shared);
-                pump(&mut app);
+                complete_pending(&mut app);
                 frame(&mut app, panel, &theme);
                 let p = app.panels.pipeline(panel).unwrap();
                 let view = p.nav.viewport(&app.doc);
@@ -377,7 +365,7 @@ fn navigating_while_a_pipeline_loads_preserves_the_chosen_view() {
     app.handle(Command::Action(Action::PanRight));
     app.doc.shared.viewport.set(chosen);
     frame(&mut app, panel, &Theme::one_dark());
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, panel, &Theme::one_dark());
     assert_eq!(app.doc.shared.viewport.value, chosen);
 }
@@ -390,7 +378,7 @@ fn pipeline_layout_only_measures_and_commands_apply_the_opening_view() {
     app.set_session(session);
     app.handle(Command::OpenPipeline { track: a(track) });
     let panel = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     let before = app.doc.shared.viewport.value;
     app.layout_panel(panel, BOUNDS, &Theme::one_dark(), 1.0, &mut MonoMeasure)
         .unwrap();
@@ -412,7 +400,7 @@ fn explicit_navigation_cancels_opening_even_when_the_view_does_not_change() {
     let before = app.doc.shared.viewport.value;
     app.handle(Command::Action(Action::GoToStart));
     assert_eq!(app.doc.shared.viewport.target(), before);
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, panel, &Theme::one_dark());
     assert_eq!(app.doc.shared.viewport.target(), before);
     assert!(app.panel_measurement(panel).is_none());
@@ -437,7 +425,7 @@ fn navigation_in_a_linked_panel_cancels_pending_shared_opening() {
         app.handle(Command::Action(Action::ZoomIn));
         app.tick(Instant::now() + Duration::from_secs(1));
         let chosen = app.doc.shared.viewport.value;
-        pump(&mut app);
+        complete_pending(&mut app);
         frame(&mut app, pipeline, &Theme::one_dark());
         let view = app
             .panels
@@ -475,7 +463,7 @@ fn pending_opening_uses_current_time_units_after_trace_refinement() {
         .unwrap();
         app.add_session(fine).unwrap();
         assert_eq!(app.doc.time_base().timescale, -12);
-        pump(&mut app);
+        complete_pending(&mut app);
         frame(&mut app, panel, &theme);
         let p = app.panels.pipeline(panel).unwrap();
         let width = f64::from(p.last_layout().cells.width());
@@ -533,7 +521,7 @@ fn activity_follows_cursor_then_view_center_and_preserves_other_axes() {
     use volna_core::pipeline::{ActivityCommand, FollowActivity};
     use volna_core::wave::viewport::Viewport;
     let (mut app, _, waves, pipeline) = opened(1000);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     app.doc.shared.viewport.set(Viewport {
         start: 100.0,
@@ -596,7 +584,7 @@ fn activity_vertical_override_edges_resume_and_idle_are_explicit() {
     use volna_core::pipeline::{ActivityCommand, FollowActivity};
     use volna_core::wave::viewport::Viewport;
     let (mut app, _, _, pipeline) = opened(1000);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     app.doc.shared.viewport.set(Viewport {
         start: 400.0,
@@ -677,7 +665,7 @@ fn activity_state_survives_workspace_and_split() {
         FollowActivity::Suspended,
     ] {
         let (mut app, session, _, pipeline) = opened(100);
-        pump(&mut app);
+        complete_pending(&mut app);
         app.panels.pipeline_mut(pipeline).unwrap().follow = follow;
         assert_eq!(
             app.panels.pipeline(pipeline).unwrap().clone_view().follow,
@@ -743,7 +731,7 @@ fn activity_keeps_long_overlaps_and_points_in_one_generator() {
     app.doc.shared.cursor = Some(500);
     let theme = Theme::one_dark();
     frame(&mut app, panel, &theme);
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, panel, &theme);
     let p = app.panels.pipeline(panel).unwrap();
     let activity = p.activity(&app.doc);
@@ -797,7 +785,7 @@ fn narrow_pipeline_stages_show_the_prefix_that_fits() {
     let session = fixture_with_stages(2, &["fetch", "decode", "execute"]);
     let mut app = App::new();
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(open_pipeline(
         &app,
         Member::Generator(
@@ -810,7 +798,7 @@ fn narrow_pipeline_stages_show_the_prefix_that_fits() {
                 .unwrap(),
         ),
     ));
-    pump(&mut app);
+    complete_pending(&mut app);
     let panel = app.panels.focused_id();
     let theme = Theme::one_dark();
     frame(&mut app, panel, &theme);
@@ -892,7 +880,7 @@ fn opening_a_pipeline_loads_the_track_once_and_paints_cells() {
     for r in requests {
         app.deliver(r.perform());
     }
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, pipeline, &theme);
     let p = app.panels.pipeline(pipeline).unwrap();
     let Rows::Ready(set) = p.rows(&app.doc) else {
@@ -961,7 +949,7 @@ fn opening_a_pipeline_loads_the_track_once_and_paints_cells() {
     );
 
     let generator = Member::Generator(0);
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(open_pipeline(&app, generator));
     assert_eq!(app.panels.len(), 3);
     assert!(app.take_requests().is_empty());
@@ -998,7 +986,7 @@ fn opening_a_pipeline_loads_the_track_once_and_paints_cells() {
                 .unwrap(),
         ),
     ));
-    pump(&mut app);
+    complete_pending(&mut app);
     let bus_panel = app.panels.focused_id();
     assert_eq!(app.panels.len(), 4);
     frame(&mut app, bus_panel, &theme);
@@ -1014,7 +1002,7 @@ fn opening_a_pipeline_loads_the_track_once_and_paints_cells() {
 fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
     for zoom in [1.0f32, 2.0] {
         let (mut app, _, _, pipeline) = opened(200);
-        pump(&mut app);
+        complete_pending(&mut app);
         let theme = Theme::one_dark().zoomed(zoom);
         app.panels
             .pipeline_mut(pipeline)
@@ -1097,7 +1085,7 @@ fn zoom_about_the_pointer_keeps_time_and_row_at_both_interface_zooms() {
 #[test]
 fn linked_navigation_moves_the_wave_panel_and_unlinked_navigation_does_not() {
     let (mut app, _, waves, pipeline) = opened(60);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     let cells = cells(&mut app, pipeline, &theme);
     frame(&mut app, pipeline, &theme);
@@ -1258,7 +1246,7 @@ fn box_press(app: &mut App, id: PanelId, position: Point, modifiers: Modifiers, 
 
 fn box_view(theme: &Theme) -> (App, PanelId, Rect) {
     let (mut app, _, _, id) = opened(1000);
-    pump(&mut app);
+    complete_pending(&mut app);
     app.doc
         .shared
         .viewport
@@ -1798,7 +1786,7 @@ fn pipeline_wheel_restores_nearest_squares_after_linked_waveform_zoom() {
         for wave_delta in [-120.0, 120.0] {
             for pipeline_delta in [-30.0, 30.0] {
                 let (mut app, _, waves, pipeline) = opened(1000);
-                pump(&mut app);
+                complete_pending(&mut app);
                 let theme = Theme::one_dark().zoomed(zoom);
                 let cells = cells(&mut app, pipeline, &theme);
                 let side = 8.0 * f64::from(zoom);
@@ -1868,7 +1856,7 @@ fn animated_square_zoom_keeps_cells_square_and_accumulates_targets() {
     use volna_core::wave::viewport::Viewport;
     for linked in [true, false] {
         let (mut app, _, _, pipeline) = opened(1000);
-        pump(&mut app);
+        complete_pending(&mut app);
         let theme = Theme::one_dark();
         if !linked {
             app.handle(Command::Panels(PanelsCommand::ToggleLink {
@@ -1924,7 +1912,7 @@ fn square_cells_use_the_stream_clock_period_instead_of_time_units() {
             panic!("the bound pipeline generator exists")
         };
         app.handle(open_pipeline(&app, Member::Generator(generator)));
-        pump(&mut app);
+        complete_pending(&mut app);
         let pipeline = app.panels.focused_id();
         let theme = Theme::one_dark().zoomed(zoom);
         let cells = cells(&mut app, pipeline, &theme);
@@ -1956,7 +1944,7 @@ fn one_cycle_primary_stage_fills_are_square_at_readable_scales() {
     for zoom in [1.0, 2.0] {
         for side in [6.0, 12.0, 24.0] {
             let (mut app, _, _, pipeline) = opened(200);
-            pump(&mut app);
+            complete_pending(&mut app);
             let theme = Theme::one_dark().zoomed(zoom);
             let cells = cells(&mut app, pipeline, &theme);
             let width = f64::from(cells.width()) / f64::from(side * zoom);
@@ -2001,7 +1989,7 @@ fn square_zoom_stops_at_fit_and_retraces_its_scales() {
     for zoom in [1.0f32, 2.0] {
         let theme = Theme::one_dark().zoomed(zoom);
         let (mut app, _, _, pipeline) = opened(10_000);
-        pump(&mut app);
+        complete_pending(&mut app);
         let cells = cells(&mut app, pipeline, &theme);
         app.doc.shared.viewport.set(Viewport {
             start: 5000.0,
@@ -2071,7 +2059,7 @@ fn square_zoom_stops_at_fit_and_retraces_its_scales() {
 fn square_zoom_stops_both_axes_at_the_row_cap_and_alt_wheel_can_raise_it() {
     for zoom in [1.0f32, 2.0] {
         let (mut app, _, _, pipeline) = opened(200);
-        pump(&mut app);
+        complete_pending(&mut app);
         let theme = Theme::one_dark().zoomed(zoom);
         let cells = cells(&mut app, pipeline, &theme);
         let pointer = point(cells.left() + 300.0, cells.top() + 60.0);
@@ -2123,7 +2111,7 @@ fn square_zoom_stops_both_axes_at_the_row_cap_and_alt_wheel_can_raise_it() {
 #[test]
 fn plain_wheel_follows_rows_and_shift_or_sideways_wheel_pans_time() {
     let (mut app, _, _, pipeline) = opened(500);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     let cells = cells(&mut app, pipeline, &theme);
     app.doc
@@ -2185,7 +2173,7 @@ fn navigator_drag_reveals_sampled_rows_without_changing_cursor_selection_or_scal
     use volna_core::pipeline::FollowActivity;
     for linked in [true, false] {
         let (mut app, _, waves, pipeline) = opened(500);
-        pump(&mut app);
+        complete_pending(&mut app);
         if !linked {
             app.handle(Command::Panels(PanelsCommand::ToggleLink {
                 panel: pipeline,
@@ -2271,7 +2259,7 @@ fn resizing_and_hiding_navigator_preserves_linked_time_mapping_and_saved_width()
     use volna_core::{panels::Axis, pipeline::NavigatorCommand};
     for theme in [Theme::volna(true), Theme::volna(false).zoomed(1.5)] {
         let (mut app, session, waves, pipeline) = opened(500);
-        pump(&mut app);
+        complete_pending(&mut app);
         app.configure_persistence(volna_core::workspace::persistence::Persistence::Auto);
         dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
         timeline_frames(&mut app, waves, pipeline, 1400.0, &theme);
@@ -2423,7 +2411,7 @@ fn navigator_grip_target_toggles_from_its_outer_edge_in_expanded_and_collapsed_l
         Theme::builtin("dracula").unwrap().zoomed(1.5),
     ] {
         let (mut app, _, _, pipeline) = opened(500);
-        pump(&mut app);
+        complete_pending(&mut app);
         frame(&mut app, pipeline, &theme);
         let initial = app.panels.pipeline(pipeline).unwrap().rows.value;
         let view = app
@@ -2465,7 +2453,7 @@ fn navigator_grip_target_toggles_from_its_outer_edge_in_expanded_and_collapsed_l
 fn stream_wheel_follows_local_or_shared_time_and_reverses_without_drift() {
     for linked in [true, false] {
         let (mut app, _, _, pipeline) = opened(500);
-        pump(&mut app);
+        complete_pending(&mut app);
         if !linked {
             app.handle(Command::Panels(PanelsCommand::ToggleLink {
                 panel: pipeline,
@@ -2533,7 +2521,7 @@ fn zoom_fit_keeps_square_cells_and_fits_short_and_tall_traces() {
     for zoom in [1.0, 2.0] {
         for n in [10u64, 10_000] {
             let (mut app, _, _, pipeline) = opened(n);
-            pump(&mut app);
+            complete_pending(&mut app);
             let theme = Theme::one_dark().zoomed(zoom);
             let cells = cells(&mut app, pipeline, &theme);
             app.panels.pipeline_mut(pipeline).unwrap().follow = FollowActivity::Following;
@@ -2589,7 +2577,7 @@ fn press(app: &mut App, id: PanelId, position: Point, modifiers: Modifiers) {
 #[test]
 fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
     let (mut app, _, waves, pipeline) = opened(60);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     frame(&mut app, pipeline, &theme);
     app.doc
@@ -2752,7 +2740,7 @@ fn the_markers_lane_is_the_same_in_wave_and_pipeline_panels() {
 #[test]
 fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
     let (mut app, _, waves, pipeline) = opened(60);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     let cells = cells(&mut app, pipeline, &theme);
     frame(&mut app, pipeline, &theme);
@@ -2904,7 +2892,7 @@ fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
 #[test]
 fn each_layout_uses_its_own_device_scale() {
     let (mut app, _, _, pipeline) = opened(1000);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     app.panels
         .pipeline_mut(pipeline)
@@ -2928,7 +2916,7 @@ fn each_layout_uses_its_own_device_scale() {
 #[test]
 fn overview_uses_physical_pixel_presence_with_bounded_output() {
     let (mut app, _, _, pipeline) = opened(10_000);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     app.panels
         .pipeline_mut(pipeline)
@@ -3005,7 +2993,7 @@ fn overview_uses_physical_pixel_presence_with_bounded_output() {
 #[test]
 fn flushed_and_open_rows_are_told_apart_by_colour() {
     let (mut app, _, _, pipeline) = opened(12);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     app.panels
         .pipeline_mut(pipeline)
@@ -3048,7 +3036,7 @@ fn flushed_and_open_rows_are_told_apart_by_colour() {
 #[test]
 fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     let (mut app, session, waves, pipeline) = opened(30);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     frame(&mut app, pipeline, &theme);
     app.handle(Command::Panels(PanelsCommand::ToggleLink {
@@ -3296,7 +3284,7 @@ fn a_stream_opened_first_replaces_the_start_panel_and_rows_find_a_waveform_tab()
     let pipeline = app.panels.focused_id();
     assert_ne!(pipeline, start);
     assert!(app.panels.pipeline(pipeline).unwrap().is_attached());
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(app.doc.track(a(track)).is_some());
     app.handle(Command::AddVars(a_all(vec![0])));
     assert_eq!(app.panels.len(), 3);
@@ -3346,7 +3334,7 @@ fn the_checked_in_showcase_has_two_pipeline_generators_on_a_cycle_time_base() {
                     .unwrap(),
             ),
         ));
-        pump(&mut app);
+        complete_pending(&mut app);
         let id = app.panels.focused_id();
         frame(&mut app, id, &theme);
         let p = app.panels.pipeline(id).unwrap();
@@ -3392,7 +3380,7 @@ fn the_feature_showcase_cpu_paints_stage_cells_and_stall_bands() {
     let session = OpenSpec::Path(path).open().unwrap();
     let mut app = App::new();
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     let stream = scope(session.as_ref(), &["soc", "cpu", "thread0"]);
     app.handle(open_pipeline(
         &app,
@@ -3406,7 +3394,7 @@ fn the_feature_showcase_cpu_paints_stage_cells_and_stall_bands() {
                 .unwrap(),
         ),
     ));
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     let theme = Theme::one_dark();
     frame(&mut app, id, &theme);
@@ -3446,7 +3434,7 @@ fn the_theme_showcase_runs_the_c910_stage_ladder_with_flushed_and_open_rows() {
     let session = OpenSpec::Path(path).open().unwrap();
     let mut app = App::new();
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     for (core, stages) in [
         ("cpu0", &["F", "D", "X", "M", "W"][..]),
@@ -3470,7 +3458,7 @@ fn the_theme_showcase_runs_the_c910_stage_ladder_with_flushed_and_open_rows() {
                     .unwrap(),
             ),
         ));
-        pump(&mut app);
+        complete_pending(&mut app);
         let id = app.panels.focused_id();
         frame(&mut app, id, &theme);
         let p = app.panels.pipeline(id).expect("a pipeline panel");
@@ -3506,7 +3494,7 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
     );
     let mut app = App::new();
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     let Lookup::Found(generator) = session
         .hierarchy()
         .find_generator(&["TOP", "tb", "core", "pipeline"])
@@ -3514,7 +3502,7 @@ fn the_verilator_demo_counts_in_its_clock_and_feeds_the_transaction_panel() {
         panic!("the bound pipeline generator exists")
     };
     app.handle(open_pipeline(&app, Member::Generator(generator)));
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     app.handle(Command::PipelineActivity(
         id,
@@ -3627,7 +3615,7 @@ fn stages_outside_owner_lifetimes_fit_paint_and_select_at_their_recorded_times()
     app.handle(Command::OpenPipeline {
         track: a(TrackRef(source.id())),
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     let panel = app.panels.focused_id();
     let theme = Theme::one_dark();
     frame(&mut app, panel, &theme);
@@ -3807,7 +3795,7 @@ fn half_million_rows_load_lay_out_and_paint() {
         }
     }
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     let parts: Vec<&str> = stream_path.split('.').collect();
     let stream = scope(session.as_ref(), &parts);
     let opened = t0.elapsed().as_secs_f64();
@@ -3824,7 +3812,7 @@ fn half_million_rows_load_lay_out_and_paint() {
                 .unwrap(),
         ),
     ));
-    pump(&mut app);
+    complete_pending(&mut app);
     let loaded = t1.elapsed().as_secs_f64();
     let id = app.panels.focused_id();
     let theme = Theme::one_dark();
@@ -3893,7 +3881,7 @@ fn half_million_rows_load_lay_out_and_paint() {
 #[test]
 fn marker_walks_move_a_pipeline_panel_cursor_like_a_wave_panel_cursor() {
     let (mut app, _, waves, pipeline) = opened(60);
-    pump(&mut app);
+    complete_pending(&mut app);
     let (lo, hi) = app.doc.limits();
     let (near, far) = (lo + (hi - lo) / 4, lo + (hi - lo) * 3 / 4);
     app.doc.add_marker(near);
@@ -3928,7 +3916,7 @@ fn marker_walks_move_a_pipeline_panel_cursor_like_a_wave_panel_cursor() {
 #[test]
 fn the_pipeline_measures_from_the_reference_like_the_waves() {
     let (mut app, _, waves, pipeline) = opened(60);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     let (lo, hi) = app.doc.limits();
     let (a, b) = (lo + (hi - lo) / 4, lo + (hi - lo) / 2);
@@ -4013,7 +4001,7 @@ fn removing_the_last_marker_keeps_measurements_and_controls_in_both_panels() {
         Theme::builtin("github-light").unwrap().zoomed(1.5),
     ] {
         let (mut app, _, waves, pipeline) = opened(60);
-        pump(&mut app);
+        complete_pending(&mut app);
         let (lo, hi) = app.doc.limits();
         let (a, b) = (lo + (hi - lo) / 4, lo + (hi - lo) / 2);
         for id in [waves, pipeline] {
@@ -4079,7 +4067,7 @@ fn removing_the_last_marker_keeps_measurements_and_controls_in_both_panels() {
 #[test]
 fn a_pipeline_chip_goes_on_click_moves_onto_cycles_on_drag_and_esc_cancels() {
     let (mut app, _, _, pipeline) = opened(60);
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     let (lo, hi) = app.doc.limits();
     let a = lo + (hi - lo) / 4;
@@ -4232,7 +4220,7 @@ fn stacked_timelines_share_divider_and_keep_names_divider_local() {
     use volna_core::panels::Axis;
     for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
         let (mut app, _, waves, pipeline) = opened(30);
-        pump(&mut app);
+        complete_pending(&mut app);
         dock_timelines(&mut app, waves, pipeline, Axis::Horizontal);
         app.panels.pipeline_mut(pipeline).unwrap().label_width = 400.0;
         dock_timelines(&mut app, waves, pipeline, Axis::Vertical);
@@ -4601,7 +4589,7 @@ fn occupancy_is_independent_of_waveform_layout_and_shared_when_both_show_a_gener
         assert!(!matches!(request, LoadRequest::Occupancy { .. }));
         app.deliver(request.perform());
     }
-    pump(&mut app);
+    complete_pending(&mut app);
     let Some(AnalysisLoad::Ready(index)) = app.doc.transaction_index(track) else {
         panic!("waveform index ready")
     };
@@ -4673,7 +4661,7 @@ fn occupancy_controls_preserve_rows_and_selection_and_persist_settings() {
     use volna_core::pipeline::OccupancyCommand;
     for theme in [Theme::one_dark(), Theme::islands_light().zoomed(2.0)] {
         let (mut app, session, _, pipeline) = opened(500);
-        pump(&mut app);
+        complete_pending(&mut app);
         frame(&mut app, pipeline, &theme);
         app.handle(Command::Panels(PanelsCommand::ToggleLink {
             panel: pipeline,

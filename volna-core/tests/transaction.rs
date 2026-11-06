@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use volna_core::testing::a;
+use volna_core::testing::{a, complete_pending};
 
 use volna_core::app::{Action, App, Command};
 use volna_core::data::text::Radix;
@@ -25,18 +25,6 @@ fn example(name: &str) -> Arc<dyn Session> {
         .join("../volna/examples")
         .join(name);
     OpenSpec::Path(path).open().unwrap()
-}
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
 }
 
 fn frame(app: &mut App, id: PanelId) {
@@ -95,7 +83,7 @@ fn with_pipeline(name: &str, stream: &str) -> (App, Arc<dyn Session>, PanelId) {
         track: a(track(session.as_ref(), stream)),
     });
     let pipeline = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::PipelineActivity(
         pipeline,
         volna_core::pipeline::ActivityCommand::Toggle,
@@ -183,10 +171,10 @@ fn located_and_embedded_activity_share_the_instruction_view_and_relation_navigat
     let track = TrackRef(instructions.id());
     app.handle(Command::OpenPipeline { track: a(track) });
     let pipeline = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, pipeline);
     let panel = show(&mut app, pipeline, track, owner.id());
-    pump(&mut app);
+    complete_pending(&mut app);
     let projection = view(&app, panel);
     assert_eq!(projection.stages.total, 3);
     assert_eq!(projection.events.total, 2);
@@ -602,7 +590,7 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
         app.panels.transaction(panel).unwrap().state(&app.doc),
         TxPanelState::Loading
     ));
-    pump(&mut app);
+    complete_pending(&mut app);
     let v = view(&app, panel);
     assert_eq!(v.identity.label.as_deref(), Some("read 0x10000020"));
     assert_eq!(v.identity.parent, Some(load));
@@ -628,7 +616,7 @@ fn a_jump_loads_the_target_track_back_returns_and_reveal_finds_the_row() {
     app.handle(Command::OpenPipeline {
         track: a(track(session.as_ref(), "soc.l2.bus")),
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::Panels(volna_core::panels::PanelsCommand::Focus(
         focused,
     )));
@@ -792,7 +780,7 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     assert!(view(&app, panel).attributes.collapsed);
 
     select(&mut app, pipeline, write, unfinished.0);
-    pump(&mut app);
+    complete_pending(&mut app);
     let v = view(&app, panel);
     assert_eq!(v.identity.status, Status::Open);
     assert_eq!((v.timing.end, v.timing.end_text.as_str()), (None, "open"));
@@ -825,7 +813,7 @@ fn a_restored_panel_loads_without_another_track_consumer() {
             )
             .unwrap();
         assert!(plan.commit(&mut restored).unwrap().notices.is_empty());
-        pump(&mut restored);
+        complete_pending(&mut restored);
         assert_eq!(view(&restored, panel).identity.id, load);
         assert_eq!(restored.panels.transaction(panel).unwrap().pinned(), pinned);
 
@@ -834,7 +822,7 @@ fn a_restored_panel_loads_without_another_track_consumer() {
         )));
         assert!(restored.doc.resident_generator(a(insn)).is_none());
         restored.handle(Command::Undo);
-        pump(&mut restored);
+        complete_pending(&mut restored);
         assert_eq!(view(&restored, panel).identity.id, load);
         restored.handle(Command::Redo);
         assert!(restored.doc.resident_generator(a(insn)).is_none());
@@ -882,7 +870,7 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         .unwrap();
     assert!(plan.report().notices.is_empty(), "{:?}", plan.report());
     plan.commit(&mut restored).unwrap();
-    pump(&mut restored);
+    complete_pending(&mut restored);
     let v = view(&restored, pinned);
     assert_eq!(v.identity.id, load);
     assert_eq!(
@@ -993,7 +981,7 @@ fn a_table_row_is_the_document_selection() {
         clicked: None,
     });
     let table = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, table);
     app.handle(Command::Table(
         table,
@@ -1093,7 +1081,7 @@ fn inspector_placement_preserves_record_history_and_restores_across_regions() {
         .unwrap()
         .commit(&mut restored)
         .unwrap();
-    pump(&mut restored);
+    complete_pending(&mut restored);
     assert_eq!(
         restored.panels.layout().right.as_ref().unwrap().width,
         510.0
@@ -1248,7 +1236,7 @@ fn opening_a_pipeline_reveals_a_reusable_inspector_without_stealing_focus() {
     assert!(app.panels.focused().kind.is_start());
     assert!(app.panels.layout().right.is_none());
     app.handle(Command::Redo);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(app.panels.focused_id(), pipeline);
     assert_eq!(app.panels.first_free_transaction(), Some(detail));
 

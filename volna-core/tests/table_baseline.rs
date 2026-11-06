@@ -1,7 +1,7 @@
 //! Headless vertical-slice checks for the reduced table panel.
 
 use std::path::PathBuf;
-use volna_core::testing::a_all;
+use volna_core::testing::{a_all, complete_pending};
 use volna_core::trace::TraceId;
 use volna_trace::session::LoadRequest as TraceRequest;
 
@@ -20,18 +20,6 @@ fn fixture() -> std::sync::Arc<dyn Session> {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples/pipeline_showcase.vtr");
     OpenSpec::Path(path).open().unwrap()
-}
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            break;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
 }
 
 fn frame(app: &mut App, panel: volna_core::panels::PanelId) {
@@ -92,7 +80,7 @@ fn logs_can_explicitly_open_a_table_with_formatted_filterable_sortable_columns()
         clicked: None,
     });
     let panel = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, panel);
     let table = app.panels.get(panel).unwrap().kind.table().unwrap();
     assert_eq!(table.len(), 3);
@@ -181,7 +169,7 @@ fn log_table_customization_survives_waveform_activation_restore_and_reset_undo()
         clicked: None,
     });
     let panel = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, panel);
     let message = app
         .panels
@@ -239,7 +227,7 @@ fn log_table_customization_survives_waveform_activation_restore_and_reset_undo()
         .unwrap()
         .commit(&mut app)
         .unwrap();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, panel);
     let table = app.panels.get(panel).unwrap().kind.table().unwrap();
     assert_eq!(table.columns.get(), &columns);
@@ -275,7 +263,7 @@ fn log_table_keeps_generic_attribute_sizing_when_message_is_hidden_or_resized() 
             clicked: None,
         });
         let panel = app.panels.focused_id();
-        pump(&mut app);
+        complete_pending(&mut app);
         frame(&mut app, panel);
         let message = app
             .panels
@@ -343,7 +331,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     let session = fixture();
     let mut app = App::new();
     app.set_session(session.clone());
-    pump(&mut app);
+    complete_pending(&mut app);
     let budget = app
         .doc
         .session(TraceId::A)
@@ -363,7 +351,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     ));
     app.handle(Command::Table(panel, TableCommand::Cancel));
     app.handle(Command::Table(panel, TableCommand::Retry));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(
         budget.used() > session_bytes + volna_core::table::model::PANEL_BYTES,
         "the native track and table must share the session ledger"
@@ -422,7 +410,7 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
         clicked: None,
     });
     let panel = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, panel);
     let table = app.panels.get(panel).unwrap().kind.table().unwrap();
     assert!(matches!(table.source, TableSource::Signals(_)));
@@ -547,7 +535,7 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
         )
         .unwrap();
     plan.commit(&mut app).unwrap();
-    pump(&mut app);
+    complete_pending(&mut app);
     let restored = app.panels.get(panel).unwrap().kind.table().unwrap();
     assert!(matches!(restored.source, TableSource::Signals(_)));
     assert_eq!(restored.viewport.top, 0);
@@ -581,7 +569,7 @@ fn single_signal_table_ignores_out_of_range_rows_and_next_starts_at_the_first() 
         clicked: None,
     });
     let panel = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, panel);
     let len = app.panels.get(panel).unwrap().kind.table().unwrap().len();
     assert!(len > 1);
@@ -606,7 +594,7 @@ fn attribute_layout_roundtrips_hidden_keys_widths_order_and_undo() {
         clicked: None,
     });
     let panel = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     let key = app
         .panels
         .get(panel)
@@ -673,7 +661,7 @@ fn attribute_layout_roundtrips_hidden_keys_widths_order_and_undo() {
         .unwrap()
         .commit(&mut app)
         .unwrap();
-    pump(&mut app);
+    complete_pending(&mut app);
     let table = app.panels.get(panel).unwrap().kind.table().unwrap();
     assert_eq!(table.columns.get(), &expected);
     assert_eq!(table.widths[7], Some(257.0));
@@ -716,7 +704,7 @@ fn transaction_attribute_shortcut_reuses_a_table_and_never_toggles_it_off() {
         clicked: None,
     });
     let table_panel = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::Table(table_panel, TableCommand::Select(0)));
     app.handle(Command::ShowTransaction { from: table_panel });
     let inspector = app
@@ -753,7 +741,7 @@ fn transaction_attribute_shortcut_reuses_a_table_and_never_toggles_it_off() {
         from: inspector,
         key: "vtr.label".into(),
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     let table = app
         .panels
         .focused()

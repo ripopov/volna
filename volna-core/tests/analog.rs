@@ -3,7 +3,7 @@
 use vtr::Recorder;
 
 use std::sync::Arc;
-use volna_core::testing::a_all;
+use volna_core::testing::{a_all, complete_pending};
 
 use web_time::{Duration, Instant};
 
@@ -92,24 +92,12 @@ fn trace_until(end: u64) -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     (file, session)
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
-}
-
 fn app() -> (tempfile::NamedTempFile, App, PanelId) {
     let (file, session) = trace();
     let mut app = App::new();
     app.set_session(session);
     app.handle(Command::AddVars(a_all(vec![BUS, REAL, BIT])));
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id);
     (file, app, id)
@@ -943,7 +931,7 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
     let mut app = App::new();
     app.set_session(session);
     app.handle(Command::AddVars(a_all(vec![BUS])));
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     let used = |app: &App| app.status().memory.unwrap().used;
     let digital = used(&app);
@@ -1009,7 +997,7 @@ fn long_histories_summarize_on_the_worker_and_release_with_the_plot() {
         app.doc.analog_summary(signal, signed, &history),
         Some(AnalysisLoad::Building(_))
     ));
-    pump(&mut app);
+    complete_pending(&mut app);
     select(&mut app, id, &[BUS]);
     app.handle(Command::Action(Action::ToggleAnalog));
     assert!(app.doc.analog_summary(signal, signed, &history).is_none());

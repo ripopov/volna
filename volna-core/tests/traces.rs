@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use volna_core::testing::complete_pending;
 
 use volna_core::Theme;
 use volna_core::app::{App, Command, Event};
@@ -26,18 +27,6 @@ fn landing() -> PathBuf {
 
 fn values_vtr() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures/values.vtr")
-}
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
 }
 
 fn frame(app: &mut App, id: PanelId) {
@@ -77,9 +66,9 @@ fn history(app: &App, trace: TraceId, name: &str) -> Arc<dyn volna_trace::data::
 fn two_runs() -> App {
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(landing())));
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::AddTrace(OpenSpec::Path(landing())));
-    pump(&mut app);
+    complete_pending(&mut app);
     app
 }
 
@@ -87,10 +76,10 @@ fn two_runs() -> App {
 fn vtr_recordings_in_ns_and_ps_share_one_exact_timeline() {
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(landing())));
-    pump(&mut app);
+    complete_pending(&mut app);
     let pc = var(&app, TraceId::A, "soc.cpu0.pc");
     app.handle(Command::AddVars(vec![pc]));
-    pump(&mut app);
+    complete_pending(&mut app);
     let raw = history(&app, TraceId::A, "pc");
     let (ns_end, changes) = (app.doc.limits().1, raw.len());
     let third = raw.time(3);
@@ -101,7 +90,7 @@ fn vtr_recordings_in_ns_and_ps_share_one_exact_timeline() {
 
     app.handle(Command::AddTrace(OpenSpec::Path(values_vtr())));
     assert_eq!(app.trace_chips()[1].detail(), "opening…");
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(app.doc.time_base().timescale, -12);
     assert_eq!(app.doc.shared.cursor, Some(783_000));
     assert_eq!(app.doc.markers()[0].time, 783_000);
@@ -124,7 +113,7 @@ fn vtr_recordings_in_ns_and_ps_share_one_exact_timeline() {
 
     let logic = var(&app, b(), "top.logic");
     app.handle(Command::AddVars(vec![logic]));
-    pump(&mut app);
+    complete_pending(&mut app);
     let b = history(&app, b(), "logic");
     assert_eq!((b.time(0), b.time(1)), (5, 10));
 
@@ -156,7 +145,7 @@ fn rows_of_both_traces_show_their_letters_in_one_panel() {
         var(&app, TraceId::A, "soc.cpu0.pc"),
         var(&app, b(), "soc.cpu0.pc"),
     ]));
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id);
     let shown = app.members_on_waves();
@@ -215,7 +204,7 @@ fn closing_a_trace_takes_its_rows_and_panels_in_one_step() {
     let pipeline = app.pipeline_generators()[1].1;
     assert_eq!(pipeline.trace, b());
     app.handle(Command::OpenPipeline { track: pipeline });
-    pump(&mut app);
+    complete_pending(&mut app);
     let waves = app.panels.first_waves().unwrap();
     assert_eq!(app.panels.waves(waves).unwrap().items().len(), 3);
     assert_eq!(app.panels.len(), 3);
@@ -242,7 +231,7 @@ fn closing_a_trace_takes_its_rows_and_panels_in_one_step() {
     app.handle(Command::Undo);
     assert!(Arc::ptr_eq(app.doc.session(b()).unwrap(), &session));
     assert_eq!(app.panels.len(), 3);
-    pump(&mut app);
+    complete_pending(&mut app);
     let items = app.panels.waves(waves).unwrap().items();
     assert_eq!(items.len(), 3);
     assert!(
@@ -281,10 +270,10 @@ fn traces_are_named_by_what_tells_them_apart_and_renames_undo() {
     let slow = copy_to(&dir.path().join("runs/dram20"), "landing.vtr");
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(base)));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(app.doc.name().as_deref(), Some("landing.vtr"));
     app.handle(Command::AddTrace(OpenSpec::Path(slow)));
-    pump(&mut app);
+    complete_pending(&mut app);
     let names = |app: &App| {
         app.trace_chips()
             .into_iter()
@@ -314,7 +303,7 @@ fn reopen(trace: &Path, sidecar: Content) -> App {
     let mut app = App::new();
     app.configure_persistence(Persistence::Auto);
     app.open_resource(OpenSpec::Path(trace.into()), uri(trace));
-    pump(&mut app);
+    complete_pending(&mut app);
     let trace_uri = uri(trace);
     app.restore_candidates(
         &trace_uri,
@@ -333,7 +322,7 @@ fn reopen(trace: &Path, sidecar: Content) -> App {
             writable: true,
         },
     );
-    pump(&mut app);
+    complete_pending(&mut app);
     app
 }
 
@@ -345,13 +334,13 @@ fn a_workspace_reopens_every_trace_it_names() {
     std::fs::copy(values_vtr(), &dram).unwrap();
     let mut app = reopen(&cpu, Content::Missing);
     app.add_resource(OpenSpec::Path(dram.clone()), uri(&dram));
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::RenameTrace(b(), Some("dram".into())));
     app.handle(Command::AddVars(vec![
         var(&app, TraceId::A, "soc.cpu0.pc"),
         var(&app, b(), "top.logic"),
     ]));
-    pump(&mut app);
+    complete_pending(&mut app);
     app.save_workspace(None);
     let bytes = app
         .take_events()
@@ -468,7 +457,7 @@ fn the_landing_cpu_and_dram_traces_line_up_on_one_timeline() {
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(landing())));
     app.handle(Command::AddTrace(OpenSpec::Path(landing_dram())));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(app.doc.time_base().timescale, -12);
     let burst = app
         .doc
@@ -485,7 +474,7 @@ fn the_landing_cpu_and_dram_traces_line_up_on_one_timeline() {
         var(&app, b(), "lpddr_tb.ctrl.state"),
         var(&app, b(), "lpddr_tb.ctrl.addr"),
     ]));
-    pump(&mut app);
+    complete_pending(&mut app);
     let (state, addr) = (history(&app, b(), "state"), history(&app, b(), "addr"));
     let bursts = app.doc.resident_generator(burst).unwrap();
     let records = bursts.transactions();
@@ -526,7 +515,7 @@ fn a_trace_opening_while_a_workspace_restores_still_joins() {
     let saved = {
         let mut other = App::new();
         other.handle(Command::Open(OpenSpec::Path(cpu.clone())));
-        pump(&mut other);
+        complete_pending(&mut other);
         Workspace::capture(&other, |_| Ok(Some("cpu.vtr".into())), None)
             .unwrap()
             .to_bytes()
@@ -551,7 +540,7 @@ fn a_trace_opening_while_a_workspace_restores_still_joins() {
         },
     );
     app.deliver(second.perform());
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(app.doc.traces().len(), 2);
     assert!(app.trace_chips().iter().all(|c| !c.loading));
 }
@@ -560,7 +549,7 @@ fn a_trace_opening_while_a_workspace_restores_still_joins() {
 fn closing_a_trace_still_opening_cancels_it() {
     let mut app = App::new();
     app.handle(Command::Open(OpenSpec::Path(landing())));
-    pump(&mut app);
+    complete_pending(&mut app);
     app.handle(Command::AddTrace(OpenSpec::Path(values_vtr())));
     assert!(app.trace_chips()[1].loading);
     app.handle(Command::RemoveTrace(b()));
@@ -627,7 +616,7 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
     std::fs::copy(values_vtr(), &y).unwrap();
     let mut app = reopen(&cpu, Content::Missing);
     app.add_resource(OpenSpec::Path(x.clone()), uri(&x));
-    pump(&mut app);
+    complete_pending(&mut app);
     let writes = |app: &mut App| -> Vec<(Target, serde_json::Value)> {
         app.take_events()
             .into_iter()
@@ -659,7 +648,7 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
     assert_eq!(app.doc.traces().get(b()).unwrap().uri, Some(uri(&x)));
     let ticket = app.workspace.scheduler.outstanding().cloned().unwrap();
     app.workspace_saved(ticket, None, volna_core::Instant::now());
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(app.doc.traces().get(b()).unwrap().uri, Some(uri(&y)));
     assert!(
         writes(&mut app).iter().all(|(target, _)| *target != old),

@@ -5,24 +5,12 @@ use volna_core::data::points::PointKind;
 use volna_core::geometry::{Modifiers, MouseButton, Rect, point};
 use volna_core::panels::PanelId;
 use volna_core::scene::MonoMeasure;
-use volna_core::testing::a;
+use volna_core::testing::{a, complete_pending};
 use volna_core::transaction::{TransactionCommand, TxPanelState};
 use volna_core::wave::{PointerEvent, points};
 use volna_core::{App, Command, Theme};
 use volna_trace::data::Member;
 use volna_trace::session::OpenSpec;
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            break;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
-}
 
 fn frame(app: &mut App, waves: PanelId) {
     let theme = Theme::one_dark();
@@ -58,7 +46,7 @@ fn point_generators_open_on_waves_and_group_details_preserve_record_identity() {
         app.handle(Command::ActivateMembers(vec![a(member)]));
         let waves = app.panels.focused_id();
         assert!(app.panels.waves(waves).is_some());
-        pump(&mut app);
+        complete_pending(&mut app);
         let lane = app.panels.waves(waves).unwrap().items()[0].lane().unwrap();
         let generator = lane.generator(&app.doc).unwrap();
         assert_eq!(generator.points().unwrap().kind, kind);
@@ -260,7 +248,7 @@ fn point_generators_open_on_waves_and_group_details_preserve_record_identity() {
             .unwrap()
             .commit(&mut restored)
             .unwrap();
-        pump(&mut restored);
+        complete_pending(&mut restored);
         let model = restored.panels.transaction(details).unwrap();
         assert!(model.pinned());
         assert_eq!(model.shown(), Some(&shown));
@@ -293,7 +281,7 @@ fn point_generators_open_on_waves_and_group_details_preserve_record_identity() {
         let finer = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../volna-trace/tests/fixtures/values.vtr");
         app.handle(Command::AddTrace(OpenSpec::Path(finer)));
-        pump(&mut app);
+        complete_pending(&mut app);
         assert_eq!(app.doc.time_base().timescale, -12);
         assert_eq!(app.doc.selection_range().unwrap().begin, time * 1000);
         let model = app.panels.transaction(details).unwrap();

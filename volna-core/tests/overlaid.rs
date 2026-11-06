@@ -11,7 +11,7 @@ use volna_core::data::NumericKind;
 use volna_core::geometry::{Point, Rect, point};
 use volna_core::panels::PanelId;
 use volna_core::scene::{MonoMeasure, Prim, Scene};
-use volna_core::testing::a;
+use volna_core::testing::{a, complete_pending};
 use volna_core::trace::TraceId;
 use volna_core::wave::analog::{self, AnalogDraw, AnalogRange, Plot, Series};
 use volna_core::wave::model::MenuAction;
@@ -108,7 +108,7 @@ fn fixture(changes: usize) -> (tempfile::NamedTempFile, App, PanelId) {
     w.close().unwrap();
     let mut app = App::new();
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
-    pump(&mut app);
+    complete_pending(&mut app);
     let Lookup::Found(top) = app.doc.hierarchy(TraceId::A).unwrap().find_scope(&["top"]) else {
         panic!();
     };
@@ -116,22 +116,10 @@ fn fixture(changes: usize) -> (tempfile::NamedTempFile, App, PanelId) {
         scope: a(top),
         recursive: false,
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id, &Theme::volna(true));
     (file, app, id)
-}
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            break;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
 }
 
 fn frame<'a>(app: &'a mut App, id: PanelId, t: &Theme) -> &'a Scene {
@@ -673,7 +661,7 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
             .texts()
             .any(|s| s.contains("Summarizing"))
     );
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(matches!(
         app.doc
             .analog_summary(signal, NumericKind::Unsigned, &history),
@@ -691,7 +679,7 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
             .is_none()
     );
     app.handle(Command::Undo);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(matches!(
         app.doc
             .analog_summary(signal, NumericKind::Unsigned, &history),
@@ -731,7 +719,7 @@ fn overlay_workspace_round_trips_settings_and_visibility_at_version_19() {
         .unwrap()
         .commit(&mut restored)
         .unwrap();
-    pump(&mut restored);
+    complete_pending(&mut restored);
     let rid = restored.panels.focused_id();
     assert_eq!(style(&restored, rid), style(&app, id));
     assert!(

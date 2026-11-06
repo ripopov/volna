@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use std::time::Duration;
 use volna_core::sidebar::TreeNode;
-use volna_core::testing::{a, a_all};
+use volna_core::testing::{a, a_all, complete_pending};
 use volna_core::trace::TraceId;
 
 use volna_core::app::{Action, App, Command, Event};
@@ -59,18 +59,6 @@ impl Session for Source {
         self.loads.fetch_add(1, SeqCst);
         anyhow::ensure!(!self.fail.load(SeqCst), "test failure");
         self.inner.load_signal(signal)
-    }
-}
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for r in requests {
-            app.deliver(r.perform());
-        }
     }
 }
 
@@ -130,7 +118,7 @@ fn missing_initial_sample_is_not_painted_as_a_logic_level() {
 fn partially_scrolled_row_backgrounds_are_clipped_below_the_timeline() {
     let (mut app, _) = loaded_app(40);
     app.handle(Command::AddVars(a_all((0..40).collect::<Vec<_>>())));
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     let t = Theme::volna(true);
     app.panels.waves_mut(id).unwrap().selected = [0, 39].into();
@@ -181,7 +169,7 @@ fn batch_loads_coalesce_and_stale_batches_preserve_new_pending() {
             .iter()
             .all(|row| row.signal().unwrap().history.is_none())
     );
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(app.doc.pending_count(), 0);
     assert!(
         app.panels
@@ -232,7 +220,7 @@ fn removing_one_alias_keeps_the_other_alias_queued() {
         source.hierarchy.var_count() - 1,
     ])));
     app.handle(Command::Action(Action::RemoveSelected));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(source.loads.load(SeqCst), 1);
     assert_eq!(app.panels.focused_waves().unwrap().items().len(), 1);
     assert!(
@@ -319,7 +307,7 @@ fn stale_results_cannot_fill_rows_or_clear_new_pending_loads() {
             .error
             .is_none()
     );
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(
         app.panels.focused_waves().unwrap().items()[0]
             .signal()
@@ -338,10 +326,10 @@ fn retry_menu_reloads_aliases_without_adding_rows_or_changing_ready_data() {
         0,
         source.hierarchy.var_count() - 1,
     ])));
-    pump(&mut app);
+    complete_pending(&mut app);
     source.fail.store(false, SeqCst);
     app.handle(Command::AddVars(a_all(vec![1])));
-    pump(&mut app);
+    complete_pending(&mut app);
     let panel = app.panels.focused_id();
     let ready = app.panels.waves(panel).unwrap().items()[2]
         .signal()
@@ -420,7 +408,7 @@ fn failed_loads_can_retry_for_all_alias_rows() {
         0,
         source.hierarchy.var_count() - 1,
     ])));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(
         app.panels.focused_waves().unwrap().items().iter().all(|i| i
             .signal()
@@ -438,7 +426,7 @@ fn failed_loads_can_retry_for_all_alias_rows() {
         panel,
         volna_core::wave::model::MenuAction::RetryLoad,
     ));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(source.loads.load(SeqCst), 2);
     assert!(
         app.panels.focused_waves().unwrap().items().iter().all(|i| i
@@ -514,7 +502,7 @@ fn closing_invalidates_pending_success_and_error() {
 fn open_errors_are_reported_and_a_later_open_recovers() {
     let mut app = App::new();
     app.open_bytes("bad.vtr".into(), vec![0; 16]);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(matches!(app.trace_state(), TraceState::Error(e) if !e.is_empty()));
     app.open_bytes("good.vtr".into(), Vec::new());
     volna_core::testing::complete_open(&mut app, ProceduralTrace::session(10));
@@ -544,7 +532,7 @@ fn cursor_markers_and_selection_follow_the_document() {
     let (mut app, _) = loaded_app(100);
     let theme = Theme::one_dark();
     app.handle(Command::AddVars(a_all(vec![0, 1, 2])));
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();
     let p = point(layout.waves.left() + 300.0, layout.row_y(1) + 12.0);
@@ -672,7 +660,7 @@ fn cursor_markers_and_selection_follow_the_document() {
 fn shift_wheel_scrolls_rows_without_panning_time() {
     let (mut app, _) = loaded_app(1000);
     volna_core::testing::add_signal_copies(&mut app, &[volna_core::testing::a(0)], 80);
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &Theme::one_dark());
     let panel = app.panels.focused_id();
     let w = app.panels.focused_waves().unwrap();
@@ -835,7 +823,7 @@ fn zoom_pan_and_fit_are_deterministic_with_an_explicit_clock() {
     let (mut app, _) = loaded_app(1000);
     let theme = Theme::one_dark();
     app.handle(Command::AddVars(a_all(vec![0])));
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     let full = app.panels.focused_waves().unwrap().viewport(&app.doc);
     let t0 = Instant::now();
@@ -998,7 +986,7 @@ fn dense_columns_collapse_into_one_band_and_zooming_in_resolves_edges() {
     let mut app = App::new();
     app.set_session(BurstSource::new());
     app.handle(Command::AddVars(a_all(vec![0])));
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     let aliased =
         |c: &volna_core::Color| c.with_alpha(1.0) == theme.wave_signal && (0.3..1.0).contains(&c.a);
@@ -1063,7 +1051,7 @@ fn format_menu_and_translator_cycle() {
         .position(|v| matches!(v.shape, SignalShape::Vector { .. }))
         .expect("a vector variable");
     app.handle(Command::AddVars(a_all(vec![vector])));
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     let badge = app.panels.focused_waves().unwrap().last_layout().badges[0].1;
     app.handle(Command::Pointer(
@@ -1146,7 +1134,7 @@ fn signal_name_menu_opens_and_removes_the_selected_signal_group() {
 
     let (mut app, _) = loaded_app(100);
     app.handle(Command::AddVars(a_all(vec![0, 1, 2])));
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &Theme::one_dark());
     let waves = app.panels.focused_id();
     let position = {
@@ -1238,7 +1226,7 @@ fn height_submenu_resizes_the_selection_and_rows_lay_out_paint_and_hit_test_tall
     let theme = Theme::one_dark();
     let (mut app, _) = loaded_app(100);
     app.handle(Command::AddVars(a_all(vec![0, 1, 2, 3])));
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     let waves = app.panels.focused_id();
     let row_h = app.panels.waves(waves).unwrap().last_layout().row_h;
@@ -1374,7 +1362,7 @@ fn row_height_actions_step_presets_and_keep_the_anchor_row_on_screen() {
     let theme = Theme::one_dark();
     let (mut app, _) = loaded_app(100);
     volna_core::testing::add_signal_copies(&mut app, &[volna_core::testing::a(0)], 60);
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     let waves = app.panels.focused_id();
     let row_h = app.panels.waves(waves).unwrap().last_layout().row_h;
@@ -1475,7 +1463,7 @@ fn dragging_signal_names_reorders_rows_and_keeps_them_selected() {
     let (mut app, _) = loaded_app(10);
     let waves = app.panels.focused_id();
     app.handle(Command::AddVars(a_all(vec![0, 1, 2, 3, 4, 5])));
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     let names = row_names(&app, waves);
     let order = |ix: &[usize]| ix.iter().map(|&i| names[i].clone()).collect::<Vec<_>>();
@@ -1551,7 +1539,7 @@ fn dragging_rows_past_an_edge_scrolls_and_keeps_heights_with_their_rows() {
     let (mut app, _) = loaded_app(10);
     let waves = app.panels.focused_id();
     volna_core::testing::add_signal_copies(&mut app, &a_all(0..8), 5);
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     press_row(&mut app, 0, 0.5, Modifiers::default());
     release(&mut app);
@@ -1605,7 +1593,7 @@ fn copied_rows_paste_as_duplicates_sharing_data_in_any_wave_panel() {
     let (mut app, source) = loaded_app(10);
     let waves = app.panels.focused_id();
     app.handle(Command::AddVars(a_all(vec![0, 1, 2])));
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(source.loads.load(SeqCst), 3);
     let names = row_names(&app, waves);
     app.handle(Command::Action(Action::PasteSignals));
@@ -1685,7 +1673,7 @@ fn copied_rows_paste_as_duplicates_sharing_data_in_any_wave_panel() {
             names[2].as_str()
         ]
     );
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(source.loads.load(SeqCst), 6);
     assert!(
         app.panels
@@ -1744,12 +1732,12 @@ fn status_reports_memory_budget_use_as_signals_load_and_unload() {
     let mut app = App::new();
     assert_eq!(app.status().memory, None, "no trace, no budget");
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
-    pump(&mut app);
+    complete_pending(&mut app);
     let opened = app.status().memory.expect("an open trace has a budget");
     assert_eq!(opened.limit, 512 * 1024 * 1024);
     assert!(opened.used > 0, "the resident trace is accounted");
     app.handle(Command::AddVars(a_all(vec![0])));
-    pump(&mut app);
+    complete_pending(&mut app);
     let loaded = app.status().memory.unwrap();
     assert!(loaded.used > opened.used, "{loaded:?} after {opened:?}");
     app.handle(Command::Action(Action::SelectAll));
@@ -1827,7 +1815,7 @@ fn layout_hit_regions_and_scene_cursors_agree() {
     let (mut app, _) = loaded_app(10);
     let theme = Theme::one_dark();
     volna_core::testing::add_signal_copies(&mut app, &a_all(0..4), 10);
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();
     assert!(layout.scrollbar.is_some(), "40 rows overflow 600 px");
@@ -1907,7 +1895,7 @@ fn hover_is_derived_from_the_pointer_and_only_changes_request_repaints() {
     let (mut app, _) = loaded_app(10);
     let theme = Theme::one_dark();
     app.handle(Command::AddVars(a_all(vec![0, 1])));
-    pump(&mut app);
+    complete_pending(&mut app);
     frame(&mut app, &theme);
     app.take_events();
     let layout = app.panels.focused_waves().unwrap().last_layout().clone();

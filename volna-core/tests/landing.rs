@@ -3,6 +3,7 @@
 //! back to the same bytes.
 
 use std::path::PathBuf;
+use volna_core::testing::complete_pending;
 
 use volna_core::geometry::Rect;
 use volna_core::panels::PanelId;
@@ -15,18 +16,6 @@ use volna_trace::session::OpenSpec;
 
 fn examples() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna/examples")
-}
-
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
 }
 
 fn landing(workspace: &str) -> App {
@@ -45,7 +34,7 @@ fn landing(workspace: &str) -> App {
         .unwrap()
         .commit(&mut app)
         .unwrap();
-    pump(&mut app);
+    complete_pending(&mut app);
     app
 }
 
@@ -60,7 +49,7 @@ fn landing_waveforms_render_at_full_range_and_saved_zoom() {
         app.layout_panel(PanelId(39), bounds, &theme, 1.0, &mut MonoMeasure)
             .unwrap();
         app.render_panel(PanelId(39), &theme, &mut MonoMeasure);
-        pump(app);
+        complete_pending(app);
         app.layout_panel(PanelId(39), bounds, &theme, 1.0, &mut MonoMeasure)
             .unwrap();
         let scene = app.render_panel(PanelId(39), &theme, &mut MonoMeasure);
@@ -139,7 +128,7 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         .unwrap();
     assert_eq!(plan.report().notices, Vec::<String>::new());
     plan.commit(&mut app).unwrap();
-    pump(&mut app);
+    complete_pending(&mut app);
     let theme = Theme::one_dark();
     let bounds = Rect::from_xywh(0.0, 0.0, 900.0, 420.0);
     for id in [39, 38, 40] {
@@ -147,7 +136,7 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
             .unwrap();
         app.render_panel(PanelId(id), &theme, &mut MonoMeasure);
     }
-    pump(&mut app);
+    complete_pending(&mut app);
     app.tick(Instant::now());
 
     let waves = app.panels.waves(PanelId(39)).unwrap();
@@ -225,7 +214,7 @@ fn the_landing_workspace_restores_every_panel_and_saves_the_same_bytes() {
         cursor: None,
     });
     app.handle(Command::ShowTransaction { from: PanelId(38) });
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(app.panels.focused_id(), PanelId(37));
     assert_eq!(app.panels.len(), 4, "reuse the existing transaction panel");
     match app.panels.transaction(PanelId(37)).unwrap().state(&app.doc) {

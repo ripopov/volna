@@ -12,7 +12,7 @@ use volna_core::data::NumericKind;
 use volna_core::geometry::{Point, Rect, point};
 use volna_core::panels::PanelId;
 use volna_core::scene::{MonoMeasure, Prim, Scene};
-use volna_core::testing::a;
+use volna_core::testing::{a, complete_pending};
 use volna_core::trace::TraceId;
 use volna_core::wave::analog::Sample;
 use volna_core::wave::model::{MenuAction, MenuEntry};
@@ -506,13 +506,13 @@ fn long_stacks_hold_integral_summaries_until_their_histories_go() {
     let (_f, session) = long_trace();
     let mut app = App::new();
     app.set_session(session);
-    pump(&mut app);
+    complete_pending(&mut app);
     let top = scope(&app, &["top"]);
     app.handle(Command::AddScopeAsGroup {
         scope: a(top),
         recursive: false,
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     let layers = app.panels.waves(id).unwrap().stack_layers(0);
     assert!(
@@ -536,7 +536,7 @@ fn long_stacks_hold_integral_summaries_until_their_histories_go() {
     );
     let shown = texts(frame(&mut app, id));
     assert!(shown.iter().any(|s| s == "Summarizing…"), "{shown:?}");
-    pump(&mut app);
+    complete_pending(&mut app);
     for l in &layers {
         let Some(AnalysisLoad::Ready(s)) = app.doc.integral(&l.history, l.reading) else {
             panic!("no summary");
@@ -791,18 +791,6 @@ fn trace() -> (tempfile::NamedTempFile, Arc<dyn Session>) {
     (file, session)
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            return;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
-}
-
 fn frame(app: &mut App, id: PanelId) -> &Scene {
     let theme = Theme::one_dark();
     app.layout_panel(
@@ -827,13 +815,13 @@ fn app() -> (tempfile::NamedTempFile, App, PanelId) {
     let (file, session) = trace();
     let mut app = App::new();
     app.set_session(session);
-    pump(&mut app);
+    complete_pending(&mut app);
     let top = scope(&app, &["top"]);
     app.handle(Command::AddScopeAsGroup {
         scope: a(top),
         recursive: false,
     });
-    pump(&mut app);
+    complete_pending(&mut app);
     let id = app.panels.focused_id();
     frame(&mut app, id);
     (file, app, id)
@@ -1099,7 +1087,7 @@ fn signed_members_stack_below_zero_with_a_net_line() {
         panic!()
     };
     app.handle(Command::AddVars(vec![a(flow)]));
-    pump(&mut app);
+    complete_pending(&mut app);
     let w = app.panels.waves_mut(id).unwrap();
     let end = w.items().len() - 1;
     w.selected = [end].into();
@@ -1108,7 +1096,7 @@ fn signed_members_stack_below_zero_with_a_net_line() {
     w.selected = [0].into();
     w.anchor = Some(0);
     app.handle(Command::Action(Action::ToggleStack));
-    pump(&mut app);
+    complete_pending(&mut app);
     let App { panels, doc, .. } = &mut app;
     panels.waves_mut(id).unwrap().nav.jump_to(
         doc,
@@ -1191,9 +1179,9 @@ fn stacked(app: &mut App, path: &[&str]) -> (Vec<String>, (f64, f64)) {
         scope: a(s),
         recursive: false,
     });
-    pump(app);
+    complete_pending(app);
     app.handle(Command::Action(Action::ToggleStack));
-    pump(app);
+    complete_pending(app);
     let id = app.panels.focused_id();
     let w = app.panels.waves(id).unwrap();
     let g = *w.selected.first().unwrap();
@@ -1213,7 +1201,7 @@ fn stacked(app: &mut App, path: &[&str]) -> (Vec<String>, (f64, f64)) {
 fn the_showcase_scopes_stack_bits_counts_and_signed_currents() {
     let mut app = App::new();
     app.set_session(showcase());
-    pump(&mut app);
+    complete_pending(&mut app);
     let (names, range) = stacked(&mut app, &["soc", "cpu", "occupancy"]);
     assert_eq!(names, ["fetch", "decode", "execute", "memory", "writeback"]);
     assert_eq!(range, (0.0, 5.0), "up to five instructions in flight");
@@ -1285,7 +1273,7 @@ fn the_analog_showcase_stacks_related_contributions_and_preserves_gaps() {
 
     let mut app = App::new();
     app.set_session(OpenSpec::Path(path).open().unwrap());
-    pump(&mut app);
+    complete_pending(&mut app);
     let (names, range) = stacked(&mut app, &["analog", "power"]);
     assert_eq!(names, ["cpu_mw", "gpu_mw", "memory_mw", "io_mw"]);
     assert!(range.0 == 0.0 && range.1 > 65.0, "{range:?}");
@@ -1332,7 +1320,7 @@ fn the_analog_showcase_stacks_related_contributions_and_preserves_gaps() {
 fn the_peak_band_shows_bursts_and_switches_from_the_menu() {
     let mut app = App::new();
     app.set_session(showcase());
-    pump(&mut app);
+    complete_pending(&mut app);
     stacked(&mut app, &["soc", "power"]);
     let id = app.panels.focused_id();
     let g = *app.panels.waves(id).unwrap().selected.first().unwrap();

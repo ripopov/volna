@@ -5,6 +5,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use volna_core::testing::complete_pending;
 
 use volna_core::{
     App, Command,
@@ -143,18 +144,6 @@ impl Session for Ancestry {
     }
 }
 
-fn pump(app: &mut App) {
-    loop {
-        let requests = app.take_requests();
-        if requests.is_empty() {
-            break;
-        }
-        for request in requests {
-            app.deliver(request.perform());
-        }
-    }
-}
-
 fn show(session: Arc<Ancestry>) -> (App, PanelId) {
     let mut app = App::new();
     app.set_session(session);
@@ -167,7 +156,7 @@ fn show(session: Arc<Ancestry>) -> (App, PanelId) {
     });
     app.handle(Command::ShowTransaction { from: origin });
     let panel = app.panels.focused_id();
-    pump(&mut app);
+    complete_pending(&mut app);
     (app, panel)
 }
 
@@ -194,7 +183,7 @@ fn parents_load_on_demand_without_changing_selection_and_are_released_on_hide() 
         &ParentTraceState::Loading
     );
     assert!(app.doc.track(a(TrackRef(3))).is_none());
-    pump(&mut app);
+    complete_pending(&mut app);
     let graph = app.panels.transaction(panel).unwrap().parents();
     assert_eq!(graph.state(), &ParentTraceState::Ready);
     assert_eq!(
@@ -293,7 +282,7 @@ fn cancel_navigation_and_close_discard_late_ancestry_completions() {
                 &ParentTraceState::Idle
             );
         }
-        pump(&mut app);
+        complete_pending(&mut app);
     }
 }
 
@@ -303,14 +292,14 @@ fn failed_parent_loads_can_be_retried() {
     session.fail_parent.store(true, Ordering::Relaxed);
     let (mut app, panel) = show(session.clone());
     trace(&mut app, panel);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert!(
         matches!(app.panels.transaction(panel).unwrap().parents().state(), ParentTraceState::Failed(error) if error.contains("parent load failed"))
     );
     assert!(app.doc.track(a(TrackRef(2))).is_none());
     session.fail_parent.store(false, Ordering::Relaxed);
     trace(&mut app, panel);
-    pump(&mut app);
+    complete_pending(&mut app);
     assert_eq!(
         app.panels.transaction(panel).unwrap().parents().state(),
         &ParentTraceState::Ready
@@ -322,7 +311,7 @@ fn cycles_missing_parents_and_budget_refusals_do_not_report_a_complete_graph() {
     for (cycle, missing, message) in [(true, false, "cycle"), (false, true, "missing")] {
         let (mut app, panel) = show(Ancestry::new(3, false, cycle, missing));
         trace(&mut app, panel);
-        pump(&mut app);
+        complete_pending(&mut app);
         assert!(
             matches!(app.panels.transaction(panel).unwrap().parents().state(), ParentTraceState::Failed(error) if error.contains(message))
         );
