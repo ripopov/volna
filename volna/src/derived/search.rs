@@ -65,6 +65,7 @@ impl DerivedEditor {
         {
             return;
         }
+        self.input_search.task = None;
         let work = RecordedSearch::new(doc, &key.query);
         self.input_search.key = Some(key.clone());
         self.input_search.results = None;

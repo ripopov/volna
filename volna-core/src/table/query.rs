@@ -30,17 +30,7 @@ enum Indices {
 }
 impl Indices {
     fn build(len: u64, compare: &impl Fn(u64, u64) -> Ordering, stop: &AtomicBool) -> Result<Self> {
-        let count = usize::try_from(len)?;
-        if len <= u64::from(u32::MAX) + 1 {
-            Ok(Self::Narrow(build(
-                count,
-                |i| i as u32,
-                |a, b| compare(u64::from(a), u64::from(b)),
-                stop,
-            )?))
-        } else {
-            Ok(Self::Wide(build(count, |i| i as u64, compare, stop)?))
-        }
+        Self::from_rows(len, len, 0..len, compare, stop)
     }
     fn from_rows(
         len: u64,
@@ -51,31 +41,14 @@ impl Indices {
     ) -> Result<Self> {
         let count = usize::try_from(len)?;
         if source_len <= u64::from(u32::MAX) + 1 {
-            let mut values = Vec::new();
-            values.try_reserve_exact(count)?;
-            for (i, row) in rows.enumerate() {
-                if i.is_multiple_of(4096) {
-                    checkpoint(stop)?;
-                }
-                values.push(u32::try_from(row)?);
-            }
-            sort_run(
-                &mut values,
-                &|a, b| compare(u64::from(a), u64::from(b)),
+            Ok(Self::Narrow(build(
+                count,
+                rows.map(|row| Ok(u32::try_from(row)?)),
+                |a, b| compare(u64::from(a), u64::from(b)),
                 stop,
-            )?;
-            Ok(Self::Narrow(values))
+            )?))
         } else {
-            let mut values = Vec::new();
-            values.try_reserve_exact(count)?;
-            for (i, row) in rows.enumerate() {
-                if i.is_multiple_of(4096) {
-                    checkpoint(stop)?;
-                }
-                values.push(row);
-            }
-            sort_run(&mut values, compare, stop)?;
-            Ok(Self::Wide(values))
+            Ok(Self::Wide(build(count, rows.map(Ok), compare, stop)?))
         }
     }
     fn len(&self) -> usize {
@@ -268,7 +241,7 @@ fn checkpoint(stop: &AtomicBool) -> Result<()> {
 
 fn build<T: Copy>(
     len: usize,
-    ordinal: impl Fn(usize) -> T,
+    source: impl Iterator<Item = Result<T>>,
     compare: impl Fn(T, T) -> Ordering,
     stop: &AtomicBool,
 ) -> Result<Vec<T>> {
@@ -276,9 +249,11 @@ fn build<T: Copy>(
     let mut rows = Vec::new();
     rows.try_reserve_exact(len)
         .context("Cannot allocate table sort index")?;
-    for start in (0..len).step_by(4096) {
-        checkpoint(stop)?;
-        rows.extend((start..start.saturating_add(4096).min(len)).map(&ordinal));
+    for (i, row) in source.enumerate() {
+        if i.is_multiple_of(4096) {
+            checkpoint(stop)?;
+        }
+        rows.push(row?);
     }
     sort_run(&mut rows, &compare, stop)?;
     checkpoint(stop)?;

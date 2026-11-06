@@ -1130,30 +1130,24 @@ impl Workspace {
             let Some(request) = self.route_remote(request, cx) else {
                 continue;
             };
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let work = self.native_imports.prepare(request);
-                cx.spawn(async move |this, cx| {
-                    let result = cx.background_spawn(async move { work() }).await;
-                    this.update(cx, |this, cx| {
-                        this.native_imports.finish(&result);
-                        this.app.deliver(result);
-                        this.after(None, cx);
-                    })
-                    .ok();
-                })
-                .detach();
-            }
-            #[cfg(target_family = "wasm")]
-            Self::spawn_request(request, cx);
+            self.spawn_request(request, cx);
         }
     }
 
-    #[cfg(any(test, target_family = "wasm"))]
-    pub(crate) fn spawn_request(request: volna_core::session::LoadRequest, cx: &mut Context<Self>) {
+    pub(crate) fn spawn_request(
+        &mut self,
+        request: volna_core::session::LoadRequest,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(not(target_family = "wasm"))]
+        let work = self.native_imports.prepare(request);
+        #[cfg(target_family = "wasm")]
+        let work = move || request.perform();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move { request.perform() }).await;
+            let result = cx.background_spawn(async move { work() }).await;
             this.update(cx, |this, cx| {
+                #[cfg(not(target_family = "wasm"))]
+                this.native_imports.finish(&result);
                 this.app.deliver(result);
                 this.after(None, cx);
             })

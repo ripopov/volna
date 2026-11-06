@@ -1478,7 +1478,7 @@ fn latest_open_wins_and_a_stale_open_cannot_replace_the_trace(cx: &mut TestAppCo
         })
         .unwrap();
     window
-        .update(cx, |_, _, cx| Workspace::spawn_request(slow, cx))
+        .update(cx, |ws, _, cx| ws.spawn_request(slow, cx))
         .unwrap();
     cx.run_until_parked();
     window
