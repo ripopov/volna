@@ -9,7 +9,7 @@ pub struct ActivityCounter {
     order: Vec<ScopeId>,
     totals: Vec<u32>,
     generators: Vec<(u32, u32)>,
-    _reservation: Reservation,
+    reservation: Reservation,
 }
 
 impl ActivityCounter {
@@ -46,6 +46,7 @@ impl ActivityCounter {
             stack.push(None);
             stack.extend(scope.children.iter().rev().map(Some));
         }
+        drop(stack);
         let (sizes, contributions) = census.finish_recorded();
         let mut totals = vec![0; h.scope_count()];
         for (i, &id) in order.iter().enumerate() {
@@ -58,18 +59,16 @@ impl ActivityCounter {
             .map(|(id, generator)| (generator.track.0, signals as u32 + id as u32))
             .collect();
         generators.sort_unstable();
-        drop(stack);
-        let resident = contributions.memory_bytes()
-            + ((order.capacity() * std::mem::size_of::<ScopeId>())
-                + totals.capacity() * 4
-                + generators.capacity() * 8) as u64;
-        Ok(Self {
+        let mut counter = Self {
             contributions,
             order,
             totals,
             generators,
-            _reservation: super::admission::finish(reservation, resident)?,
-        })
+            reservation,
+        };
+        let resident = counter.resident_bytes();
+        counter.reservation = super::admission::finish(counter.reservation, resident)?;
+        Ok(counter)
     }
 
     #[must_use]
@@ -102,7 +101,7 @@ pub struct ActivityCounts {
     changing: Vec<u32>,
     signals: Vec<vtr::SignalId>,
     generators: Vec<u32>,
-    _reservation: Reservation,
+    reservation: Reservation,
 }
 
 impl ActivityCounts {
@@ -131,16 +130,16 @@ impl ActivityCounts {
                     .map(|i| counter.generators[i].1)
             }),
         ));
-        let resident = (changing.capacity() * std::mem::size_of::<u32>()
-            + signals.capacity() * std::mem::size_of::<vtr::SignalId>()
-            + generators.capacity() * 4) as u64;
-        Ok(Self {
+        let mut counts = Self {
             window,
             changing,
             signals,
             generators,
-            _reservation: super::admission::finish(reservation, resident)?,
-        })
+            reservation,
+        };
+        let resident = counts.resident_bytes();
+        counts.reservation = super::admission::finish(counts.reservation, resident)?;
+        Ok(counts)
     }
 
     #[must_use]
