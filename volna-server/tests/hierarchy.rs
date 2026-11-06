@@ -1,7 +1,6 @@
 #[path = "../src/server.rs"]
 mod server;
 use std::sync::Arc;
-use volna_trace::data::Hierarchy;
 use volna_trace::remote::{
     ClientStep,
     hierarchy::PAGE_ENTRIES,
@@ -9,6 +8,7 @@ use volna_trace::remote::{
     transport::{Body, Packet},
 };
 use volna_trace::session::{LoadResult, Session};
+use volna_trace::testing::assert_hierarchy_eq;
 fn wide(count: usize) -> Arc<dyn Session> {
     let mut h = volna_trace::data::HierarchyBuilder::default();
     let root = h.push_scope("顶层.λ".into(), "module".into(), None);
@@ -27,60 +27,6 @@ fn wide(count: usize) -> Arc<dyn Session> {
         });
     }
     volna_trace::testing::hierarchy_session(h)
-}
-fn equal(a: &Hierarchy, b: &Hierarchy) {
-    assert_eq!(a.scope_count(), b.scope_count());
-    assert_eq!(a.var_count(), b.var_count());
-    assert_eq!(
-        a.roots().iter().collect::<Vec<_>>(),
-        b.roots().iter().collect::<Vec<_>>()
-    );
-    for id in 0..a.scope_count() {
-        let (a, b) = (a.scope(id), b.scope(id));
-        assert_eq!(
-            (a.name, a.kind, a.component, a.parent),
-            (b.name, b.kind, b.component, b.parent)
-        );
-        assert_eq!(
-            a.children.iter().collect::<Vec<_>>(),
-            b.children.iter().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            a.vars.iter().collect::<Vec<_>>(),
-            b.vars.iter().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            a.generators.iter().collect::<Vec<_>>(),
-            b.generators.iter().collect::<Vec<_>>()
-        );
-    }
-    for id in 0..a.var_count() {
-        let (a, b) = (a.var(id), b.var(id));
-        assert_eq!(
-            (
-                a.name,
-                a.scope,
-                a.shape,
-                a.var_type,
-                a.direction,
-                a.signal,
-                a.enum_table
-            ),
-            (
-                b.name,
-                b.scope,
-                b.shape,
-                b.var_type,
-                b.direction,
-                b.signal,
-                b.enum_table
-            )
-        );
-    }
-    assert_eq!(
-        bincode::serialize(a.generators()).unwrap(),
-        bincode::serialize(b.generators()).unwrap()
-    );
 }
 
 #[test]
@@ -139,7 +85,7 @@ fn production_in_process_transport_matches_local_over_multiple_pages() {
             }
         }
     };
-    equal(expected.hierarchy(), remote.hierarchy());
+    assert_hierarchy_eq(expected.hierarchy(), remote.hierarchy());
     write_packet(
         &mut client_socket,
         &Packet {

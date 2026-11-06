@@ -7,6 +7,68 @@ use crate::data::source::{Direction, Hierarchy, SignalRef, TraceInfo, Variable};
 use crate::data::value::{Bit, SignalShape, WaveValue};
 use crate::session::Session;
 
+#[track_caller]
+pub fn assert_hierarchy_eq(a: &Hierarchy, b: &Hierarchy) {
+    assert_eq!(
+        bincode::serialize(&a.enum_tables()).unwrap(),
+        bincode::serialize(&b.enum_tables()).unwrap()
+    );
+    assert_eq!(a.scope_count(), b.scope_count());
+    assert_eq!(a.var_count(), b.var_count());
+    assert_eq!(
+        a.roots().iter().collect::<Vec<_>>(),
+        b.roots().iter().collect::<Vec<_>>()
+    );
+    for id in 0..a.scope_count() {
+        let (a, b) = (a.scope(id), b.scope(id));
+        assert_eq!(
+            (a.name, a.kind, a.component, a.parent, a.description),
+            (b.name, b.kind, b.component, b.parent, b.description)
+        );
+        assert_eq!(
+            a.children.iter().collect::<Vec<_>>(),
+            b.children.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            a.vars.iter().collect::<Vec<_>>(),
+            b.vars.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            a.generators.iter().collect::<Vec<_>>(),
+            b.generators.iter().collect::<Vec<_>>()
+        );
+    }
+    for id in 0..a.var_count() {
+        let (a, b) = (a.var(id), b.var(id));
+        assert_eq!(
+            (
+                a.name,
+                a.scope,
+                a.shape,
+                a.var_type,
+                a.direction,
+                a.signal,
+                a.enum_table,
+                a.description
+            ),
+            (
+                b.name,
+                b.scope,
+                b.shape,
+                b.var_type,
+                b.direction,
+                b.signal,
+                b.enum_table,
+                b.description
+            )
+        );
+    }
+    assert_eq!(
+        bincode::serialize(a.generators()).unwrap(),
+        bincode::serialize(b.generators()).unwrap()
+    );
+}
+
 pub struct ProceduralTrace {
     info: TraceInfo,
     hierarchy: Hierarchy,

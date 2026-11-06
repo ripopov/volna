@@ -12,6 +12,7 @@ use volna_trace::remote::{ClientStep, signals::SignalTransfer};
 use volna_trace::remote::{client::RemoteClient, memory::MemoryBudget};
 use volna_trace::session::LoadResult;
 use volna_trace::session::OpenSpec;
+use volna_trace::testing::assert_hierarchy_eq;
 use vtr::Recorder;
 
 struct Server {
@@ -298,68 +299,12 @@ fn vtr_process_histories_match_local_values_and_aliases() {
         let metadata = server.open(64 * 1024 * 1024).unwrap();
         metadata.validate().unwrap();
         assert_eq!(
-            metadata.hierarchy.var_count(),
-            local.hierarchy().var_count()
-        );
-        assert_eq!(
             bincode::serialize(&metadata.info).unwrap(),
             bincode::serialize(local.info()).unwrap()
         );
         assert_eq!(metadata.capabilities, local.capabilities());
         assert_eq!(metadata.tracks, local.tracks());
-        let a = &metadata.hierarchy;
-        let b = local.hierarchy();
-        assert_eq!(a.scope_count(), b.scope_count());
-        assert_eq!(
-            a.roots().iter().collect::<Vec<_>>(),
-            b.roots().iter().collect::<Vec<_>>()
-        );
-        for id in 0..a.scope_count() {
-            let (a, b) = (a.scope(id), b.scope(id));
-            assert_eq!(
-                (a.name, a.kind, a.component, a.parent),
-                (b.name, b.kind, b.component, b.parent)
-            );
-            assert_eq!(
-                a.children.iter().collect::<Vec<_>>(),
-                b.children.iter().collect::<Vec<_>>()
-            );
-            assert_eq!(
-                a.vars.iter().collect::<Vec<_>>(),
-                b.vars.iter().collect::<Vec<_>>()
-            );
-            assert_eq!(
-                a.generators.iter().collect::<Vec<_>>(),
-                b.generators.iter().collect::<Vec<_>>()
-            );
-        }
-        for id in 0..a.var_count() {
-            let (a, b) = (a.var(id), b.var(id));
-            assert_eq!(
-                (
-                    a.name,
-                    a.scope,
-                    a.shape,
-                    a.var_type,
-                    a.direction,
-                    a.signal,
-                    a.enum_table
-                ),
-                (
-                    b.name,
-                    b.scope,
-                    b.shape,
-                    b.var_type,
-                    b.direction,
-                    b.signal,
-                    b.enum_table
-                )
-            );
-        }
-        assert_eq!(
-            bincode::serialize(a.generators()).unwrap(),
-            bincode::serialize(b.generators()).unwrap()
-        );
+        assert_hierarchy_eq(&metadata.hierarchy, local.hierarchy());
         let mut ids = vec![];
         for variable in local.hierarchy().vars().take(32) {
             if !ids.contains(&variable.signal.0) {

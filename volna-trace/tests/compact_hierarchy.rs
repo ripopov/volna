@@ -1,7 +1,7 @@
 //! Compact hierarchy parity and remote admission/lifecycle tests.
 
 use std::sync::Arc;
-use volna_trace::data::{Hierarchy, ScopeSizes};
+use volna_trace::data::ScopeSizes;
 use volna_trace::remote::ClientStep;
 use volna_trace::remote::{
     hierarchy::{Header, PAGE_ENTRIES, Page},
@@ -11,6 +11,7 @@ use volna_trace::remote::{
 };
 use volna_trace::session::LoadResult;
 use volna_trace::session::{OpenSpec, Session};
+use volna_trace::testing::assert_hierarchy_eq;
 
 fn objects(session: &dyn Session) -> Vec<(ObjectId, Vec<u8>)> {
     let header = Header::from_session(session).unwrap();
@@ -118,64 +119,6 @@ fn roundtrip(session: Arc<dyn Session>, chunk: usize, budget: &MemoryBudget) -> 
     transfer.finish().unwrap();
     result.unwrap()
 }
-fn equal(a: &Hierarchy, b: &Hierarchy) {
-    assert_eq!(
-        bincode::serialize(&a.enum_tables()).unwrap(),
-        bincode::serialize(&b.enum_tables()).unwrap()
-    );
-    assert_eq!(a.scope_count(), b.scope_count());
-    assert_eq!(a.var_count(), b.var_count());
-    assert_eq!(
-        a.roots().iter().collect::<Vec<_>>(),
-        b.roots().iter().collect::<Vec<_>>()
-    );
-    for id in 0..a.scope_count() {
-        let (a, b) = (a.scope(id), b.scope(id));
-        assert_eq!(
-            (a.name, a.kind, a.component, a.parent),
-            (b.name, b.kind, b.component, b.parent)
-        );
-        assert_eq!(
-            a.children.iter().collect::<Vec<_>>(),
-            b.children.iter().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            a.vars.iter().collect::<Vec<_>>(),
-            b.vars.iter().collect::<Vec<_>>()
-        );
-        assert_eq!(
-            a.generators.iter().collect::<Vec<_>>(),
-            b.generators.iter().collect::<Vec<_>>()
-        );
-    }
-    for id in 0..a.var_count() {
-        let (a, b) = (a.var(id), b.var(id));
-        assert_eq!(
-            (
-                a.name,
-                a.scope,
-                a.shape,
-                a.var_type,
-                a.direction,
-                a.signal,
-                a.enum_table
-            ),
-            (
-                b.name,
-                b.scope,
-                b.shape,
-                b.var_type,
-                b.direction,
-                b.signal,
-                b.enum_table
-            )
-        );
-    }
-    assert_eq!(
-        bincode::serialize(a.generators()).unwrap(),
-        bincode::serialize(b.generators()).unwrap()
-    );
-}
 
 #[test]
 fn every_fixture_roundtrips_column_for_column_with_shared_sizes() {
@@ -189,7 +132,7 @@ fn every_fixture_roundtrips_column_for_column_with_shared_sizes() {
         let local = OpenSpec::Path(root.join(path)).open().unwrap();
         let budget = MemoryBudget::new(64 * 1024 * 1024);
         let remote = roundtrip(local.clone(), 7, &budget);
-        equal(local.hierarchy(), remote.hierarchy());
+        assert_hierarchy_eq(local.hierarchy(), remote.hierarchy());
         let sizes = ScopeSizes::count(local.hierarchy());
         let received = remote.scope_sizes().unwrap();
         for id in 0..local.hierarchy().scope_count() {
@@ -231,7 +174,7 @@ fn pages_cross_65536_entries_and_shared_hierarchy_outlives_the_session() {
         let local = wide(count);
         let budget = MemoryBudget::new(32 * 1024 * 1024);
         let remote = roundtrip(local.clone(), DATA_BYTES, &budget);
-        equal(local.hierarchy(), remote.hierarchy());
+        assert_hierarchy_eq(local.hierarchy(), remote.hierarchy());
         let hierarchy = remote.hierarchy().clone();
         drop(remote);
         assert!(budget.used() > 0);
@@ -415,7 +358,7 @@ fn preorder_pages_preserve_declaration_ids_and_membership() {
     assert_eq!(Page::vars(local.hierarchy(), 0).ids, [1, 3, 2, 0]);
     let budget = MemoryBudget::new(1024 * 1024);
     let remote = roundtrip(local.clone(), 1, &budget);
-    equal(local.hierarchy(), remote.hierarchy());
+    assert_hierarchy_eq(local.hierarchy(), remote.hierarchy());
     let clone = local.hierarchy().clone();
     assert_eq!(
         clone.var(0).name.as_ptr(),
@@ -441,7 +384,7 @@ fn empty_forest_and_deep_hierarchy_roundtrip_without_recursion() {
         let local = volna_trace::testing::hierarchy_session(b);
         let budget = MemoryBudget::new(16 * 1024 * 1024);
         let remote = roundtrip(local.clone(), DATA_BYTES, &budget);
-        equal(local.hierarchy(), remote.hierarchy());
+        assert_hierarchy_eq(local.hierarchy(), remote.hierarchy());
         if depth > 0 {
             assert!(!remote.hierarchy().has_vars(0));
         }
@@ -694,7 +637,7 @@ fn root_variables_keep_synthetic_scope_declaration_order_and_later_top_is_distin
         }
         let budget = MemoryBudget::new(1024 * 1024);
         let remote = roundtrip(local.clone(), 7, &budget);
-        equal(h, remote.hierarchy());
+        assert_hierarchy_eq(h, remote.hierarchy());
     }
 }
 
@@ -723,7 +666,7 @@ fn enum_presence_preserves_the_complete_raw_identity_range() {
     let local = volna_trace::testing::hierarchy_session(builder);
     let budget = MemoryBudget::new(1024 * 1024);
     let remote = roundtrip(local.clone(), 7, &budget);
-    equal(local.hierarchy(), remote.hierarchy());
+    assert_hierarchy_eq(local.hierarchy(), remote.hierarchy());
     assert_eq!(remote.hierarchy().var(3).enum_table, Some(u32::MAX));
     drop(remote);
     assert_eq!(budget.used(), 0);
