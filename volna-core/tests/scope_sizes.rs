@@ -2,34 +2,18 @@
 //! every VTR fixture, and the scope tree reports it per row once the count after
 //! open is delivered.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use volna_core::app::App;
 use volna_core::data::sizes::ScopeSizeLabel;
 use volna_core::session::LoadRequest;
 use volna_core::sidebar::{ScopeTreeModel, TreeNode};
 use volna_core::trace::{TraceId, Traced};
-use volna_trace::data::{Hierarchy, ScopeId, ScopeSize};
+use volna_trace::data::ScopeSize;
 use volna_trace::session::OpenSpec;
+use volna_trace::testing::brute_scope_size;
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
-}
-
-fn brute(h: &Hierarchy, scope: ScopeId) -> ScopeSize {
-    let (mut signals, mut variables, mut scopes) = (HashSet::new(), 0, 0);
-    let mut stack = vec![scope];
-    while let Some(s) = stack.pop() {
-        scopes += 1;
-        variables += h.scope(s).vars.len() as u32;
-        signals.extend(h.scope(s).vars.iter().map(|v| h.var(v).signal));
-        stack.extend(h.scope(s).children);
-    }
-    ScopeSize {
-        signals: signals.len() as u32,
-        variables,
-        scopes,
-    }
 }
 
 #[test]
@@ -53,7 +37,7 @@ fn the_scope_tree_reports_sizes_once_counted() {
     }
     assert_eq!(
         ScopeTreeModel::size(app.doc.traces(), top),
-        Some(brute(h, h.roots().first().unwrap()))
+        Some(brute_scope_size(h, h.roots().first().unwrap()))
     );
     assert_eq!(
         ScopeTreeModel::size(app.doc.traces(), TreeNode::trace(TraceId::A)),

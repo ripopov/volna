@@ -1,11 +1,30 @@
 //! Test fixtures, built only for tests and with the `testing` feature.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::data::history::SignalHistory;
 use crate::data::source::{Direction, Hierarchy, SignalRef, TraceInfo, Variable};
 use crate::data::value::{Bit, SignalShape, WaveValue};
+use crate::data::{ScopeId, ScopeSize};
 use crate::session::Session;
+
+#[must_use]
+pub fn brute_scope_size(h: &Hierarchy, scope: ScopeId) -> ScopeSize {
+    let (mut signals, mut variables, mut scopes) = (HashSet::new(), 0, 0);
+    let mut stack = vec![scope];
+    while let Some(s) = stack.pop() {
+        scopes += 1;
+        variables += h.scope(s).vars.len() as u32;
+        signals.extend(h.scope(s).vars.iter().map(|v| h.var(v).signal));
+        stack.extend(h.scope(s).children);
+    }
+    ScopeSize {
+        signals: signals.len() as u32,
+        variables,
+        scopes,
+    }
+}
 
 #[track_caller]
 pub fn assert_hierarchy_eq(a: &Hierarchy, b: &Hierarchy) {
