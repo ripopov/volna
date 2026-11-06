@@ -3127,16 +3127,25 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
     window
         .update(&mut vcx, |ws, window, cx| {
             let panel = ws.app.panels.focused_id();
-            let badge = ws.app.panels.focused_waves().unwrap().last_layout().badges[0].1;
+            let layout = ws.app.panels.focused_waves().unwrap().last_layout();
+            let position = point(
+                layout.names.left() + 40.0,
+                layout.row_y(0) + layout.row_h / 2.0,
+            );
             ws.dispatch(
                 Command::Pointer(
                     panel,
                     PointerEvent::Down {
-                        position: point(badge.left() + 2.0, badge.top() + 2.0),
-                        button: MouseButton::Left,
+                        position,
+                        button: MouseButton::Right,
                         modifiers: Modifiers::default(),
                     },
                 ),
+                Some(window),
+                cx,
+            );
+            ws.dispatch(
+                Command::MenuSelect(panel, volna_core::wave::model::MenuAction::OpenFormat),
                 Some(window),
                 cx,
             );

@@ -1053,14 +1053,18 @@ fn format_menu_and_translator_cycle() {
     app.handle(Command::AddVars(a_all(vec![vector])));
     complete_pending(&mut app);
     frame(&mut app, &theme);
-    let badge = app.panels.focused_waves().unwrap().last_layout().badges[0].1;
+    let position = name_point(&app, 0, 0.5);
     app.handle(Command::Pointer(
         app.panels.focused_id(),
         PointerEvent::Down {
-            position: point(badge.left() + 2.0, badge.top() + 2.0),
-            button: MouseButton::Left,
+            position,
+            button: MouseButton::Right,
             modifiers: Modifiers::default(),
         },
+    ));
+    app.handle(Command::MenuSelect(
+        app.panels.focused_id(),
+        volna_core::wave::model::MenuAction::OpenFormat,
     ));
     let menu = app
         .panels
@@ -1116,10 +1120,14 @@ fn format_menu_and_translator_cycle() {
     app.handle(Command::Pointer(
         app.panels.focused_id(),
         PointerEvent::Down {
-            position: point(badge.left() + 2.0, badge.top() + 2.0),
-            button: MouseButton::Left,
+            position,
+            button: MouseButton::Right,
             modifiers: Modifiers::default(),
         },
+    ));
+    app.handle(Command::MenuSelect(
+        app.panels.focused_id(),
+        volna_core::wave::model::MenuAction::OpenFormat,
     ));
     assert!(app.panels.focused_waves().unwrap().menu.is_some());
     app.handle(Command::Action(Action::ClearSelection));
@@ -1865,16 +1873,6 @@ fn layout_hit_regions_and_scene_cursors_agree() {
     app.handle(Command::Pointer(app.panels.focused_id(), PointerEvent::Up));
     frame(&mut app, &theme);
     assert!(app.scene().window_cursor.is_none());
-    assert!(
-        app.scene().cursors.len()
-            >= 2 + app
-                .panels
-                .focused_waves()
-                .unwrap()
-                .last_layout()
-                .badges
-                .len()
-    );
     let (mut depth, mut max_depth) = (0i32, 0);
     for p in &app.scene().prims {
         match p {

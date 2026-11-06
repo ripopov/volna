@@ -255,9 +255,11 @@ fn reopening_a_workspace_preserves_one_signals_hex_override() {
     let name = point(layout.names.left() + 60.0, layout.row_y(0) + 12.0);
     press(&mut app, name);
     release(&mut app);
-    let badge = app.panels.focused_waves().unwrap().last_layout().badges[0].1;
-    press(&mut app, point(badge.left() + 2.0, badge.top() + 2.0));
-    release(&mut app);
+    app.handle(Command::OpenSignalMenu(app.panels.focused_id()));
+    app.handle(Command::MenuSelect(
+        app.panels.focused_id(),
+        MenuAction::OpenFormat,
+    ));
     app.handle(Command::MenuSelect(
         app.panels.focused_id(),
         MenuAction::Format("hex".into()),
@@ -368,10 +370,11 @@ fn overflowing_buses_keep_their_base_and_both_ends() {
     fit_value_characters(&mut wide_app, 0, 7);
     assert_values(&mut wide_app, &["0x10…34"]);
 
-    let layout = app.panels.focused_waves().unwrap().last_layout();
-    let badge = layout.badges[0].1;
-    press(&mut app, point(badge.left() + 2.0, badge.top() + 2.0));
-    release(&mut app);
+    app.handle(Command::OpenSignalMenu(app.panels.focused_id()));
+    app.handle(Command::MenuSelect(
+        app.panels.focused_id(),
+        MenuAction::OpenFormat,
+    ));
     app.handle(Command::MenuSelect(
         app.panels.focused_id(),
         MenuAction::Format("bin".into()),

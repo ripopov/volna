@@ -178,8 +178,7 @@ scopes with identical paths remain separate. To compare repeated names, add
 `soc.cpu0.pc` and `soc.cpu1.pc`
 from `volna/examples/pipeline_showcase.vtr`.
 
-Right-click a signal and choose **Format signal…**, or click its value-format
-badge or analog status line. All three open the same menu. **Waveform** offers
+Right-click a signal and choose **Format signal…**. **Waveform** offers
 Digital, Analog steps (hold each sample), and Analog lines (interpolate between
 samples), with waveform icons and hover descriptions. **Vertical scale** controls
 the analog value axis; **Value format** controls numeric or text representation.
@@ -196,10 +195,10 @@ cannot hold a meaningful representation. These compact labels do not change
 recorded values or clipboard contents.
 
 For a native control specimen, open `volna/examples/analog_showcase.vtr` and add
-`analog.waves.sine` and `analog.waves.cosine`. The format badge and the
-`linear · whole trace` status line both have dropdown chevrons. Select both rows
-to open **Format 2 signals**. Differing settings show **Mixed**; changing a setting
-applies that setting to the selection. Waveform controls identify the applicable
+`analog.waves.sine` and `analog.waves.cosine`. The format badge and analog status
+line show the current settings; left-dragging either reorders signals. Select both
+rows and choose **Format signals…** from the context menu to open **Format 2 signals**.
+Differing settings show **Mixed**; changing a setting applies that setting to the selection. Waveform controls identify the applicable
 numeric subset when a selection also contains signals that cannot be plotted.
 Value-format choices must support every target. The menu uses the native theme,
 keyboard navigation, and window bounds at each interface zoom.

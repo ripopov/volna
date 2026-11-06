@@ -1034,7 +1034,6 @@ pub struct WaveModel {
     pub scope: super::ScopeColumn,
     pub values_width: f32,
     pub hover_row: Option<usize>,
-    pub format_hover: Option<usize>,
     pub edge_hover: Option<usize>,
     pub split_hover: bool,
     pub lane_hover: Option<crate::marker::LaneHit>,
@@ -1117,7 +1116,6 @@ impl WaveModel {
             scope: super::ScopeColumn::default(),
             values_width: 120.0,
             hover_row: None,
-            format_hover: None,
             edge_hover: None,
             split_hover: false,
             lane_hover: None,
@@ -1150,7 +1148,6 @@ impl WaveModel {
         self.drag = None;
         self.row_edit = None;
         self.hover_row = None;
-        self.format_hover = None;
     }
 
     #[must_use]
@@ -3557,29 +3554,6 @@ impl WaveModel {
         self.layout.badges.retain(|(ix, _)| {
             Some(*ix) != preview_index && items.get(*ix).is_some_and(|row| row.signal().is_some())
         });
-        for pos in self.layout.rows.clone() {
-            let Some(row) = self.layout.entry(pos) else {
-                continue;
-            };
-            if Some(row) == preview_index
-                || self.signal(row).is_none_or(|s| s.analog.is_none())
-                || self.layout.row_height(pos) < 2.0 * self.layout.row_h - 0.5
-            {
-                continue;
-            }
-            let x = super::layout::indent_x(self.layout.name_left, items[row].depth, theme.zoom);
-            let y = (self.layout.row_y(pos) + self.layout.row_h - 4.0 * theme.zoom)
-                .max(self.layout.names.top());
-            let bottom = (self.layout.row_y(pos) + 2.0 * self.layout.row_h - 4.0 * theme.zoom)
-                .min(self.layout.names.bottom());
-            let width = self.layout.names.right() - 6.0 * theme.zoom - x;
-            if width > 0.0 && bottom > y {
-                self.layout.format_summaries.push((
-                    row,
-                    crate::geometry::Rect::from_xywh(x, y, width, bottom - y),
-                ));
-            }
-        }
         if let Some(row) = self.reveal_row.take() {
             let scroll = self.scroll_y;
             self.reveal_entry(doc, row);
@@ -4018,33 +3992,26 @@ impl WaveModel {
 
     fn update_hover(&mut self) {
         self.edge_hover = self.pointer.and_then(|p| self.row_edge_at(p));
-        let (hover_row, format_hover) = match self.pointer {
+        self.hover_row = match self.pointer {
             Some(p)
                 if self.layout.bounds.contains(p)
                     && !self.layout.gutter.contains(p)
                     && p.y >= self.layout.names.top() =>
             {
-                let row = self
-                    .layout
+                self.layout
                     .entry_at(p.y)
-                    .filter(|&r| self.display_entry(r).is_some());
-                let format_row = self.layout.format_at(p).map(|(ix, _)| ix);
-                (row, format_row)
+                    .filter(|&r| self.display_entry(r).is_some())
             }
-            _ => (None, None),
+            _ => None,
         };
-        self.hover_row = hover_row;
-        self.format_hover = format_hover;
     }
 
     fn clear_hover(&mut self) -> bool {
         let had = self.hover_row.is_some()
-            || self.format_hover.is_some()
             || self.edge_hover.is_some()
             || self.split_hover
             || self.lane_hover.is_some();
         self.hover_row = None;
-        self.format_hover = None;
         self.edge_hover = None;
         self.split_hover = false;
         self.lane_hover = None;
@@ -4435,14 +4402,6 @@ impl WaveModel {
             self.set_folded(doc, g, !collapsed, modifiers.alt);
             return;
         }
-        if let Some((ix, b)) = layout.format_at(p) {
-            let pos = point(b.left(), b.bottom() + 4.0 * layout.zoom);
-            if !self.selected.contains(&ix) {
-                self.select_row(ix, modifiers);
-            }
-            self.open_format_menu(doc, ix, pos);
-            return;
-        }
         let Some(r) = row else {
             self.nav.clear_ruler_selection();
             self.selected.clear();
@@ -4610,9 +4569,8 @@ impl WaveModel {
                 false
             }
             None => {
-                let (prev_row, prev_format, prev_split, prev_lane, prev_edge) = (
+                let (prev_row, prev_split, prev_lane, prev_edge) = (
                     self.hover_row,
-                    self.format_hover,
                     self.split_hover,
                     self.lane_hover.take(),
                     self.edge_hover,
@@ -4630,7 +4588,6 @@ impl WaveModel {
                             || self.items.get(r).is_some_and(Entry::is_group)
                     });
                 self.hover_row != prev_row
-                    || self.format_hover != prev_format
                     || self.split_hover != prev_split
                     || self.lane_hover != prev_lane
                     || self.edge_hover != prev_edge

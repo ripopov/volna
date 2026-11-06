@@ -467,13 +467,6 @@ pub(crate) fn paint(
                 || format!("{} · {}", a.draw.label(), a.range.label()),
                 |preview| format!("Draft · {}", preview.status),
             );
-            let hovered = model.format_hover == Some(ix);
-            let color = if hovered {
-                colors.text
-            } else {
-                colors.text_muted
-            };
-            let label_w = p.width(&label, FontRole::Ui, t.ui_size_small);
             p.scene.clipped(layout.names, |scene| {
                 scene.text(
                     point(name_x, y + row_h - z(4.0)),
@@ -481,20 +474,8 @@ pub(crate) fn paint(
                     label,
                     FontRole::Ui,
                     t.ui_size_small,
-                    color,
+                    colors.text_muted,
                 );
-                if preview.is_none() {
-                    scene.icon(
-                        IconName::ChevronDown,
-                        Rect::from_xywh(
-                            name_x + label_w + z(3.0),
-                            y + row_h - z(4.0) + (row_h - z(12.0)) / 2.0,
-                            z(12.0),
-                            z(12.0),
-                        ),
-                        color,
-                    );
-                }
             });
         }
 
@@ -535,39 +516,18 @@ pub(crate) fn paint(
                 });
             }
             if let Some(b) = badge {
-                let hovered = model.format_hover == Some(ix);
-                let bg = if hovered {
-                    t.badge_hover.bg
-                } else {
-                    t.badge.bg
-                };
                 let label = item.translator.badge();
                 let label_w = p.width(label, FontRole::UiMedium, t.ui_size_small);
-                let color = if hovered {
-                    t.badge_hover.text
-                } else {
-                    t.badge.text_muted
-                };
-                let x = b.left() + (b.width() - label_w - z(14.0)) / 2.0;
+                let x = b.left() + (b.width() - label_w) / 2.0;
                 p.scene.clipped(values_rect, |scene| {
-                    scene.quad(b, bg, z(3.0), 1.0, t.border_variant);
+                    scene.quad(b, t.badge.bg, z(3.0), 1.0, t.border_variant);
                     scene.text(
                         point(snap(x), b.top()),
                         b.height(),
                         label,
                         FontRole::UiMedium,
                         t.ui_size_small,
-                        color,
-                    );
-                    scene.icon(
-                        IconName::ChevronDown,
-                        Rect::from_xywh(
-                            b.right() - z(14.0),
-                            b.top() + (b.height() - z(12.0)) / 2.0,
-                            z(12.0),
-                            z(12.0),
-                        ),
-                        color,
+                        t.badge.text_muted,
                     );
                 });
             }
@@ -1070,12 +1030,6 @@ pub(crate) fn paint(
         p.scene
             .cursors
             .push((layout.scopes_toggle, CursorIcon::PointingHand));
-        for (_, b) in &layout.badges {
-            p.scene.cursors.push((*b, CursorIcon::PointingHand));
-        }
-        for (_, rect) in &layout.format_summaries {
-            p.scene.cursors.push((*rect, CursorIcon::PointingHand));
-        }
     }
 
     if let Some((track, thumb)) = layout.scrollbar {
@@ -1103,10 +1057,6 @@ pub(crate) fn paint(
                 point,
             )
         });
-    let format_hint = model
-        .pointer
-        .filter(|p| model.drag.is_none() && model.menu.is_none() && layout.format_at(*p).is_some())
-        .map(|p| ("Format signal", p));
     let scope_hint = model
         .pointer
         .filter(|p| {
@@ -1142,7 +1092,6 @@ pub(crate) fn paint(
         .as_ref()
         .map(|(hint, pointer)| (hint.as_str(), *pointer))
         .or(scope_toggle_hint)
-        .or(format_hint)
         .or_else(|| model.disclosure_hint())
         .or(scope_hint)
         .or(ruler_scope_hint

@@ -676,8 +676,6 @@ impl Element for PanelCanvas {
                         layout.values_split,
                         layout.scopes_toggle,
                     ];
-                    rects.extend(layout.badges.iter().map(|(_, b)| *b));
-                    rects.extend(layout.format_summaries.iter().map(|(_, rect)| *rect));
                     rects.extend(layout.marker_lane.chips.iter().map(|c| c.rect));
                     rects
                 }

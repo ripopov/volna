@@ -554,52 +554,63 @@ fn mixed_bits_and_buses_have_no_shared_format_and_cycling_changes_only_the_bus()
 }
 
 #[test]
-fn badge_and_analog_summary_open_the_same_menu_and_preserve_bulk_selection() {
-    let (_file, mut app, id) = app();
+fn dragging_format_badge_or_analog_status_reorders_selected_signals() {
     for dark in [true, false] {
         for zoom in [0.75, 1.0, 1.5] {
-            let theme = Theme::volna(dark).zoomed(zoom);
-            app.layout_panel(
-                id,
-                Rect::from_xywh(0.0, 0.0, 1400.0, 700.0),
-                &theme,
-                1.0,
-                &mut MonoMeasure,
-            );
-            select(&mut app, id, &[BUS, REAL]);
-            let layout = app.panels.waves(id).unwrap().last_layout();
-            let badge = layout.badges.iter().find(|(r, _)| *r == REAL).unwrap().1;
-            let summary = layout
-                .format_summaries
-                .iter()
-                .find(|(r, _)| *r == REAL)
-                .unwrap()
-                .1;
-            let mut entries = Vec::new();
-            for target in [badge, summary] {
-                let p = point(
-                    target.left() + target.width() / 2.0,
-                    target.top() + target.height() / 2.0,
+            for from_badge in [true, false] {
+                let (_file, mut app, id) = app();
+                let theme = Theme::volna(dark).zoomed(zoom);
+                app.layout_panel(
+                    id,
+                    Rect::from_xywh(0.0, 0.0, 1400.0, 700.0),
+                    &theme,
+                    1.0,
+                    &mut MonoMeasure,
                 );
-                app.handle(Command::Pointer(id, PointerEvent::Move { position: p }));
-                assert_eq!(app.panels.waves(id).unwrap().format_hover, Some(REAL));
+                select(&mut app, id, &[BUS, REAL]);
+                let w = app.panels.waves(id).unwrap();
+                let names: Vec<_> = w
+                    .items()
+                    .iter()
+                    .map(|item| item.name().to_owned())
+                    .collect();
+                let layout = w.last_layout();
+                let badge = layout.badges.iter().find(|(r, _)| *r == REAL).unwrap().1;
+                let start = if from_badge {
+                    point(
+                        badge.left() + badge.width() / 2.0,
+                        badge.top() + badge.height() / 2.0,
+                    )
+                } else {
+                    point(
+                        layout.names.left() + 40.0 * zoom,
+                        layout.row_y(REAL) + 1.5 * layout.row_h,
+                    )
+                };
+                let end = point(start.x, layout.row_y(BIT) + 0.9 * layout.row_height(BIT));
                 app.handle(Command::Pointer(
                     id,
                     PointerEvent::Down {
-                        position: p,
+                        position: start,
                         button: MouseButton::Left,
                         modifiers: Modifiers::default(),
                     },
                 ));
+                assert!(app.panels.waves(id).unwrap().menu.is_none());
+                app.handle(Command::Pointer(id, PointerEvent::Move { position: end }));
+                app.handle(Command::Pointer(id, PointerEvent::Up));
                 let w = app.panels.waves(id).unwrap();
-                assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [BUS, REAL]);
-                let menu = w.menu.as_ref().expect("format menu opened");
-                if entries.is_empty() {
-                    entries = menu.entries.clone();
-                } else {
-                    assert_eq!(menu.entries, entries);
-                }
-                app.handle(Command::MenuDismiss(id));
+                let reordered: Vec<_> = w.items().iter().map(|item| item.name()).collect();
+                assert_eq!(
+                    reordered,
+                    [
+                        names[BIT].as_str(),
+                        names[BUS].as_str(),
+                        names[REAL].as_str()
+                    ]
+                );
+                assert_eq!(w.selected.iter().copied().collect::<Vec<_>>(), [1, 2]);
+                assert!(w.menu.is_none());
             }
         }
     }

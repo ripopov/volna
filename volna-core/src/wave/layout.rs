@@ -1,6 +1,5 @@
 //! Pixel layout of the wave panel for one frame: the columns, the visible row range,
-//! the scrollbar, and the small interactive rectangles (format badges, Markers lane chips,
-//! column dividers).
+//! the scrollbar, format badges, and interactive rectangles for marker chips and dividers.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -47,7 +46,6 @@ pub struct WaveLayout {
     pub max_scroll: f32,
     pub scrollbar: Option<(Rect, Rect)>,
     pub badges: Vec<(usize, Rect)>,
-    pub format_summaries: Vec<(usize, Rect)>,
     pub marker_lane: MarkerLane,
     pub names_split: Rect,
     pub scopes_split: Rect,
@@ -248,7 +246,6 @@ impl WaveLayout {
             max_scroll,
             scrollbar,
             badges,
-            format_summaries: Vec::new(),
             marker_lane,
             names_split: split_zone(names.right()),
             scopes_split: split_zone(scopes.right()),
@@ -317,21 +314,6 @@ impl WaveLayout {
     pub fn entry_span(&self, entry: usize) -> Option<(f32, f32)> {
         let pos = self.position(entry)?;
         Some((self.row_y(pos), self.row_height(pos)))
-    }
-
-    #[must_use]
-    pub fn badge_at(&self, p: Point) -> Option<(usize, Rect)> {
-        self.badges.iter().copied().find(|(_, b)| b.contains(p))
-    }
-
-    #[must_use]
-    pub fn format_at(&self, p: Point) -> Option<(usize, Rect)> {
-        self.badge_at(p).or_else(|| {
-            self.format_summaries
-                .iter()
-                .copied()
-                .find(|(_, rect)| rect.contains(p))
-        })
     }
 
     #[must_use]
