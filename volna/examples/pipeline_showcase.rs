@@ -1,5 +1,9 @@
 //! Two simulated pipelines with typed instructions, memory requests, and cycle waveforms.
 
+#[path = "support/rng.rs"]
+mod rng;
+
+use rng::Rng;
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use vtr::{
@@ -237,22 +241,6 @@ struct Insn {
     deps: Vec<usize>,
     /// A memory request: (begin, end, `is_write`).
     request: Option<(u64, u64, bool)>,
-}
-
-/// A small deterministic generator (xorshift).
-struct Rng(u64);
-impl Rng {
-    fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-    fn chance(&mut self, one_in: u64) -> bool {
-        self.next().is_multiple_of(one_in)
-    }
 }
 
 /// In-order pipeline with `width` instructions per stage and cycle, load

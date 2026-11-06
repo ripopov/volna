@@ -1,5 +1,12 @@
 //! A simulated chip with typed pipeline, cache, DRAM, clocks, logs, and an optional matching VCD.
 
+#[path = "support/instruction.rs"]
+mod instruction;
+#[path = "support/rng.rs"]
+mod rng;
+
+use instruction::Instruction;
+use rng::Rng;
 use std::collections::HashMap;
 use std::path::Path;
 use vtr::schema::{Address, TimeValue};
@@ -9,39 +16,6 @@ use vtr::{
     TransactionQuery, Value, VarType, Writer, WriterOptions,
 };
 
-struct Instruction {
-    label: String,
-    insn_id: u64,
-    pc: u64,
-}
-impl Payload for Instruction {
-    fn bind(types: &mut vtr::Types) -> vtr::Result<vtr::TypeId> {
-        let label_type = <String as Payload>::bind(types)?;
-        let insn_id_type = <u64 as Payload>::bind(types)?;
-        let pc_type = <u64 as Payload>::bind(types)?;
-        types.structure(
-            "Instruction",
-            vec![
-                vtr::schema::Field::new("vtr.label", label_type),
-                vtr::schema::Field::new("insn_id", insn_id_type),
-                vtr::schema::Field::new("pc", pc_type),
-            ],
-        )
-    }
-    fn encode(&self, out: &mut Vec<u8>) -> vtr::Result<()> {
-        self.label.encode(out)?;
-        self.insn_id.encode(out)?;
-        self.pc.encode(out)?;
-        Ok(())
-    }
-    fn decode(reader: &mut PayloadReader<'_>) -> vtr::Result<Self> {
-        Ok(Self {
-            label: <String as Payload>::decode(reader)?,
-            insn_id: <u64 as Payload>::decode(reader)?,
-            pc: <u64 as Payload>::decode(reader)?,
-        })
-    }
-}
 struct MemoryRequest {
     label: String,
     address: u64,
@@ -372,21 +346,6 @@ struct Insn {
     deps: Vec<usize>,
     access: Option<Access>,
     l1_miss: bool,
-}
-
-struct Rng(u64);
-impl Rng {
-    fn next(&mut self) -> u64 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        x
-    }
-    fn chance(&mut self, one_in: u64) -> bool {
-        self.next().is_multiple_of(one_in)
-    }
 }
 
 struct Run {
