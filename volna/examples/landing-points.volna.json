@@ -1,6 +1,6 @@
 {
   "format": "volna-workspace",
-  "version": 18,
+  "version": 19,
   "traces": [
     {
       "letter": "A",
@@ -38,7 +38,7 @@
   "focused": 39,
   "panels": [
     {"id":37,"kind":"transaction","version":4,"title":null,"pinned":false,"cursor_height":198.0,"record":{"track":["soc","log"],"id":208,"range":{"begin":103,"end":103}},"collapsed":[],"radix":{}},
-    {"id":39,"kind":"waves","version":19,"title":null,"link":{"viewport":true,"cursor":true},"scroll_y":0.0,"columns":{"names":150.0,"scope":{"collapsed":false,"expanded_width":160.0},"values":80.0},"rows":[{"type":"signal","computed":null,"shape":"Bit","projection":null,"bus":null,"signal":["soc","l2","req_valid"],"format":"bit"},{"type":"signal","computed":null,"shape":{"Vector":{"width":32}},"projection":null,"bus":{"collapsed":true,"initialized":false},"signal":["soc","cpu0","pc"],"format":"hex"},{"type":"lane","generator":["soc","log"],"height":8,"first_sub_row":0,"occupancy":false},{"type":"lane","generator":["soc","events"],"height":8,"first_sub_row":0,"occupancy":false}],"selected":[2]}
+    {"id":39,"kind":"waves","version":20,"title":null,"link":{"viewport":true,"cursor":true},"scroll_y":0.0,"columns":{"names":150.0,"scope":{"collapsed":false,"expanded_width":160.0},"values":80.0},"rows":[{"type":"signal","computed":null,"shape":"Bit","projection":null,"bus":null,"signal":["soc","l2","req_valid"],"format":"bit"},{"type":"signal","computed":null,"shape":{"Vector":{"width":32}},"projection":null,"bus":{"collapsed":true,"initialized":false},"signal":["soc","cpu0","pc"],"format":"hex"},{"type":"lane","generator":["soc","log"],"height":8,"first_sub_row":0,"occupancy":false},{"type":"lane","generator":["soc","events"],"height":8,"first_sub_row":0,"occupancy":false}],"selected":[2]}
   ],
   "shared": {
     "viewport": {

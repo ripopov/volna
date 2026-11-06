@@ -5,6 +5,7 @@ use anyhow::{Result, ensure};
 mod cache;
 pub mod engine;
 pub(super) mod evaluate;
+pub mod language;
 mod parser;
 pub(crate) use cache::Programs;
 
@@ -267,6 +268,14 @@ pub struct Program {
 }
 
 impl Program {
+    pub fn with_bindings(expression: &str, inputs: &[super::Input]) -> Result<Self> {
+        Self::parse_captured(
+            expression,
+            &super::input_types(inputs)?,
+            &super::input_captures(inputs)?,
+        )
+    }
+
     pub fn parse(expression: &str, inputs: &[(String, Type)]) -> Result<Self> {
         Self::parse_captured(expression, inputs, &vec![false; inputs.len()])
     }
@@ -305,6 +314,19 @@ impl Program {
     #[must_use]
     pub fn uses_input(&self, index: usize) -> bool {
         self.used_inputs.get(index).copied().unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn uses_default_step(&self) -> bool {
+        self.nodes.iter().any(|node| {
+            matches!(
+                node.node,
+                Node::MovingAverage { step: None, .. }
+                    | Node::Lowpass { step: None, .. }
+                    | Node::Integrate { step: None, .. }
+                    | Node::Sine { step: None, .. }
+            )
+        })
     }
 
     pub fn used_inputs(&self) -> impl Iterator<Item = usize> + '_ {

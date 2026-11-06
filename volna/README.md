@@ -228,16 +228,28 @@ interface zoom.
 
 Select recorded numeric waveforms or applied waveform formulas and choose
 **Derive**, or right-click one and choose **Derive signal…**. The docked
-inspector offers **Moving average** and **Formula**. Selecting several rows
-starts a formula with those input bindings. **Add recorded input…** searches all
-loaded traces, including signals that are not displayed. Each binding shows its
-source, local alias, numeric interpretation, and optional bit or slice.
-**Replace…** repairs or changes a binding. Aliases are independent of row names.
+inspector opens a formula with the selected input bindings. The formula editor
+uses an accent-colored frame and tinted surface in both themes. Moving average,
+Low-pass, and Mean over intervals presets insert complete formulas using the
+first binding; Boolean inputs are converted with `real(...)` when needed.
+**Add recorded input…** searches all loaded traces, including signals that are not
+displayed. Each compact binding row shows its alias, source, and numeric type. Click an
+alias to insert it at the formula cursor. **Edit** expands the alias, numeric
+interpretation, optional bit or slice, and **Replace…** and **Remove** actions.
+Aliases are independent of row names.
 
 A temporary **Draft** row previews the result on the waveform timeline, sharing
 zoom, markers, cursor, and value readout. Initial settings compute automatically;
-typing updates after a 300 ms pause, while operation changes, policy toggles,
-and Enter update immediately. Renaming the output does not recompute it. The
+typing updates after a 300 ms pause. Presets and policy selections update
+immediately; Ctrl+Enter (Command+Enter on macOS) requests an immediate preview.
+Enter inserts a new line in the formula. Ctrl+Space opens completion for live
+input aliases and functions with their argument signatures. Function hints appear
+beneath the editor, and errors appear directly below the expression. The
+collapsible guide provides searchable examples, **Insert** at the cursor, and
+**Replace formula** using available input aliases. **Copy** preserves the original
+example text. Default sampling step appears only when a sampled function omits
+`step`; measurement scope and missing-value controls appear for interval
+measurements. Scope and missing-value menus show their choices directly. Renaming the output does not recompute it. The
 last successful result remains dimmed and marked outdated while settings change.
 **Add waveform** keeps the successful draft. Select it and choose **Derive** or
 **Edit derived signal…** to edit; **Apply changes** commits the result. **Cancel**
@@ -310,8 +322,9 @@ bitwise operations, user-defined functions, and scripts are not supported.
 
 ### Moving averages
 
-A moving average accepts one recorded numeric input, a trailing window, and an
-output interval. Enter durations such as `4 us` or `250 ns`, or an integer number
+`moving_avg(input, window, step: interval)` accepts a Real waveform expression,
+a trailing window, and an output interval. Use the **Moving average** preset to
+start with a bound input. Enter durations such as `4 us` or `250 ns`, or an integer number
 of timeline ticks; durations must resolve to whole ticks. The mean weights each
 held value by its duration in `[t − window, t)`. Warm-up can wait for a complete
 window or use available history. Missing, NaN, and infinite inputs propagate a
@@ -324,13 +337,13 @@ grid over the input trace's domain, with at most 1,000,000 samples.
 
 ### Execution and saved definitions
 
-Both operations share the native/background Web Worker executor and perform
+Formulas use the native/background Web Worker executor and perform
 memory admission before scanning input values or allocating output. **Stop**,
 cancellation, and calculation changes cancel abandoned work. **Resume** and
 **Retry** restart stopped or failed work. Late completions cannot replace a
 newer preview. Invalid drafts and failed previews preserve the applied row.
 
-Workspace version 18 and wave panel version 19 store operations, expressions,
+Workspace version 19 and wave panel version 20 store formula expressions,
 persistent formula IDs and revisions, ordered aliases, stable recorded paths and
 duplicate-path ordinals, recursive applied-formula inputs, source shapes,
 numeric interpretations, slices, default steps, saved ranges, marker scopes,

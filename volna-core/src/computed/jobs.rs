@@ -1,6 +1,6 @@
 //! Job ownership cancels abandoned work; request identities reject late completions.
 
-use super::{Calculation, Definition, Input, Interpretation, MeasurementScope, ResultKind};
+use super::{Definition, Input, Interpretation, MeasurementScope, ResultKind};
 use crate::{data::admission::Buffer, session::LoadRequest, trace::Traced};
 use anyhow::Context as _;
 use std::collections::{HashMap, HashSet};
@@ -90,9 +90,9 @@ pub struct Key {
     pub generation: u64,
     domain: (u64, u64),
     pub(crate) inputs: Vec<KeyInput>,
-    pub(crate) calculation: Calculation,
-    formula: Option<super::FormulaSettings>,
-    scope: Option<ResolvedScope>,
+    pub(crate) calculation: Arc<super::Program>,
+    formula: super::FormulaSettings,
+    scope: ResolvedScope,
     timescale: i8,
     time_unit: Option<String>,
 }
@@ -149,26 +149,19 @@ impl Key {
     ) -> anyhow::Result<Self> {
         use anyhow::Context;
         let inputs = live_inputs(doc, inputs)?;
-        let (calculation, formula) = match &definition.operation {
-            super::Operation::Formula {
-                expression,
-                settings,
-            } => (
-                Calculation::Formula(doc.formula_programs.parse(
-                    expression,
-                    super::input_types(&inputs)?,
-                    super::input_captures(&inputs)?,
-                )?),
-                Some(settings.clone()),
-            ),
-            super::Operation::MovingAverage { .. } => (definition.calculation(&inputs)?, None),
-        };
+        let super::Operation::Formula {
+            expression,
+            settings,
+        } = &definition.operation;
+        let calculation = doc.formula_programs.parse(
+            expression,
+            super::input_types(&inputs)?,
+            super::input_captures(&inputs)?,
+        )?;
+        let formula = settings.clone();
         let mut key_inputs = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
-            let used = match &calculation {
-                Calculation::Formula(program) => program.uses_input(index),
-                Calculation::MovingAverage(_) => true,
-            };
+            let used = calculation.uses_input(index);
             if !used {
                 key_inputs.push(KeyInput {
                     signal: None,
@@ -209,29 +202,21 @@ impl Key {
                 });
             }
         }
-        let domain = match &calculation {
-            Calculation::MovingAverage(settings) => (settings.origin, settings.end),
-            Calculation::Formula(_) => {
-                let mut domain = (0, u64::MAX);
-                let mut used = false;
-                for input in key_inputs.iter().filter(|input| input.used) {
-                    domain.0 = domain.0.max(input.domain.0);
-                    domain.1 = domain.1.min(input.domain.1);
-                    used = true;
-                }
-                if used { domain } else { doc.limits() }
-            }
-        };
+        let mut domain = (0, u64::MAX);
+        let mut used = false;
+        for input in key_inputs.iter().filter(|input| input.used) {
+            domain.0 = domain.0.max(input.domain.0);
+            domain.1 = domain.1.min(input.domain.1);
+            used = true;
+        }
+        if !used {
+            domain = doc.limits();
+        }
         anyhow::ensure!(
             domain.0 <= domain.1,
             "Formula inputs have no common time range."
         );
-        let scope = match (&calculation, &formula) {
-            (Calculation::Formula(program), Some(settings)) => {
-                Some(resolve_scope(doc, settings, program.kind, domain)?)
-            }
-            _ => None,
-        };
+        let scope = resolve_scope(doc, &formula, calculation.kind, domain)?;
         Ok(Self {
             generation: doc.generation(),
             domain,
@@ -302,104 +287,88 @@ impl Key {
                 *cursor += 1;
             }
         }
-        match &self.calculation {
-            Calculation::MovingAverage(settings) => Ok(DerivedOutput::Waveform(Arc::new(
-                crate::moving_average::MeanHistory::build(
-                    resolved[0].as_ref(),
-                    self.inputs[0].interpretation,
-                    *settings,
-                    budget,
-                    cancelled,
-                )?,
-            ))),
-            Calculation::Formula(program) => {
-                let settings = self.formula.as_ref().expect("formula settings");
-                let inputs = self
-                    .inputs
-                    .iter()
-                    .zip(&resolved)
-                    .map(|(binding, source)| super::Source {
-                        history: source.as_ref(),
-                        interpretation: binding.interpretation,
-                        domain: binding.domain,
-                    })
-                    .collect::<Vec<_>>();
-                let options = super::EvaluationOptions {
-                    saved_range: settings.saved_range,
-                    default_step: settings.default_step,
-                    time_base: crate::wave::timeline::TimeBase {
-                        timescale: self.timescale,
-                        unit: self.time_unit.as_deref(),
-                    },
-                    interval: None,
-                    unknown: settings.unknown,
-                };
-                match self.scope.as_ref().expect("formula scope") {
-                    ResolvedScope::Waveform => {
-                        match super::evaluate_program(program, &inputs, options, budget, cancelled)?
-                        {
-                            super::Evaluation::Waveform(history) => {
-                                Ok(DerivedOutput::Waveform(Arc::new(history)))
-                            }
-                            super::Evaluation::Measurement(_) => {
-                                anyhow::bail!("Expected a waveform formula.")
-                            }
-                        }
+        let program = &self.calculation;
+        let settings = &self.formula;
+        let inputs = self
+            .inputs
+            .iter()
+            .zip(&resolved)
+            .map(|(binding, source)| super::Source {
+                history: source.as_ref(),
+                interpretation: binding.interpretation,
+                domain: binding.domain,
+            })
+            .collect::<Vec<_>>();
+        let options = super::EvaluationOptions {
+            saved_range: settings.saved_range,
+            default_step: settings.default_step,
+            time_base: crate::wave::timeline::TimeBase {
+                timescale: self.timescale,
+                unit: self.time_unit.as_deref(),
+            },
+            interval: None,
+            unknown: settings.unknown,
+        };
+        match &self.scope {
+            ResolvedScope::Waveform => {
+                match super::evaluate_program(program, &inputs, options, budget, cancelled)? {
+                    super::Evaluation::Waveform(history) => {
+                        Ok(DerivedOutput::Waveform(Arc::new(history)))
                     }
-                    ResolvedScope::Scalar(interval) => {
-                        let options = super::EvaluationOptions {
-                            interval: *interval,
-                            ..options
-                        };
-                        match super::evaluate_program(program, &inputs, options, budget, cancelled)?
-                        {
-                            super::Evaluation::Measurement(measurement) => {
-                                Ok(DerivedOutput::Measurement(measurement))
-                            }
-                            super::Evaluation::Waveform(_) => {
-                                anyhow::bail!("Expected a scalar formula.")
-                            }
-                        }
-                    }
-                    ResolvedScope::Table(intervals) => {
-                        let mut evaluator = super::formula::engine::Evaluator::new(
-                            program, &inputs, options, budget, cancelled,
-                        )?;
-                        let mut rows = Buffer::new(budget)?;
-                        let mut timeline: Buffer<(u64, Option<f64>)> = Buffer::new(budget)?;
-                        for interval in intervals {
-                            let result = if interval.bounds.0 >= interval.bounds.1 {
-                                Err("Coincident markers do not define a positive interval.")
-                            } else {
-                                Ok(evaluator.measure(interval.bounds)?)
-                            };
-                            if interval.bounds.0 < interval.bounds.1 {
-                                let sample = (
-                                    interval.bounds.0,
-                                    result.as_ref().ok().and_then(|value| value.value),
-                                );
-                                if let Some(last) =
-                                    timeline.last_mut().filter(|last| last.0 == sample.0)
-                                {
-                                    *last = sample;
-                                } else {
-                                    timeline.push(sample)?;
-                                }
-                                timeline.push((interval.bounds.1, None))?;
-                            }
-                            rows.push(MeasurementRow {
-                                start: interval.start,
-                                end: interval.end,
-                                bounds: interval.bounds,
-                                result,
-                            })?;
-                        }
-                        Ok(DerivedOutput::IntervalTable(Arc::new(MeasurementTable {
-                            rows,
-                            timeline,
-                        })))
+                    super::Evaluation::Measurement(_) => {
+                        anyhow::bail!("Expected a waveform formula.")
                     }
                 }
+            }
+            ResolvedScope::Scalar(interval) => {
+                let options = super::EvaluationOptions {
+                    interval: *interval,
+                    ..options
+                };
+                match super::evaluate_program(program, &inputs, options, budget, cancelled)? {
+                    super::Evaluation::Measurement(measurement) => {
+                        Ok(DerivedOutput::Measurement(measurement))
+                    }
+                    super::Evaluation::Waveform(_) => {
+                        anyhow::bail!("Expected a scalar formula.")
+                    }
+                }
+            }
+            ResolvedScope::Table(intervals) => {
+                let mut evaluator = super::formula::engine::Evaluator::new(
+                    program, &inputs, options, budget, cancelled,
+                )?;
+                let mut rows = Buffer::new(budget)?;
+                let mut timeline: Buffer<(u64, Option<f64>)> = Buffer::new(budget)?;
+                for interval in intervals {
+                    let result = if interval.bounds.0 >= interval.bounds.1 {
+                        Err("Coincident markers do not define a positive interval.")
+                    } else {
+                        Ok(evaluator.measure(interval.bounds)?)
+                    };
+                    if interval.bounds.0 < interval.bounds.1 {
+                        let sample = (
+                            interval.bounds.0,
+                            result.as_ref().ok().and_then(|value| value.value),
+                        );
+                        if let Some(last) = timeline.last_mut().filter(|last| last.0 == sample.0) {
+                            *last = sample;
+                        } else {
+                            timeline.push(sample)?;
+                        }
+                        timeline.push((interval.bounds.1, None))?;
+                    }
+                    rows.push(MeasurementRow {
+                        start: interval.start,
+                        end: interval.end,
+                        bounds: interval.bounds,
+                        result,
+                    })?;
+                }
+                Ok(DerivedOutput::IntervalTable(Arc::new(MeasurementTable {
+                    rows,
+                    timeline,
+                })))
             }
         }
     }

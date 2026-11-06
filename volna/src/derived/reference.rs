@@ -243,6 +243,20 @@ pub(super) fn render(
                             .justify_end()
                             .gap_1()
                             .child(
+                                Button::new(format!("insert-example-{index}-{example_index}"))
+                                    .label("Insert")
+                                    .small()
+                                    .on_click({
+                                        let editor = editor.downgrade();
+                                        move |_, window, cx| {
+                                            drop(editor.update(cx, |view, cx| {
+                                                let text = view.example_text(formula, cx);
+                                                view.insert_formula(&text, window, cx);
+                                            }));
+                                        }
+                                    }),
+                            )
+                            .child(
                                 Button::new(format!("copy-example-{index}-{example_index}"))
                                     .debug_selector(move || {
                                         format!("copy-example-{index}-{example_index}")
@@ -259,7 +273,7 @@ pub(super) fn render(
                                     .debug_selector(move || {
                                         format!("use-example-{index}-{example_index}")
                                     })
-                                    .label("Use example")
+                                    .label("Replace formula")
                                     .small()
                                     .on_click(move |_, window, cx| {
                                         drop(owner.update(cx, |view, cx| {

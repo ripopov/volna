@@ -133,32 +133,25 @@ impl App {
             let domain = input_domain(&inputs, &self.doc).unwrap_or_else(|_| self.doc.limits());
             let interval = (domain.1 - domain.0).div_ceil(2000).max(1);
             let mut draft = Draft {
-                name: format!("{}_mean", signal.name),
-                window: duration_text(interval.saturating_mul(16), self.doc.time_base()),
+                name: format!("{}_derived", signal.name),
                 interval: duration_text(interval, self.doc.time_base()),
-                partial: false,
                 skip_unknown: false,
-                formula: None,
+                formula: inputs
+                    .first()
+                    .map_or_else(|| "0".into(), |input| input.alias.clone()),
                 scope: crate::computed::MeasurementScope::MarkerIntervals,
             };
             if inputs.len() > 1 {
                 draft.name = "formula".into();
-                draft.formula = Some(inputs[0].alias.clone());
             }
             if let Some(d) = definition {
                 draft.name.clone_from(&d.name);
                 match &d.operation {
-                    Operation::MovingAverage { settings } => {
-                        draft.window = duration_text(settings.window, self.doc.time_base());
-                        draft.interval = duration_text(settings.interval, self.doc.time_base());
-                        draft.partial = settings.partial;
-                        draft.skip_unknown = settings.skip_unknown;
-                    }
                     Operation::Formula {
                         expression,
                         settings,
                     } => {
-                        draft.formula = Some(expression.clone());
+                        draft.formula.clone_from(expression);
                         draft.interval = duration_text(settings.default_step, self.doc.time_base());
                         draft.skip_unknown =
                             settings.unknown == crate::computed::UnknownPolicy::Skip;
@@ -171,7 +164,7 @@ impl App {
                 .map(|definition| (definition.id, definition.revision))
                 .unwrap_or_default();
             let mut display_definition =
-                draft.definition(domain, self.doc.limits(), self.doc.time_base(), &inputs)?;
+                draft.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
             display_definition.id = definition_id;
             display_definition.revision = definition_revision;
             let last_result = definition.and_then(|_| {
@@ -342,25 +335,24 @@ impl App {
                     self.derived_editor = None;
                     return Ok(());
                 }
-                if let Operation::Formula { settings, .. } = &mut definition.operation {
-                    match &output {
-                        crate::computed::DerivedOutput::IntervalTable(rows) => {
-                            settings.scope = crate::computed::MeasurementScope::IntervalSnapshot {
-                                intervals: rows
-                                    .iter()
-                                    .filter(|row| row.bounds.0 < row.bounds.1)
-                                    .map(|row| row.bounds)
-                                    .collect(),
-                            };
-                        }
-                        crate::computed::DerivedOutput::Measurement(value) => {
-                            settings.scope = crate::computed::MeasurementScope::Explicit {
-                                start: value.bounds.0,
-                                end: value.bounds.1,
-                            };
-                        }
-                        crate::computed::DerivedOutput::Waveform(_) => {}
+                let Operation::Formula { settings, .. } = &mut definition.operation;
+                match &output {
+                    crate::computed::DerivedOutput::IntervalTable(rows) => {
+                        settings.scope = crate::computed::MeasurementScope::IntervalSnapshot {
+                            intervals: rows
+                                .iter()
+                                .filter(|row| row.bounds.0 < row.bounds.1)
+                                .map(|row| row.bounds)
+                                .collect(),
+                        };
                     }
+                    crate::computed::DerivedOutput::Measurement(value) => {
+                        settings.scope = crate::computed::MeasurementScope::Explicit {
+                            start: value.bounds.0,
+                            end: value.bounds.1,
+                        };
+                    }
+                    crate::computed::DerivedOutput::Waveform(_) => {}
                 }
                 let count: usize = self
                     .panels

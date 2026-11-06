@@ -1,5 +1,6 @@
 //! Recorded-input computation controls with debounced previews on the shared waveform timeline.
 
+mod editor;
 mod inputs;
 mod reference;
 mod search;
@@ -15,7 +16,8 @@ use gpui_kit::base::Disableable;
 use gpui_kit::component::{
     Selectable, Sizable,
     button::{Button, ButtonVariants},
-    input::{Input, InputEvent, InputState},
+    input::{Editor, EditorState, Input, InputEvent, InputState},
+    menu::{DropdownMenu, PopupMenuItem},
     scroll::ScrollableElement,
 };
 use gpui_kit::prelude::*;
@@ -32,6 +34,25 @@ use volna_core::{
 
 use inputs::{BindingFields, InputPicker};
 use search::InputSearch;
+
+gpui_kit::actions!(derived, [PreviewFormula]);
+
+pub(crate) fn init(cx: &mut gpui_kit::App) {
+    cx.bind_keys([
+        gpui_kit::KeyBinding::new("ctrl-enter", PreviewFormula, Some("FormulaEditor > Input")),
+        gpui_kit::KeyBinding::new("cmd-enter", PreviewFormula, Some("FormulaEditor > Input")),
+    ]);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScopeChoice {
+    MarkerIntervals,
+    WholeRange,
+    Explicit,
+    Snapshot,
+    Linked,
+    MarkerSet,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SnapshotSelection {
@@ -57,18 +78,15 @@ pub(crate) struct DerivedEditor {
     panel: PanelId,
     generation: u64,
     name: Entity<InputState>,
-    window: Entity<InputState>,
     interval: Entity<InputState>,
-    expression: Entity<InputState>,
+    expression: Entity<EditorState>,
     reference_search: Entity<InputState>,
     scope_start: Entity<InputState>,
     scope_end: Entity<InputState>,
-    formula: bool,
     search: Entity<InputState>,
     picker: Option<InputPicker>,
     input_search: InputSearch,
     bindings: Vec<BindingFields>,
-    partial: bool,
     skip_unknown: bool,
     scope: volna_core::computed::MeasurementScope,
     selected_markers: Vec<volna_core::marker::MarkerId>,
@@ -77,6 +95,8 @@ pub(crate) struct DerivedEditor {
     resize_focus: FocusHandle,
     width_drag: Option<WidthDrag>,
     preview_task: Option<gpui_kit::Task<()>>,
+    diagnostic: Option<volna_core::computed::language::Diagnostic>,
+    analysis: Option<std::sync::Arc<editor::Analysis>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -98,11 +118,9 @@ impl DerivedEditor {
             ws.app.doc.markers().to_vec(),
         );
         let name = cx.new(|cx| InputState::new(window, cx).default_value(draft.name));
-        let trailing = cx.new(|cx| InputState::new(window, cx).default_value(draft.window));
         let interval = cx.new(|cx| InputState::new(window, cx).default_value(draft.interval));
-        let expression = cx.new(|cx| {
-            InputState::new(window, cx).default_value(draft.formula.clone().unwrap_or_default())
-        });
+        let expression =
+            cx.new(|cx| editor::state(&owner, window, cx).default_value(draft.formula.clone()));
         let reference_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Find a function or example…"));
         let explicit_bounds = match &draft.scope {
@@ -130,14 +148,7 @@ impl DerivedEditor {
             cx.new(|cx| InputState::new(window, cx).placeholder("Search recorded signals…"));
         let mut subscriptions = Vec::new();
         subscriptions.push(cx.subscribe(&reference_search, |_, _, _: &InputEvent, cx| cx.notify()));
-        for input in [
-            &name,
-            &trailing,
-            &interval,
-            &expression,
-            &scope_start,
-            &scope_end,
-        ] {
+        for input in [&name, &interval, &scope_start, &scope_end] {
             subscriptions.push(
                 cx.subscribe_in(input, window, |view, _, event, window, cx| {
                     if matches!(event, InputEvent::Change) && view.update_draft(window, cx) {
@@ -150,6 +161,14 @@ impl DerivedEditor {
                 }),
             );
         }
+        subscriptions.push(
+            cx.subscribe_in(&expression, window, |view, _, event, window, cx| {
+                if matches!(event, InputEvent::Change) && view.update_draft(window, cx) {
+                    view.schedule_preview(window, cx);
+                }
+            }),
+        );
+        cx.observe(&expression, |_, _, cx| cx.notify()).detach();
         subscriptions.push(cx.subscribe(&search, |view, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 view.sync_search(cx);
@@ -166,26 +185,25 @@ impl DerivedEditor {
             panel,
             generation,
             name,
-            window: trailing,
             interval,
             expression,
             reference_search,
             scope_start,
             scope_end,
-            formula: draft.formula.is_some(),
             search,
             picker: None,
             input_search: InputSearch::default(),
             bindings: Vec::new(),
-            partial: draft.partial,
             skip_unknown: draft.skip_unknown,
             scope: draft.scope,
             selected_markers,
             snapshot_selection: SnapshotSelection::Saved,
-            guide: GuideVisibility::Open,
+            guide: GuideVisibility::Closed,
             resize_focus: cx.focus_handle().tab_stop(true),
             width_drag: None,
             preview_task: None,
+            diagnostic: None,
+            analysis: None,
             _subscriptions: subscriptions,
         }
     }
@@ -248,7 +266,12 @@ impl DerivedEditor {
             .derived_editor
             .as_ref()
             .map(|editor| editor.calculation_revision);
-        let scope = if self.formula {
+        let Some(analysis) = self.analysis(cx) else {
+            return false;
+        };
+        let scope = if analysis.result.as_ref().is_ok_and(|program| {
+            program.kind == volna_core::computed::ResultKind::ScalarMeasurement
+        }) {
             let Ok(scope) = self.resolved_scope(cx) else {
                 cx.notify();
                 return false;
@@ -260,13 +283,9 @@ impl DerivedEditor {
         self.send(
             DerivedCommand::Update(Draft {
                 name: self.name.read(cx).value().to_string(),
-                window: self.window.read(cx).value().to_string(),
                 interval: self.interval.read(cx).value().to_string(),
-                partial: self.partial,
                 skip_unknown: self.skip_unknown,
-                formula: self
-                    .formula
-                    .then(|| self.expression.read(cx).value().to_string()),
+                formula: self.expression.read(cx).value().to_string(),
                 scope,
             }),
             window,
@@ -396,7 +415,7 @@ impl DerivedEditor {
         cx.notify();
     }
 
-    fn cycle_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_scope(&mut self, choice: ScopeChoice, window: &mut Window, cx: &mut Context<Self>) {
         use volna_core::computed::MeasurementScope;
         let Some(owner) = self.owner.upgrade() else {
             return;
@@ -406,47 +425,38 @@ impl DerivedEditor {
             return;
         };
         let markers = ws.app.doc.markers();
-        self.scope = match &self.scope {
-            MeasurementScope::MarkerIntervals if markers.len() >= 2 => {
-                self.selected_markers = markers[..2].iter().map(|marker| marker.id).collect();
-                MeasurementScope::LinkedMarkers {
-                    start: markers[0].id,
-                    end: markers[1].id,
-                }
-            }
-            MeasurementScope::WholeRange | MeasurementScope::IntervalSnapshot { .. } => {
-                MeasurementScope::MarkerIntervals
-            }
-            MeasurementScope::MarkerIntervals | MeasurementScope::MarkerSet { .. } => {
-                MeasurementScope::Explicit {
-                    start: editor.domain.0,
-                    end: editor.domain.1,
-                }
-            }
-            MeasurementScope::LinkedMarkers { .. } => {
-                let selected = self
-                    .selected_markers
-                    .iter()
-                    .filter_map(|id| markers.iter().find(|marker| marker.id == *id))
-                    .collect::<Vec<_>>();
-                if selected.len() == 2 {
-                    MeasurementScope::MarkerSnapshot {
-                        start: selected[0].time.min(selected[1].time),
-                        end: selected[0].time.max(selected[1].time),
-                    }
-                } else {
-                    MeasurementScope::Explicit {
-                        start: editor.domain.0,
-                        end: editor.domain.1,
-                    }
-                }
-            }
-            MeasurementScope::MarkerSnapshot { .. } => MeasurementScope::MarkerSet {
+        self.selected_markers
+            .retain(|id| markers.iter().any(|marker| marker.id == *id));
+        if self.selected_markers.len() < 2 {
+            self.selected_markers = markers.iter().take(2).map(|marker| marker.id).collect();
+        }
+        if choice == ScopeChoice::Linked && self.selected_markers.len() < 2 {
+            return;
+        }
+        self.scope = match choice {
+            ScopeChoice::MarkerIntervals => MeasurementScope::MarkerIntervals,
+            ScopeChoice::WholeRange => MeasurementScope::WholeRange,
+            ScopeChoice::Explicit => MeasurementScope::Explicit {
+                start: editor.domain.0,
+                end: editor.domain.1,
+            },
+            ScopeChoice::Snapshot => MeasurementScope::MarkerSnapshot {
+                start: editor.domain.0,
+                end: editor.domain.1,
+            },
+            ScopeChoice::Linked => MeasurementScope::LinkedMarkers {
+                start: self.selected_markers[0],
+                end: self.selected_markers[1],
+            },
+            ScopeChoice::MarkerSet => MeasurementScope::MarkerSet {
                 markers: self.selected_markers.clone(),
             },
-            MeasurementScope::Explicit { .. } => MeasurementScope::WholeRange,
         };
-        self.snapshot_selection = SnapshotSelection::Saved;
+        self.snapshot_selection = if choice == ScopeChoice::Snapshot {
+            SnapshotSelection::Edited
+        } else {
+            SnapshotSelection::Saved
+        };
         self.preview_task = None;
         self.update_draft(window, cx);
         if self.resolved_scope(cx).is_ok() {
@@ -576,7 +586,18 @@ impl DerivedEditor {
         )
     }
 
+    fn example_text(&self, formula: &str, cx: &Context<Self>) -> String {
+        if let Some(owner) = self.owner.upgrade() {
+            let ws = owner.read(cx);
+            if let Some(editor) = &ws.app.derived_editor {
+                return editor::adapt_example(formula, &editor.bindings, &ws.app.doc);
+            }
+        }
+        formula.into()
+    }
+
     fn use_example(&mut self, formula: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let formula = self.example_text(formula, cx);
         self.expression
             .update(cx, |input, cx| input.set_value(formula, window, cx));
         self.expression.read(cx).focus_handle(cx).focus(window, cx);
@@ -585,27 +606,63 @@ impl DerivedEditor {
         self.send(DerivedCommand::Preview, window, cx);
     }
 
-    fn operation(&mut self, formula: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.formula = formula;
-        if formula && self.expression.read(cx).value().is_empty() {
-            let alias = self
-                .owner
-                .upgrade()
-                .and_then(|owner| {
-                    owner
-                        .read(cx)
-                        .app
-                        .derived_editor
-                        .as_ref()?
-                        .bindings
-                        .first()
-                        .map(|i| i.alias.clone())
-                })
-                .unwrap_or_default();
-            self.expression
-                .update(cx, |input, cx| input.set_value(alias, window, cx));
-        }
-        self.preview_task = None;
+    fn insert_formula(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::EntityInputHandler;
+        self.expression.update(cx, |input, cx| {
+            input.replace_text_in_range(None, text, window, cx);
+            input.focus_handle(cx).focus(window, cx);
+        });
+        self.update_draft(window, cx);
+        self.schedule_preview(window, cx);
+    }
+
+    fn preset(&mut self, function: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
+        let ws = owner.read(cx);
+        let Some(input) = ws
+            .app
+            .derived_editor
+            .as_ref()
+            .and_then(|editor| editor.bindings.first())
+        else {
+            return;
+        };
+        let alias = if input.effective_shape(&ws.app.doc) == volna_trace::data::SignalShape::Bit {
+            format!("real({})", input.alias)
+        } else {
+            input.alias.clone()
+        };
+        let step = self.interval.read(cx).value().to_string();
+        let expression = match function {
+            "moving_avg" => format!(
+                "moving_avg({alias}, {}, step: {step})",
+                volna_core::moving_average::duration(&step, ws.app.doc.time_base()).map_or_else(
+                    |_| step.clone(),
+                    |ticks| {
+                        let ticks = ticks.saturating_mul(16);
+                        let formatted = volna_core::wave::timeline::format_time(
+                            ticks as f64,
+                            ws.app.doc.time_base(),
+                        );
+                        if volna_core::moving_average::duration(&formatted, ws.app.doc.time_base())
+                            .ok()
+                            == Some(ticks)
+                        {
+                            formatted
+                        } else {
+                            format!("{ticks} ticks")
+                        }
+                    }
+                )
+            ),
+            "lowpass" => format!("lowpass({alias}, {step}, step: {step})"),
+            _ => format!("interval_mean({alias})"),
+        };
+        self.expression
+            .update(cx, |input, cx| input.set_value(expression, window, cx));
+        self.expression.read(cx).focus_handle(cx).focus(window, cx);
         self.update_draft(window, cx);
         self.send(DerivedCommand::Preview, window, cx);
     }
@@ -638,7 +695,7 @@ impl Render for DerivedEditor {
                 format!(
                     "{} output {} · live preview{}",
                     history.len(),
-                    if self.formula { "events" } else { "samples" },
+                    "events",
                     if warnings.is_empty() {
                         String::new()
                     } else {
@@ -694,11 +751,42 @@ impl Render for DerivedEditor {
                 .child(label)
                 .child(Input::new(input).small().w_full())
         };
-        let scope_error = self
-            .formula
-            .then(|| self.resolved_scope(cx).err())
-            .flatten();
+        let Some(analysis) = self.analysis(cx) else {
+            return div().into_any_element();
+        };
+        let measurement = analysis.result.as_ref().is_ok_and(|program| {
+            program.kind == volna_core::computed::ResultKind::ScalarMeasurement
+        });
+        let default_step = analysis
+            .result
+            .as_ref()
+            .is_ok_and(volna_core::computed::Program::uses_default_step)
+            || volna_core::moving_average::duration(
+                &self.interval.read(cx).value(),
+                ws.app.doc.time_base(),
+            )
+            .is_err();
+        let scope_error = measurement.then(|| self.resolved_scope(cx).err()).flatten();
         ready &= scope_error.is_none();
+        let marker_count = ws.app.doc.markers().len();
+        let current_scope = match self.scope {
+            volna_core::computed::MeasurementScope::MarkerIntervals => {
+                Some(ScopeChoice::MarkerIntervals)
+            }
+            volna_core::computed::MeasurementScope::WholeRange => Some(ScopeChoice::WholeRange),
+            volna_core::computed::MeasurementScope::Explicit { .. } => Some(ScopeChoice::Explicit),
+            volna_core::computed::MeasurementScope::MarkerSnapshot { .. } => {
+                Some(ScopeChoice::Snapshot)
+            }
+            volna_core::computed::MeasurementScope::LinkedMarkers { .. } => {
+                Some(ScopeChoice::Linked)
+            }
+            volna_core::computed::MeasurementScope::MarkerSet { .. } => {
+                Some(ScopeChoice::MarkerSet)
+            }
+            volna_core::computed::MeasurementScope::IntervalSnapshot { .. } => None,
+        };
+        let skip_unknown = self.skip_unknown;
         let marker_scope = matches!(
             self.scope,
             volna_core::computed::MeasurementScope::LinkedMarkers { .. }
@@ -765,34 +853,6 @@ impl Render for DerivedEditor {
             .on_click(
                 cx.listener(|view, _, window, cx| view.send(DerivedCommand::Close, window, cx)),
             );
-        let warmup = Button::new("average-warmup")
-            .label(if self.partial {
-                "Warm-up: available history"
-            } else {
-                "Warm-up: wait for full window"
-            })
-            .small()
-            .selected(self.partial)
-            .on_click(cx.listener(|view, _, window, cx| {
-                view.partial = !view.partial;
-                view.preview_task = None;
-                view.update_draft(window, cx);
-                view.send(DerivedCommand::Preview, window, cx);
-            }));
-        let missing = Button::new("average-unknown")
-            .label(if self.skip_unknown {
-                "Missing values: skip unknown time"
-            } else {
-                "Missing values: propagate gaps"
-            })
-            .small()
-            .selected(self.skip_unknown)
-            .on_click(cx.listener(|view, _, window, cx| {
-                view.skip_unknown = !view.skip_unknown;
-                view.preview_task = None;
-                view.update_draft(window, cx);
-                view.send(DerivedCommand::Preview, window, cx);
-            }));
         let actions =
             div()
                 .flex()
@@ -842,20 +902,49 @@ impl Render for DerivedEditor {
                             view.send(DerivedCommand::ApplyTable, window, cx);
                         })),
                 );
-        let description = if self.formula {
-            "Held inputs are evaluated at their combined transition times, within the common recording domain. Zoom does not change the result."
-        } else {
-            "Time-weighted mean over [t − window, t). Output values are held until the next output sample. Zoom does not change the result."
+        let expression = self.expression.read(cx).value().to_string();
+        let whole_expression = |message: String| volna_core::computed::language::Diagnostic {
+            source: expression.clone(),
+            range: 0..expression.len(),
+            message,
         };
         let diagnostic = scope_error
-            .or(error)
-            .or_else(|| match ws.app.derived_preview() {
-                Some(ComputationStatus::Failed(error)) => Some(error.clone()),
-                _ => None,
+            .map(whole_expression)
+            .or_else(|| analysis.result.as_ref().err().cloned())
+            .or_else(|| {
+                error
+                    .or_else(|| match ws.app.derived_preview() {
+                        Some(ComputationStatus::Failed(error)) => Some(error.clone()),
+                        _ => None,
+                    })
+                    .map(whole_expression)
             });
         let (min_width, max_width) = Self::width_limits(window, cx);
         let width = ws.derived_width.clamp(min_width, max_width);
         let wide = width >= max_width - 1.0;
+        if self.diagnostic != diagnostic {
+            self.diagnostic.clone_from(&diagnostic);
+            self.expression.update(cx, |state, cx| {
+                use gpui_kit::base::input::{Diagnostic, DiagnosticSeverity};
+                use gpui_kit::component::input::RopeExt;
+                let text = state.text().clone();
+                if let Some(set) = state.diagnostics_mut() {
+                    set.clear();
+                    if let Some(diagnostic) = &diagnostic {
+                        let range = &diagnostic.range;
+                        set.push(
+                            Diagnostic::new(
+                                text.offset_to_position(range.start)
+                                    ..text.offset_to_position(range.end),
+                                diagnostic.message.clone(),
+                            )
+                            .with_severity(DiagnosticSeverity::Error),
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        }
         let header = div()
             .flex_none()
             .flex()
@@ -887,160 +976,9 @@ impl Render for DerivedEditor {
                     )
                     .child(close),
             );
-        let composer = div()
-            .id("formula-composer")
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p(t.px(12.0))
-            .border_b_1()
-            .border_color(t.border)
-            .child(
-                div()
-                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                    .child("Formula"),
-            )
-            .child(
-                div()
-                    .id("formula-expression")
-                    .debug_selector(|| "formula-expression".into())
-                    .font_family(t.mono_font)
-                    .child(Input::new(&self.expression).w_full()),
-            )
-            .child(
-                div()
-                    .text_color(t.panel.text_muted)
-                    .whitespace_normal()
-                    .child("Use your input aliases below. Changes preview automatically."),
-            );
-        let form = div()
-            .id("derived-form-scroll")
-            .debug_selector(|| "derived-form-scroll".into())
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .overflow_y_scrollbar()
-            .p(t.px(12.0))
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(
-                div().flex().flex_col().gap_1().child("Operation").child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .child(
-                            Button::new("operation-average")
-                                .label("Moving average")
-                                .small()
-                                .selected(!self.formula)
-                                .disabled(inputs.len() != 1)
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.operation(false, window, cx);
-                                })),
-                        )
-                        .child(
-                            Button::new("operation-formula")
-                                .label("Formula")
-                                .small()
-                                .selected(self.formula)
-                                .debug_selector(|| "operation-formula".into())
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.operation(true, window, cx);
-                                })),
-                        ),
-                ),
-            )
-            .child(field("Name", &self.name, "derived-name"))
-            .child(self.input_controls(&inputs, window, cx))
-            .when(self.formula, |el| {
-                el.child(field(
-                    "Default sampling step",
-                    &self.interval,
-                    "formula-default-step",
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child("Measurement scope")
-                        .child(
-                            Button::new("formula-scope")
-                                .debug_selector(|| "formula-scope".into())
-                                .label(match &self.scope {
-                                    volna_core::computed::MeasurementScope::IntervalSnapshot {
-                                        ..
-                                    } => "Saved intervals",
-                                    volna_core::computed::MeasurementScope::MarkerIntervals => {
-                                        "Each marker interval"
-                                    }
-                                    volna_core::computed::MeasurementScope::WholeRange => {
-                                        "Whole range"
-                                    }
-                                    volna_core::computed::MeasurementScope::Explicit { .. } => {
-                                        "Explicit bounds"
-                                    }
-                                    volna_core::computed::MeasurementScope::MarkerSnapshot {
-                                        ..
-                                    } => "Marker snapshot",
-                                    volna_core::computed::MeasurementScope::LinkedMarkers {
-                                        ..
-                                    } => "Linked markers",
-                                    volna_core::computed::MeasurementScope::MarkerSet {
-                                        ..
-                                    } => "Marker set table",
-                                })
-                                .small()
-                                .on_click(
-                                    cx.listener(|view, _, window, cx| view.cycle_scope(window, cx)),
-                                ),
-                        ),
-                )
-                .child(scope_details)
-                .child(
-                    Button::new("formula-unknown")
-                        .label(if self.skip_unknown {
-                            "Missing values: skip unknown"
-                        } else {
-                            "Missing values: propagate gaps"
-                        })
-                        .small()
-                        .selected(self.skip_unknown)
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.skip_unknown = !view.skip_unknown;
-                            view.preview_task = None;
-                            view.update_draft(window, cx);
-                            view.send(DerivedCommand::Preview, window, cx);
-                        })),
-                )
-            })
-            .when(!self.formula, |el| {
-                el.child(field("Trailing window", &self.window, "average-window"))
-                    .child(field("Output interval", &self.interval, "average-interval"))
-                    .child(
-                        div()
-                            .text_color(t.panel.text_muted)
-                            .child("Use time units (4 us, 250 ns) or timeline ticks."),
-                    )
-                    .child(warmup)
-                    .child(missing)
-            })
-            .child(
-                div()
-                    .text_color(t.panel.text_muted)
-                    .child(format!("Output domain · {bounds}")),
-            )
-            .child(
-                div()
-                    .text_color(t.panel.text_muted)
-                    .whitespace_normal()
-                    .child(description),
-            );
         let has_diagnostic = diagnostic.is_some();
-        let error_card = diagnostic.map(|message| {
+        let error_card = diagnostic.map(|diagnostic| {
+            let message = diagnostic.message;
             let for_copy = message.clone();
             let for_details = message.clone();
             div()
@@ -1091,6 +1029,226 @@ impl Render for DerivedEditor {
                         ),
                 )
         });
+        let composer = div()
+            .id("formula-composer")
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p(t.px(12.0))
+            .border_b_1()
+            .border_color(t.panel.icon_accent)
+            .bg(t.selection.bg)
+            .child(
+                div()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .text_color(t.panel.icon_accent)
+                    .child("Formula"),
+            )
+            .child(
+                div()
+                    .id("formula-expression")
+                    .debug_selector(|| "formula-expression".into())
+                    .font_family(t.mono_font)
+                    .key_context("FormulaEditor")
+                    .on_action(cx.listener(|view, _: &PreviewFormula, window, cx| {
+                        view.preview_task = None;
+                        view.update_draft(window, cx);
+                        view.send(DerivedCommand::Preview, window, cx);
+                    }))
+                    .h(t.px(110.0))
+                    .border_2()
+                    .border_color(t.panel.icon_accent)
+                    .rounded(t.px(4.0))
+                    .child(Editor::new(&self.expression).h_full().bg(t.selection.bg).bordered(false).aria_label("Formula expression")),
+            )
+            .child(
+                div()
+                    .text_color(t.panel.text_muted)
+                    .whitespace_normal()
+                    .child("Changes preview automatically · Ctrl+Enter to update · Ctrl+Space for completion"),
+            );
+        let composer = composer
+            .when_some(
+                analysis
+                    .syntax
+                    .signature(self.expression.read(cx).selected_range().end),
+                |el, signature| {
+                    el.child(
+                        div()
+                            .debug_selector(|| "formula-signature".into())
+                            .font_family(t.mono_font)
+                            .text_color(t.panel.text_muted)
+                            .whitespace_normal()
+                            .child(signature),
+                    )
+                },
+            )
+            .when_some(error_card, ParentElement::child)
+            .child(
+                div()
+                    .text_color(t.panel.text_muted)
+                    .child("Replace with preset"),
+            )
+            .child(
+                div().flex().flex_wrap().gap_1().children(
+                    [
+                        ("moving_avg", "Moving average"),
+                        ("lowpass", "Low-pass"),
+                        ("interval_mean", "Mean over intervals"),
+                    ]
+                    .into_iter()
+                    .map(|(function, label)| {
+                        Button::new(format!("preset-{function}"))
+                            .label(label)
+                            .small()
+                            .disabled(inputs.is_empty())
+                            .debug_selector(move || format!("preset-{function}"))
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.preset(function, window, cx);
+                            }))
+                    }),
+                ),
+            );
+        let form = div()
+            .id("derived-form-scroll")
+            .debug_selector(|| "derived-form-scroll".into())
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .overflow_y_scrollbar()
+            .p(t.px(12.0))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(field("Name", &self.name, "derived-name"))
+            .child(self.input_controls(&inputs, window, cx))
+            .when(default_step, |el| {
+                el.child(field(
+                    "Default sampling step",
+                    &self.interval,
+                    "formula-default-step",
+                ))
+            })
+            .when(measurement, |el| {
+                el.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child("Measurement scope")
+                        .child(
+                            Button::new("formula-scope")
+                                .debug_selector(|| "formula-scope".into())
+                                .label(match &self.scope {
+                                    volna_core::computed::MeasurementScope::IntervalSnapshot {
+                                        ..
+                                    } => "Saved intervals",
+                                    volna_core::computed::MeasurementScope::MarkerIntervals => {
+                                        "Each marker interval"
+                                    }
+                                    volna_core::computed::MeasurementScope::WholeRange => {
+                                        "Whole range"
+                                    }
+                                    volna_core::computed::MeasurementScope::Explicit { .. } => {
+                                        "Explicit bounds"
+                                    }
+                                    volna_core::computed::MeasurementScope::MarkerSnapshot {
+                                        ..
+                                    } => "Marker snapshot",
+                                    volna_core::computed::MeasurementScope::LinkedMarkers {
+                                        ..
+                                    } => "Linked markers",
+                                    volna_core::computed::MeasurementScope::MarkerSet {
+                                        ..
+                                    } => "Marker set table",
+                                })
+                                .small()
+                                .dropdown_caret(true)
+                                .dropdown_menu({
+                                    let view = cx.entity().downgrade();
+                                    move |menu, _, _| {
+                                        [
+                                            (ScopeChoice::MarkerIntervals, "Each marker interval"),
+                                            (ScopeChoice::WholeRange, "Whole range"),
+                                            (ScopeChoice::Explicit, "Explicit bounds"),
+                                            (ScopeChoice::Snapshot, "Marker snapshot"),
+                                            (ScopeChoice::Linked, "Linked markers"),
+                                            (ScopeChoice::MarkerSet, "Marker set table"),
+                                        ]
+                                        .into_iter()
+                                        .fold(
+                                            menu,
+                                            |menu, (choice, label)| {
+                                                let view = view.clone();
+                                                menu.item(
+                                                    PopupMenuItem::new(label)
+                                                        .checked(current_scope == Some(choice))
+                                                        .disabled(
+                                                            marker_count < 2
+                                                                && matches!(
+                                                                    choice,
+                                                                    ScopeChoice::Snapshot
+                                                                        | ScopeChoice::Linked
+                                                                        | ScopeChoice::MarkerSet
+                                                                ),
+                                                        )
+                                                        .on_click(move |_, window, cx| {
+                                                            drop(view.update(cx, |view, cx| {
+                                                                view.select_scope(
+                                                                    choice, window, cx,
+                                                                );
+                                                            }));
+                                                        }),
+                                                )
+                                            },
+                                        )
+                                    }
+                                }),
+                        ),
+                )
+                .child(scope_details)
+                .child(
+                    Button::new("formula-unknown")
+                        .label(if self.skip_unknown {
+                            "Missing values: skip unknown"
+                        } else {
+                            "Missing values: propagate gaps"
+                        })
+                        .small()
+                        .dropdown_caret(true)
+                        .dropdown_menu({
+                            let view = cx.entity().downgrade();
+                            move |menu, _, _| {
+                                [(false, "Propagate gaps"), (true, "Skip unknown time")]
+                                    .into_iter()
+                                    .fold(menu, |menu, (skip, label)| {
+                                        let view = view.clone();
+                                        menu.item(
+                                            PopupMenuItem::new(label)
+                                                .checked(skip == skip_unknown)
+                                                .on_click(move |_, window, cx| {
+                                                    drop(view.update(cx, |view, cx| {
+                                                        view.skip_unknown = skip;
+                                                        view.update_draft(window, cx);
+                                                        view.send(
+                                                            DerivedCommand::Preview,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }));
+                                                }),
+                                        )
+                                    })
+                            }
+                        }),
+                )
+            })
+            .child(
+                div()
+                    .text_color(t.panel.text_muted)
+                    .child(format!("Output domain · {bounds}")),
+            );
         let footer = div()
             .flex_none()
             .flex()
@@ -1111,7 +1269,6 @@ impl Render for DerivedEditor {
                     })
                     .child(status),
             )
-            .when_some(error_card, ParentElement::child)
             .child(actions)
             .when(editing, |el| {
                 el.child(
@@ -1157,7 +1314,7 @@ impl Render for DerivedEditor {
                     .child(div().id("formula-guide-search").debug_selector(|| "formula-guide-search".into())
                         .child(Input::new(&self.reference_search).small().w_full()))
                     .child(div().text_color(t.panel.text_muted).whitespace_normal()
-                        .child("Use example replaces the formula. Replace a, b and clock aliases with your inputs.")))
+                        .child("Replace formula uses your bound aliases where possible. Insert adds an example at the cursor.")))
                     .child(reference::render(&t, guide_height, &cx.entity(), &self.reference_search.read(cx).value()))
             });
         let splitter = div()
@@ -1205,9 +1362,9 @@ impl Render for DerivedEditor {
                     .flex_col()
                     .bg(t.panel.bg)
                     .child(header)
-                    .when(self.formula, |el| el.child(composer))
+                    .child(composer)
                     .child(form)
-                    .when(self.formula, |el| el.child(guide))
+                    .child(guide)
                     .child(footer),
             )
             .when_some(resize_tracker, ParentElement::child)

@@ -57,6 +57,7 @@ pub fn init_app(cx: &mut App) {
             executor.spawn(async move { work() }).detach();
         });
     }
+    derived::init(cx);
     table_panel::init(cx);
     table_filters::init(cx);
     table_columns::init(cx);

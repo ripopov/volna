@@ -82,7 +82,7 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
         );
     });
     vcx.update(|window, cx| window.draw(cx).clear(cx));
-    let field = vcx.debug_bounds("average-window").unwrap();
+    let field = vcx.debug_bounds("formula-expression").unwrap();
     vcx.simulate_click(
         gpui_kit::point(field.center().x, field.bottom() - px(10.0)),
         Modifiers::default(),
@@ -92,14 +92,27 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
     } else {
         "ctrl-a"
     });
-    vcx.simulate_input("4 us");
-    vcx.simulate_keystrokes("enter");
+    let alias = ws.read_with(&vcx, |ws, _| {
+        ws.app.derived_editor.as_ref().unwrap().bindings[0]
+            .alias
+            .clone()
+    });
+    vcx.simulate_input(&format!("moving_avg({alias}, 4 us, step: 2 ns)"));
+    vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
     ws.read_with(&vcx, |ws, _| {
-        assert_eq!(ws.app.derived_editor.as_ref().unwrap().draft.window, "4 us");
+        assert!(
+            ws.app
+                .derived_editor
+                .as_ref()
+                .unwrap()
+                .draft
+                .formula
+                .contains("4 us")
+        );
         assert!(
             matches!(ws.app.derived_preview(), Some(ComputationStatus::Ready(_))),
-            "preview key {:?}, error {:?}, status {}",
+            "preview key {:?}, error {:?}, status {}, draft {:?}",
             ws.app.derived_editor.as_ref().unwrap().preview,
             ws.app.derived_editor.as_ref().unwrap().error,
             match ws.app.derived_preview() {
@@ -110,7 +123,8 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
                 Some(ComputationStatus::ReadyMeasurement(_)) => "measurement",
                 Some(ComputationStatus::ReadyTable(_)) => "table",
                 None => "none",
-            }
+            },
+            ws.app.derived_editor.as_ref().unwrap().draft
         );
     });
     click(&mut vcx, "derived-apply");
@@ -122,22 +136,14 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
             volna_trace::data::SignalShape::Real
         );
         assert_eq!(waves.signal(1).unwrap().translator.id(), "real");
-        assert_eq!(
-            {
-                let volna_core::computed::Operation::MovingAverage { settings } = &waves
-                    .signal(1)
-                    .unwrap()
-                    .source
-                    .computed()
-                    .unwrap()
-                    .operation
-                else {
-                    panic!()
-                };
-                settings.window
-            },
-            4000
-        );
+        let volna_core::computed::Operation::Formula { expression, .. } = &waves
+            .signal(1)
+            .unwrap()
+            .source
+            .computed()
+            .unwrap()
+            .operation;
+        assert!(expression.contains("4 us"));
     });
     vcx.simulate_keystrokes("shift-f10");
     vcx.run_until_parked();
@@ -162,7 +168,7 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
     });
 }
 
-// A user chooses Formula, searches for a hidden recorded input, and applies the live difference waveform.
+// A user searches for a hidden recorded input, and applies the live difference waveform.
 #[gpui_kit::test]
 fn formula_picker_and_expression_create_a_two_input_waveform(cx: &mut TestAppContext) {
     cx.update(crate::init_app);
@@ -195,7 +201,7 @@ fn formula_picker_and_expression_create_a_two_input_waveform(cx: &mut TestAppCon
         vcx.run_until_parked();
     };
     click(&mut vcx, "derive-signal");
-    click(&mut vcx, "operation-formula");
+
     click(&mut vcx, "add-formula-input");
     click(&mut vcx, "recorded-input-search");
     vcx.simulate_input("cosine");
@@ -216,18 +222,12 @@ fn formula_picker_and_expression_create_a_two_input_waveform(cx: &mut TestAppCon
         "ctrl-a"
     });
     vcx.simulate_input("input - cosine");
-    vcx.simulate_keystrokes("enter");
+    vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
     ws.read_with(&vcx, |ws, _| {
         assert_eq!(
-            ws.app
-                .derived_editor
-                .as_ref()
-                .unwrap()
-                .draft
-                .formula
-                .as_deref(),
-            Some("input - cosine")
+            ws.app.derived_editor.as_ref().unwrap().draft.formula.trim(),
+            "input - cosine"
         );
         let Some(ComputationStatus::Ready(history)) = ws.app.derived_preview() else {
             panic!("formula did not preview");
@@ -301,7 +301,8 @@ fn formula_reference_is_a_scrollable_bottom_panel_in_both_themes(cx: &mut TestAp
     let (_ws, mut vcx) = formula_workspace(cx, vec![0]);
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("formula-reference").is_none());
-    click_control(&mut vcx, "operation-formula");
+    click_control(&mut vcx, "formula-guide-toggle");
+
     for dark in [false, true] {
         vcx.update(|_, cx| crate::theme::set(crate::theme::CoreTheme::volna(dark), cx));
         vcx.run_until_parked();
@@ -347,7 +348,8 @@ fn formula_reference_is_a_scrollable_bottom_panel_in_both_themes(cx: &mut TestAp
 #[gpui_kit::test]
 fn guide_examples_copy_paste_and_replace_the_formula(cx: &mut TestAppContext) {
     let (ws, mut vcx) = formula_workspace(cx, vec![0]);
-    click_control(&mut vcx, "operation-formula");
+
+    click_control(&mut vcx, "formula-guide-toggle");
     click_control(&mut vcx, "copy-example-0-0");
     vcx.update(|_, cx| {
         assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "a - b");
@@ -359,18 +361,12 @@ fn guide_examples_copy_paste_and_replace_the_formula(cx: &mut TestAppContext) {
     } else {
         "ctrl-a ctrl-v"
     });
-    vcx.simulate_keystrokes("enter");
+    vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
     ws.read_with(&vcx, |ws, _| {
         assert_eq!(
-            ws.app
-                .derived_editor
-                .as_ref()
-                .unwrap()
-                .draft
-                .formula
-                .as_deref(),
-            Some("a - b")
+            ws.app.derived_editor.as_ref().unwrap().draft.formula.trim(),
+            "a - b"
         );
     });
     vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
@@ -379,19 +375,13 @@ fn guide_examples_copy_paste_and_replace_the_formula(cx: &mut TestAppContext) {
         "ctrl-a"
     });
     vcx.simulate_input("2");
-    vcx.simulate_keystrokes("enter");
+    vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
     click_control(&mut vcx, "use-example-0-0");
     ws.read_with(&vcx, |ws, _| {
         assert_eq!(
-            ws.app
-                .derived_editor
-                .as_ref()
-                .unwrap()
-                .draft
-                .formula
-                .as_deref(),
-            Some("a - b")
+            ws.app.derived_editor.as_ref().unwrap().draft.formula.trim(),
+            "input - b"
         );
     });
     vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
@@ -400,7 +390,7 @@ fn guide_examples_copy_paste_and_replace_the_formula(cx: &mut TestAppContext) {
         "ctrl-a"
     });
     vcx.simulate_input("3");
-    vcx.simulate_keystrokes("enter");
+    vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
     ws.read_with(&vcx, |ws, _| {
         assert!(matches!(
@@ -426,8 +416,6 @@ fn guide_examples_copy_paste_and_replace_the_formula(cx: &mut TestAppContext) {
                 .unwrap()
                 .draft
                 .formula
-                .as_ref()
-                .unwrap()
                 .starts_with("sine(")
         );
     });
@@ -446,7 +434,7 @@ fn formula_editor_adds_interval_results_to_the_existing_table(cx: &mut TestAppCo
             .unwrap();
         cx.notify();
     });
-    click_control(&mut vcx, "operation-formula");
+
     let field = vcx.debug_bounds("formula-expression").unwrap();
     vcx.simulate_click(field.center(), Modifiers::default());
     vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
@@ -455,7 +443,7 @@ fn formula_editor_adds_interval_results_to_the_existing_table(cx: &mut TestAppCo
         "ctrl-a"
     });
     vcx.simulate_input("interval_max(3)");
-    vcx.simulate_keystrokes("enter");
+    vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
     click_control(&mut vcx, "derived-table");
     vcx.update(|window, cx| window.draw(cx).clear(cx));
@@ -483,7 +471,7 @@ fn formula_editor_adds_interval_results_to_the_existing_table(cx: &mut TestAppCo
 #[gpui_kit::test]
 fn formula_editor_resizes_and_copies_diagnostics(cx: &mut TestAppContext) {
     let (ws, mut vcx) = formula_workspace(cx, vec![0]);
-    click_control(&mut vcx, "operation-formula");
+
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let original = vcx.debug_bounds("derived-signal-editor").unwrap();
     click_control(&mut vcx, "derived-width");
@@ -516,7 +504,7 @@ fn formula_editor_resizes_and_copies_diagnostics(cx: &mut TestAppContext) {
             .clone()
     });
     vcx.simulate_input(&format!("interval_sum({alias})"));
-    vcx.simulate_keystrokes("enter");
+    vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("derived-error").is_some());
@@ -530,6 +518,9 @@ fn formula_editor_resizes_and_copies_diagnostics(cx: &mut TestAppContext) {
     });
     vcx.simulate_resize(size(px(1400.0), px(720.0)));
     vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    click_control(&mut vcx, "input-details-0");
+    vcx.simulate_resize(size(px(1000.0), px(650.0)));
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let footer = vcx.debug_bounds("derived-status").unwrap();
     let first_field = vcx.debug_bounds("derived-name").unwrap();
@@ -561,7 +552,7 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
         cx.notify();
         (first, second, third, (start, end))
     });
-    click_control(&mut vcx, "operation-formula");
+
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let field = vcx.debug_bounds("formula-expression").unwrap();
     vcx.simulate_click(
@@ -574,10 +565,10 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
         "ctrl-a"
     });
     vcx.simulate_input("interval_mean(input)");
-    vcx.simulate_keystrokes("enter");
+    vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
 
-    click_control(&mut vcx, "formula-scope");
+    choose_scope(&mut vcx, 4);
     click_control(&mut vcx, "scope-marker-3");
     let time = |fraction| bounds.0 + (bounds.1 - bounds.0) * fraction / 4;
     ws.read_with(&vcx, |ws, _| {
@@ -587,7 +578,7 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
         };
         assert_eq!(measurement.bounds, (time(2), time(3)));
     });
-    click_control(&mut vcx, "formula-scope");
+    choose_scope(&mut vcx, 3);
     ws.read_with(&vcx, |ws, _| {
         let Some(ComputationStatus::ReadyMeasurement(measurement)) = ws.app.derived_preview()
         else {
@@ -595,7 +586,7 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
         };
         assert_eq!(measurement.bounds, (time(2), time(3)));
     });
-    click_control(&mut vcx, "formula-scope");
+    choose_scope(&mut vcx, 5);
     click_control(&mut vcx, "scope-marker-1");
     click_control(&mut vcx, "scope-marker-2");
     ws.read_with(&vcx, |ws, _| {
@@ -623,7 +614,7 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
             (Some(first), Some(second), (time(1), time(2)))
         );
     });
-    click_control(&mut vcx, "formula-scope");
+    choose_scope(&mut vcx, 2);
     let set_bound = |vcx: &mut VisualTestContext, selector, value: String| {
         vcx.update(|window, cx| window.draw(cx).clear(cx));
         let field = vcx.debug_bounds(selector).unwrap();
@@ -637,7 +628,7 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
             "ctrl-a"
         });
         vcx.simulate_input(&value);
-        vcx.simulate_keystrokes("enter");
+        vcx.simulate_keystrokes("ctrl-enter");
         vcx.run_until_parked();
     };
     let left = bounds.0 + (bounds.1 - bounds.0) / 4;
@@ -661,10 +652,7 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
             .unwrap()
             .source;
         let volna_core::computed::Operation::Formula { settings, .. } =
-            &source.computed().unwrap().operation
-        else {
-            panic!("expected applied formula");
-        };
+            &source.computed().unwrap().operation;
         assert_eq!(
             settings.scope,
             volna_core::computed::MeasurementScope::Explicit {
@@ -689,6 +677,7 @@ fn removing_invalid_slice_resumes_preview(cx: &mut TestAppContext) {
         .position(|v| matches!(v.shape, volna_trace::data::SignalShape::Vector { .. }))
         .unwrap();
     let (ws, mut vcx) = formula_workspace(cx, vec![0, vector]);
+    click_control(&mut vcx, "input-details-1");
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let field = vcx.debug_bounds("recorded-input-1-slice").unwrap();
     vcx.simulate_click(
@@ -714,10 +703,13 @@ fn removing_invalid_slice_resumes_preview(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn binding_removal_closes_the_stale_replacement_picker(cx: &mut TestAppContext) {
     let (ws, mut vcx) = formula_workspace(cx, vec![0, 1, 2]);
+    click_control(&mut vcx, "input-details-1");
     click_control(&mut vcx, "replace-input-1");
+    click_control(&mut vcx, "input-details-0");
     click_control(&mut vcx, "remove-input-0");
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("recorded-input-search").is_none());
+    click_control(&mut vcx, "input-details-0");
     click_control(&mut vcx, "replace-input-0");
     click_control(&mut vcx, "recorded-candidate-A-3");
     ws.read_with(&vcx, |ws, _| {
@@ -766,7 +758,7 @@ fn recorded_picker_handles_large_scopes_and_superseded_queries(cx: &mut TestAppC
     writer.close().unwrap();
     let session = OpenSpec::Path(file.path().into()).open().unwrap();
     let (ws, mut vcx) = formula_workspace_session(cx, session, vec![0]);
-    click_control(&mut vcx, "operation-formula");
+
     click_control(&mut vcx, "add-formula-input");
     click_control(&mut vcx, "recorded-input-search");
     vcx.simulate_input("not_a_signal");
@@ -784,5 +776,255 @@ fn recorded_picker_handles_large_scopes_and_superseded_queries(cx: &mut TestAppC
         let bindings = &ws.app.derived_editor.as_ref().unwrap().bindings;
         assert_eq!(bindings.len(), 2);
         assert!(bindings[1].label(&ws.app.doc).contains("probe_4999"));
+    });
+}
+
+fn choose_scope(vcx: &mut VisualTestContext, index: usize) {
+    click_control(vcx, "formula-scope");
+    for _ in 0..=index {
+        vcx.simulate_keystrokes("down");
+        vcx.run_until_parked();
+    }
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+}
+
+// A user starts a moving average from a bound input, edits it, and applies it;
+// the preview must honor full-window warm-up and the saved formula must reopen.
+#[gpui_kit::test]
+fn moving_average_preset_previews_and_reopens_as_a_formula(cx: &mut TestAppContext) {
+    let (ws, mut vcx) = formula_workspace(cx, vec![0]);
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("operation-average").is_none());
+    assert!(vcx.debug_bounds("operation-formula").is_none());
+    assert!(vcx.debug_bounds("formula-default-step").is_none());
+    assert!(vcx.debug_bounds("formula-scope").is_none());
+    click_control(&mut vcx, "preset-moving_avg");
+    let field = vcx.debug_bounds("formula-expression").unwrap();
+    vcx.simulate_click(field.center(), Modifiers::default());
+    vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    vcx.simulate_input("moving_avg(input, 32 ns, step: 2 ns)");
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    ws.read_with(&vcx, |ws, _| {
+        let Some(ComputationStatus::Ready(history)) = ws.app.derived_preview() else { panic!("average did not preview"); };
+        assert_eq!(history.value(history.index_at(0)), volna_trace::data::WaveValue::Unavailable);
+        let base = ws.app.doc.time_base();
+        let time = volna_core::moving_average::duration("32 ns", base).unwrap();
+        assert!(matches!(history.value(history.index_at(time)), volna_trace::data::WaveValue::Real(value) if value.is_finite()));
+    });
+    click_control(&mut vcx, "derived-apply");
+    vcx.simulate_keystrokes("shift-f10");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "wave-menu-derived");
+    ws.read_with(&vcx, |ws, _| {
+        assert_eq!(
+            ws.app.derived_editor.as_ref().unwrap().draft.formula,
+            "moving_avg(input, 32 ns, step: 2 ns)"
+        );
+    });
+}
+
+// A user inserts a bound alias at the cursor and switches to an interval mean;
+// the waveform must use that input, and measurement controls appear only when needed.
+#[gpui_kit::test]
+fn aliases_insert_at_the_cursor_and_settings_follow_the_formula(cx: &mut TestAppContext) {
+    let (ws, mut vcx) = formula_workspace(cx, vec![0]);
+    let set_formula = |vcx: &mut VisualTestContext, expression: &str| {
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let field = vcx.debug_bounds("formula-expression").unwrap();
+        vcx.simulate_click(field.center(), Modifiers::default());
+        vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        });
+        vcx.simulate_input(expression);
+    };
+    set_formula(&mut vcx, "1 + ");
+    click_control(&mut vcx, "insert-input-0");
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    ws.read_with(&vcx, |ws, _| {
+        let Some(ComputationStatus::Ready(history)) = ws.app.derived_preview() else {
+            panic!("inserted alias did not preview");
+        };
+        assert_eq!(
+            history.value(history.index_at(0)),
+            volna_trace::data::WaveValue::Real(1.0)
+        );
+    });
+    set_formula(&mut vcx, "moving_avg(input, 32 ns)");
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("formula-default-step").is_some());
+    click_control(&mut vcx, "preset-interval_mean");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("formula-default-step").is_none());
+    assert!(vcx.debug_bounds("formula-scope").is_some());
+}
+
+// A user creates a generator, removes its unused recorded binding, and edits the
+// applied waveform again; generators must remain editable without any inputs.
+#[gpui_kit::test]
+fn generator_without_bindings_reopens_for_editing(cx: &mut TestAppContext) {
+    let (ws, mut vcx) = formula_workspace(cx, vec![0]);
+    let field = vcx.debug_bounds("formula-expression").unwrap();
+    vcx.simulate_click(field.center(), Modifiers::default());
+    vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    vcx.simulate_input("sine(period: 8 ns, step: 1 ns)");
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "input-details-0");
+    click_control(&mut vcx, "remove-input-0");
+    click_control(&mut vcx, "derived-apply");
+    vcx.simulate_keystrokes("shift-f10");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "wave-menu-derived");
+    ws.read_with(&vcx, |ws, _| {
+        assert!(ws.app.derived_editor.as_ref().unwrap().bindings.is_empty());
+        let Some(ComputationStatus::Ready(history)) = ws.app.derived_preview() else {
+            panic!("generator did not reopen");
+        };
+        assert_eq!(
+            history.value(history.index_at(0)),
+            volna_trace::data::WaveValue::Real(0.0)
+        );
+    });
+}
+
+// A user prefixes an invalid formula with more arithmetic. The error stays the
+// same, but its visible underline must move to the alias's new location.
+#[gpui_kit::test]
+fn unknown_alias_underlines_follow_edits_with_the_same_error(cx: &mut TestAppContext) {
+    use gpui_kit::component::input::RopeExt;
+    let (_ws, editor, mut vcx) = standalone_formula_editor(cx);
+    let mut previous_message = None;
+    for expression in ["missing", "1 + missing", "min(input, missing)"] {
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let field = vcx.debug_bounds("formula-expression").unwrap();
+        vcx.simulate_click(field.center(), Modifiers::default());
+        vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        });
+        vcx.simulate_input(expression);
+        vcx.simulate_keystrokes("ctrl-enter");
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        editor.read_with(&vcx, |editor, cx| {
+            let state = editor.expression.read(cx);
+            let diagnostic = state.diagnostics().unwrap().iter().next().unwrap();
+            let start = state
+                .text()
+                .position_to_offset(&diagnostic.diagnostic.range.start);
+            let end = state
+                .text()
+                .position_to_offset(&diagnostic.diagnostic.range.end);
+            assert_eq!(&expression[start..end], "missing");
+            if let Some(message) = &previous_message {
+                assert_eq!(&diagnostic.message, message);
+            }
+            previous_message = Some(diagnostic.message.clone());
+            assert_eq!(
+                diagnostic.severity,
+                gpui_kit::base::input::DiagnosticSeverity::Error
+            );
+        });
+        assert!(vcx.debug_bounds("derived-error").is_some());
+    }
+}
+
+fn standalone_formula_editor(
+    cx: &mut TestAppContext,
+) -> (Entity<Workspace>, Entity<DerivedEditor>, VisualTestContext) {
+    let (ws, _) = formula_workspace(cx, vec![0]);
+    let panel = ws.read_with(cx, |ws, _| ws.app.panels.focused_id());
+    let mut editor = None;
+    let root = cx.add_window(|window, cx| {
+        let view = cx.new(|cx| DerivedEditor::new(ws.downgrade(), panel, window, cx));
+        editor = Some(view.clone());
+        gpui_kit::component::Root::new(view, window, cx)
+    });
+    let editor = editor.unwrap();
+    let vcx = VisualTestContext::from_window(root.into(), cx);
+    vcx.simulate_resize(size(px(800.0), px(900.0)));
+    vcx.run_until_parked();
+    (ws, editor, vcx)
+}
+
+// A user completes a function, sees its argument hint, then renames an input
+// and completes the new alias. Completion must use the language and live bindings.
+#[gpui_kit::test]
+fn completion_and_argument_help_follow_functions_and_renamed_inputs(cx: &mut TestAppContext) {
+    let (ws, editor, mut vcx) = standalone_formula_editor(cx);
+    let set_expression = |vcx: &mut VisualTestContext, text: &str| {
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let field = vcx.debug_bounds("formula-expression").unwrap();
+        vcx.simulate_click(field.center(), Modifiers::default());
+        vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        });
+        vcx.simulate_input(text);
+        vcx.run_until_parked();
+    };
+    set_expression(&mut vcx, "moving_");
+    vcx.simulate_keystrokes("ctrl-space");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    editor.read_with(&vcx, |editor, cx| {
+        assert_eq!(editor.expression.read(cx).value().trim(), "moving_avg");
+    });
+    vcx.simulate_input("(");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("formula-signature").is_some());
+    click_control(&mut vcx, "input-details-0");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let alias = vcx.debug_bounds("recorded-input-0-alias").unwrap();
+    vcx.simulate_click(
+        gpui_kit::point(alias.center().x, alias.bottom() - px(10.0)),
+        Modifiers::default(),
+    );
+    vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    vcx.simulate_input("sample");
+    vcx.run_until_parked();
+    set_expression(&mut vcx, "sam");
+    vcx.simulate_keystrokes("ctrl-space");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.simulate_keystrokes("enter");
+    vcx.run_until_parked();
+    editor.read_with(&vcx, |editor, cx| {
+        assert_eq!(editor.expression.read(cx).value().trim(), "sample");
+    });
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    ws.read_with(&vcx, |ws, _| {
+        let Some(ComputationStatus::Ready(history)) = ws.app.derived_preview() else {
+            panic!("completed alias did not preview");
+        };
+        assert_eq!(
+            history.value(history.index_at(0)),
+            volna_trace::data::WaveValue::Real(0.0)
+        );
     });
 }

@@ -123,7 +123,7 @@ fn take_derived(app: &mut App) -> LoadRequest {
 fn formula(app: &mut App, expression: &str) {
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = "result".into();
-    draft.formula = Some(expression.into());
+    draft.formula = expression.into();
     command(app, Derive::Update(draft));
     command(app, Derive::Preview);
     pump(app);
@@ -377,7 +377,7 @@ fn edited_and_rebound_formulas_reject_late_results() {
     add(&mut app, 1);
     formula(&mut app, "a");
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.formula = Some("a-b".into());
+    draft.formula = "a-b".into();
     command(&mut app, Derive::Update(draft.clone()));
     command(&mut app, Derive::Preview);
     assert!(
@@ -386,7 +386,7 @@ fn edited_and_rebound_formulas_reject_late_results() {
         app.derived_editor.as_ref().unwrap().error
     );
     let old = take_derived(&mut app);
-    draft.formula = Some("a+b".into());
+    draft.formula = "a+b".into();
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::Preview);
     assert!(
@@ -610,7 +610,7 @@ fn formula_memory_admission_failure_is_recoverable() {
     command(&mut app, Derive::Open(Some(0)));
     pump(&mut app);
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.formula = Some("a+1".into());
+    draft.formula = "a+1".into();
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::Preview);
     let mut request = app
@@ -826,7 +826,7 @@ fn synchronized_inputs_admit_intermediate_storage_and_release_it_on_close() {
     add(&mut app, 1);
     add(&mut app, 2);
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.formula = Some("a + b + c".into());
+    draft.formula = "a + b + c".into();
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::Preview);
     let budget = MemoryBudget::new(2 << 20);
@@ -1049,7 +1049,7 @@ fn generator_formulas_need_no_recorded_inputs_and_restore_their_step() {
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = "generated".into();
     draft.interval = "2 ns".into();
-    draft.formula = Some("sine(period: 8 ns)".into());
+    draft.formula = "sine(period: 8 ns)".into();
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::Preview);
     pump(&mut app);
@@ -1067,10 +1067,7 @@ fn generator_formulas_need_no_recorded_inputs_and_restore_their_step() {
         .unwrap();
     assert!((number(generated.history.as_deref().unwrap(), 2).unwrap() - 1.0).abs() < 1e-12);
     let volna_core::computed::Operation::Formula { settings, .. } =
-        &generated.source.computed().unwrap().operation
-    else {
-        panic!("generated row is not a formula");
-    };
+        &generated.source.computed().unwrap().operation;
     assert_eq!(settings.default_step, 2);
     assert_eq!(settings.saved_range, app.doc.limits());
 }
@@ -1381,7 +1378,7 @@ fn applied_formula_bindings_follow_identity_and_live_revisions() {
     command(&mut app, Derive::Open(Some(1)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = "renamed_source".into();
-    draft.formula = Some("a * 2".into());
+    draft.formula = "a * 2".into();
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::Preview);
     pump(&mut app);
@@ -1482,7 +1479,7 @@ fn formula_cycles_are_rejected_with_the_complete_path() {
     };
     command(&mut app, Derive::Open(Some(1)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.formula = Some("second + a".into());
+    draft.formula = "second + a".into();
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::AddInput(Traced::new(TraceId::A, 1)));
     let second_binding = app.derived_editor.as_ref().unwrap().bindings[1].clone();
@@ -1569,7 +1566,7 @@ fn interval_measurements_admit_scratch_and_recover_after_refusal() {
     let (_file, mut app) = fixture_with_end(100_000);
     command(&mut app, Derive::Open(Some(0)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.formula = Some("interval_sum(a @ 1 ns)".into());
+    draft.formula = "interval_sum(a @ 1 ns)".into();
     draft.skip_unknown = true;
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::Preview);
@@ -1605,7 +1602,7 @@ fn interval_table_enforces_one_work_limit_for_the_request() {
     for _ in 0..6 {
         expression = format!("({expression}+{expression})");
     }
-    draft.formula = Some(expression);
+    draft.formula = expression;
     draft.scope = MeasurementScope::IntervalSnapshot {
         intervals: (0..100_000).map(|start| (start, start + 1)).collect(),
     };
@@ -1669,7 +1666,7 @@ fn interval_preview_retains_only_result_storage_until_closed() {
     app.doc.add_marker(8).unwrap();
     command(&mut app, Derive::Open(Some(0)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.formula = Some("interval_sum(a @ 1 ns)".into());
+    draft.formula = "interval_sum(a @ 1 ns)".into();
     draft.skip_unknown = true;
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::Preview);
@@ -1686,4 +1683,61 @@ fn interval_preview_retains_only_result_storage_until_closed() {
     assert!(budget.used() > 0);
     command(&mut app, Derive::Close);
     assert_eq!(budget.used(), 0);
+}
+
+// A user enters a scientific literal; its editor highlighting and numerical
+// result must agree that the exponent belongs to the same number.
+#[test]
+fn scientific_literals_share_editor_tokens_and_evaluation() {
+    use volna_core::computed::language::{self, TokenKind};
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Open(Some(0)));
+    let expression = "2e-3 + .5";
+    let syntax = language::Syntax::new(expression);
+    let tokens = syntax.tokens();
+    let number_token = tokens
+        .iter()
+        .find(|token| token.range.contains(&2))
+        .unwrap();
+    assert_eq!(&expression[number_token.range.clone()], "2e-3");
+    assert_eq!(number_token.kind, TokenKind::Number);
+    formula(&mut app, expression);
+    assert_eq!(number(preview(&app), 0), Some(0.502));
+}
+
+// A user repairs invalid input while editing; diagnostics must point to the
+// offending source text, and incomplete syntax must still provide function help.
+#[test]
+fn editor_diagnostics_and_hints_follow_the_current_expression() {
+    use volna_core::computed::{
+        FormulaType, Program,
+        language::{self, Diagnostic, TokenKind},
+    };
+    let inputs = [("a".into(), FormulaType::Real)];
+    for expression in ["missing", "1 + missing", "min(a, missing)"] {
+        let error = Program::parse(expression, &inputs).unwrap_err();
+        let diagnostic = Diagnostic::from_error(expression, &error);
+        assert_eq!(&expression[diagnostic.range], "missing");
+        assert!(diagnostic.message.contains("Available aliases: a"));
+    }
+    let expression = "mim(a, 1)";
+    let diagnostic = Diagnostic::from_error(
+        expression,
+        &Program::parse(expression, &inputs).unwrap_err(),
+    );
+    assert_eq!(&expression[diagnostic.range], "mim");
+    let expression = "moving_avg(a, 2e-3 ns, warmup: \"available\"";
+    let hint = language::Syntax::new(expression)
+        .signature(expression.len())
+        .unwrap();
+    assert!(hint.starts_with("moving_avg("));
+    assert!(hint.contains("warmup:"));
+    let expression = "min(a, λ)";
+    let diagnostic = Diagnostic::from_error(
+        expression,
+        &Program::parse(expression, &inputs).unwrap_err(),
+    );
+    assert_eq!(&expression[diagnostic.range], "λ");
+    let expression = "a + ? + 3";
+    assert!(language::Syntax::new(expression).tokens().iter().any(|token| token.kind == TokenKind::Number && &expression[token.range.clone()] == "3"));
 }

@@ -9,6 +9,7 @@ pub use formula::engine::{
     CaptureSupport, Evaluation, EvaluationOptions, FormulaHistory, Measurement, MeasurementStatus,
     Source, evaluate_program,
 };
+pub use formula::language;
 pub use formula::{Program, ResultKind, Type as FormulaType, UnknownPolicy};
 pub(crate) use jobs::Computations;
 pub use jobs::{
@@ -16,7 +17,7 @@ pub use jobs::{
 };
 
 use crate::{
-    moving_average::{Settings, duration},
+    moving_average::duration,
     trace::{Retime, Traced},
     wave::model::RowSource,
 };
@@ -49,7 +50,7 @@ impl Input {
     pub fn validate(&self) -> Result<()> {
         if let RowSource::Computed { inputs, definition } = &self.source {
             ensure!(
-                definition.calculation(inputs)?.kind() != ResultKind::ScalarMeasurement,
+                definition.calculation(inputs)?.kind != ResultKind::ScalarMeasurement,
                 "Scalar measurements cannot be formula inputs."
             );
         }
@@ -112,9 +113,6 @@ pub struct FormulaSettings {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Operation {
-    MovingAverage {
-        settings: Settings,
-    },
     Formula {
         expression: String,
         settings: FormulaSettings,
@@ -123,7 +121,6 @@ pub enum Operation {
 impl Retime for Operation {
     fn retime(&mut self, by: crate::trace::Rescale) {
         match self {
-            Self::MovingAverage { settings } => settings.retime(by),
             Self::Formula { settings, .. } => {
                 settings.default_step = by.time(settings.default_step).max(1);
                 settings.saved_range.0 = by.time(settings.saved_range.0);
@@ -173,26 +170,12 @@ impl Definition {
                 && !self.name.chars().any(char::is_control),
             "Use a name of 1–256 bytes without control characters."
         );
-        self.calculation(inputs).map(|c| c.output().shape())
+        self.calculation(inputs).map(|c| c.output.shape())
     }
-    pub(crate) fn calculation(&self, inputs: &[Input]) -> Result<Calculation> {
-        let types = input_types(inputs)?;
-        match &self.operation {
-            Operation::MovingAverage { settings } => {
-                ensure!(inputs.len() == 1, "Moving average requires one input.");
-                settings.sample_count()?;
-                Ok(Calculation::MovingAverage(*settings))
-            }
-            Operation::Formula { expression, .. } => Ok(Calculation::Formula(Arc::new(
-                formula::Program::parse_captured(expression, &types, &input_captures(inputs)?)?,
-            ))),
-        }
+    pub(crate) fn calculation(&self, inputs: &[Input]) -> Result<Arc<formula::Program>> {
+        let Operation::Formula { expression, .. } = &self.operation;
+        Program::with_bindings(expression, inputs).map(Arc::new)
     }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Calculation {
-    MovingAverage(Settings),
-    Formula(Arc<formula::Program>),
 }
 
 fn input_types(inputs: &[Input]) -> Result<Vec<(String, formula::Type)>> {
@@ -215,7 +198,7 @@ fn input_captures(inputs: &[Input]) -> Result<Vec<bool>> {
         .map(|input| {
             Ok(match &input.source {
                 RowSource::Computed { inputs, definition } => {
-                    definition.calculation(inputs)?.kind() == ResultKind::CapturedWaveform
+                    definition.calculation(inputs)?.kind == ResultKind::CapturedWaveform
                 }
                 _ => false,
             })
@@ -223,65 +206,33 @@ fn input_captures(inputs: &[Input]) -> Result<Vec<bool>> {
         .collect()
 }
 
-impl Calculation {
-    pub fn output(&self) -> formula::Type {
-        match self {
-            Self::MovingAverage(_) => formula::Type::Real,
-            Self::Formula(program) => program.output,
-        }
-    }
-
-    pub fn kind(&self) -> ResultKind {
-        match self {
-            Self::MovingAverage(_) => ResultKind::Waveform,
-            Self::Formula(program) => program.kind,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Draft {
     pub name: String,
-    pub window: String,
     pub interval: String,
-    pub partial: bool,
     pub skip_unknown: bool,
-    pub formula: Option<String>,
+    pub formula: String,
     pub scope: MeasurementScope,
 }
 impl Draft {
     pub fn definition(
         &self,
-        domain: (u64, u64),
         saved_range: (u64, u64),
         base: crate::wave::timeline::TimeBase<'_>,
         inputs: &[Input],
     ) -> Result<Definition> {
-        let operation = if let Some(expression) = &self.formula {
-            Operation::Formula {
-                expression: expression.clone(),
-                settings: FormulaSettings {
-                    default_step: duration(&self.interval, base).context("Default step")?,
-                    saved_range,
-                    scope: self.scope.clone(),
-                    unknown: if self.skip_unknown {
-                        UnknownPolicy::Skip
-                    } else {
-                        UnknownPolicy::Gap
-                    },
+        let operation = Operation::Formula {
+            expression: self.formula.clone(),
+            settings: FormulaSettings {
+                default_step: duration(&self.interval, base).context("Default step")?,
+                saved_range,
+                scope: self.scope.clone(),
+                unknown: if self.skip_unknown {
+                    UnknownPolicy::Skip
+                } else {
+                    UnknownPolicy::Gap
                 },
-            }
-        } else {
-            Operation::MovingAverage {
-                settings: Settings {
-                    window: duration(&self.window, base).context("Window")?,
-                    interval: duration(&self.interval, base).context("Output interval")?,
-                    origin: domain.0,
-                    end: domain.1,
-                    partial: self.partial,
-                    skip_unknown: self.skip_unknown,
-                },
-            }
+            },
         };
         let definition = Definition {
             id: FormulaId::default(),
@@ -294,21 +245,10 @@ impl Draft {
     }
     #[must_use]
     pub fn calculation_changed(&self, other: &Self) -> bool {
-        match (&self.formula, &other.formula) {
-            (Some(a), Some(b)) => {
-                a != b
-                    || self.interval != other.interval
-                    || self.skip_unknown != other.skip_unknown
-                    || self.scope != other.scope
-            }
-            (None, None) => {
-                self.window != other.window
-                    || self.interval != other.interval
-                    || self.partial != other.partial
-                    || self.skip_unknown != other.skip_unknown
-            }
-            _ => true,
-        }
+        self.formula != other.formula
+            || self.interval != other.interval
+            || self.skip_unknown != other.skip_unknown
+            || self.scope != other.scope
     }
 }
 
@@ -452,9 +392,7 @@ impl Editor {
         base: crate::wave::timeline::TimeBase<'_>,
         inputs: &[Input],
     ) -> Result<Definition> {
-        let mut definition = self
-            .draft
-            .definition(self.domain, saved_range, base, inputs)?;
+        let mut definition = self.draft.definition(saved_range, base, inputs)?;
         definition.id = self.definition_id;
         definition.revision = self.definition_revision;
         Ok(definition)

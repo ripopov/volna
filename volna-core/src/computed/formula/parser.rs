@@ -4,26 +4,14 @@ use super::{
 };
 use anyhow::{Context, Result, bail, ensure};
 
-const FUNCTIONS: &[&str] = &[
-    "abs",
-    "min",
-    "max",
-    "real",
-    "bool",
-    "moving_avg",
-    "lowpass",
-    "integrate",
-    "sine",
-    "clock",
-    "interval_mean",
-    "interval_integral",
-    "interval_min",
-    "interval_max",
-    "interval_sum",
-];
+use super::language::{self, Diagnostic, SyntaxToken, TokenKind};
+use std::ops::Range;
 
 pub(super) fn reserved(name: &str) -> bool {
-    matches!(name, "true" | "false" | "posedge") || FUNCTIONS.contains(&name)
+    matches!(name, "true" | "false" | "posedge")
+        || language::FUNCTIONS
+            .iter()
+            .any(|(function, _)| *function == name)
 }
 
 #[derive(Clone, Debug)]
@@ -71,157 +59,80 @@ fn unit(name: &str) -> DurationUnit {
     }
 }
 
-fn number(text: &str, start: usize) -> Result<(Token, usize)> {
-    let bytes = text.as_bytes();
-    let mut at = start;
-    let mut digits = 0;
-    while bytes.get(at).is_some_and(u8::is_ascii_digit) {
-        at += 1;
-        digits += 1;
-    }
-    if bytes.get(at) == Some(&b'.') {
-        at += 1;
-        while bytes.get(at).is_some_and(u8::is_ascii_digit) {
-            at += 1;
-            digits += 1;
-        }
-    }
-    ensure!(
-        digits > 0,
-        "Invalid numeric constant at byte {}.",
-        start + 1
-    );
-    if matches!(bytes.get(at), Some(b'e' | b'E')) {
-        at += 1;
-        if matches!(bytes.get(at), Some(b'+' | b'-')) {
-            at += 1;
-        }
-        let exponent = at;
-        while bytes.get(at).is_some_and(u8::is_ascii_digit) {
-            at += 1;
-        }
-        ensure!(
-            at > exponent,
-            "Invalid numeric exponent at byte {}.",
-            at + 1
-        );
-    }
-    let raw = &text[start..at];
+fn number(text: &str, syntax: &SyntaxToken) -> Result<Token> {
+    let raw = &text[syntax.range.start..syntax.number_end];
     let value = raw.parse::<f64>().context("Invalid numeric constant.")?;
     ensure!(value.is_finite(), "Numeric constants must be finite.");
-    let mut following = at;
-    while bytes.get(following).is_some_and(u8::is_ascii_whitespace) {
-        following += 1;
-    }
-    if bytes
-        .get(following)
-        .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_')
-    {
-        let unit_start = following;
-        following += 1;
-        while bytes
-            .get(following)
-            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
-        {
-            following += 1;
-        }
+    if syntax.kind == TokenKind::Duration {
         let (digits, scale) = decimal(raw)?;
-        return Ok((
-            Token::Duration(Duration {
-                digits,
-                scale,
-                unit: unit(&text[unit_start..following]),
-            }),
-            following,
-        ));
+        Ok(Token::Duration(Duration {
+            digits,
+            scale,
+            unit: unit(text[syntax.number_end..syntax.range.end].trim()),
+        }))
+    } else {
+        Ok(Token::Number(value.to_bits()))
     }
-    Ok((Token::Number(value.to_bits()), at))
 }
 
-fn lex(text: &str) -> Result<Vec<Token>> {
-    let mut tokens = Vec::new();
-    let mut at = 0;
-    while at < text.len() {
-        let bytes = text.as_bytes();
-        if bytes[at].is_ascii_whitespace() {
-            at += 1;
-            continue;
+fn located(error: anyhow::Error, range: Range<usize>, source: &str) -> anyhow::Error {
+    if error.downcast_ref::<Diagnostic>().is_some() {
+        error
+    } else {
+        Diagnostic {
+            source: source.into(),
+            range,
+            message: format!("{error:#}"),
         }
-        if bytes[at].is_ascii_digit() || bytes[at] == b'.' {
-            let (token, next) = number(text, at)?;
-            tokens.push(token);
-            at = next;
-            continue;
-        }
-        if bytes[at].is_ascii_alphabetic() || bytes[at] == b'_' {
-            let start = at;
-            at += 1;
-            while bytes
-                .get(at)
-                .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
-            {
-                at += 1;
-            }
-            let name = &text[start..at];
-            tokens.push(match name {
-                "true" => Token::Boolean(true),
-                "false" => Token::Boolean(false),
-                _ => Token::Identifier(name.into()),
-            });
-            continue;
-        }
-        if bytes[at] == b'"' {
-            let end = text[at + 1..]
-                .find('"')
-                .map(|i| at + 1 + i)
-                .context("Unterminated policy literal.")?;
-            let policy = &text[at + 1..end];
+        .into()
+    }
+}
+
+fn token(text: &str, syntax: &SyntaxToken) -> Result<Token> {
+    let raw = &text[syntax.range.clone()];
+    match syntax.kind {
+        TokenKind::Number | TokenKind::Duration => number(text, syntax),
+        TokenKind::Identifier | TokenKind::Function | TokenKind::Keyword => Ok(match raw {
+            "true" => Token::Boolean(true),
+            "false" => Token::Boolean(false),
+            _ => Token::Identifier(raw.into()),
+        }),
+        TokenKind::String => {
             ensure!(
-                matches!(policy, "full" | "available" | "gap" | "skip"),
-                "Unknown policy literal '\"{policy}\"'."
+                raw.len() >= 2 && raw.ends_with('"'),
+                "Unterminated policy literal."
             );
-            tokens.push(Token::Policy(match policy {
+            Ok(Token::Policy(match &raw[1..raw.len() - 1] {
                 "full" => "full",
                 "available" => "available",
                 "gap" => "gap",
-                _ => "skip",
-            }));
-            at = end + 1;
-            continue;
+                "skip" => "skip",
+                policy => bail!("Unknown policy literal '\"{policy}\"'."),
+            }))
         }
-        let rest = &text[at..];
-        let mut matched = false;
-        for (raw, token) in [
-            ("||", Token::Operator("||")),
-            ("&&", Token::Operator("&&")),
-            ("==", Token::Operator("==")),
-            ("!=", Token::Operator("!=")),
-            ("<=", Token::Operator("<=")),
-            (">=", Token::Operator(">=")),
-            ("<", Token::Operator("<")),
-            (">", Token::Operator(">")),
-            ("+", Token::Operator("+")),
-            ("-", Token::Operator("-")),
-            ("*", Token::Operator("*")),
-            ("/", Token::Operator("/")),
-            ("%", Token::Operator("%")),
-            ("!", Token::Operator("!")),
-            ("(", Token::LeftParen),
-            (")", Token::RightParen),
-            (",", Token::Comma),
-            (":", Token::Colon),
-            ("@", Token::Capture),
-        ] {
-            if rest.starts_with(raw) {
-                tokens.push(token);
-                at += raw.len();
-                matched = true;
-                break;
-            }
-        }
-        ensure!(matched, "Unexpected token at byte {}.", at + 1);
+        _ => Ok(match raw {
+            "||" => Token::Operator("||"),
+            "&&" => Token::Operator("&&"),
+            "==" => Token::Operator("=="),
+            "!=" => Token::Operator("!="),
+            "<=" => Token::Operator("<="),
+            ">=" => Token::Operator(">="),
+            "<" => Token::Operator("<"),
+            ">" => Token::Operator(">"),
+            "+" => Token::Operator("+"),
+            "-" => Token::Operator("-"),
+            "*" => Token::Operator("*"),
+            "/" => Token::Operator("/"),
+            "%" => Token::Operator("%"),
+            "!" => Token::Operator("!"),
+            "(" => Token::LeftParen,
+            ")" => Token::RightParen,
+            "," => Token::Comma,
+            ":" => Token::Colon,
+            "@" => Token::Capture,
+            _ => bail!("Unexpected token in formula."),
+        }),
     }
-    Ok(tokens)
 }
 
 pub(super) fn parse(
@@ -229,42 +140,69 @@ pub(super) fn parse(
     inputs: &[(String, Type)],
     captured: &[bool],
 ) -> Result<Program> {
-    let tokens = lex(expression)?;
+    let syntax = language::Syntax::new(expression);
+    let tokens = syntax
+        .tokens()
+        .iter()
+        .map(|syntax| {
+            token(expression, syntax)
+                .map_err(|error| located(error, syntax.range.clone(), expression))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut parser = Parser {
+        source: expression,
         tokens,
+        ranges: syntax.tokens.into_iter().map(|token| token.range).collect(),
+        end: expression.len(),
         at: 0,
         nodes: Vec::new(),
         inputs,
         captured,
         used_inputs: vec![false; inputs.len()],
     };
-    let root = parser.expression(0)?;
-    ensure!(
-        parser.at == parser.tokens.len(),
-        "Unexpected token in formula."
-    );
-    let root = &parser.nodes[root.node];
-    let kind = match root.kind {
-        NodeKind::Scalar => {
-            ensure!(
-                root.ty == Type::Real,
-                "Scalar measurements must produce Real values."
-            );
-            ResultKind::ScalarMeasurement
-        }
-        NodeKind::Waveform { captured: true } => ResultKind::CapturedWaveform,
-        NodeKind::Literal | NodeKind::Waveform { captured: false } => ResultKind::Waveform,
-    };
-    Ok(Program {
-        output: root.ty,
-        kind,
-        nodes: parser.nodes,
-        used_inputs: parser.used_inputs,
+    let result = (|| {
+        let root = parser.expression(0)?;
+        ensure!(
+            parser.at == parser.tokens.len(),
+            "Unexpected token in formula."
+        );
+        let root = &parser.nodes[root.node];
+        let kind = match root.kind {
+            NodeKind::Scalar => {
+                ensure!(
+                    root.ty == Type::Real,
+                    "Scalar measurements must produce Real values."
+                );
+                ResultKind::ScalarMeasurement
+            }
+            NodeKind::Waveform { captured: true } => ResultKind::CapturedWaveform,
+            NodeKind::Literal | NodeKind::Waveform { captured: false } => ResultKind::Waveform,
+        };
+        Ok(Program {
+            output: root.ty,
+            kind,
+            nodes: std::mem::take(&mut parser.nodes),
+            used_inputs: std::mem::take(&mut parser.used_inputs),
+        })
+    })();
+    result.map_err(|error| {
+        located(
+            error,
+            parser
+                .ranges
+                .get(parser.at)
+                .cloned()
+                .unwrap_or(parser.end..parser.end),
+            expression,
+        )
     })
 }
 
 struct Parser<'a> {
+    source: &'a str,
     tokens: Vec<Token>,
+    ranges: Vec<Range<usize>>,
+    end: usize,
     at: usize,
     nodes: Vec<TypedNode>,
     inputs: &'a [(String, Type)],
@@ -540,9 +478,12 @@ impl Parser<'_> {
                 self.push(Node::Boolean(value), Type::Boolean, NodeKind::Literal)
             }
             Some(Token::Identifier(name)) => {
+                let range = self.ranges[self.at].clone();
                 self.at += 1;
                 if self.consume(&Token::LeftParen) {
-                    return self.call(&name, depth + 1);
+                    return self
+                        .call(&name, depth + 1)
+                        .map_err(|error| located(error, range, self.source));
                 }
                 let (index, (_, ty)) = self
                     .inputs
@@ -550,8 +491,20 @@ impl Parser<'_> {
                     .enumerate()
                     .find(|(_, (alias, _))| alias == &name)
                     .with_context(|| {
-                        format!("Unknown input '{name}'. Add a binding or use its alias.")
-                    })?;
+                        if self.inputs.is_empty() {
+                            format!("Unknown input '{name}'. Add an input binding first.")
+                        } else {
+                            format!(
+                                "Unknown input '{name}'. Available aliases: {}.",
+                                self.inputs
+                                    .iter()
+                                    .map(|(alias, _)| alias.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        }
+                    })
+                    .map_err(|error| located(error, range, self.source))?;
                 self.used_inputs[index] = true;
                 self.push(
                     Node::Input(index),

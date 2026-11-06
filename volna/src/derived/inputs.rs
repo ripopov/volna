@@ -13,6 +13,7 @@ pub(super) struct BindingFields {
     synced_alias: String,
     synced_slice: String,
     alias: Entity<InputState>,
+    expanded: bool,
     slice: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
@@ -84,6 +85,7 @@ impl DerivedEditor {
                     synced_alias: input.alias.clone(),
                     synced_slice: input.slice.clone(),
                     alias,
+                    expanded: false,
                     slice,
                     _subscriptions: subscriptions,
                 }
@@ -130,7 +132,11 @@ impl DerivedEditor {
     ) -> gpui_kit::AnyElement {
         use volna_core::data::NumericKind;
         let t = *theme(cx);
-        let mut result = div().flex().flex_col().gap_2().child("Recorded inputs");
+        let mut result = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child("Inputs · click an alias to insert");
         for (index, input) in inputs.iter().enumerate() {
             let Some(fields) = self.bindings.get(index) else {
                 continue;
@@ -151,7 +157,7 @@ impl DerivedEditor {
                 kinds
             };
             for kind in kinds {
-                let label = if self.formula && shape == volna_trace::data::SignalShape::Bit {
+                let label = if shape == volna_trace::data::SignalShape::Bit {
                     "Boolean"
                 } else {
                     volna_core::computed::Interpretation {
@@ -185,18 +191,58 @@ impl DerivedEditor {
                         })),
                 );
             }
-            let mut binding = div()
+            let alias = input.alias.clone();
+            let expanded = fields.expanded;
+            let summary = div()
                 .flex()
-                .flex_col()
+                .items_center()
                 .gap_1()
-                .p_2()
-                .border_1()
-                .border_color(t.border)
+                .child(
+                    Button::new(("insert-alias", index))
+                        .label(input.alias.clone())
+                        .small()
+                        .debug_selector(move || format!("insert-input-{index}"))
+                        .tooltip("Insert alias at the formula cursor")
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.insert_formula(&alias, window, cx);
+                        })),
+                )
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
                         .text_color(t.panel.text_muted)
-                        .child(input.label(&self.owner.upgrade().unwrap().read(cx).app.doc)),
+                        .child(input.label(doc)),
                 )
+                .child(if shape == volna_trace::data::SignalShape::Bit {
+                    "Boolean"
+                } else {
+                    volna_core::computed::Interpretation {
+                        kind: input.kind,
+                        projection: None,
+                    }
+                    .label()
+                })
+                .child(
+                    Button::new(("input-details", index))
+                        .label(if expanded { "Hide" } else { "Edit" })
+                        .ghost()
+                        .xsmall()
+                        .debug_selector(move || format!("input-details-{index}"))
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            if let Some(fields) = view.bindings.get_mut(index) {
+                                fields.expanded = !fields.expanded;
+                            }
+                            cx.notify();
+                        })),
+                );
+            let mut details = div()
+                .flex()
+                .flex_col()
+                .gap_2()
                 .child(
                     div()
                         .flex()
@@ -208,7 +254,7 @@ impl DerivedEditor {
                 )
                 .child(formats);
             if input.shape.is_digital() && input.shape.width() > 1 {
-                binding = binding.child(
+                details = details.child(
                     div()
                         .flex()
                         .flex_col()
@@ -218,48 +264,53 @@ impl DerivedEditor {
                         .child(Input::new(&fields.slice).small()),
                 );
             }
-            binding = binding.child(
+            details = details.child(
                 div()
                     .flex()
                     .gap_1()
                     .child(
                         Button::new(("rebind-input", index))
-                            .debug_selector(move || format!("replace-input-{index}"))
                             .label("Replace…")
                             .ghost()
                             .xsmall()
+                            .debug_selector(move || format!("replace-input-{index}"))
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 view.open_picker(InputPicker::Replace(index), cx);
                             })),
                     )
-                    .when(self.formula, |el| {
-                        el.child(
-                            Button::new(("remove-input", index))
-                                .debug_selector(move || format!("remove-input-{index}"))
-                                .label("Remove")
-                                .ghost()
-                                .xsmall()
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    view.send(DerivedCommand::RemoveInput(index), window, cx);
-                                    view.send(DerivedCommand::Preview, window, cx);
-                                })),
-                        )
-                    }),
+                    .child(
+                        Button::new(("remove-input", index))
+                            .label("Remove")
+                            .ghost()
+                            .xsmall()
+                            .debug_selector(move || format!("remove-input-{index}"))
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.send(DerivedCommand::RemoveInput(index), window, cx);
+                                view.send(DerivedCommand::Preview, window, cx);
+                            })),
+                    ),
             );
+            let binding = div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_2()
+                .border_1()
+                .border_color(t.border)
+                .child(summary)
+                .when(expanded, |el| el.child(details));
             result = result.child(binding);
         }
-        if self.formula {
-            result = result.child(
-                Button::new("add-formula-input")
-                    .label("Add recorded input…")
-                    .small()
-                    .disabled(inputs.len() >= 16)
-                    .debug_selector(|| "add-formula-input".into())
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.open_picker(InputPicker::Add, cx);
-                    })),
-            );
-        }
+        result = result.child(
+            Button::new("add-formula-input")
+                .label("Add recorded input…")
+                .small()
+                .disabled(inputs.len() >= 16)
+                .debug_selector(|| "add-formula-input".into())
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.open_picker(InputPicker::Add, cx);
+                })),
+        );
         if let Some(target) = self.picker {
             let candidates = self.input_search.results.as_deref().unwrap_or_default();
             let loading = self.input_search.results.is_none();

@@ -688,7 +688,7 @@ fn long_overlay_members_share_analog_summaries_and_release_them_on_style_change(
 }
 
 #[test]
-fn overlay_workspace_round_trips_settings_and_visibility_at_version_19() {
+fn overlay_workspace_round_trips_settings_and_visibility_at_version_20() {
     let (_f, mut app, id) = fixture(101);
     app.handle(Command::Action(Action::ToggleOverlaid));
     choose(
@@ -709,7 +709,7 @@ fn overlay_workspace_round_trips_settings_and_visibility_at_version_19() {
         Workspace::capture(&app, volna_core::testing::paths(TRACE), None).unwrap(),
     )
     .unwrap();
-    assert_eq!(saved["panels"][0]["version"], 19);
+    assert_eq!(saved["panels"][0]["version"], 20);
     assert_eq!(saved["panels"][0]["rows"][0]["style"], "overlaid");
     assert_eq!(saved["panels"][0]["rows"][0]["overlaid"]["draw"], "linear");
     let (_f2, mut restored, _) = fixture(101);

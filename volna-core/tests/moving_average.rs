@@ -1,4 +1,4 @@
-//! Numerical semantics, job lifetime, and the first persistent moving-average workflow.
+//! Moving-average numerics and formula preview, persistence, and undo.
 
 use std::sync::{
     Arc,
@@ -6,7 +6,7 @@ use std::sync::{
 };
 use volna_core::{
     Action, App, Command, LoadRequest,
-    computed::{Command as Average, ComputationStatus, Interpretation, Operation},
+    computed::{Command as Average, ComputationStatus, Interpretation},
     data::NumericKind,
     moving_average::{MeanHistory, Settings},
     testing::a_all,
@@ -446,7 +446,10 @@ fn command(app: &mut App, command: Average) {
 fn draft(app: &mut App, window: &str) {
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = "smoothed".into();
-    draft.window = window.into();
+    draft.formula = format!(
+        "moving_avg({}, {window})",
+        app.derived_editor.as_ref().unwrap().bindings[0].alias
+    );
     draft.interval = "250 ns".into();
     command(app, Average::Update(draft));
     command(app, Average::Preview);
@@ -709,17 +712,6 @@ fn changing_the_timeline_timescale_preserves_definitions_and_undo() {
         .unwrap();
     pump(&mut app);
     assert_eq!(app.doc.timescale(), -12);
-    let definition = app
-        .panels
-        .focused_waves()
-        .unwrap()
-        .signal(1)
-        .unwrap()
-        .source
-        .computed()
-        .unwrap();
-    assert_eq!(average_settings(definition).window, 4_000_000);
-    assert_eq!(average_settings(definition).interval, 250_000);
     assert_eq!(number(output(&app), 4_000_000), Some(3.5));
     app.handle(Command::Undo);
     pump(&mut app);
@@ -784,7 +776,13 @@ fn add_numeric_mean(app: &mut App, row: usize, name: &str) {
     command(app, Average::Open(Some(row)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = name.into();
-    draft.window = "4 ns".into();
+    let binding = &app.derived_editor.as_ref().unwrap().bindings[0];
+    let alias = if binding.effective_shape(&app.doc) == SignalShape::Bit {
+        format!("real({})", binding.alias)
+    } else {
+        binding.alias.clone()
+    };
+    draft.formula = format!("moving_avg({alias}, 4 ns)");
     draft.interval = "1 ns".into();
     command(app, Average::Update(draft));
     command(app, Average::Preview);
@@ -1077,7 +1075,13 @@ fn dragging_rows_across_a_live_preview_preserves_its_input() {
         .clone();
     command(&mut app, Average::Open(Some(0)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.window = "4 ns".into();
+    let binding = &app.derived_editor.as_ref().unwrap().bindings[0];
+    let alias = if binding.effective_shape(&app.doc) == SignalShape::Bit {
+        format!("real({})", binding.alias)
+    } else {
+        binding.alias.clone()
+    };
+    draft.formula = format!("moving_avg({alias}, 4 ns)");
     draft.interval = "1 ns".into();
     command(&mut app, Average::Update(draft));
     command(&mut app, Average::Preview);
@@ -1169,7 +1173,7 @@ fn calculation_revision_changes_only_when_calculation_fields_change() {
             );
         }
     }
-    draft.window = "8 us".into();
+    draft.formula = "moving_avg(adc, 8 us)".into();
     command(&mut app, Average::Update(draft.clone()));
     let editor = app.derived_editor.as_ref().unwrap();
     assert_eq!(editor.calculation_revision, revision + 1);
@@ -1179,11 +1183,4 @@ fn calculation_revision_changes_only_when_calculation_fields_change() {
         app.derived_editor.as_ref().unwrap().calculation_revision,
         revision + 1
     );
-}
-
-fn average_settings(definition: &volna_core::computed::Definition) -> Settings {
-    let Operation::MovingAverage { settings } = definition.operation else {
-        panic!("expected average")
-    };
-    settings
 }
