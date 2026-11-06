@@ -136,22 +136,7 @@ impl TransactionPanelView {
                 .transaction(self.id)
                 .map(|model| model.copy_tsv(&ws.app.doc))
         };
-        match result {
-            Some(Ok(text)) => {
-                crate::clipboard::copy(text, cx);
-            }
-            Some(Err(error)) => {
-                owner.update(cx, |ws, cx| {
-                    ws.dispatch_if_current(
-                        self.generation,
-                        Command::Notice(error.to_string()),
-                        None,
-                        cx,
-                    );
-                });
-            }
-            None => {}
-        }
+        Workspace::copy_result(&owner, self.generation, result, cx);
     }
 
     fn sync_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {

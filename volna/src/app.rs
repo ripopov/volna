@@ -869,6 +869,21 @@ impl Workspace {
         workspace
     }
 
+    pub(crate) fn copy_result(
+        owner: &Entity<Self>,
+        generation: u64,
+        result: Option<anyhow::Result<String>>,
+        cx: &mut App,
+    ) {
+        match result {
+            Some(Ok(text)) => crate::clipboard::copy(text, cx),
+            Some(Err(error)) => owner.update(cx, |ws, cx| {
+                ws.dispatch_if_current(generation, Command::Notice(error.to_string()), None, cx);
+            }),
+            None => {}
+        }
+    }
+
     pub fn dispatch(
         &mut self,
         command: Command,

@@ -435,29 +435,14 @@ impl CanvasPanelView {
         let Some(owner) = self.ws.upgrade() else {
             return;
         };
-        match owner
+        let result = owner
             .read(cx)
             .app
             .panels
             .get(self.id)
             .and_then(|panel| panel.kind.table())
-            .map(volna_core::table::TableModel::copy_tsv)
-        {
-            Some(Ok(text)) => {
-                crate::clipboard::copy(text, cx);
-            }
-            Some(Err(error)) => {
-                owner.update(cx, |ws, cx| {
-                    ws.dispatch_if_current(
-                        self.generation,
-                        Command::Notice(error.to_string()),
-                        None,
-                        cx,
-                    );
-                });
-            }
-            None => {}
-        }
+            .map(volna_core::table::TableModel::copy_tsv);
+        crate::app::Workspace::copy_result(&owner, self.generation, result, cx);
     }
 
     fn table_go_to(&self, window: &mut Window, cx: &mut Context<Self>) {
