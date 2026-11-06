@@ -1,7 +1,7 @@
 //! Average concurrency and peak envelopes shared by transaction and pipeline views.
 
 use crate::{
-    geometry::{Rect, point},
+    geometry::{Rect, point, push_horizontal_run},
     scene::{FontRole, Scene},
     theme::Theme,
     wave::viewport::Viewport,
@@ -39,9 +39,9 @@ pub(crate) fn paint(
         let sample = summary.sample(start, start + step);
         let left = area.left() + x as f32 * w;
         let h = (height * (sample.average / peak) as f32).max(minimum);
-        append(&mut fills, Rect::from_xywh(left, bottom - h, w, h));
+        push_horizontal_run(&mut fills, Rect::from_xywh(left, bottom - h, w, h));
         let y = bottom - (height * (sample.peak as f64 / peak) as f32).max(minimum);
-        append(&mut peak_bands, Rect::from_xywh(left, y, w, bottom - h - y));
+        push_horizontal_run(&mut peak_bands, Rect::from_xywh(left, y, w, bottom - h - y));
         if let Some(old) = previous.filter(|&old| old != y) {
             peaks.push([point(left, old), point(left, y)]);
         }
@@ -55,7 +55,7 @@ pub(crate) fn paint(
         }
         previous = Some(y);
         if sample.failed {
-            append(
+            push_horizontal_run(
                 &mut errors,
                 Rect::from_xywh(left, area.top() + heading + z(1.0), w, z(2.0)),
             );
@@ -98,22 +98,6 @@ pub(crate) fn paint(
             t.ui_size_small,
             t.panel.text_muted,
         );
-    }
-}
-
-fn append(rects: &mut Vec<Rect>, rect: Rect) {
-    if rect.width() <= 0.0 || rect.height() <= 0.0 {
-        return;
-    }
-    if let Some(last) = rects.last_mut()
-        && last.top() == rect.top()
-        && last.height() == rect.height()
-        && last.left() <= rect.left()
-        && (last.right() - rect.left()).abs() < 0.01
-    {
-        last.size.width = rect.right() - last.left();
-    } else {
-        rects.push(rect);
     }
 }
 

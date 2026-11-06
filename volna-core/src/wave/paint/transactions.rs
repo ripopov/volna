@@ -8,6 +8,8 @@ use super::{
     Viewport, fit_mono_prefix, lane, point,
 };
 
+use crate::geometry::push_horizontal_run;
+
 const PIXELS: usize = 4096;
 const LABELS: usize = 384;
 
@@ -66,7 +68,7 @@ pub(super) fn paint(
                 } else {
                     &mut bars.solid
                 };
-                append(solids, rect);
+                push_horizontal_run(solids, rect);
                 outline(bars.edges(failed), rect);
                 if bars.labels.len() < LABELS && bar_h >= z(8.0) && xb - xa > z(16.0) {
                     let text = lane::label(tx);
@@ -90,7 +92,7 @@ pub(super) fn paint(
                     } else {
                         &mut bars.dense
                     };
-                    append(fills, rect);
+                    push_horizontal_run(fills, rect);
                 }
                 if let Some(&ordinal) = candidates.last()
                     && outlined != Some(ordinal)
@@ -107,7 +109,7 @@ pub(super) fn paint(
                         } else {
                             &mut bars.solid
                         };
-                        append(fills, rect);
+                        push_horizontal_run(fills, rect);
                         outline(bars.edges(failed), rect);
                     }
                 }
@@ -200,22 +202,6 @@ fn outline(edges: &mut Vec<[Point; 2]>, rect: Rect) {
     edges.extend([[a, b], [b, c], [c, d], [d, a]]);
 }
 
-fn append(rects: &mut Vec<Rect>, rect: Rect) {
-    if rect.width() <= 0.0 || rect.height() <= 0.0 {
-        return;
-    }
-    if let Some(last) = rects.last_mut()
-        && last.top() == rect.top()
-        && last.height() == rect.height()
-        && last.left() <= rect.left()
-        && (last.right() - rect.left()).abs() < 0.01
-    {
-        last.size.width = rect.right() - last.left();
-    } else {
-        rects.push(rect);
-    }
-}
-
 fn occupancy_ribbon(
     scene: &mut Scene,
     summary: &crate::data::occupancy::Occupancy,
@@ -243,13 +229,13 @@ fn occupancy_ribbon(
         if sample.average > 0.0 {
             let density = ((sample.average - 1.0).max(0.0) / (scale - 1.0).max(1.0)).sqrt();
             let level = 1 + (density.clamp(0.0, 1.0) * 14.0).round() as usize;
-            append(&mut fills[level], rect);
+            push_horizontal_run(&mut fills[level], rect);
         }
         if sample.failed {
-            append(&mut errors, rect);
+            push_horizontal_run(&mut errors, rect);
         }
         if sample.has_points {
-            append(
+            push_horizontal_run(
                 &mut points,
                 Rect::from_xywh(
                     rect.left(),

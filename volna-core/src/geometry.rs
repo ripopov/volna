@@ -83,6 +83,23 @@ impl Rect {
     }
 }
 
+#[inline]
+pub(crate) fn push_horizontal_run(rects: &mut Vec<Rect>, rect: Rect) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return;
+    }
+    if let Some(last) = rects.last_mut()
+        && last.top() == rect.top()
+        && last.height() == rect.height()
+        && last.left() <= rect.left()
+        && (last.right() - rect.left()).abs() < 0.01
+    {
+        last.size.width = rect.right() - last.left();
+    } else {
+        rects.push(rect);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[expect(
     clippy::struct_excessive_bools,
