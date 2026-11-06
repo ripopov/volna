@@ -138,15 +138,7 @@ impl LoadedGenerator {
         raw: Arc<RawGenerator>,
         budget: Option<&volna_trace::remote::memory::MemoryBudget>,
     ) -> anyhow::Result<Self> {
-        let mut prepare =
-            std::pin::pin!(Self::prepare_with(raw, budget, || std::future::ready(())));
-        match std::future::Future::poll(
-            prepare.as_mut(),
-            &mut std::task::Context::from_waker(std::task::Waker::noop()),
-        ) {
-            std::task::Poll::Ready(result) => result,
-            std::task::Poll::Pending => unreachable!("blocking preparation never yields"),
-        }
+        prepare_synchronously(Self::prepare_with(raw, budget, || std::future::ready(())))
     }
     pub(crate) async fn prepare_with<F: std::future::Future<Output = ()>>(
         raw: Arc<RawGenerator>,
@@ -409,15 +401,7 @@ impl LoadedTrack {
         raw: RawTrack,
         budget: Option<&volna_trace::remote::memory::MemoryBudget>,
     ) -> anyhow::Result<Self> {
-        let mut prepare =
-            std::pin::pin!(Self::prepare_with(raw, budget, || std::future::ready(())));
-        match std::future::Future::poll(
-            prepare.as_mut(),
-            &mut std::task::Context::from_waker(std::task::Waker::noop()),
-        ) {
-            std::task::Poll::Ready(result) => result,
-            std::task::Poll::Pending => unreachable!("blocking preparation never yields"),
-        }
+        prepare_synchronously(Self::prepare_with(raw, budget, || std::future::ready(())))
     }
     pub(crate) async fn prepare_with<F: std::future::Future<Output = ()>>(
         raw: RawTrack,
@@ -436,6 +420,17 @@ impl LoadedTrack {
         })
     }
 }
+fn prepare_synchronously<T>(work: impl std::future::Future<Output = T>) -> T {
+    let mut work = std::pin::pin!(work);
+    match std::future::Future::poll(
+        work.as_mut(),
+        &mut std::task::Context::from_waker(std::task::Waker::noop()),
+    ) {
+        std::task::Poll::Ready(result) => result,
+        std::task::Poll::Pending => unreachable!("blocking preparation never yields"),
+    }
+}
+
 fn scale_attribute(
     key: &str,
     value: &mut volna_trace::data::transactions::AttributeValue,
