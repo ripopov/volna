@@ -23,6 +23,29 @@ fn init(cx: &mut TestAppContext) {
     cx.update(crate::init_app);
 }
 
+fn double_click(
+    vcx: &mut gpui_kit::VisualTestContext,
+    position: gpui_kit::Point<gpui_kit::Pixels>,
+) {
+    use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent};
+
+    for click_count in [1, 2] {
+        vcx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count,
+            first_mouse: false,
+        });
+        vcx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count,
+        });
+    }
+}
+
 fn open_pipeline_table(
     ws: &mut Workspace,
     window: &mut gpui_kit::Window,
@@ -3628,21 +3651,7 @@ fn group_keys_and_the_hosted_name_editor(cx: &mut TestAppContext) {
         .unwrap();
     let at = gpui_kit::point(gpui_kit::px(at.x), gpui_kit::px(at.y));
     vcx.simulate_mouse_move(at, None, gpui_kit::Modifiers::default());
-    for click_count in [1, 2] {
-        vcx.simulate_event(gpui_kit::MouseDownEvent {
-            button: gpui_kit::MouseButton::Left,
-            position: at,
-            modifiers: gpui_kit::Modifiers::default(),
-            click_count,
-            first_mouse: false,
-        });
-        vcx.simulate_event(gpui_kit::MouseUpEvent {
-            button: gpui_kit::MouseButton::Left,
-            position: at,
-            modifiers: gpui_kit::Modifiers::default(),
-            click_count,
-        });
-    }
+    double_click(&mut vcx, at);
     vcx.run_until_parked();
     vcx.simulate_keystrokes("b u s enter");
     vcx.run_until_parked();
@@ -3998,9 +4007,7 @@ fn ctrl_digits_place_and_move_markers_while_bare_digits_jump(cx: &mut TestAppCon
 
 #[gpui_kit::test]
 fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppContext) {
-    use gpui_kit::{
-        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, VisualTestContext, point,
-    };
+    use gpui_kit::{VisualTestContext, point};
     init(cx);
     let window = RootWindow::new(cx);
     let root = window.root;
@@ -4080,21 +4087,7 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
         gpui_kit::px(chip.left() + 3.0),
         gpui_kit::px(chip.top() + 3.0),
     );
-    for click_count in [1, 2] {
-        vcx.simulate_event(MouseDownEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::default(),
-            click_count,
-            first_mouse: false,
-        });
-        vcx.simulate_event(MouseUpEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::default(),
-            click_count,
-        });
-    }
+    double_click(&mut vcx, at);
     draw(&mut vcx);
     assert!(vcx.debug_bounds("marker-name").is_some());
     let focused = |vcx: &mut VisualTestContext| {
@@ -4114,21 +4107,7 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
     draw(&mut vcx);
     assert_eq!(names(&mut vcx), (Some("req 2.".into()), None, Some(far)));
     assert!(vcx.debug_bounds("marker-name").is_none());
-    for click_count in [1, 2] {
-        vcx.simulate_event(MouseDownEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::default(),
-            click_count,
-            first_mouse: false,
-        });
-        vcx.simulate_event(MouseUpEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::default(),
-            click_count,
-        });
-    }
+    double_click(&mut vcx, at);
     draw(&mut vcx);
     vcx.simulate_keystrokes("e n d enter");
     draw(&mut vcx);
@@ -4140,9 +4119,7 @@ fn marker_name_field_opens_over_the_chip_and_keeps_its_keys(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn double_click_on_a_span_zooms_to_it(cx: &mut TestAppContext) {
-    use gpui_kit::{
-        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, VisualTestContext, point,
-    };
+    use gpui_kit::{VisualTestContext, point};
     init(cx);
     let window = RootWindow::new(cx);
     let root = window.root;
@@ -4174,21 +4151,7 @@ fn double_click_on_a_span_zooms_to_it(cx: &mut TestAppContext) {
         })
         .unwrap();
     let at = point(gpui_kit::px(x), gpui_kit::px(y));
-    for click_count in [1, 2] {
-        vcx.simulate_event(MouseDownEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::default(),
-            click_count,
-            first_mouse: false,
-        });
-        vcx.simulate_event(MouseUpEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::default(),
-            click_count,
-        });
-    }
+    double_click(&mut vcx, at);
     vcx.run_until_parked();
     let v = window
         .update(&mut vcx, |ws, _, _| ws.app.doc.shared.viewport.target())
@@ -4254,21 +4217,7 @@ fn reference_keys_and_a_double_click_on_the_live_span(cx: &mut TestAppContext) {
         })
         .unwrap();
     let at = point(gpui_kit::px(x), gpui_kit::px(y));
-    for click_count in [1, 2] {
-        vcx.simulate_event(MouseDownEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::default(),
-            click_count,
-            first_mouse: false,
-        });
-        vcx.simulate_event(MouseUpEvent {
-            button: MouseButton::Left,
-            position: at,
-            modifiers: Modifiers::default(),
-            click_count,
-        });
-    }
+    double_click(&mut vcx, at);
     vcx.run_until_parked();
     let (v, cursor) = window
         .update(&mut vcx, |ws, _, _| {
@@ -4421,21 +4370,7 @@ fn marker_chips_drag_open_menus_copy_and_double_click_adds(cx: &mut TestAppConte
             (l.waves.left() + l.waves.width() * 0.8, l.header.top() + 6.0)
         })
         .unwrap();
-    for click_count in [1, 2] {
-        vcx.simulate_event(MouseDownEvent {
-            button: MouseButton::Left,
-            position: at(hx, hy),
-            modifiers: Modifiers::default(),
-            click_count,
-            first_mouse: false,
-        });
-        vcx.simulate_event(MouseUpEvent {
-            button: MouseButton::Left,
-            position: at(hx, hy),
-            modifiers: Modifiers::default(),
-            click_count,
-        });
-    }
+    double_click(&mut vcx, at(hx, hy));
     vcx.run_until_parked();
     let (count, cursor, last) = window
         .update(&mut vcx, |ws, _, _| {
