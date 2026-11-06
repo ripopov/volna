@@ -31,6 +31,10 @@ impl WaveModel {
             let remaining = COPY_BYTES.saturating_sub(text.len());
             let value = match row {
                 WaveRow::Signal(signal) => {
+                    if let Some(measurement) = &signal.measurement {
+                        append_cell(&mut text, &[&super::model::measurement_text(measurement)])?;
+                        continue;
+                    }
                     let value = signal.cursor_value(cursor, remaining);
                     anyhow::ensure!(
                         !value.truncated,
@@ -322,6 +326,35 @@ mod tests {
             ),
             "42 cycle"
         );
+    }
+
+    // A user copies a measurement card; the export retains its value and evaluation metadata rather than a cursor placeholder.
+    #[test]
+    fn measurement_exports_include_value_scope_support_coverage_and_status() {
+        let mut app = app();
+        let waves = app.panels.focused_waves_mut().unwrap();
+        waves.signals_mut().next().unwrap().measurement = Some(
+            crate::computed::MeasurementResult::Scalar(crate::computed::Measurement {
+                value: Some(55.0),
+                bounds: (0, 20),
+                requested_ticks: 20,
+                known_ticks: 11,
+                captures: None,
+                policy: crate::computed::UnknownPolicy::Gap,
+                status: crate::computed::MeasurementStatus::Complete,
+            }),
+        );
+        let text = waves.rows_tsv(waves.items(), &app.doc).unwrap();
+        for expected in [
+            "value=55",
+            "bounds=[0, 20)",
+            "policy=Gap",
+            "support=11/20 ticks",
+            "coverage=55.00%",
+            "status=Complete",
+        ] {
+            assert!(text.contains(expected), "{expected} in {text}");
+        }
     }
 
     #[test]

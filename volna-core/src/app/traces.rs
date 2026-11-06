@@ -175,8 +175,8 @@ impl App {
     }
 
     fn refine(&mut self, factor: u64, now: Instant) {
-        self.moving_average_editor = None;
-        self.averages.clear();
+        self.derived_editor = None;
+        self.computations.clear();
         let by = Rescale::Finer(factor);
         self.history.retime(by);
         let Self { panels, doc, .. } = self;
@@ -249,6 +249,14 @@ impl App {
     }
 
     pub(crate) fn forget_trace(&mut self, trace: TraceId) -> Option<crate::trace::TraceSlot> {
+        if self
+            .derived_editor
+            .as_ref()
+            .is_some_and(|editor| editor.bindings.iter().any(|i| i.source.uses_trace(trace)))
+        {
+            self.derived_editor = None;
+        }
+
         let Self { panels, doc, .. } = self;
         for panel in panels.iter_mut() {
             panel.kind.forget_trace(doc, trace, None);

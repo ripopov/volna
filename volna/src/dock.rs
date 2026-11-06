@@ -1006,7 +1006,7 @@ fn rename_panel(
 }
 
 pub(crate) struct CanvasPanelView {
-    moving_average: Option<Entity<crate::moving_average::MovingAverageEditor>>,
+    derived_signal: Option<Entity<crate::derived::DerivedEditor>>,
     pub(crate) table_columns: Option<Entity<crate::table_columns::ColumnPicker>>,
     pub(crate) table_filters: Option<Entity<crate::table_filters::FilterRow>>,
     pub(crate) ws: WeakEntity<Workspace>,
@@ -1036,7 +1036,7 @@ impl CanvasPanelView {
         })
         .detach();
         Self {
-            moving_average: None,
+            derived_signal: None,
             ws,
             id,
             generation,
@@ -1134,27 +1134,24 @@ impl Panel for CanvasPanelView {
             let enabled = self
                 .ws
                 .upgrade()
-                .is_some_and(|owner| owner.read(cx).app.can_derive_moving_average(self.id));
+                .is_some_and(|owner| owner.read(cx).app.can_derive_signal(self.id));
             let owner = self.ws.clone();
             let panel = self.id;
             let generation = self.generation;
             buttons.insert(
                 0,
-                Button::new("derive-moving-average")
+                Button::new("derive-signal")
                     .label("Derive")
                     .ghost()
                     .xsmall()
                     .disabled(!enabled)
                     .tooltip("Create or edit a derived signal from the selected waveform")
-                    .debug_selector(|| "derive-moving-average".into())
+                    .debug_selector(|| "derive-signal".into())
                     .on_click(move |_, window, cx| {
                         drop(owner.update(cx, |ws, cx| {
                             ws.dispatch_if_current(
                                 generation,
-                                Command::MovingAverage(
-                                    panel,
-                                    volna_core::moving_average::Command::Open(None),
-                                ),
+                                Command::Derived(panel, volna_core::computed::Command::Open(None)),
                                 Some(window),
                                 cx,
                             );
@@ -1434,27 +1431,22 @@ impl Render for CanvasPanelView {
         let editor = ws
             .read(cx)
             .app
-            .moving_average_editor
+            .derived_editor
             .as_ref()
             .filter(|e| e.panel == self.id)
             .map(|e| e.id);
         if let Some(editor_id) = editor {
             if self
-                .moving_average
+                .derived_signal
                 .as_ref()
                 .is_none_or(|view| view.read(cx).id != editor_id)
             {
-                self.moving_average = Some(cx.new(|cx| {
-                    crate::moving_average::MovingAverageEditor::new(
-                        self.ws.clone(),
-                        self.id,
-                        window,
-                        cx,
-                    )
+                self.derived_signal = Some(cx.new(|cx| {
+                    crate::derived::DerivedEditor::new(self.ws.clone(), self.id, window, cx)
                 }));
             }
         } else {
-            self.moving_average = None;
+            self.derived_signal = None;
         }
         div()
             .id(("wave-panel", self.id.0))
@@ -1475,7 +1467,7 @@ impl Render for CanvasPanelView {
                     crate::canvas::PanelCanvas::new(ws, self.id, self.generation).waves(waves),
                 ))
             })
-            .when_some(self.moving_average.clone(), gpui_kit::ParentElement::child)
+            .when_some(self.derived_signal.clone(), gpui_kit::ParentElement::child)
             .into_any_element()
     }
 }

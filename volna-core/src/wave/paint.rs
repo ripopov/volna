@@ -397,7 +397,7 @@ pub(crate) fn paint(
             None => name_x,
         };
 
-        let name_x = if item.source.moving_average().is_some() {
+        let name_x = if item.source.computed().is_some() {
             p.scene.clipped(layout.names, |scene| {
                 scene.text(
                     point(name_x, y),

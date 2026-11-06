@@ -42,7 +42,7 @@ impl BitSlice {
         }
     }
 
-    fn offset(self, i: u32) -> usize {
+    pub(crate) fn offset(self, i: u32) -> usize {
         (if self.first <= self.last {
             self.first + i
         } else {

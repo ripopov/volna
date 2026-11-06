@@ -1341,6 +1341,7 @@ fn spans_between_markers_count_cycles_and_zoom_on_a_double_click() {
         panel,
         PointerEvent::Move { position: mid },
     ));
+    app.tick(app.tooltip_deadline().expect("hover deadline"));
     let shown = texts(&mut app);
     for want in [
         "1 → 2 · double-click to zoom",

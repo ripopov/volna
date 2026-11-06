@@ -224,21 +224,27 @@ impl TableModel {
         translators: Translators,
     ) -> Self {
         let columns = match &source {
+            TableSource::Statistics(data) => ColumnSet::signals(data.signal_count()),
             TableSource::Generator(_) => ColumnSet::transactions_default(),
             TableSource::Signals(signals) => ColumnSet::signals(signals.len()),
         };
         let count = match &source {
+            TableSource::Statistics(data) => data.signal_count() + 1,
             TableSource::Generator(_) => TransactionColumn::ALL.len(),
             TableSource::Signals(signals) => signals.len() + 1,
         };
         let mut nav = NavState::new();
         nav.link = link;
+        let mut formats = TableFormats::new(count);
+        if matches!(&source, TableSource::Statistics(data) if data.has_intervals()) {
+            formats.columns[2] = Some("udec".into());
+        }
         Self {
             source,
             state: TableState::Loading,
             columns: crate::history::Journaled::new(columns),
             widths: crate::history::Journaled::new(vec![None; count]),
-            formats: crate::history::Journaled::new(TableFormats::new(count)),
+            formats: crate::history::Journaled::new(formats),
             translators,
             log: false,
             filters_visible: false,
@@ -318,6 +324,10 @@ impl TableModel {
         self.attached = true;
         self.nav.reset(Some(doc.limits()));
         match &mut self.source {
+            TableSource::Statistics(data) => {
+                data.validate()?;
+                self.refresh(doc);
+            }
             TableSource::Generator(source) => {
                 let Some(track) = source.track() else {
                     self.state = TableState::Unavailable;
@@ -377,7 +387,7 @@ impl TableModel {
         }
         match &self.source {
             TableSource::Signals(sources) => Box::new(sources.iter().filter_map(|s| s.signal)),
-            TableSource::Generator(_) => Box::new(std::iter::empty()),
+            TableSource::Generator(_) | TableSource::Statistics(_) => Box::new(std::iter::empty()),
         }
     }
 
@@ -413,6 +423,34 @@ impl TableModel {
             return;
         }
         match &self.source {
+            TableSource::Statistics(data) => {
+                if matches!(self.rows, Rows::None) {
+                    let bytes = (data.len() * size_of::<u64>()) as u64;
+                    let reservation = match self.budget.reserve(bytes) {
+                        Ok(reservation) => reservation,
+                        Err(error) => {
+                            self.state = TableState::Refused(format!(
+                                "Interval statistics need {bytes} bytes: {error}"
+                            ));
+                            return;
+                        }
+                    };
+                    self.rows = Rows::Signals {
+                        histories: data.histories(),
+                        axis: Some(
+                            (0..data.len())
+                                .map(|index| data.row(index).expect("statistics row").start)
+                                .collect(),
+                        ),
+                        axis_reservation: Some(Arc::new(reservation)),
+                    };
+                    self.state = if data.len() == 0 {
+                        TableState::Empty
+                    } else {
+                        TableState::Ready
+                    };
+                }
+            }
             TableSource::Generator(source) => {
                 let Some(track) = source.track() else {
                     self.state = TableState::Unavailable;
@@ -859,11 +897,15 @@ impl TableModel {
                         TableSource::Generator(_) => {
                             super::filter::Column::Transaction(self.transaction_column(i)?.clone())
                         }
-                        TableSource::Signals(_) if i == 0 => super::filter::Column::Time,
-                        TableSource::Signals(_) => super::filter::Column::Signal {
-                            index: i - 1,
-                            name: self.column_title(i).to_owned(),
-                        },
+                        TableSource::Signals(_) | TableSource::Statistics(_) if i == 0 => {
+                            super::filter::Column::Time
+                        }
+                        TableSource::Signals(_) | TableSource::Statistics(_) => {
+                            super::filter::Column::Signal {
+                                index: i - 1,
+                                name: self.column_title(i).to_owned(),
+                            }
+                        }
                     };
                     Some((column, f.as_ref()?.clone()))
                 })
@@ -963,6 +1005,11 @@ impl TableModel {
     }
 
     pub(crate) fn retime(&mut self, by: crate::trace::Rescale) {
+        if let TableSource::Statistics(data) = &mut self.source {
+            Arc::make_mut(data).retime(by);
+            self.rows = Rows::None;
+            self.query_changed();
+        }
         if let Some(RowIdentity::SignalTime(time)) = &mut self.selected {
             crate::trace::Retime::retime(time, by);
         }
@@ -1343,8 +1390,10 @@ impl TableModel {
                 .applicable(shape)
                 .into_iter()
                 .filter(|t| {
-                    matches!(self.source, TableSource::Signals(_))
-                        || t.numeric_kind() != Some(crate::data::NumericKind::Float)
+                    matches!(
+                        self.source,
+                        TableSource::Signals(_) | TableSource::Statistics(_)
+                    ) || t.numeric_kind() != Some(crate::data::NumericKind::Float)
                 })
                 .collect()
         })
@@ -1613,6 +1662,7 @@ impl TableModel {
             return true;
         }
         match &self.source {
+            TableSource::Statistics(_) => false,
             TableSource::Generator(source) => {
                 source.track().is_some_and(|track| doc.retry_track(track))
             }
@@ -2033,6 +2083,13 @@ impl TableModel {
     #[must_use]
     pub fn column_title(&self, source_index: usize) -> &str {
         match &self.source {
+            TableSource::Statistics(data) => match source_index {
+                0 if data.has_intervals() => "Start",
+                0 => "Time",
+                1 => &data.name,
+                2 => "End (ticks)",
+                _ => "",
+            },
             TableSource::Generator(_) => {
                 self.transaction_column(source_index)
                     .map_or("", |c| match c {
@@ -2294,12 +2351,15 @@ impl TableModel {
                     )?;
                 }
             }
-            (Rows::Signals { histories, .. }, TableSource::Signals(signals)) => {
+            (
+                Rows::Signals { histories, .. },
+                TableSource::Signals(_) | TableSource::Statistics(_),
+            ) => {
                 let time = self.row_time(ordinal).unwrap();
                 append_exact(&mut text, "Time", COPY_BYTES)?;
-                for source in signals {
+                for column in 1..=histories.len() {
                     append_exact(&mut text, "\t", COPY_BYTES)?;
-                    append_exact(&mut text, &source.name, COPY_BYTES)?;
+                    append_exact(&mut text, self.column_title(column), COPY_BYTES)?;
                 }
                 append_exact(&mut text, "\n", COPY_BYTES)?;
                 append_exact(&mut text, &time.to_string(), COPY_BYTES)?;

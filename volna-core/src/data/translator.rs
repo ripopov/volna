@@ -119,25 +119,36 @@ impl NumericKind {
             (_, ValueView::Logic(bits)) if bits.width > 0 => bits,
             _ => return None,
         };
-        let w = bits.width;
-        let bit = |i: usize| match bits.bit(i) {
+        if bits.width <= 64 {
+            self.read_raw(bits.to_u64()?, bits.width)
+        } else {
+            self.read_bits(bits.width, |i| bits.bit(i))
+        }
+    }
+
+    pub(crate) fn read_bits(self, width: usize, read: impl Fn(usize) -> u8) -> Option<f64> {
+        let bit = |i: usize| match read(i) {
             b'0' => Some(0u64),
             b'1' => Some(1),
             _ => None,
         };
-        if w > 64 {
+        if width > 64 {
             let mut acc = 0.0f64;
-            for i in 0..w {
+            for i in 0..width {
                 acc = acc * 2.0 + bit(i)? as f64;
             }
             let v = match self {
-                Self::Signed if bits.bit(0) == b'1' => acc - 2f64.powi(w as i32),
+                Self::Signed if read(0) == b'1' => acc - 2f64.powi(width as i32),
                 Self::Unsigned | Self::Signed => acc,
                 _ => return None,
             };
             return v.is_finite().then_some(v);
         }
-        let raw = bits.to_u64()?;
+        let raw = (0..width).try_fold(0_u64, |raw, i| Some((raw << 1) | bit(i)?))?;
+        self.read_raw(raw, width)
+    }
+
+    fn read_raw(self, raw: u64, w: usize) -> Option<f64> {
         let v = match self {
             Self::Signed if w == 64 => raw as i64 as f64,
             Self::Signed if (raw >> (w - 1)) & 1 == 1 => raw as f64 - 2f64.powi(w as i32),

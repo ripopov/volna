@@ -48,9 +48,67 @@ pub(crate) fn finish(mut held: Reservation, resident: u64) -> Result<Reservation
     Ok(held)
 }
 
+#[derive(Debug)]
 pub(crate) struct Storage {
     what: &'static str,
     held: Option<Reservation>,
+}
+
+/// Keeps a vector's admission alive for exactly as long as its allocation.
+#[derive(Debug)]
+pub(crate) struct Buffer<T> {
+    values: Vec<T>,
+    storage: Storage,
+}
+
+impl<T> Buffer<T> {
+    pub(crate) fn new(budget: &volna_trace::remote::memory::MemoryBudget) -> Result<Self> {
+        Ok(Self {
+            values: Vec::new(),
+            storage: Storage::new("analysis buffer", size_of::<Self>(), Some(budget))?,
+        })
+    }
+
+    pub(crate) fn filled(
+        budget: &volna_trace::remote::memory::MemoryBudget,
+        len: usize,
+        value: impl FnMut() -> T,
+    ) -> Result<Self> {
+        let mut out = Self::new(budget)?;
+        out.values = out.storage.vec(len)?;
+        out.values.resize_with(len, value);
+        Ok(out)
+    }
+
+    pub(crate) fn push(&mut self, value: T) -> Result<()> {
+        self.storage.push(&mut self.values, value)
+    }
+
+    pub(crate) fn resident_bytes(&self) -> u64 {
+        self.storage.held.as_ref().map_or(0, Reservation::bytes)
+    }
+}
+
+impl Buffer<String> {
+    pub(crate) fn push_text(&mut self, text: &str) -> Result<()> {
+        let mut bytes = self.storage.vec(text.len())?;
+        bytes.extend_from_slice(text.as_bytes());
+        self.push(String::from_utf8(bytes)?)
+    }
+}
+
+impl<T> std::ops::Deref for Buffer<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.values
+    }
+}
+
+impl<T> std::ops::DerefMut for Buffer<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.values
+    }
 }
 
 impl Storage {

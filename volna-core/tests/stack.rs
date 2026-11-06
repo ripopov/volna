@@ -935,7 +935,7 @@ fn the_group_menu_draws_it_as_activity_or_a_stacked_area() {
 }
 
 #[test]
-fn stacked_groups_round_trip_through_workspaces_at_version_15() {
+fn stacked_groups_round_trip_through_workspaces_at_version_19() {
     let (_f, mut app, _) = app();
     app.handle(Command::Action(Action::ToggleStack));
     let saved = serde_json::to_value(
@@ -943,7 +943,7 @@ fn stacked_groups_round_trip_through_workspaces_at_version_15() {
     )
     .unwrap();
     let panel = &saved["panels"][0];
-    assert_eq!(panel["version"], 15);
+    assert_eq!(panel["version"], 19);
     assert_eq!(panel["rows"][0]["style"], "stack");
     assert_eq!(panel["rows"][0]["height"], 3);
     let (_f2, session) = trace();

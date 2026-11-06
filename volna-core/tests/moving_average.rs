@@ -6,10 +6,9 @@ use std::sync::{
 };
 use volna_core::{
     Action, App, Command, LoadRequest,
+    computed::{Command as Average, ComputationStatus, Interpretation, Operation},
     data::NumericKind,
-    moving_average::{
-        Command as Average, ComputationStatus, Interpretation, MeanHistory, Settings,
-    },
+    moving_average::{MeanHistory, Settings},
     testing::a_all,
     workspace::Workspace,
 };
@@ -442,10 +441,10 @@ fn pump(app: &mut App) {
     panic!("load loop did not settle");
 }
 fn command(app: &mut App, command: Average) {
-    app.handle(Command::MovingAverage(app.panels.focused_id(), command));
+    app.handle(Command::Derived(app.panels.focused_id(), command));
 }
 fn draft(app: &mut App, window: &str) {
-    let mut draft = app.moving_average_editor.as_ref().unwrap().draft.clone();
+    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = "smoothed".into();
     draft.window = window.into();
     draft.interval = "250 ns".into();
@@ -473,7 +472,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
     command(&mut app, Average::Open(Some(0)));
     pump(&mut app);
     assert!(matches!(
-        app.moving_average_preview(),
+        app.derived_preview(),
         Some(ComputationStatus::Ready(_))
     ));
     assert_eq!(capture(&app).to_bytes().unwrap(), before);
@@ -484,7 +483,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
     draft(&mut app, "4 us");
     pump(&mut app);
     assert!(matches!(
-        app.moving_average_preview(),
+        app.derived_preview(),
         Some(ComputationStatus::Ready(_))
     ));
     command(&mut app, Average::Apply);
@@ -518,7 +517,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
     command(&mut app, Average::Open(Some(1)));
     draft(&mut app, "0 us");
     command(&mut app, Average::Apply);
-    assert!(app.moving_average_editor.as_ref().unwrap().error.is_some());
+    assert!(app.derived_editor.as_ref().unwrap().error.is_some());
     assert!(Arc::ptr_eq(
         &history,
         app.panels
@@ -581,7 +580,7 @@ fn cancelled_and_superseded_previews_cannot_publish_late_results() {
     let stale = app
         .take_requests()
         .into_iter()
-        .find(|r| matches!(r, LoadRequest::MovingAverage { .. }))
+        .find(|r| matches!(r, LoadRequest::Derived { .. }))
         .unwrap();
     let completed = stale.perform();
     command(&mut app, Average::Stop);
@@ -589,30 +588,30 @@ fn cancelled_and_superseded_previews_cannot_publish_late_results() {
     let current = app
         .take_requests()
         .into_iter()
-        .find(|r| matches!(r, LoadRequest::MovingAverage { .. }))
+        .find(|r| matches!(r, LoadRequest::Derived { .. }))
         .unwrap();
     app.deliver(completed);
     assert!(matches!(
-        app.moving_average_preview(),
+        app.derived_preview(),
         Some(ComputationStatus::Building)
     ));
     app.deliver(current.perform());
     assert!(matches!(
-        app.moving_average_preview(),
+        app.derived_preview(),
         Some(ComputationStatus::Ready(_))
     ));
     draft(&mut app, "8 us");
     let running = app
         .take_requests()
         .into_iter()
-        .find(|r| matches!(r, LoadRequest::MovingAverage { .. }))
+        .find(|r| matches!(r, LoadRequest::Derived { .. }))
         .unwrap();
     command(&mut app, Average::Close);
-    if let LoadRequest::MovingAverage { cancelled, .. } = &running {
+    if let LoadRequest::Derived { cancelled, .. } = &running {
         assert!(cancelled.load(Ordering::Relaxed));
     }
     app.deliver(running.perform());
-    assert!(app.moving_average_preview().is_none());
+    assert!(app.derived_preview().is_none());
     assert_eq!(app.panels.focused_waves().unwrap().items().len(), 1);
 }
 
@@ -625,7 +624,7 @@ fn a_changed_row_list_rejects_apply_without_replacing_the_wrong_row() {
     app.handle(Command::Action(Action::RemoveSelected));
     command(&mut app, Average::Apply);
     assert!(
-        app.moving_average_editor
+        app.derived_editor
             .as_ref()
             .unwrap()
             .error
@@ -665,7 +664,8 @@ fn computed_row_survives_removing_its_displayed_input_and_reopens_without_it() {
     let row = app.panels.focused_waves().unwrap().signal(0).unwrap();
     assert_eq!(number(row.history.as_deref().unwrap(), 4000), Some(3.5));
     let mut missing: serde_json::Value = serde_json::from_slice(&saved).unwrap();
-    missing["panels"][0]["rows"][0]["signal"] = serde_json::json!(["missing"]);
+    missing["panels"][0]["rows"][0]["computed"]["inputs"][0]["path"] =
+        serde_json::json!(["missing"]);
     Workspace::parse(&serde_json::to_vec(&missing).unwrap())
         .unwrap()
         .prepare(
@@ -716,10 +716,10 @@ fn changing_the_timeline_timescale_preserves_definitions_and_undo() {
         .signal(1)
         .unwrap()
         .source
-        .moving_average()
+        .computed()
         .unwrap();
-    assert_eq!(definition.settings.window, 4_000_000);
-    assert_eq!(definition.settings.interval, 250_000);
+    assert_eq!(average_settings(definition).window, 4_000_000);
+    assert_eq!(average_settings(definition).interval, 250_000);
     assert_eq!(number(output(&app), 4_000_000), Some(3.5));
     app.handle(Command::Undo);
     pump(&mut app);
@@ -782,7 +782,7 @@ fn format_row(app: &mut App, row: usize, format: &str) {
 
 fn add_numeric_mean(app: &mut App, row: usize, name: &str) {
     command(app, Average::Open(Some(row)));
-    let mut draft = app.moving_average_editor.as_ref().unwrap().draft.clone();
+    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = name.into();
     draft.window = "4 ns".into();
     draft.interval = "1 ns".into();
@@ -790,7 +790,7 @@ fn add_numeric_mean(app: &mut App, row: usize, name: &str) {
     command(app, Average::Preview);
     pump(app);
     command(app, Average::Apply);
-    assert!(app.moving_average_editor.is_none());
+    assert!(app.derived_editor.is_none());
 }
 
 fn named_mean<'a>(app: &'a App, name: &str) -> &'a volna_core::wave::model::DisplayedSignal {
@@ -808,7 +808,7 @@ fn named_mean<'a>(app: &'a App, name: &str) -> &'a volna_core::wave::model::Disp
 fn signed_unsigned_and_float_definitions_keep_distinct_results_and_restore_their_interpretation() {
     let (_file, mut app) = numeric_fixture();
     format_row(&mut app, 0, "sdec");
-    assert!(app.can_derive_moving_average(app.panels.focused_id()));
+    assert!(app.can_derive_signal(app.panels.focused_id()));
     add_numeric_mean(&mut app, 0, "signed_mean");
     format_row(&mut app, 0, "udec");
     add_numeric_mean(&mut app, 0, "unsigned_mean");
@@ -875,11 +875,7 @@ fn signed_unsigned_and_float_definitions_keep_distinct_results_and_restore_their
         .unwrap();
     command(&mut app, Average::Open(Some(signed_row)));
     assert_eq!(
-        app.moving_average_editor
-            .as_ref()
-            .unwrap()
-            .interpretation
-            .kind,
+        app.derived_editor.as_ref().unwrap().bindings[0].kind,
         NumericKind::Signed
     );
     command(&mut app, Average::Preview);
@@ -975,9 +971,9 @@ fn text_and_event_sources_do_not_offer_a_numeric_average() {
     let count = app.panels.waves(panel).unwrap().items().len();
     for row in 0..count {
         app.panels.waves_mut(panel).unwrap().selected = std::collections::BTreeSet::from([row]);
-        assert!(!app.can_derive_moving_average(panel));
+        assert!(!app.can_derive_signal(panel));
         command(&mut app, Average::Open(Some(row)));
-        assert!(app.moving_average_editor.is_none());
+        assert!(app.derived_editor.is_none());
     }
 }
 
@@ -1080,7 +1076,7 @@ fn dragging_rows_across_a_live_preview_preserves_its_input() {
         .source
         .clone();
     command(&mut app, Average::Open(Some(0)));
-    let mut draft = app.moving_average_editor.as_ref().unwrap().draft.clone();
+    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.window = "4 ns".into();
     draft.interval = "1 ns".into();
     command(&mut app, Average::Update(draft));
@@ -1092,31 +1088,36 @@ fn dragging_rows_across_a_live_preview_preserves_its_input() {
         app.panels.focused_waves().unwrap().signal(1).unwrap().name,
         "flag"
     );
-    assert_eq!(app.moving_average_editor.as_ref().unwrap().row, 0);
+    assert_eq!(app.derived_editor.as_ref().unwrap().row, 0);
 
     drag_between_rows(&mut app, 0, 2, 0.9);
-    let editor = app.moving_average_editor.as_ref().unwrap();
+    let editor = app.derived_editor.as_ref().unwrap();
     assert_eq!(editor.row, 2);
     assert_eq!(
         editor.revision,
         app.panels.focused_waves().unwrap().revision()
     );
-    assert_eq!(editor.input, input);
+    assert_eq!(editor.bindings[0].source, input);
     command(&mut app, Average::Apply);
-    assert!(app.moving_average_editor.is_none());
+    assert!(app.derived_editor.is_none());
     let mean = app.panels.focused_waves().unwrap().signal(3).unwrap();
     assert_eq!(mean.source.input_signal(), input.signal());
     assert_eq!(
-        mean.source.moving_average().unwrap().interpretation.kind,
+        {
+            let volna_core::wave::model::RowSource::Computed { inputs, .. } = &mean.source else {
+                panic!()
+            };
+            inputs[0].interpretation.kind
+        },
         NumericKind::Signed
     );
     assert_eq!(number(mean.history.as_deref().unwrap(), 4), Some(0.0));
 
     command(&mut app, Average::Open(Some(3)));
     drag_between_rows(&mut app, 0, 3, 0.9);
-    assert_eq!(app.moving_average_editor.as_ref().unwrap().row, 2);
+    assert_eq!(app.derived_editor.as_ref().unwrap().row, 2);
     command(&mut app, Average::Apply);
-    assert!(app.moving_average_editor.is_none());
+    assert!(app.derived_editor.is_none());
     assert_eq!(app.panels.focused_waves().unwrap().items().len(), 4);
     assert!(
         app.panels
@@ -1125,7 +1126,7 @@ fn dragging_rows_across_a_live_preview_preserves_its_input() {
             .signal(2)
             .unwrap()
             .source
-            .moving_average()
+            .computed()
             .is_some()
     );
     assert_eq!(
@@ -1139,34 +1140,50 @@ fn calculation_revision_changes_only_when_calculation_fields_change() {
     let (_file, mut app) = fixture();
     command(&mut app, Average::Open(Some(0)));
     pump(&mut app);
-    let editor = app.moving_average_editor.as_ref().unwrap();
+    let Some(volna_core::computed::ComputationStatus::Ready(history)) = app.derived_preview()
+    else {
+        panic!("initial preview did not complete");
+    };
+    let expected = [0, 4, 8].map(|time| number(history.as_ref(), time));
+    let editor = app.derived_editor.as_ref().unwrap();
     let revision = editor.calculation_revision;
-    let key = editor.preview;
+    let key = editor.preview.clone();
     let mut draft = editor.draft.clone();
     for name in ["renamed", "", "renamed_again"] {
         draft.name = name.into();
         command(&mut app, Average::Update(draft.clone()));
-        let editor = app.moving_average_editor.as_ref().unwrap();
+        let editor = app.derived_editor.as_ref().unwrap();
         assert_eq!(editor.calculation_revision, revision);
         assert_eq!(editor.preview, key);
         assert_eq!(editor.error.is_some(), name.is_empty());
-        assert!(
-            !app.take_requests()
-                .iter()
-                .any(|r| matches!(r, LoadRequest::MovingAverage { .. }))
-        );
+        pump(&mut app);
+        if !name.is_empty() {
+            let Some(volna_core::computed::ComputationStatus::Ready(history)) =
+                app.derived_preview()
+            else {
+                panic!("renamed preview did not recover");
+            };
+            assert_eq!(
+                [0, 4, 8].map(|time| number(history.as_ref(), time)),
+                expected
+            );
+        }
     }
     draft.window = "8 us".into();
     command(&mut app, Average::Update(draft.clone()));
-    let editor = app.moving_average_editor.as_ref().unwrap();
+    let editor = app.derived_editor.as_ref().unwrap();
     assert_eq!(editor.calculation_revision, revision + 1);
     assert!(editor.preview.is_none());
     command(&mut app, Average::Update(draft));
     assert_eq!(
-        app.moving_average_editor
-            .as_ref()
-            .unwrap()
-            .calculation_revision,
+        app.derived_editor.as_ref().unwrap().calculation_revision,
         revision + 1
     );
+}
+
+fn average_settings(definition: &volna_core::computed::Definition) -> Settings {
+    let Operation::MovingAverage { settings } = definition.operation else {
+        panic!("expected average")
+    };
+    settings
 }

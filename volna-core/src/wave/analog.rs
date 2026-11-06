@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
+pub use crate::data::numeric_input::{Sample, sample};
 use crate::data::{NumericKind, Translator};
 use crate::geometry::{Point, point};
 use crate::wave::model::RowHeight;
 use crate::wave::viewport::Viewport;
-use volna_trace::data::value_view::ValueView;
-use volna_trace::data::{Bit, SignalHistory, SignalShape};
+use volna_trace::data::{SignalHistory, SignalShape};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,37 +224,6 @@ fn interpolate(from: f64, to: f64, fraction: f64) -> f64 {
     } else {
         from * (1.0 - fraction) + to * fraction
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Sample {
-    Missing,
-    Undefined,
-    Value(f64),
-}
-
-pub fn sample(h: &dyn SignalHistory, kind: NumericKind, i: Option<usize>) -> Sample {
-    if h.shape() == SignalShape::Bit && kind == NumericKind::Unsigned {
-        return match h.bit(i) {
-            Bit::Zero => Sample::Value(0.0),
-            Bit::One => Sample::Value(1.0),
-            Bit::Unavailable => Sample::Missing,
-            Bit::Other => match h.value_view(i) {
-                ValueView::Logic(l) if l.width == 1 => match l.bit(0) {
-                    b'h' | b'H' => Sample::Value(1.0),
-                    b'l' | b'L' => Sample::Value(0.0),
-                    _ => Sample::Undefined,
-                },
-                _ => Sample::Undefined,
-            },
-            Bit::X | Bit::Z | Bit::DontCare => Sample::Undefined,
-        };
-    }
-    let view = h.value_view(i);
-    if matches!(view, ValueView::Unavailable) {
-        return Sample::Missing;
-    }
-    kind.read(&view).map_or(Sample::Undefined, Sample::Value)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

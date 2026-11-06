@@ -61,6 +61,50 @@ rectangle. The host converts it to an opaque ink image, paints it without
 rescaling, and releases obsolete image resources. GPU handles and image formats
 belong entirely to the host.
 
+## Formula computations
+
+`computed` owns definitions, typed bindings, preparation, editor validation, and
+background job identities for formulas and moving averages. `Command::Derived`
+drives their shared draft/Apply workflow; `LoadRequest::Derived` and
+`LoadResult::Derived` use the existing executor. Results can be ordinary or
+captured waveforms, scalar measurements, or interval tables. Numeric
+interpretation and projected reads live in `data::numeric_input`, shared with
+the moving-average kernel and analog reader.
+
+The formula parser covers pointwise operators, exact durations, captures,
+`moving_avg`, `lowpass`, `integrate`, `sine`, `clock`, and interval reductions.
+Temporal nodes publish on independent fixed grids; parent pointwise expressions
+merge those grids with raw events. Capture timestamps survive repeated values
+and direct applied-formula references. Measurements retain their scope,
+unknown-data policy, known support or capture count, and coverage. Literal-only
+and generator formulas use the saved document range and default step.
+
+Only referenced bindings determine the source domain. Applied formulas resolve
+through persistent IDs and revisions, retain a recursive snapshot when their
+visible row is removed, and reject dependency cycles with their complete path.
+A document-local weak cache shares immutable programs by expression, input
+types, and capture metadata. Worker keys contain resolved dependencies and saved
+settings, and late completions are rejected by request number. Storage uses
+shared memory admission for intermediate buffers and retained results. Interval
+reductions share prepared waveforms and one work counter per evaluation request.
+Jobs refuse more than 1,000,000 output events or 10,000,000 evaluation steps.
+
+The core owns raw binding drafts, validation, invalidation, and result
+eligibility; the frontend owns text controls and debounce. Recorded source
+search uses cancellable immutable session snapshots. Apply replaces or inserts
+a row through the existing splice edit, so a definition and its placement enter
+undo together. Wave panel schema 19 (workspace 18) stores IDs, revisions,
+settings, marker scopes, and recursive recorded/applied inputs; results are
+recomputed after restore. Unavailable recorded bindings and deleted linked
+markers remain repairable.
+
+Interval measurements use the analog renderer through a numeric history view.
+Applying saves resolved interval bounds, so later marker edits do not change the
+measurement. The table destination stores a statistics snapshot as a source for
+the existing table model, reusing its signal columns, sorting, filtering, and
+clipboard handling. Table schema 8 persists measurement values with interval bounds
+and waveform samples with timestamps, including samples at the domain endpoint.
+
 ## Pipeline overview
 
 Below two physical pixels per row, the pipeline paints opaque presence in the

@@ -16,12 +16,12 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub(crate) fn retime_moving_average(&mut self, by: crate::trace::Rescale) {
+    pub(crate) fn retime_derived(&mut self, by: crate::trace::Rescale) {
         use crate::trace::Retime;
         if let Some(row) = self.row.signal_mut()
-            && let super::model::RowSource::MovingAverage { definition, .. } = &mut row.source
+            && let super::model::RowSource::Computed { definition, .. } = &mut row.source
         {
-            definition.settings.retime(by);
+            definition.operation.retime(by);
             row.history = None;
             row.error = None;
         }
@@ -462,7 +462,7 @@ pub fn ungroup(items: &[Entry], groups: &BTreeSet<usize>) -> (Vec<Splice>, BTree
 
 #[must_use]
 pub fn of_trace(items: &[Entry], trace: crate::trace::TraceId) -> BTreeSet<usize> {
-    let of = |j: usize| items[j].row.trace() == Some(trace);
+    let of = |j: usize| items[j].row.uses_trace(trace);
     (0..items.len())
         .filter(|&i| {
             if !items[i].is_group() {

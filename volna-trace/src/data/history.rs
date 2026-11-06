@@ -33,6 +33,18 @@ pub trait SignalHistory: Send + Sync {
 
     fn bit(&self, i: Option<usize>) -> Bit;
 
+    fn capture_times(&self) -> Option<&[u64]> {
+        None
+    }
+
+    fn coverage_at(&self, _t: u64) -> Option<f64> {
+        None
+    }
+
+    fn warnings(&self) -> &[String] {
+        &[]
+    }
+
     fn index_at(&self, t: u64) -> Option<usize> {
         let n = self.len();
         if n == 0 || self.time(0) > t {

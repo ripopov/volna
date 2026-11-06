@@ -46,8 +46,9 @@ impl SignalSource {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TableSource {
+    Statistics(std::sync::Arc<super::statistics::Statistics>),
     Generator(TrackSource),
     Signals(Vec<SignalSource>),
 }
@@ -55,6 +56,7 @@ pub enum TableSource {
 impl TableSource {
     pub fn traces(&self) -> impl Iterator<Item = TraceId> + '_ {
         let (generator, signals) = match self {
+            Self::Statistics(_) => (None, &[][..]),
             Self::Generator(source) => (Some(source.trace()), &[][..]),
             Self::Signals(sources) => (None, sources.as_slice()),
         };
@@ -65,7 +67,7 @@ impl TableSource {
     pub fn generator_track(&self) -> Option<Traced<TrackRef>> {
         match self {
             Self::Generator(source) => source.track(),
-            Self::Signals(_) => None,
+            Self::Signals(_) | Self::Statistics(_) => None,
         }
     }
 

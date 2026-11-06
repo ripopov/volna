@@ -1,57 +1,14 @@
 //! Duration-weighted trailing means on an explicit, viewport-independent output grid.
 
-mod jobs;
-pub(crate) use jobs::Computations;
-pub use jobs::{ComputationStatus, Key};
-
-use crate::data::{NumericKind, projection::BitSlice};
+use crate::data::{
+    NumericKind,
+    numeric_input::{InputHistory, Interpretation, Sample, sample},
+};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-use volna_trace::data::value_view::ValueView;
 use volna_trace::data::{Bit, SignalHistory, SignalShape, WaveValue};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Interpretation {
-    pub kind: NumericKind,
-    pub projection: Option<BitSlice>,
-}
-
-impl Interpretation {
-    pub fn validate(self, source_shape: SignalShape) -> Result<()> {
-        let shape = self
-            .projection
-            .map(|slice| slice.validate(source_shape).map(BitSlice::shape))
-            .transpose()?
-            .unwrap_or(source_shape);
-        ensure!(
-            match self.kind {
-                NumericKind::Real => shape == SignalShape::Real,
-                NumericKind::Unsigned | NumericKind::Signed =>
-                    matches!(shape, SignalShape::Bit | SignalShape::Vector { width: 2.. }),
-                NumericKind::Float => matches!(
-                    shape,
-                    SignalShape::Vector {
-                        width: 16 | 32 | 64
-                    }
-                ),
-            },
-            "Input shape does not support the saved numeric interpretation."
-        );
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self.kind {
-            NumericKind::Unsigned => "Unsigned",
-            NumericKind::Signed => "Signed",
-            NumericKind::Float => "IEEE floating point",
-            NumericKind::Real => "Real",
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Settings {
@@ -90,89 +47,6 @@ impl crate::trace::Retime for Settings {
         self.interval = by.time(self.interval).max(1);
         self.origin = by.time(self.origin);
         self.end = by.time(self.end);
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Definition {
-    pub name: String,
-    pub interpretation: Interpretation,
-    pub settings: Settings,
-}
-
-impl Definition {
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            !self.name.trim().is_empty()
-                && self.name.len() <= 256
-                && !self.name.chars().any(char::is_control),
-            "Use a name of 1–256 bytes without control characters."
-        );
-        self.settings.sample_count()?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Draft {
-    pub name: String,
-    pub window: String,
-    pub interval: String,
-    pub partial: bool,
-    pub skip_unknown: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Command {
-    Open(Option<usize>),
-    Update(Draft),
-    Preview,
-    Stop,
-    Apply,
-    Remove,
-    Close,
-}
-
-pub struct Editor {
-    pub id: u64,
-    pub panel: crate::panels::PanelId,
-    pub row: usize,
-    pub revision: u64,
-    pub input: crate::wave::model::RowSource,
-    pub interpretation: Interpretation,
-    pub editing: bool,
-    pub draft: Draft,
-    pub domain: (u64, u64),
-    pub preview: Option<Key>,
-    pub calculation_revision: u64,
-    pub error: Option<String>,
-    pub stopped: bool,
-    pub(crate) display_definition: Definition,
-    pub(crate) last_result: Option<std::sync::Arc<dyn SignalHistory>>,
-    pub(crate) reveal_preview: bool,
-}
-
-impl Draft {
-    pub fn definition(
-        &self,
-        domain: (u64, u64),
-        base: crate::wave::timeline::TimeBase<'_>,
-        interpretation: Interpretation,
-    ) -> Result<Definition> {
-        let definition = Definition {
-            name: self.name.trim().to_owned(),
-            interpretation,
-            settings: Settings {
-                window: duration(&self.window, base).context("Window")?,
-                interval: duration(&self.interval, base).context("Output interval")?,
-                origin: domain.0,
-                end: domain.1,
-                partial: self.partial,
-                skip_unknown: self.skip_unknown,
-            },
-        };
-        definition.validate()?;
-        Ok(definition)
     }
 }
 
@@ -372,8 +246,8 @@ impl<'a> Cursor<'a> {
                 target
             };
             ensure!(end >= self.time, "Source history is not ordered.");
-            let value = match crate::wave::analog::sample(self.source, self.kind, self.index) {
-                crate::wave::analog::Sample::Value(v) => Some(v),
+            let value = match sample(self.source, self.kind, self.index) {
+                Sample::Value(v) => Some(v),
                 _ => None,
             };
             add(end - self.time, value);
@@ -383,45 +257,6 @@ impl<'a> Cursor<'a> {
             }
         }
         Ok(())
-    }
-}
-
-struct InputHistory<'a> {
-    source: &'a dyn SignalHistory,
-    projection: Option<BitSlice>,
-}
-
-impl SignalHistory for InputHistory<'_> {
-    fn shape(&self) -> SignalShape {
-        self.projection
-            .map_or_else(|| self.source.shape(), BitSlice::shape)
-    }
-    fn len(&self) -> usize {
-        self.source.len()
-    }
-    fn time(&self, i: usize) -> u64 {
-        self.source.time(i)
-    }
-    fn value(&self, i: Option<usize>) -> WaveValue {
-        self.projection.map_or_else(
-            || self.source.value(i),
-            |p| p.value(self.source.value_view(i)),
-        )
-    }
-    fn value_view(&self, i: Option<usize>) -> ValueView<'_> {
-        self.projection.map_or_else(
-            || self.source.value_view(i),
-            |p| ValueView::owned(p.value(self.source.value_view(i))),
-        )
-    }
-    fn bit(&self, i: Option<usize>) -> Bit {
-        match self.projection {
-            Some(slice) => match self.source.value_view(i) {
-                ValueView::Logic(bits) => Bit::from_ascii(bits.bit(slice.first as usize)),
-                _ => Bit::Unavailable,
-            },
-            None => self.source.bit(i),
-        }
     }
 }
 

@@ -112,6 +112,11 @@ pub struct Document {
     detached: Option<MarkerId>,
     trace_edits: Vec<(String, TraceEdit)>,
     pub translators: Translators,
+    pub(crate) formula_programs: crate::computed::formula::Programs,
+    pub(crate) formula_definitions: HashMap<
+        crate::computed::FormulaId,
+        Option<(Vec<crate::computed::Input>, crate::computed::Definition)>,
+    >,
     pending: HashSet<Traced<SignalRef>>,
     requests: Vec<LoadRequest>,
     tracks: HashMap<Traced<TrackRef>, TrackLoad>,
@@ -175,6 +180,8 @@ impl Document {
             detached: None,
             trace_edits: Vec::new(),
             translators: Translators::builtin(),
+            formula_programs: crate::computed::formula::Programs::default(),
+            formula_definitions: HashMap::new(),
             pending: HashSet::new(),
             requests: Vec::new(),
             tracks: HashMap::new(),
@@ -541,7 +548,7 @@ impl Document {
 
     pub(crate) fn retime(&mut self, by: Rescale) {
         for entry in &mut self.copied_rows {
-            entry.retime_moving_average(by);
+            entry.retime_derived(by);
         }
         self.shared.viewport.retime(by);
         self.shared.cursor.retime(by);
@@ -616,7 +623,7 @@ impl Document {
             | LoadRequest::GroupSummary { .. }
             | LoadRequest::Integral { .. }
             | LoadRequest::StackTotal { .. }
-            | LoadRequest::MovingAverage { .. } => true,
+            | LoadRequest::Derived { .. } => true,
         });
         self.transaction_indexes.retain(|(t, _)| t.trace != trace);
         self.occupancies.retain(|(t, _)| *t != trace);
@@ -624,8 +631,7 @@ impl Document {
         if self.selection.is_some_and(|s| s.track.trace == trace) {
             self.select(None);
         }
-        self.copied_rows
-            .retain(|e| e.row.trace().is_none_or(|t| t != trace));
+        self.copied_rows.retain(|e| !e.row.uses_trace(trace));
         self.clocks.remove_trace(trace);
     }
 
@@ -1157,7 +1163,7 @@ impl Document {
 
     pub fn deliver(&mut self, result: LoadResult) -> Option<Delivered> {
         match result {
-            LoadResult::MovingAverage { .. }
+            LoadResult::Derived { .. }
             | LoadResult::Projection { .. }
             | LoadResult::ActivityBuilt { .. }
             | LoadResult::ActivityCounter { .. }

@@ -10,11 +10,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use volna_trace::data::source::Lookup;
 
-pub(crate) const VERSION: u32 = 6;
+pub(crate) const VERSION: u32 = 8;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum SavedTableSource {
+    Statistics {
+        data: Box<RawValue>,
+    },
     Generator {
         #[serde(default, skip_serializing_if = "TraceId::is_a")]
         trace: TraceId,
@@ -23,6 +26,46 @@ enum SavedTableSource {
     Signals {
         signals: Vec<SavedTableSignal>,
     },
+}
+
+// Keep statistics as JSON until their rows can be admitted against the restore budget.
+impl<'de> Deserialize<'de> for SavedTableSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let raw = Box::<RawValue>::deserialize(deserializer)?;
+        #[derive(Deserialize)]
+        struct Kind {
+            #[serde(rename = "type")]
+            kind: String,
+        }
+        let kind: Kind = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
+        if kind.kind == "statistics" {
+            #[derive(Deserialize)]
+            struct Snapshot {
+                data: Box<RawValue>,
+            }
+            let snapshot: Snapshot = serde_json::from_str(raw.get()).map_err(D::Error::custom)?;
+            return Ok(Self::Statistics {
+                data: snapshot.data,
+            });
+        }
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum Recorded {
+            Generator {
+                #[serde(default)]
+                trace: TraceId,
+                path: Vec<String>,
+            },
+            Signals {
+                signals: Vec<SavedTableSignal>,
+            },
+        }
+        match serde_json::from_str(raw.get()).map_err(D::Error::custom)? {
+            Recorded::Generator { trace, path } => Ok(Self::Generator { trace, path }),
+            Recorded::Signals { signals } => Ok(Self::Signals { signals }),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,6 +98,9 @@ pub(crate) fn save(
     title: Option<String>,
 ) -> Result<Box<RawValue>> {
     let source = match &table.source {
+        TableSource::Statistics(data) => SavedTableSource::Statistics {
+            data: serde_json::value::to_raw_value(data.as_ref())?,
+        },
         TableSource::Generator(track) => SavedTableSource::Generator {
             trace: track.trace(),
             path: track.path().to_vec(),
@@ -88,6 +134,9 @@ pub(crate) fn save(
 pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Panel> {
     let saved: TablePanel = serde_json::from_str(raw.get()).context("invalid table panel")?;
     let source = match saved.source {
+        SavedTableSource::Statistics { data } => TableSource::Statistics(std::sync::Arc::new(
+            super::statistics::Statistics::restore(&data, &ctx.budget)?,
+        )),
         SavedTableSource::Generator { trace, path } => {
             ensure!(!path.is_empty(), "empty table generator path");
             let found = ctx
@@ -153,6 +202,10 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     );
     table.widths.restore(saved.widths);
     match (&table.source, &saved.columns) {
+        (TableSource::Statistics(data), ColumnSet::Signals { time, visible }) => ensure!(
+            visible.len() == data.signal_count() && (*time || visible.iter().any(|v| *v)),
+            "Invalid statistics columns"
+        ),
         (TableSource::Generator(_), ColumnSet::Transactions(columns)) => {
             ensure!(columns.validate(), "invalid transaction columns");
         }

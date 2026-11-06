@@ -4,6 +4,7 @@ pub mod analysis;
 pub mod app;
 pub mod clock;
 pub mod color;
+pub mod computed;
 pub mod data;
 pub mod document;
 pub mod frames;

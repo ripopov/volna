@@ -204,58 +204,129 @@ numeric subset when a selection also contains signals that cannot be plotted.
 Value-format choices must support every target. The menu uses the native theme,
 keyboard navigation, and window bounds at each interface zoom.
 
-## Moving-average signals
+## Derived signals and measurements
 
-Select one numeric waveform and choose **Derive**, or right-click it and
-choose **Derive signal…**. The docked inspector shows **Operation · Moving
-average**, the currently available operation, and accepts a name, trailing
-window, and output interval. Enter durations such as `4 us` or `250 ns`, or an
-integer number of timeline ticks. Durations must resolve to whole ticks.
-A temporary **Draft** row previews the result directly on the waveform timeline,
-sharing its zoom, markers, cursor, and value readout. The initial settings compute
-automatically; typing updates after a 300 ms pause, while policy toggles and Enter
-update immediately. Renaming does not recompute the result. The last successful
-waveform remains visible, dimmed and labeled as outdated, while settings change.
-**Add waveform** keeps the successful draft as an ordinary analog row. Select
-that row and choose **Derive** again to edit it, or use **Edit derived signal…**
-from its menu. Edits preview in the existing row; **Apply changes** commits them.
-**Cancel** discards the draft and restores the applied waveform. Reordering rows
-keeps the editor attached to its source. Drafts are not
-saved and do not enter undo history; applying creates one undo step.
-**Remove definition** removes the row; ordinary row removal, copy/paste, and
+Select recorded numeric waveforms or applied waveform formulas and choose
+**Derive**, or right-click one and choose **Derive signal…**. The docked
+inspector offers **Moving average** and **Formula**. Selecting several rows
+starts a formula with those input bindings. **Add recorded input…** searches all
+loaded traces, including signals that are not displayed. Each binding shows its
+source, local alias, numeric interpretation, and optional bit or slice.
+**Replace…** repairs or changes a binding. Aliases are independent of row names.
+
+A temporary **Draft** row previews the result on the waveform timeline, sharing
+zoom, markers, cursor, and value readout. Initial settings compute automatically;
+typing updates after a 300 ms pause, while operation changes, policy toggles,
+and Enter update immediately. Renaming the output does not recompute it. The
+last successful result remains dimmed and marked outdated while settings change.
+**Add waveform** keeps the successful draft. Select it and choose **Derive** or
+**Edit derived signal…** to edit; **Apply changes** commits the result. **Cancel**
+restores the applied result. Reordering rows keeps the editor attached to its
+source. Drafts are not saved and do not enter undo history; each Apply creates
+one undo step. **Remove definition**, ordinary row removal, copy/paste, and
 undo/redo also work.
 
-The mean weights each held input value by its duration in the half-open window
-`[t − window, t)`. Warm-up can wait for a complete window or use the available
-history since the output origin. Missing, NaN, and infinite inputs propagate a
+### Formula language
+
+Formulas support up to 16 recorded or applied waveform inputs. Examples:
+
+```text
+adc_in - reference
+valid && ready
+abs(measured - expected) > tolerance
+moving_avg(adc_in, 4 us, step: 250 ns)
+adc_in - reference @posedge clk
+100 * interval_mean(real(valid))
+sine(period: 20 us, amplitude: 2, step: 500 ns)
+```
+
+Supported syntax includes finite numeric constants, parentheses, unary `+`/`-`,
+arithmetic `+ - * / %`, comparisons `< <= > >= == !=`, Boolean `&& || !`, and
+`abs`, `min`, `max`, `real`, and `bool`. Temporal functions are `moving_avg`,
+`lowpass`, and `integrate`; generators are `sine` and `clock`. Durations such as
+`4 us` and `250 ns` must resolve exactly to integer timeline ticks. Named
+arguments set steps, warm-up, unknown-data policies, phase, and initial values.
+The saved **Default step** is used when a function omits `step`.
+
+Single-bit inputs are Boolean. Wider vectors use the binding's unsigned, signed,
+or IEEE floating-point interpretation; recorded reals remain real. Slices use
+source HDL bit indices, such as `7:0`. `real(bit)` maps false/true to 0/1;
+`bool(number)` tests for nonzero. There are no implicit Boolean/Real casts.
+Unknowns propagate through arithmetic; division or remainder by zero and
+non-finite results produce gaps. Boolean logic uses three values: false AND
+unknown is false, true OR unknown is true, and unresolved cases remain unknown.
+
+Values are held between events. Pointwise expressions use the sorted union of
+input events, while temporal children keep independent grids anchored at their
+resolved domain starts. Viewport and zoom changes never move those grids.
+`x @ 1 ns` captures on a fixed grid, `x @clk` captures every published clock
+state change, and `x @posedge clk` captures only known false-to-known true
+transitions. Repeated captures remain available even when their values repeat.
+Captures use timestamp-coalesced histories, so delta-cycle edges cannot be
+recovered.
+
+`interval_mean`, `interval_integral`, `interval_min`, `interval_max`, and
+`interval_sum` produce measurements drawn as analog steps over the saved **Scope**.
+The default **Each marker interval** splits the recording at its markers, including
+the interval before the first marker and after the last. Applying saves the
+interval boundaries; moving or deleting markers afterward does not alter the
+saved result. With no interior markers, it covers the whole range. Unknown
+results appear as gaps.
+
+Other scopes are Whole range, explicit bounds, a marker snapshot, linked markers,
+or a marker set. Marker sets produce one value per adjacent pair. Marker-based
+scopes follow markers while previewing and save their bounds when applied.
+Strict mode propagates unknown data, while skip mode uses known support and
+reports coverage. **Add to waveform** plots the result. **Add to table** opens
+the existing table panel with start times, values, and end ticks for measurements.
+Waveform results use timestamp and value columns, including the final sample.
+The table retains its values in the workspace. `interval_sum` requires a captured Real
+waveform and counts samples rather than weighting them by time.
+
+The expression is limited to 4,096 bytes, 256 expression nodes, and 32 nesting
+levels. Output is limited to 1,000,000 events per expression node and jobs are
+limited to 10,000,000 evaluation steps. HDL width-preserving arithmetic,
+bitwise operations, user-defined functions, and scripts are not supported.
+
+### Moving averages
+
+A moving average accepts one recorded numeric input, a trailing window, and an
+output interval. Enter durations such as `4 us` or `250 ns`, or an integer number
+of timeline ticks; durations must resolve to whole ticks. The mean weights each
+held value by its duration in `[t − window, t)`. Warm-up can wait for a complete
+window or use available history. Missing, NaN, and infinite inputs propagate a
 gap by default; **skip unknown time** divides by the known duration instead.
-A window with no known duration is unavailable in both modes. Values retain the
-input's numerical scale. The definition captures its source row's numeric
-interpretation (unsigned, signed, IEEE floating point, or real) and any selected
-bus slice. The inspector shows this interpretation, which is preserved when
-editing or reopening the average, independently of subsequent source display
-format changes. Bit inputs are interpreted as 0 and 1; X/Z and other undefined
-logic values follow the missing-data policy. Text and event signals cannot be
-averaged. The result is always real-valued.
+A window without known duration is unavailable in both modes. The result is
+always real-valued and retains the captured numerical interpretation and slice.
+Bit inputs contribute 0 and 1; undefined logic follows the missing-data policy.
+Text and event signals cannot be averaged. Output follows the explicit fixed
+grid over the input trace's domain, with at most 1,000,000 samples.
 
-Output samples cover the input trace's time domain on
-the chosen fixed grid and are held between samples; zoom does not recompute or
-resample the definition. The grid is limited to 1,000,000 samples.
+### Execution and saved definitions
 
-Preview work runs on the native/background Web Worker executor, with memory
-admission before scanning the input or allocating the output. **Stop**, cancelling
-the editor, and changing calculation settings cancel abandoned work. **Resume**
-and **Retry** restart stopped or failed work. Late completions cannot replace a
-newer preview. Invalid drafts and failed previews preserve the applied row. Workspace files store source paths and duplicate-path ordinals, names,
-window policies, numeric interpretations, slices, and output time settings;
-results are recomputed on reopening. Each definition belongs to its waveform row.
-**Open input signal in table** opens the recorded input.
+Both operations share the native/background Web Worker executor and perform
+memory admission before scanning input values or allocating output. **Stop**,
+cancellation, and calculation changes cancel abandoned work. **Resume** and
+**Retry** restart stopped or failed work. Late completions cannot replace a
+newer preview. Invalid drafts and failed previews preserve the applied row.
+
+Workspace version 18 and wave panel version 19 store operations, expressions,
+persistent formula IDs and revisions, ordered aliases, stable recorded paths and
+duplicate-path ordinals, recursive applied-formula inputs, source shapes,
+numeric interpretations, slices, default steps, saved ranges, marker scopes,
+and unknown-data policies. Results are recomputed on reopening. Recorded domains
+follow the current recordings; generator and literal-only domains use the saved
+range. Missing or ambiguous bindings remain repairable. Renaming or removing an
+applied source row does not invalidate dependent definitions, and dependency
+cycles are rejected before Apply. **Open recorded inputs in table** opens all
+resolved recorded inputs.
 
 For a native control specimen, open `volna/examples/analog_showcase.vtr`, add
-`analog.waves.noise`, derive a `4 us` mean with a `250 ns` output interval, then
-edit the window to `8 us`. Inspect the live row and apply each change, save/reopen the
-workspace, and remove the row. The inspector uses the current theme and native
-text fields and buttons.
+`analog.waves.sine`, derive a formula, add `analog.waves.cosine` with the picker,
+and enter `input - cosine` (`sine` is a reserved generator name). Switch themes
+while the inspector is open. For a
+moving average, derive `analog.waves.noise` with a `4 us` window and `250 ns`
+output interval, then change the window and cancel to inspect the original row.
 
 ## Feature, pipeline, and landing examples
 
@@ -544,7 +615,7 @@ In a Table panel, **Filter** after **Columns** shows an entry row below the
 headers. Enter applies a column's draft; Escape restores its applied query.
 Collapsing the row preserves the rules, and the button shows the active count.
 Clear filters removes every rule, including rules on hidden columns. Filter
-rules and row visibility are saved with the table; workspace table schema is v6.
+rules and row visibility are saved with the table; workspace table schema is v7.
 
 The mode button in each editor offers contains, exact, wildcard (`*`, `?`, and
 backslash escaping), fuzzy subsequence, regular expression, and numeric expression

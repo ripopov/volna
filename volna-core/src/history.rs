@@ -552,7 +552,7 @@ impl History {
                 }
                 Edit::Rows { splices, .. } => {
                     for entry in splices.iter_mut().flat_map(|s| s.insert.iter_mut()) {
-                        entry.retime_moving_average(by);
+                        entry.retime_derived(by);
                     }
                 }
                 Edit::Traces(_) => {}

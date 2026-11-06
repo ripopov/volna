@@ -9,10 +9,10 @@ use volna_trace::session::{
 };
 
 pub enum LoadRequest {
-    MovingAverage {
-        key: crate::moving_average::Key,
+    Derived {
+        key: crate::computed::Key,
         request: u64,
-        source: Arc<dyn volna_trace::data::SignalHistory>,
+        sources: Vec<Arc<dyn volna_trace::data::SignalHistory>>,
         budget: MemoryBudget,
         cancelled: Arc<std::sync::atomic::AtomicBool>,
     },
@@ -98,7 +98,7 @@ impl LoadRequest {
     pub fn remote_id(&self) -> Option<u64> {
         match self {
             Self::Trace(request) => request.remote_id(),
-            Self::MovingAverage { .. }
+            Self::Derived { .. }
             | Self::Occupancy { .. }
             | Self::TransactionIndex { .. }
             | Self::Projection { .. }
@@ -116,8 +116,8 @@ impl LoadRequest {
     #[must_use]
     pub fn fail(self, error: anyhow::Error) -> LoadResult {
         match self {
-            Self::MovingAverage { key, request, .. } => LoadResult::MovingAverage {
-                key,
+            Self::Derived { key, request, .. } => LoadResult::Derived {
+                key: Box::new(key),
                 request,
                 result: Err(error),
             },
@@ -242,24 +242,20 @@ impl LoadRequest {
 
     pub fn perform(self) -> LoadResult {
         match self {
-            Self::MovingAverage {
+            Self::Derived {
                 key,
                 request,
-                source,
+                sources,
                 budget,
                 cancelled,
-            } => LoadResult::MovingAverage {
-                key,
-                request,
-                result: crate::moving_average::MeanHistory::build(
-                    source.as_ref(),
-                    key.interpretation,
-                    key.settings,
-                    &budget,
-                    &cancelled,
-                )
-                .map(Arc::new),
-            },
+            } => {
+                let result = key.build(&sources, &budget, &cancelled);
+                LoadResult::Derived {
+                    key: Box::new(key),
+                    request,
+                    result,
+                }
+            }
             Self::Occupancy {
                 generation,
                 request,
@@ -428,10 +424,10 @@ impl LoadRequest {
 }
 
 pub enum LoadResult {
-    MovingAverage {
-        key: crate::moving_average::Key,
+    Derived {
+        key: Box<crate::computed::Key>,
         request: u64,
-        result: anyhow::Result<Arc<crate::moving_average::MeanHistory>>,
+        result: anyhow::Result<crate::computed::DerivedOutput>,
     },
     Occupancy {
         generation: u64,

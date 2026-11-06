@@ -13,3 +13,5 @@ pub mod loaded_tracks;
 pub mod occupancy;
 pub mod text;
 pub mod transaction_index;
+
+pub mod numeric_input;

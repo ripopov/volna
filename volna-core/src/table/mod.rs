@@ -10,6 +10,7 @@ pub mod paint;
 pub mod query;
 pub mod sort;
 pub mod source;
+pub mod statistics;
 
 pub use layout::{ColumnRect, RowViewport, TableLayout};
 pub use model::{

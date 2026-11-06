@@ -23,6 +23,124 @@ use std::collections::BTreeSet;
 use volna_trace::data::source::Lookup;
 
 #[derive(Debug, Serialize, Deserialize)]
+struct SavedComputed {
+    definition: crate::computed::Definition,
+    inputs: Vec<SavedInput>,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+enum SavedInput {
+    Recorded {
+        alias: String,
+        trace: TraceId,
+        path: Vec<String>,
+        nth: Option<usize>,
+        shape: volna_trace::data::SignalShape,
+        interpretation: crate::computed::Interpretation,
+    },
+    Formula {
+        alias: String,
+        shape: volna_trace::data::SignalShape,
+        interpretation: crate::computed::Interpretation,
+        definition: crate::computed::Definition,
+        inputs: Vec<SavedInput>,
+    },
+}
+
+impl SavedInput {
+    fn restore(self, ctx: &mut RestoreContext<'_>) -> Result<crate::computed::Input> {
+        let input = match self {
+            Self::Recorded {
+                alias,
+                trace,
+                path,
+                nth,
+                shape,
+                interpretation,
+            } => {
+                ensure!(!path.is_empty(), "empty computed input path");
+                let h = ctx.traces.hierarchy(trace);
+                let found = h.map_or(Lookup::Missing, |h| h.find_var(&path, nth));
+                let source = match (found, h) {
+                    (Lookup::Found(var), Some(h)) if h.var(var).shape == shape => {
+                        RowSource::Resolved {
+                            trace,
+                            var,
+                            signal: h.var(var).signal,
+                        }
+                    }
+                    (found, _) => {
+                        let ambiguous = found == Lookup::Ambiguous;
+                        ctx.report.push(format!(
+                            "Unavailable recorded input {alias}: {trace}:{}",
+                            path.join(".")
+                        ));
+                        RowSource::Unresolved {
+                            trace,
+                            path,
+                            nth,
+                            ambiguous,
+                        }
+                    }
+                };
+                crate::computed::Input {
+                    alias,
+                    source,
+                    shape,
+                    interpretation,
+                }
+            }
+            Self::Formula {
+                alias,
+                shape,
+                interpretation,
+                definition,
+                inputs,
+            } => {
+                let inputs = inputs
+                    .into_iter()
+                    .map(|input| input.restore(ctx))
+                    .collect::<Result<Vec<_>>>()?;
+                ensure!(
+                    definition.validate(&inputs)? == shape,
+                    "applied formula input shape changed"
+                );
+                crate::computed::Input {
+                    alias,
+                    source: RowSource::Computed { inputs, definition },
+                    shape,
+                    interpretation,
+                }
+            }
+        };
+        input.validate()?;
+        Ok(input)
+    }
+}
+
+fn saved_input(doc: &crate::Document, input: &crate::computed::Input) -> SavedInput {
+    if let RowSource::Computed { inputs, definition } = &input.source {
+        SavedInput::Formula {
+            alias: input.alias.clone(),
+            shape: input.shape,
+            interpretation: input.interpretation,
+            definition: definition.clone(),
+            inputs: inputs.iter().map(|input| saved_input(doc, input)).collect(),
+        }
+    } else {
+        let (path, nth) = input.source.locator(doc);
+        SavedInput::Recorded {
+            alias: input.alias.clone(),
+            trace: input.source.trace(),
+            path,
+            nth,
+            shape: input.shape,
+            interpretation: input.interpretation,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct Columns {
     names: f32,
     scope: super::ScopeColumn,
@@ -33,7 +151,7 @@ struct Columns {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Row {
     Signal {
-        moving_average: Option<crate::moving_average::Definition>,
+        computed: Option<Box<SavedComputed>>,
         shape: volna_trace::data::SignalShape,
         projection: Option<crate::data::projection::BitSlice>,
         bus: Option<super::bus::BusExpansion>,
@@ -254,7 +372,7 @@ struct SavedAnalog {
     range: AnalogRange,
 }
 
-pub(crate) const VERSION: u32 = 15;
+pub(crate) const VERSION: u32 = 19;
 
 #[derive(Serialize, Deserialize)]
 struct WavePanel {
@@ -289,7 +407,13 @@ pub(crate) fn save(
         WaveRow::Signal(item) => {
             let (signal, nth) = item.source.locator(doc);
             Row::Signal {
-                moving_average: item.source.moving_average().cloned(),
+                computed: match &item.source {
+                    RowSource::Computed { inputs, definition } => Some(Box::new(SavedComputed {
+                        definition: definition.clone(),
+                        inputs: inputs.iter().map(|input| saved_input(doc, input)).collect(),
+                    })),
+                    _ => None,
+                },
                 shape: item.source_shape,
                 projection: item.projection,
                 bus: item.bus,
@@ -400,10 +524,10 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
             saved_shape,
             projection,
             bus,
-            moving_average,
+            computed,
         ) = match row {
             Row::Signal {
-                moving_average,
+                computed,
                 shape,
                 projection,
                 bus,
@@ -428,7 +552,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 shape,
                 projection,
                 bus,
-                moving_average,
+                computed,
             ),
             Row::Lane {
                 trace,
@@ -522,87 +646,99 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 continue;
             }
         };
-        let row_signal = signal;
-        ensure!(!row_signal.is_empty(), "empty signal path");
-        let h = ctx.traces.hierarchy(trace);
-        let found = h.map_or(Lookup::Missing, |h| h.find_var(&row_signal, nth));
-        let (mut source, mut name, scope, shape) = match (found, h) {
-            (Lookup::Found(var), Some(h)) => {
-                let v = h.var(var);
+        let (source, name, scope, source_shape, shape) =
+            if let Some(saved) = computed.map(|saved| *saved) {
+                ensure!(
+                    projection.is_none() && bus.is_none(),
+                    "computed output must be unprojected"
+                );
+                let inputs = saved
+                    .inputs
+                    .into_iter()
+                    .map(|input| input.restore(ctx))
+                    .collect::<Result<Vec<_>>>()?;
+                let shape = saved.definition.validate(&inputs)?;
+                ensure!(shape == saved_shape, "computed output shape changed");
+                let name = saved.definition.name.clone();
                 (
-                    RowSource::Resolved {
-                        trace,
-                        var,
-                        signal: v.signal,
-                    },
-                    v.name.to_owned(),
-                    h.scope_path(v.scope).join("."),
-                    v.shape,
-                )
-            }
-            (found, _) => {
-                let ambiguous = found == Lookup::Ambiguous;
-                ctx.report.push(format!(
-                    "{} signal: {:?}",
-                    if ambiguous { "Ambiguous" } else { "Missing" },
-                    row_signal
-                ));
-                let name = row_signal.last().unwrap().clone();
-                let scope = row_signal[..row_signal.len() - 1].join(".");
-                (
-                    RowSource::Unresolved {
-                        trace,
-                        path: row_signal,
-                        nth,
-                        ambiguous,
+                    RowSource::Computed {
+                        inputs,
+                        definition: saved.definition,
                     },
                     name,
-                    scope,
-                    volna_trace::data::SignalShape::Bit,
+                    String::new(),
+                    shape,
+                    shape,
                 )
-            }
-        };
-        ensure!(
-            !matches!(
-                saved_shape,
-                volna_trace::data::SignalShape::Vector { width: 0 | 1 }
-            ),
-            "invalid source shape"
-        );
-        let resolved = source.signal().is_some();
-        let source_shape = if resolved { shape } else { saved_shape };
-        ensure!(source_shape == saved_shape, "signal shape changed");
-        let derived = moving_average.is_some();
-        if let Some(definition) = moving_average {
-            definition.validate()?;
-            definition.interpretation.validate(source_shape)?;
-            ensure!(
-                projection.is_none() && bus.is_none(),
-                "moving-average output must be an unprojected real row"
-            );
-            name.clone_from(&definition.name);
-            source = RowSource::MovingAverage {
-                input: Box::new(source),
-                definition,
+            } else {
+                let row_signal = signal;
+                ensure!(!row_signal.is_empty(), "empty signal path");
+                let h = ctx.traces.hierarchy(trace);
+                let found = h.map_or(Lookup::Missing, |h| h.find_var(&row_signal, nth));
+                let (source, mut name, scope, shape) = match (found, h) {
+                    (Lookup::Found(var), Some(h)) => {
+                        let v = h.var(var);
+                        (
+                            RowSource::Resolved {
+                                trace,
+                                var,
+                                signal: v.signal,
+                            },
+                            v.name.to_owned(),
+                            h.scope_path(v.scope).join("."),
+                            v.shape,
+                        )
+                    }
+                    (found, _) => {
+                        let ambiguous = found == Lookup::Ambiguous;
+                        ctx.report.push(format!(
+                            "{} signal: {:?}",
+                            if ambiguous { "Ambiguous" } else { "Missing" },
+                            row_signal
+                        ));
+                        let name = row_signal.last().unwrap().clone();
+                        let scope = row_signal[..row_signal.len() - 1].join(".");
+                        (
+                            RowSource::Unresolved {
+                                trace,
+                                path: row_signal,
+                                nth,
+                                ambiguous,
+                            },
+                            name,
+                            scope,
+                            volna_trace::data::SignalShape::Bit,
+                        )
+                    }
+                };
+                ensure!(
+                    !matches!(
+                        saved_shape,
+                        volna_trace::data::SignalShape::Vector { width: 0 | 1 }
+                    ),
+                    "invalid source shape"
+                );
+                let resolved = source.signal().is_some();
+                let source_shape = if resolved { shape } else { saved_shape };
+                ensure!(source_shape == saved_shape, "signal shape changed");
+                let shape = if let Some(slice) = projection {
+                    slice.validate(source_shape)?;
+                    name = super::bus::BusIndices::new(&name, source_shape.width()).label(slice);
+                    slice.shape()
+                } else {
+                    source_shape
+                };
+                ensure!(
+                    bus.is_some()
+                        == matches!(shape, volna_trace::data::SignalShape::Vector { width: 2.. }),
+                    "invalid bus expansion"
+                );
+                ensure!(
+                    bus.is_none_or(|b| b.initialized || b.collapsed),
+                    "uninitialized bus must be collapsed"
+                );
+                (source, name, scope, source_shape, shape)
             };
-        }
-        let shape = if derived {
-            volna_trace::data::SignalShape::Real
-        } else if let Some(slice) = projection {
-            slice.validate(source_shape)?;
-            name = super::bus::BusIndices::new(&name, source_shape.width()).label(slice);
-            slice.shape()
-        } else {
-            source_shape
-        };
-        ensure!(
-            bus.is_some() == matches!(shape, volna_trace::data::SignalShape::Vector { width: 2.. }),
-            "invalid bus expansion"
-        );
-        ensure!(
-            bus.is_none_or(|b| b.initialized || b.collapsed),
-            "uninitialized bus must be collapsed"
-        );
         let requested = source
             .formats(ctx.doc, shape, projection.is_some())
             .into_iter()
@@ -627,6 +763,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
                 shape,
                 translator,
                 history: None,
+                measurement: None,
                 error: None,
                 height,
                 analog: analog.map(|a| Analog::new(a.draw, a.range)),

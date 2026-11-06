@@ -517,19 +517,19 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
     )
     .unwrap();
     let bytes = saved.to_bytes().unwrap();
-    fn contains_table_v6(value: &serde_json::Value) -> bool {
+    fn contains_current_table(value: &serde_json::Value) -> bool {
         match value {
             serde_json::Value::Object(object) => {
                 (object.get("kind").and_then(|value| value.as_str()) == Some("table")
-                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(6))
-                    || object.values().any(contains_table_v6)
+                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(8))
+                    || object.values().any(contains_current_table)
             }
-            serde_json::Value::Array(values) => values.iter().any(contains_table_v6),
+            serde_json::Value::Array(values) => values.iter().any(contains_current_table),
             _ => false,
         }
     }
     let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(contains_table_v6(&raw));
+    assert!(contains_current_table(&raw));
     let table = raw["panels"]
         .as_array()
         .unwrap()

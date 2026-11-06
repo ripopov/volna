@@ -404,6 +404,7 @@ fn the_measure_lanes_close_button_clears_the_reference_and_names_the_key() {
 
     let tip = |app: &mut App, p: Point| -> Vec<String> {
         pointer(app, PointerEvent::Move { position: p });
+        app.tick(app.tooltip_deadline().expect("hover deadline"));
         frame(app, &Theme::one_dark())
             .texts()
             .map(str::to_owned)

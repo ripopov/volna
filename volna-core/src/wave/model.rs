@@ -36,11 +36,18 @@ const ROW_DRAG_EDGE_ROWS: f32 = 1.0;
 const ROW_DRAG_SCROLL_RATE: f32 = 12.0;
 const TOTAL_EDGE_TRIES: usize = 100_000;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DerivedPlacement {
+    pub row: usize,
+    pub revision: u64,
+    pub editing: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RowSource {
-    MovingAverage {
-        input: Box<RowSource>,
-        definition: crate::moving_average::Definition,
+    Computed {
+        inputs: Vec<crate::computed::Input>,
+        definition: crate::computed::Definition,
     },
     Resolved {
         trace: TraceId,
@@ -76,8 +83,18 @@ impl RowSource {
     #[must_use]
     pub fn trace(&self) -> TraceId {
         match self {
-            Self::MovingAverage { input, .. } => input.trace(),
+            Self::Computed { inputs, .. } => {
+                inputs.first().map_or(TraceId::A, |i| i.source.trace())
+            }
             Self::Resolved { trace, .. } | Self::Unresolved { trace, .. } => *trace,
+        }
+    }
+
+    #[must_use]
+    pub fn uses_trace(&self, trace: TraceId) -> bool {
+        match self {
+            Self::Computed { inputs, .. } => inputs.iter().any(|i| i.source.uses_trace(trace)),
+            source => source.trace() == trace,
         }
     }
 
@@ -85,7 +102,7 @@ impl RowSource {
     pub fn signal(&self) -> Option<Traced<SignalRef>> {
         match self {
             Self::Resolved { trace, signal, .. } => Some(Traced::new(*trace, *signal)),
-            Self::Unresolved { .. } | Self::MovingAverage { .. } => None,
+            Self::Unresolved { .. } | Self::Computed { .. } => None,
         }
     }
 
@@ -93,14 +110,16 @@ impl RowSource {
     pub fn var(&self) -> Option<Traced<VarId>> {
         match self {
             Self::Resolved { trace, var, .. } => Some(Traced::new(*trace, *var)),
-            Self::Unresolved { .. } | Self::MovingAverage { .. } => None,
+            Self::Unresolved { .. } | Self::Computed { .. } => None,
         }
     }
 
     #[must_use]
     pub fn locator(&self, doc: &Document) -> (Vec<String>, Option<usize>) {
         match self {
-            Self::MovingAverage { input, .. } => input.locator(doc),
+            Self::Computed { inputs, .. } => inputs
+                .first()
+                .map_or_else(|| (Vec::new(), None), |i| i.source.locator(doc)),
             Self::Resolved { trace, var, .. } => doc
                 .hierarchy(*trace)
                 .map_or_else(|| (Vec::new(), None), |h| h.var_path(*var)),
@@ -111,15 +130,15 @@ impl RowSource {
     #[must_use]
     pub fn input_signal(&self) -> Option<Traced<SignalRef>> {
         match self {
-            Self::MovingAverage { input, .. } => input.signal(),
+            Self::Computed { inputs, .. } => inputs.first().and_then(|i| i.source.signal()),
             other => other.signal(),
         }
     }
 
     #[must_use]
-    pub fn moving_average(&self) -> Option<&crate::moving_average::Definition> {
+    pub fn computed(&self) -> Option<&crate::computed::Definition> {
         match self {
-            Self::MovingAverage { definition, .. } => Some(definition),
+            Self::Computed { definition, .. } => Some(definition),
             _ => None,
         }
     }
@@ -210,6 +229,7 @@ pub struct DisplayedSignal {
     pub shape: SignalShape,
     pub translator: Arc<dyn Translator>,
     pub history: Option<Arc<dyn SignalHistory>>,
+    pub measurement: Option<crate::computed::MeasurementResult>,
     pub error: Option<String>,
     pub height: RowHeight,
     pub analog: Option<Analog>,
@@ -217,7 +237,55 @@ pub struct DisplayedSignal {
     pub tint: Option<Tint>,
 }
 
+pub(super) fn measurement_text(result: &crate::computed::MeasurementResult) -> String {
+    fn value(measurement: &crate::computed::Measurement) -> String {
+        let value = measurement
+            .value
+            .map_or_else(|| "unavailable".into(), |value| value.to_string());
+        let support = measurement.captures.map_or_else(
+            || {
+                format!(
+                    "{}/{} ticks",
+                    measurement.known_ticks, measurement.requested_ticks
+                )
+            },
+            |captures| format!("{}/{} captures", captures.known, captures.total),
+        );
+        format!(
+            "value={value} bounds=[{}, {}) policy={:?} support={support} coverage={:.2}% status={:?}",
+            measurement.bounds.0,
+            measurement.bounds.1,
+            measurement.policy,
+            measurement.coverage() * 100.0,
+            measurement.status
+        )
+    }
+    match result {
+        crate::computed::MeasurementResult::Scalar(measurement) => value(measurement),
+        crate::computed::MeasurementResult::Table(rows) => rows
+            .iter()
+            .map(|row| match &row.result {
+                Ok(measurement) => format!(
+                    "[{}, {}): {}",
+                    row.bounds.0,
+                    row.bounds.1,
+                    value(measurement)
+                ),
+                Err(error) => format!("[{}, {}): {error}", row.bounds.0, row.bounds.1),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
 impl DisplayedSignal {
+    fn set_measurement(&mut self, result: crate::computed::MeasurementResult) {
+        if self.measurement.as_ref() != Some(&result) || self.history.is_none() {
+            self.history = Some(super::measurement::history(&result));
+            self.measurement = Some(result);
+        }
+    }
+
     pub(super) fn formats(&self, doc: &Document) -> Vec<Arc<dyn Translator>> {
         self.source
             .formats(doc, self.shape, self.projection.is_some())
@@ -661,6 +729,14 @@ impl WaveRow {
     }
 
     #[must_use]
+    pub fn uses_trace(&self, trace: TraceId) -> bool {
+        match self {
+            Self::Signal(signal) => signal.source.uses_trace(trace),
+            row => row.trace() == Some(trace),
+        }
+    }
+
+    #[must_use]
     pub fn detached(&self) -> Self {
         let mut row = self.clone();
         if let Self::Signal(item) = &mut row {
@@ -778,7 +854,7 @@ pub enum Drag {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
-    MovingAverage,
+    Derived,
     OpenFormat,
     Format(String),
     RetryLoad,
@@ -1265,9 +1341,41 @@ impl WaveModel {
                 }
             }
         }
+        let preview_source = self.preview_source_after(&splices);
+        let new_preview = self
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.index == self.items.len());
         let inverse = tree::apply(&mut self.items, splices)?;
         self.edited();
+        if let (Some(preview), Some(source_row)) = (&mut self.preview, preview_source) {
+            preview.source_row = source_row;
+            preview.revision = self.revision;
+            preview.index = if new_preview {
+                self.items.len()
+            } else {
+                source_row
+            };
+        }
         Ok(inverse)
+    }
+
+    fn preview_source_after(&self, splices: &[Splice]) -> Option<usize> {
+        let mut row = self.preview.as_ref()?.source_row;
+        let source = &self.items.get(row)?.signal()?.source;
+        for splice in splices {
+            if row < splice.at {
+                continue;
+            }
+            if row >= splice.at + splice.remove {
+                row = row - splice.remove + splice.insert.len();
+            } else if !splice.in_place()
+                || splice.insert.get(row - splice.at)?.signal()?.source != *source
+            {
+                return None;
+            }
+        }
+        Some(row)
     }
 
     pub(super) fn edit_rows(
@@ -1607,25 +1715,25 @@ impl WaveModel {
         self.revision
     }
 
-    pub(crate) fn apply_moving_average(
+    pub(crate) fn apply_derived(
         &mut self,
-        row: usize,
-        revision: u64,
-        definition: crate::moving_average::Definition,
-        history: Arc<dyn SignalHistory>,
+        placement: DerivedPlacement,
+        definition: crate::computed::Definition,
+        inputs: Vec<crate::computed::Input>,
+        result: crate::computed::DerivedOutput,
         translators: &crate::data::Translators,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(
-            self.revision == revision,
-            "Rows changed while editing; reopen the moving-average editor."
+            self.revision == placement.revision,
+            "Rows changed while editing; reopen the derived-signal editor."
         );
         let (at, entry, editing) =
-            self.moving_average_row(row, definition, Some(history), translators)?;
+            self.derived_row(placement, definition, inputs, Some(result), translators)?;
         self.edit_rows(
             if editing {
-                "Edit moving average"
+                "Edit derived signal"
             } else {
-                "Add moving average"
+                "Add derived signal"
             }
             .into(),
             vec![Splice {
@@ -1642,13 +1750,19 @@ impl WaveModel {
         Ok(())
     }
 
-    pub(crate) fn moving_average_row(
+    pub(crate) fn derived_row(
         &self,
-        row: usize,
-        definition: crate::moving_average::Definition,
-        history: Option<Arc<dyn SignalHistory>>,
+        placement: DerivedPlacement,
+        definition: crate::computed::Definition,
+        inputs: Vec<crate::computed::Input>,
+        result: Option<crate::computed::DerivedOutput>,
         translators: &crate::data::Translators,
     ) -> anyhow::Result<(usize, Entry, bool)> {
+        let DerivedPlacement {
+            row,
+            editing,
+            revision: _,
+        } = placement;
         let entry = self
             .items
             .get(row)
@@ -1657,31 +1771,48 @@ impl WaveModel {
             .signal()
             .ok_or_else(|| anyhow::anyhow!("Select a numeric source."))?
             .clone();
-        let editing = signal.source.moving_average().is_some();
-        let input = match &signal.source {
-            RowSource::MovingAverage { input, .. } => input.as_ref().clone(),
-            source => source.clone(),
+        let output = definition.validate(&inputs)?;
+        let (history, measurement) = match result {
+            Some(crate::computed::DerivedOutput::Waveform(history)) => (Some(history), None),
+            Some(crate::computed::DerivedOutput::Measurement(measurement)) => (
+                None,
+                Some(crate::computed::MeasurementResult::Scalar(measurement)),
+            ),
+            Some(crate::computed::DerivedOutput::IntervalTable(rows)) => {
+                (None, Some(crate::computed::MeasurementResult::Table(rows)))
+            }
+            None => (None, None),
         };
+        signal.scope.clear();
         signal.name.clone_from(&definition.name);
-        signal.source = RowSource::MovingAverage {
-            input: Box::new(input),
-            definition,
-        };
-        signal.history = history;
+        signal.source = RowSource::Computed { inputs, definition };
+        signal.history = measurement
+            .as_ref()
+            .map(super::measurement::history)
+            .or(history)
+            .filter(|h| h.shape() == output);
+        signal.measurement = measurement;
         if let Some(analog) = &mut signal.analog {
             analog.shown = None;
             analog.target = None;
         }
-        signal.shape = SignalShape::Real;
+        let shape_changed = signal.shape != output;
+        signal.shape = output;
+        signal.source_shape = output;
         signal.projection = None;
         signal.projection_source = None;
         signal.bus = None;
-        signal.translator = translators.default_for(SignalShape::Real);
+        signal.translator = translators.default_for(output);
         signal.requested_format = None;
         signal.error = None;
-        if !editing {
-            signal.height = RowHeight::ANALOG;
-            signal.analog = Some(Analog::new(AnalogDraw::Step, AnalogRange::Trace));
+        if !editing || shape_changed {
+            signal.height = if output == SignalShape::Real {
+                RowHeight::ANALOG
+            } else {
+                RowHeight::DEFAULT
+            };
+            signal.analog = (output == SignalShape::Real)
+                .then(|| Analog::new(AnalogDraw::Step, AnalogRange::Trace));
             signal.tint = Some(Tint::Violet);
         }
         let mut root = row;
@@ -1699,47 +1830,55 @@ impl WaveModel {
         Ok((at, Entry::new(depth, WaveRow::from(signal)), editing))
     }
 
-    pub(crate) fn sync_moving_averages(
+    pub(crate) fn sync_derived(
         &mut self,
-        generation: u64,
-        computations: &crate::moving_average::Computations,
+        doc: &crate::Document,
+        computations: &crate::computed::Computations,
     ) {
         for row in self.signals_mut() {
-            let RowSource::MovingAverage { input, definition } = &row.source else {
+            let RowSource::Computed { inputs, definition } = &row.source else {
                 continue;
             };
-            let Some(signal) = input.signal() else {
-                row.history = None;
-                row.error =
-                    Some("Moving-average input is missing or ambiguous in this trace.".into());
-                continue;
-            };
-            let key = crate::moving_average::Key {
-                generation,
-                signal,
-                settings: definition.settings,
-                interpretation: definition.interpretation,
+            let key = match crate::computed::Key::new(doc, inputs, definition) {
+                Ok(key) => key,
+                Err(error) => {
+                    row.history = None;
+                    row.measurement = None;
+                    row.error = Some(format!("{error:#}"));
+                    continue;
+                }
             };
             match computations.status(&key) {
-                Some(crate::moving_average::ComputationStatus::Ready(history)) => {
+                Some(crate::computed::ComputationStatus::Ready(history)) => {
                     row.history = Some(history.clone());
+                    row.measurement = None;
                     row.error = None;
                 }
-                Some(crate::moving_average::ComputationStatus::Failed(error)) => {
+                Some(crate::computed::ComputationStatus::ReadyMeasurement(measurement)) => {
+                    row.set_measurement(crate::computed::MeasurementResult::Scalar(*measurement));
+                    row.error = None;
+                }
+                Some(crate::computed::ComputationStatus::ReadyTable(rows)) => {
+                    row.set_measurement(crate::computed::MeasurementResult::Table(rows.clone()));
+                    row.error = None;
+                }
+                Some(crate::computed::ComputationStatus::Failed(error)) => {
                     row.history = None;
+                    row.measurement = None;
                     row.error = Some(error.clone());
                 }
                 _ => {
                     row.history = None;
+                    row.measurement = None;
                     row.error = None;
                 }
             }
         }
     }
 
-    pub(crate) fn retime_moving_averages(&mut self, by: crate::trace::Rescale) {
+    pub(crate) fn retime_derived(&mut self, by: crate::trace::Rescale) {
         for entry in &mut self.items {
-            entry.retime_moving_average(by);
+            entry.retime_derived(by);
         }
     }
 
@@ -2595,9 +2734,9 @@ impl WaveModel {
                     MenuAction::OpenTable,
                     if self
                         .signal(row)
-                        .is_some_and(|s| s.source.moving_average().is_some())
+                        .is_some_and(|s| s.source.computed().is_some())
                     {
-                        "Open input signal in table"
+                        "Open recorded inputs in table"
                     } else if self.signal(row).is_some_and(|s| s.projection.is_some()) {
                         "Open source signal in table"
                     } else {
@@ -2612,13 +2751,13 @@ impl WaveModel {
         let menu = self.menu.as_mut().expect("just opened");
         if let Some(signal) = self.items[row]
             .signal()
-            .filter(|s| s.numeric_kind().is_some())
+            .filter(|s| s.numeric_kind().is_some() || s.source.computed().is_some())
         {
             menu.entries.insert(
                 0,
                 MenuEntry::Item(MenuItem::plain(
-                    MenuAction::MovingAverage,
-                    if signal.source.moving_average().is_some() {
+                    MenuAction::Derived,
+                    if signal.source.computed().is_some() {
                         "Edit derived signal…"
                     } else {
                         "Derive signal…"
@@ -2915,7 +3054,7 @@ impl WaveModel {
         }
         if matches!(
             action,
-            MenuAction::MovingAverage
+            MenuAction::Derived
                 | MenuAction::OpenTable
                 | MenuAction::OpenPipeline(_)
                 | MenuAction::CopySignals
@@ -4673,6 +4812,7 @@ fn var_row(doc: &mut Document, var: Traced<VarId>, loaded: &Resident) -> Option<
         shape: v.shape,
         translator,
         history,
+        measurement: None,
         error: None,
         height: if analog.is_some() {
             RowHeight::ANALOG

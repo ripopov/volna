@@ -226,7 +226,7 @@ impl PanelKind {
 impl crate::trace::Retime for PanelKind {
     fn retime(&mut self, by: crate::trace::Rescale) {
         if let Self::Waves(w) = self {
-            w.retime_moving_averages(by);
+            w.retime_derived(by);
         }
         if let Some(nav) = self.nav_mut() {
             nav.retime(by);
@@ -266,6 +266,9 @@ impl Panel {
                     format!("Pipeline {} · {}", self.id.0, p.track.path().join("."))
                 }
                 PanelKind::Table(t) => match &t.source {
+                    crate::table::TableSource::Statistics(data) => {
+                        format!("Table {} · {}", self.id.0, data.name)
+                    }
                     crate::table::TableSource::Generator(source) => {
                         format!("Table {} · {}", self.id.0, source.path().join("."))
                     }
