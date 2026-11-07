@@ -293,6 +293,7 @@ impl Settings {
         crate::wave::model::Link {
             viewport: self.panels.link_by_default,
             cursor: self.panels.link_by_default,
+            transaction: self.panels.link_by_default,
         }
     }
 

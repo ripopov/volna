@@ -400,7 +400,7 @@
         },
         "volna.panels.linkByDefault": {
           "default": true,
-          "markdownDescription": "New waveform panels follow the shared viewport and cursor. Each panel can still unlink from its header.",
+          "markdownDescription": "New panels follow the shared viewport, cursor, and transaction selection. Each link can be toggled independently from the panel header.",
           "type": "boolean"
         },
         "volna.remote.serverPath": {

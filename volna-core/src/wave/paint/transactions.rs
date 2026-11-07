@@ -4,8 +4,8 @@
 mod tests;
 
 use super::{
-    Document, FontRole, LaneGeometry, Point, Rect, Scene, Status, TextPainter, Theme, TxLane,
-    Viewport, fit_mono_prefix, lane, point,
+    FontRole, LaneGeometry, Point, Rect, Scene, Status, TextPainter, Theme, TxLane, Viewport,
+    fit_mono_prefix, lane, point,
 };
 
 use crate::geometry::push_horizontal_run;
@@ -35,7 +35,7 @@ struct Bars {
 pub(super) fn paint(
     lane: &TxLane,
     plan: &lane::RenderPlan<'_>,
-    doc: &Document,
+    selection: Option<crate::document::TxSelection>,
     viewport: &Viewport,
     waves: Rect,
     geometry: &LaneGeometry,
@@ -153,7 +153,7 @@ pub(super) fn paint(
             } else if area.height() > 0.0 {
                 occupancy_ribbon(scene, &index.occupancy, viewport, area, t);
             }
-            if let Some(selected) = doc.selection().filter(|s| Some(s.track) == lane.track())
+            if let Some(selected) = selection.filter(|s| Some(s.track) == lane.track())
                 && let Some(ordinal) = generator.transaction_ordinal(selected.id)
             {
                 let tx = &records[ordinal];
@@ -213,7 +213,7 @@ fn outline(
     }
     if status == Status::Aborted && end_visible {
         let x = (rect.right() - marker * 2.0).max(rect.left());
-        let mid = (rect.top() + rect.bottom()) / 2.0;
+        let mid = rect.top().midpoint(rect.bottom());
         let dy = marker.min(rect.height() / 2.0);
         edges.extend([
             [point(x, mid - dy), point(rect.right(), mid + dy)],

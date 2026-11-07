@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use volna_trace::data::source::Lookup;
 
-pub(crate) const VERSION: u32 = 8;
+pub(crate) const VERSION: u32 = 9;
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

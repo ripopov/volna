@@ -141,4 +141,92 @@ impl Panel {
             ),
         })
     }
+
+    pub(crate) fn selection_reveal_ready(&self, doc: &Document) -> bool {
+        let Some(selected) = self.kind.nav().and_then(|nav| nav.selection_to_reveal(doc)) else {
+            return false;
+        };
+        match &self.kind {
+            PanelKind::Waves(waves) => {
+                waves.last_layout().waves.height() > 0.0
+                    && doc
+                        .resident_generator(selected.track)
+                        .is_some_and(|generator| generator.transaction(selected.id).is_some())
+                    && waves.items().iter().any(|entry| {
+                        entry
+                            .lane()
+                            .is_some_and(|lane| lane.track() == Some(selected.track))
+                    })
+            }
+            PanelKind::Pipeline(pipeline) => {
+                pipeline.last_layout().cells.height() > 0.0 && pipeline.selected_row(doc).is_some()
+            }
+            PanelKind::Table(table) => {
+                table.layout.body.height() > 0.0
+                    && table.source.generator_track() == Some(selected.track)
+                    && table.selected_ordinal().is_some()
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn reveal_selection(
+        &mut self,
+        doc: &mut Document,
+        now: crate::Instant,
+        force: bool,
+    ) -> bool {
+        let Some(nav) = self.kind.nav_mut() else {
+            return false;
+        };
+        if nav.selection(doc).is_none() {
+            nav.did_reveal_selection(None);
+            return false;
+        }
+        if force {
+            nav.did_reveal_selection(None);
+        }
+        let Some(selected) = nav.selection_to_reveal(doc) else {
+            return false;
+        };
+        if selected.origin == self.id && !force {
+            nav.did_reveal_selection(Some(selected));
+            return false;
+        }
+        let revealed = match &mut self.kind {
+            PanelKind::Pipeline(pipeline) => pipeline.reveal_selection(doc, now),
+            PanelKind::Table(table) => {
+                table.follow_selection(doc);
+                table.reveal_selection(doc)
+            }
+            PanelKind::Waves(waves) => {
+                if waves.last_layout().waves.height() <= 0.0 {
+                    return false;
+                }
+                if !waves.reveal_transaction(doc, selected.track, selected.id) {
+                    return false;
+                }
+                if selected.origin != self.id
+                    && let Some((begin, end)) =
+                        doc.resident_generator(selected.track)
+                            .and_then(|generator| {
+                                generator
+                                    .transaction(selected.id)
+                                    .map(|tx| (tx.begin, tx.end))
+                            })
+                {
+                    waves.nav.reveal_record(doc, begin, end, now);
+                }
+                true
+            }
+            _ => false,
+        };
+        if revealed {
+            self.kind
+                .nav_mut()
+                .unwrap()
+                .did_reveal_selection(Some(selected));
+        }
+        revealed
+    }
 }

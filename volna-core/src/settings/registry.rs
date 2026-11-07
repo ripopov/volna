@@ -422,7 +422,7 @@ pub static REGISTRY: &[Spec] = &[
         page: Page::Waves,
         group: "Panels",
         title: "Link new panels",
-        description: "New waveform panels follow the shared viewport and cursor. Each panel can still unlink from its header.",
+        description: "New panels follow the shared viewport, cursor, and transaction selection. Each link can be toggled independently from the panel header.",
         keywords: &["follow", "cursor", "viewport", "sync", "split"],
         kind: Kind::Bool,
         default: Literal::Bool(true),

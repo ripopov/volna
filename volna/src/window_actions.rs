@@ -235,7 +235,8 @@ impl Workspace {
                 FocusNextPanel,
                 FocusPrevPanel,
                 ToggleViewportLink,
-                ToggleCursorLink
+                ToggleCursorLink,
+                ToggleTransactionLink
             ]
         );
         root = root.on_action(workspace_listener(

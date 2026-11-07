@@ -5217,3 +5217,531 @@ fn occupancy_drag_zoom_ignores_tiny_ranges_cancels_and_freezes_time_navigation()
         }
     }
 }
+
+fn transaction_views() -> (App, PanelId, PanelId, PanelId, PanelId, TrackRef) {
+    let (mut app, session, waves, pipeline) = opened(140);
+    let generator = session
+        .hierarchy()
+        .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+        .generators
+        .iter()
+        .next()
+        .unwrap();
+    let member = a(Member::Generator(generator));
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
+    app.handle(Command::Panels(PanelsCommand::Focus(waves)));
+    volna_core::testing::add_signal_copies(&mut app, &[a(0)], 40);
+    app.handle(Command::AddToWaves(vec![member]));
+    app.handle(Command::Panels(PanelsCommand::Split {
+        panel: waves,
+        axis: volna_core::panels::Axis::Vertical,
+    }));
+    let second_waves = app.panels.focused_id();
+    app.handle(Command::OpenTable {
+        selected: vec![member],
+        clicked: None,
+    });
+    let table = app.panels.focused_id();
+    complete_pending(&mut app);
+    let theme = Theme::one_dark();
+    for panel in [waves, second_waves, pipeline, table] {
+        frame(&mut app, panel, &theme);
+    }
+    for panel in [waves, second_waves] {
+        let area = app.panels.waves(panel).unwrap().last_layout().names;
+        app.handle(Command::Pointer(
+            panel,
+            PointerEvent::Wheel {
+                position: point(area.left() + 10.0, area.top() + 10.0),
+                dx: 0.0,
+                dy: 100_000.0,
+                precise: true,
+                modifiers: Modifiers::default(),
+            },
+        ));
+        frame(&mut app, panel, &theme);
+    }
+    app.doc.shared.viewport.set(volna_core::wave::Viewport {
+        start: 0.0,
+        end: 20.0,
+    });
+    app.handle(Command::Panels(PanelsCommand::Focus(table)));
+    (app, waves, second_waves, pipeline, table, track)
+}
+
+#[test]
+fn selecting_table_pipeline_and_waveform_records_reveals_every_other_view() {
+    use volna_core::table::{RowIdentity, TableCommand};
+    let (mut app, waves, second_waves, pipeline, table, track) = transaction_views();
+    let theme = Theme::one_dark();
+    let before_width = app.doc.shared.viewport.target().width();
+    app.handle(Command::Table(table, TableCommand::GoTo(90)));
+    let selected = app.doc.selection().unwrap();
+    assert_eq!(app.panels.focused_id(), table);
+    assert_eq!(app.doc.shared.viewport.target().width(), before_width);
+    app.tick(Instant::now() + Duration::from_secs(1));
+    for panel in [waves, second_waves, pipeline, table] {
+        frame(&mut app, panel, &theme);
+    }
+    let p = app.panels.pipeline(pipeline).unwrap();
+    assert!(p.last_layout().row_range.contains(&90));
+    assert_eq!(p.selected_row(&app.doc), Some(90));
+    for panel in [waves, second_waves] {
+        let w = app.panels.waves(panel).unwrap();
+        let layout = w.last_layout();
+        let pos = layout.rows.clone().find(|&pos| {
+            w.items()[layout.visible[pos] as usize]
+                .lane()
+                .is_some_and(|lane| lane.track() == Some(a(track)))
+        });
+        assert!(
+            pos.is_some(),
+            "the transaction lane must be visible in each waveform"
+        );
+        let highlighted = app
+            .render_panel(panel, &theme, &mut MonoMeasure)
+            .prims
+            .iter()
+            .any(|prim| {
+                matches!(prim, Prim::Quad { border_color, border_width, .. }
+                if *border_color == theme.border_focused && *border_width == 2.0)
+            });
+        assert!(
+            highlighted,
+            "the selected transaction has a visible outline"
+        );
+    }
+
+    let position = {
+        let p = app.panels.pipeline(pipeline).unwrap();
+        let layout = p.last_layout();
+        point(
+            layout.labels.left() + 10.0,
+            layout.row_y(85) + layout.rows.row_px * 0.5,
+        )
+    };
+    app.handle(Command::Pointer(
+        pipeline,
+        PointerEvent::Down {
+            position,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    app.handle(Command::Pointer(pipeline, PointerEvent::Up));
+    frame(&mut app, table, &theme);
+    assert!(
+        app.panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .accessible_rows()
+            .any(|row| row.selected && row.ordinal == 85)
+    );
+    assert_ne!(app.doc.selection().unwrap().id, selected.id);
+
+    app.tick(Instant::now() + Duration::from_secs(1));
+    frame(&mut app, waves, &theme);
+    let (position, wanted) = {
+        let w = app.panels.waves(waves).unwrap();
+        let layout = w.last_layout();
+        let row = w
+            .items()
+            .iter()
+            .position(|entry| {
+                entry
+                    .lane()
+                    .is_some_and(|lane| lane.track() == Some(a(track)))
+            })
+            .unwrap();
+        let pos = layout
+            .visible
+            .iter()
+            .position(|&entry| entry as usize == row)
+            .unwrap();
+        let x =
+            layout.waves.left() + w.viewport(&app.doc).x_of(89.5, layout.wave_width_f64()) as f32;
+        let generator = app.doc.resident_generator(a(track)).unwrap();
+        let (ordinal, record) = generator
+            .transactions()
+            .iter()
+            .enumerate()
+            .find(|(_, tx)| tx.begin == 89)
+            .unwrap();
+        let lane = w.items()[row].lane().unwrap();
+        let subrow = generator.sub_row(ordinal) - lane.first_sub_row;
+        (
+            point(x, layout.row_y(pos) + (subrow as f32 + 0.5) * layout.row_h),
+            record.id,
+        )
+    };
+    app.handle(Command::Pointer(
+        waves,
+        PointerEvent::Down {
+            position,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    app.handle(Command::Pointer(waves, PointerEvent::Up));
+    frame(&mut app, table, &theme);
+    frame(&mut app, pipeline, &theme);
+    assert_eq!(app.doc.selection().unwrap().id, wanted);
+    assert_eq!(
+        app.panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .selected,
+        Some(RowIdentity::Transaction(wanted))
+    );
+    assert!(
+        app.panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .accessible_rows()
+            .any(|row| row.selected)
+    );
+    let p = app.panels.pipeline(pipeline).unwrap();
+    assert!(
+        p.last_layout()
+            .row_range
+            .contains(&p.selected_row(&app.doc).unwrap())
+    );
+}
+
+#[test]
+fn unlinked_transaction_selection_stays_independent_and_relinking_reveals_the_shared_record() {
+    use volna_core::table::TableCommand;
+    let (mut app, waves, _, pipeline, table, track) = transaction_views();
+    app.handle(Command::Table(table, TableCommand::GoTo(5)));
+    let original = app.doc.selection().unwrap();
+    for panel in [waves, pipeline, table] {
+        app.handle(Command::Panels(PanelsCommand::ToggleLink {
+            panel,
+            dim: LinkDim::Transaction,
+        }));
+    }
+    app.handle(Command::Table(table, TableCommand::GoTo(90)));
+    let local = app
+        .panels
+        .get(table)
+        .unwrap()
+        .kind
+        .nav()
+        .unwrap()
+        .selection(&app.doc)
+        .unwrap();
+    assert_ne!(local.id, original.id);
+    assert_eq!(app.doc.selection(), Some(original));
+    for panel in [waves, pipeline] {
+        assert_eq!(
+            app.panels
+                .get(panel)
+                .unwrap()
+                .kind
+                .nav()
+                .unwrap()
+                .selection(&app.doc),
+            Some(original)
+        );
+    }
+    app.handle(Command::ShowTransaction { from: table });
+    let inspector = app.panels.focused_id();
+    assert_eq!(
+        app.panels
+            .transaction(inspector)
+            .unwrap()
+            .shown()
+            .unwrap()
+            .id,
+        local.id
+    );
+    app.handle(Command::SelectTransaction {
+        panel: pipeline,
+        track: a(track),
+        id: local.id,
+        cursor: None,
+    });
+    assert_eq!(app.doc.selection(), Some(original));
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: pipeline,
+        dim: LinkDim::Transaction,
+    }));
+    assert_eq!(
+        app.panels
+            .pipeline(pipeline)
+            .unwrap()
+            .selected_row(&app.doc),
+        Some(5)
+    );
+    app.handle(Command::SelectTransaction {
+        panel: pipeline,
+        track: a(track),
+        id: local.id,
+        cursor: None,
+    });
+    assert_eq!(app.doc.selection().unwrap().id, local.id);
+    assert_eq!(
+        app.panels.waves(waves).unwrap().nav.selection(&app.doc),
+        Some(original)
+    );
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: waves,
+        dim: LinkDim::Transaction,
+    }));
+    app.tick(Instant::now() + Duration::from_secs(1));
+    frame(&mut app, waves, &Theme::one_dark());
+    assert_eq!(
+        app.panels
+            .waves(waves)
+            .unwrap()
+            .nav
+            .selection(&app.doc)
+            .unwrap()
+            .id,
+        local.id
+    );
+    let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+    let mut restored = App::new();
+    restored.set_session(fixture(140));
+    Workspace::parse(&saved.to_bytes().unwrap())
+        .unwrap()
+        .prepare(
+            &restored,
+            "file:///tmp/trace.vtr",
+            "file:///tmp/trace.vtr.volna.json",
+        )
+        .unwrap()
+        .commit(&mut restored)
+        .unwrap();
+    assert!(
+        !restored
+            .panels
+            .get(table)
+            .unwrap()
+            .kind
+            .nav()
+            .unwrap()
+            .link
+            .transaction
+    );
+    assert!(restored.panels.waves(waves).unwrap().nav.link.transaction);
+}
+
+#[test]
+fn transaction_following_reveals_locally_without_cursor_or_viewport_links_and_respects_filters() {
+    use volna_core::table::{TableCommand, filter::ColumnFilter};
+    let (mut app, waves, source, pipeline, table, track) = transaction_views();
+    let theme = Theme::one_dark();
+    for panel in [waves, pipeline] {
+        for dim in [LinkDim::Cursor, LinkDim::Viewport] {
+            app.handle(Command::Panels(PanelsCommand::ToggleLink { panel, dim }));
+        }
+    }
+    app.doc.shared.cursor = Some(10);
+    let shared_view = app.doc.shared.viewport.target();
+    app.handle(Command::Table(
+        table,
+        TableCommand::SetFilter {
+            source_index: 0,
+            filter: Some(ColumnFilter {
+                query: "no such instruction".into(),
+                ..Default::default()
+            }),
+        },
+    ));
+    let finish_query = |app: &mut App| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app
+            .panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .querying()
+        {
+            app.tick(Instant::now());
+            assert!(Instant::now() < deadline, "table query must complete");
+            std::thread::yield_now();
+        }
+        frame(app, table, &theme);
+    };
+    finish_query(&mut app);
+    let id = app
+        .doc
+        .resident_generator(a(track))
+        .unwrap()
+        .transactions()
+        .iter()
+        .find(|tx| tx.begin == 90)
+        .unwrap()
+        .id;
+    app.handle(Command::SelectTransaction {
+        panel: source,
+        track: a(track),
+        id,
+        cursor: None,
+    });
+    assert_eq!(app.doc.shared.cursor, Some(10));
+    assert_eq!(app.doc.shared.viewport.target(), shared_view);
+    for panel in [waves, pipeline] {
+        let nav = app.panels.get(panel).unwrap().kind.nav().unwrap();
+        let viewport = nav.viewport_state(&app.doc).target();
+        assert!(viewport.start <= 90.0 && viewport.end >= 90.0);
+        assert_eq!(viewport.width(), shared_view.width());
+        assert_eq!(nav.cursor(&app.doc), None);
+    }
+    frame(&mut app, table, &theme);
+    assert!(
+        app.panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .accessible_rows()
+            .next()
+            .is_none()
+    );
+    app.handle(Command::Table(table, TableCommand::ClearFilters));
+    finish_query(&mut app);
+    assert!(
+        app.panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .accessible_rows()
+            .any(|row| row.selected && row.ordinal == 90)
+    );
+    app.handle(Command::Table(table, TableCommand::SortColumn(1)));
+    finish_query(&mut app);
+    app.handle(Command::Table(table, TableCommand::SortColumn(1)));
+    finish_query(&mut app);
+    let id = app
+        .doc
+        .resident_generator(a(track))
+        .unwrap()
+        .transactions()
+        .iter()
+        .find(|tx| tx.begin == 20)
+        .unwrap()
+        .id;
+    app.handle(Command::SelectTransaction {
+        panel: source,
+        track: a(track),
+        id,
+        cursor: None,
+    });
+    frame(&mut app, table, &theme);
+    assert!(
+        app.panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .accessible_rows()
+            .any(|row| row.selected && row.ordinal == 119)
+    );
+}
+
+#[test]
+fn selection_before_first_layout_is_revealed_when_the_panels_become_visible() {
+    use volna_core::table::TableCommand;
+    let session = fixture(140);
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
+    let generator = session
+        .hierarchy()
+        .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+        .generators
+        .iter()
+        .next()
+        .unwrap();
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::AddToWaves(vec![a(Member::Generator(generator))]));
+    let waves = app.panels.focused_id();
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let pipeline = app.panels.focused_id();
+    app.handle(Command::OpenTable {
+        selected: vec![a(Member::Generator(generator))],
+        clicked: None,
+    });
+    let table = app.panels.focused_id();
+    complete_pending(&mut app);
+    app.handle(Command::Table(table, TableCommand::GoTo(90)));
+    let theme = Theme::one_dark();
+    frame(&mut app, pipeline, &theme);
+    let p = app.panels.pipeline(pipeline).unwrap();
+    assert_eq!(p.selected_row(&app.doc), Some(90));
+    assert!(p.last_layout().row_range.contains(&90));
+    frame(&mut app, waves, &theme);
+    let w = app.panels.waves(waves).unwrap();
+    let viewport = w.nav.viewport_state(&app.doc).target();
+    assert!(viewport.start <= 90.0 && viewport.end >= 90.0);
+    assert_eq!(app.panels.focused_id(), table);
+}
+
+#[test]
+fn revealing_a_selection_when_a_table_first_appears_requests_a_redraw() {
+    let session = fixture(140);
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
+    let generator = session
+        .hierarchy()
+        .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+        .generators
+        .iter()
+        .next()
+        .unwrap();
+    let id = session.load_track(track).unwrap().generators[0]
+        .transactions()
+        .iter()
+        .find(|tx| tx.begin == 90)
+        .unwrap()
+        .id;
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let pipeline = app.panels.focused_id();
+    app.handle(Command::OpenTable {
+        selected: vec![a(Member::Generator(generator))],
+        clicked: None,
+    });
+    let table = app.panels.focused_id();
+    complete_pending(&mut app);
+    app.handle(Command::SelectTransaction {
+        panel: pipeline,
+        track: a(track),
+        id,
+        cursor: None,
+    });
+    app.take_events();
+    frame(&mut app, table, &Theme::one_dark());
+    assert!(
+        app.panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .accessible_rows()
+            .any(|row| row.selected && row.ordinal == 90)
+    );
+    assert!(
+        app.take_events()
+            .iter()
+            .any(|event| matches!(event, Event::Changed)),
+        "the frontend must be notified to redraw the revealed row"
+    );
+}

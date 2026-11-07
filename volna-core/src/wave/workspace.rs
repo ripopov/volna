@@ -372,7 +372,7 @@ struct SavedAnalog {
     range: AnalogRange,
 }
 
-pub(crate) const VERSION: u32 = 20;
+pub(crate) const VERSION: u32 = 21;
 
 #[derive(Serialize, Deserialize)]
 struct WavePanel {

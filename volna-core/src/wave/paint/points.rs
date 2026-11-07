@@ -70,7 +70,7 @@ pub(super) fn paint(
     for group in groups {
         let count = group.records.len();
         let record = &generator.transactions()[group.records.start];
-        let selected = doc.selection().is_some_and(|s| {
+        let selected = cells.selection.is_some_and(|s| {
             Some(s.track) == lane.track()
                 && generator
                     .transaction_ordinal(s.id)

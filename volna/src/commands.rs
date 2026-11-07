@@ -166,6 +166,7 @@ command_definitions! {
     FocusPrevPanel => ("Focus previous panel", "Focus Previous Panel", Global, actions::FocusPrevPanel, |_| (true, false)),
     ToggleViewportLink => ("Follow shared viewport", "Follow Shared Viewport", Panel, actions::ToggleViewportLink, |s| (s.timed(), s.link().is_some_and(|l| l.viewport))),
     ToggleCursorLink => ("Follow shared cursor", "Follow Shared Cursor", Panel, actions::ToggleCursorLink, |s| (s.timed(), s.link().is_some_and(|l| l.cursor))),
+    ToggleTransactionLink => ("Follow shared transaction", "Follow Shared Transaction", Panel, actions::ToggleTransactionLink, |s| (s.timed(), s.link().is_some_and(|l| l.transaction))),
     ClosePanel => ("Close panel", "Close Panel", Panel, actions::ClosePanel, |_| (true, false)),
     ToggleSidebar => ("Show left sidebar", "Toggle Sidebar", Global, actions::ToggleSidebar, |s| (true, s.app.sidebar_visible)),
     ToggleRightSidebar => ("Show right sidebar", "Show right sidebar", Global, actions::ToggleRightSidebar, |s| (true, s.app.panels.layout().right.as_ref().is_some_and(|dock| dock.open))),
@@ -293,6 +294,7 @@ pub(crate) fn menu(app: &CoreApp) -> Vec<Entry> {
         Sep,
         item(Id::ToggleViewportLink),
         item(Id::ToggleCursorLink),
+        item(Id::ToggleTransactionLink),
         Sep,
         item(Id::ClosePanel),
     ]);

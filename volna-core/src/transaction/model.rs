@@ -401,6 +401,18 @@ impl TransactionModel {
         let Some(selection) = doc.selection() else {
             return false;
         };
+        self.follow_record(doc, selection, doc.selection_range())
+    }
+
+    pub(crate) fn follow_record(
+        &mut self,
+        doc: &mut Document,
+        selection: TxSelection,
+        range: Option<crate::document::RecordRange>,
+    ) -> bool {
+        if self.pinned {
+            return false;
+        }
         let Some(path) = track_path(doc, selection.track) else {
             return false;
         };
@@ -412,7 +424,7 @@ impl TransactionModel {
                     path,
                 },
                 id: selection.id,
-                range: doc.selection_range(),
+                range,
             },
         )
     }

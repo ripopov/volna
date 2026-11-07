@@ -8,8 +8,17 @@ use crate::table::TableCommand;
 impl App {
     #[must_use]
     pub fn panel_measurement(&self, panel: PanelId) -> Option<Command> {
-        let size = self.panels.pipeline(panel)?.opening_measurement()?;
-        Some(Command::PipelineMeasured(panel, size))
+        if let Some(size) = self
+            .panels
+            .pipeline(panel)
+            .and_then(crate::pipeline::PipelineModel::opening_measurement)
+        {
+            return Some(Command::PipelineMeasured(panel, size));
+        }
+        self.panels
+            .get(panel)?
+            .selection_reveal_ready(&self.doc)
+            .then_some(Command::RevealPanelSelection { panel })
     }
 
     pub(super) fn initialize_pipelines(&mut self) {

@@ -346,7 +346,7 @@ impl PipelineModel {
 
     #[must_use]
     pub fn selected_row(&self, doc: &Document) -> Option<usize> {
-        let selection = doc.selection()?;
+        let selection = self.nav.selection(doc)?;
         if selection.track.trace != self.track.trace() {
             return None;
         }
@@ -382,7 +382,7 @@ impl PipelineModel {
             }
         };
         self.nav.clear_ruler_selection();
-        doc.select(Some(selection))
+        self.nav.select(doc, Some(selection))
     }
 
     pub fn move_selection(
@@ -404,6 +404,26 @@ impl PipelineModel {
             return;
         }
         self.reveal_row(doc, next);
+    }
+
+    pub(crate) fn reveal_selection(&mut self, doc: &mut Document, now: Instant) -> bool {
+        let Some(row) = self.selected_row(doc) else {
+            return false;
+        };
+        if self.layout.cells.height() <= 0.0 {
+            return false;
+        }
+        let lifetime = match self.rows(doc) {
+            Rows::Ready(set) => set.get(row).map(|(_, tx)| (tx.begin, tx.end)),
+            _ => None,
+        };
+        let Some((begin, end)) = lifetime else {
+            return false;
+        };
+        self.suspend_follow();
+        self.reveal_row(doc, row);
+        self.nav.reveal_record(doc, begin, end, now);
+        true
     }
 
     pub fn reveal_record(
@@ -1182,7 +1202,7 @@ impl PipelineModel {
             self.drag = None;
         } else if self.selected_row(doc).is_some() || self.nav.ruler_selection().is_some() {
             self.nav.clear_ruler_selection();
-            doc.select(None);
+            self.nav.select(doc, None);
         } else {
             self.nav.set_cursor(doc, None);
         }
@@ -1299,7 +1319,7 @@ impl PipelineModel {
                             self.select_row(doc, panel, row);
                         }
                         None => {
-                            doc.select(None);
+                            self.nav.select(doc, None);
                         }
                     }
                 }
@@ -1462,7 +1482,7 @@ impl PipelineModel {
                 .collect();
             let ruler = layout.ruler_at(p, rulers.len());
             if let Some(ix) = ruler {
-                doc.select(None);
+                self.nav.select(doc, None);
                 if modifiers.secondary() && self.nav.ruler_selection() == Some(&rulers[ix]) {
                     self.nav.clear_ruler_selection();
                 } else {

@@ -596,8 +596,15 @@ reveals an existing unpinned inspector in its current location.
 
 Right-click a tab name to open its panel actions, including placement, splitting,
 new waveform tabs, closing, and renaming. Actions target that tab even when another
-tab is active. Timed panels also offer viewport and cursor links; transaction
-panels offer record pinning. The same actions appear in the panel's overflow menu.
+tab is active. Timed panels also offer independent viewport, cursor, and transaction
+links; transaction inspectors offer record pinning. **Follow shared transaction** is on
+by default. Selecting a record in a waveform, pipeline, or table highlights and
+reveals it in every linked panel already showing its stream, preserving zoom and
+keyboard focus. Tables keep their filters and sorting; a filtered-out record
+stays hidden. Unlinking snapshots the panel's selection for independent browsing;
+relinking follows the current shared record. Selection links do not depend on
+cursor or viewport links. Link choices are saved with the workspace; selections
+are transient. The same actions appear in the panel's overflow menu.
 
 The GPUI Kit `DockArea` renders both regions, including their tabs, splits, and
 resize handles. The core owns panel identities and validates the complete

@@ -509,7 +509,7 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
         match value {
             serde_json::Value::Object(object) => {
                 (object.get("kind").and_then(|value| value.as_str()) == Some("table")
-                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(8))
+                    && object.get("version").and_then(serde_json::Value::as_u64) == Some(9))
                     || object.values().any(contains_current_table)
             }
             serde_json::Value::Array(values) => values.iter().any(contains_current_table),

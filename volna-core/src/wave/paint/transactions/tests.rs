@@ -3,7 +3,6 @@ use crate::data::transaction_index::TransactionIndex;
 use crate::{
     color::Color,
     data::loaded_tracks::LoadedGenerator,
-    document::Document,
     geometry::{Point, Rect, point},
     scene::{MonoMeasure, Prim, Scene, TextCache},
     theme::{Theme, builtin},
@@ -339,7 +338,7 @@ fn draw_with_theme(
     paint(
         lane,
         &plan,
-        &Document::new(),
+        None,
         &viewport,
         Rect::from_xywh(0.0, 0.0, 1000.0, geometry.height),
         &geometry,

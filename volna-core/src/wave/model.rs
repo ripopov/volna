@@ -4077,7 +4077,8 @@ impl WaveModel {
                                 lane.generator(doc).is_some_and(|g| g.points().is_some())
                             })
                         {
-                            doc.select_range(
+                            self.nav.select_range(
+                                doc,
                                 hit.map(|(track, id, _)| TxSelection {
                                     track,
                                     id,

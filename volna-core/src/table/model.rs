@@ -1062,11 +1062,14 @@ impl TableModel {
         if let (RowIdentity::Transaction(id), Some(track)) =
             (&identity, self.source.generator_track())
         {
-            doc.select(Some(crate::document::TxSelection {
-                track,
-                id: *id,
-                origin: panel,
-            }));
+            self.nav.select(
+                doc,
+                Some(crate::document::TxSelection {
+                    track,
+                    id: *id,
+                    origin: panel,
+                }),
+            );
         }
         self.selected = Some(identity);
         self.viewport.reveal(
@@ -1084,7 +1087,7 @@ impl TableModel {
         let (Rows::Generator(_), Some(track)) = (&self.rows, self.source.generator_track()) else {
             return false;
         };
-        let wanted = match doc.selection() {
+        let wanted = match self.nav.selection(doc) {
             Some(selection) if selection.track == track => {
                 Some(RowIdentity::Transaction(selection.id))
             }
@@ -1094,6 +1097,25 @@ impl TableModel {
         let changed = self.selected != wanted;
         self.selected = wanted;
         changed
+    }
+
+    pub(crate) fn reveal_selection(&mut self, doc: &Document) -> bool {
+        if self.nav.selection(doc).map(|s| s.track) != self.source.generator_track() {
+            return false;
+        }
+        let Some(ordinal) = self.selected_ordinal() else {
+            return false;
+        };
+        if self.layout.body.height() <= 0.0 {
+            return false;
+        }
+        self.viewport.reveal(
+            ordinal,
+            self.len(),
+            self.layout.body.height(),
+            self.row_px(),
+        );
+        true
     }
 
     fn row_px(&self) -> f32 {
@@ -1287,8 +1309,8 @@ impl TableModel {
             }
             TableCommand::ClearSelection => {
                 let changed = self.selected.take().is_some();
-                if changed && doc.selection().is_some_and(|s| s.origin == panel) {
-                    doc.select(None);
+                if changed && self.nav.selection(doc).is_some_and(|s| s.origin == panel) {
+                    self.nav.select(doc, None);
                 }
                 changed
             }

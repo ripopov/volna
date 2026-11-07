@@ -1,5 +1,4 @@
-//! Navigation shared by every timed panel: the two link flags, the local viewport and
-//! cursor a panel keeps while unlinked, and the commands that move the time axis.
+//! Shared or local viewport, cursor, and transaction selection for timed panels.
 
 pub mod tween;
 use crate::history::Before;
@@ -8,7 +7,7 @@ pub use tween::{Lerp, Tween};
 use web_time::Instant;
 
 use crate::clock::ClockKey;
-use crate::document::Document;
+use crate::document::{Document, RecordRange, TxSelection};
 use crate::trace::{Rescale, Retime};
 use crate::wave::viewport::Viewport;
 
@@ -16,6 +15,7 @@ use crate::wave::viewport::Viewport;
 pub struct Link {
     pub viewport: bool,
     pub cursor: bool,
+    pub transaction: bool,
 }
 
 impl Default for Link {
@@ -23,6 +23,7 @@ impl Default for Link {
         Self {
             viewport: true,
             cursor: true,
+            transaction: true,
         }
     }
 }
@@ -31,6 +32,7 @@ impl Default for Link {
 pub enum LinkDim {
     Viewport,
     Cursor,
+    Transaction,
 }
 
 #[derive(Clone)]
@@ -38,6 +40,9 @@ pub struct NavState {
     pub link: Link,
     pub local_viewport: Tween<Viewport>,
     pub local_cursor: Option<u64>,
+    local_selection: Option<TxSelection>,
+    local_selection_range: Option<RecordRange>,
+    revealed_selection: Option<TxSelection>,
     clocks: crate::clock::ClockView,
     // Row selection is transient; the navigation clock stays active after deselection.
     ruler_selection: Option<ClockKey>,
@@ -59,6 +64,7 @@ impl Retime for NavState {
     fn retime(&mut self, by: Rescale) {
         self.local_viewport.retime(by);
         self.local_cursor.retime(by);
+        self.local_selection_range.retime(by);
         self.clocks.origin.retime(by);
         if let Some(back) = &mut self.back {
             back.cursor.retime(by);
@@ -80,6 +86,9 @@ impl NavState {
             link: Link::default(),
             local_viewport: Tween::new(Viewport::fit((0, 1000))),
             local_cursor: None,
+            local_selection: None,
+            local_selection_range: None,
+            revealed_selection: None,
             clocks: crate::clock::ClockView::default(),
             ruler_selection: None,
             clocks_before: Before::default(),
@@ -93,6 +102,9 @@ impl NavState {
             link: self.link,
             local_viewport: Tween::new(self.local_viewport.value),
             local_cursor: self.local_cursor,
+            local_selection: self.local_selection,
+            local_selection_range: self.local_selection_range,
+            revealed_selection: None,
             clocks: self.clocks.clone(),
             ruler_selection: None,
             clocks_before: Before::default(),
@@ -102,6 +114,9 @@ impl NavState {
 
     pub fn reset(&mut self, limits: Option<(u64, u64)>) {
         self.local_cursor = None;
+        self.local_selection = None;
+        self.local_selection_range = None;
+        self.revealed_selection = None;
         self.ruler_selection = None;
         self.back = None;
         let viewport = limits.map_or(self.local_viewport.value, Viewport::fit);
@@ -150,8 +165,66 @@ impl NavState {
         changed
     }
 
+    #[must_use]
+    pub fn selection(&self, doc: &Document) -> Option<TxSelection> {
+        if self.link.transaction {
+            doc.selection()
+        } else {
+            self.local_selection
+        }
+    }
+
+    #[must_use]
+    pub fn selection_range(&self, doc: &Document) -> Option<RecordRange> {
+        if self.link.transaction {
+            doc.selection_range()
+        } else {
+            self.local_selection_range
+        }
+    }
+
+    pub fn select(&mut self, doc: &mut Document, selection: Option<TxSelection>) -> bool {
+        self.select_range(doc, selection, None)
+    }
+
+    pub fn select_range(
+        &mut self,
+        doc: &mut Document,
+        selection: Option<TxSelection>,
+        range: Option<RecordRange>,
+    ) -> bool {
+        if self.link.transaction {
+            doc.select_range(selection, range)
+        } else {
+            let range = selection.and(range);
+            let changed = self.local_selection != selection || self.local_selection_range != range;
+            self.local_selection = selection;
+            self.local_selection_range = range;
+            changed
+        }
+    }
+
+    pub(crate) fn selection_to_reveal(&self, doc: &Document) -> Option<TxSelection> {
+        self.selection(doc)
+            .filter(|selected| Some(*selected) != self.revealed_selection)
+    }
+
+    pub(crate) fn did_reveal_selection(&mut self, selected: Option<TxSelection>) {
+        self.revealed_selection = selected;
+    }
+
     pub fn toggle_link(&mut self, doc: &Document, dim: LinkDim) {
         match dim {
+            LinkDim::Transaction => {
+                self.local_selection = doc.selection();
+                self.local_selection_range = doc.selection_range();
+                self.link.transaction = !self.link.transaction;
+                self.revealed_selection = if self.link.transaction {
+                    None
+                } else {
+                    self.local_selection
+                };
+            }
             LinkDim::Viewport => {
                 self.local_viewport.set(doc.shared.viewport.value);
                 self.link.viewport = !self.link.viewport;
@@ -380,6 +453,16 @@ impl NavState {
         {
             self.clear_ruler_selection();
         }
+        if self.local_selection.is_some_and(|s| s.track.trace == trace) {
+            self.local_selection = None;
+            self.local_selection_range = None;
+        }
+        if self
+            .revealed_selection
+            .is_some_and(|s| s.track.trace == trace)
+        {
+            self.revealed_selection = None;
+        }
         let mut clocks = self.clocks.clone();
         if clocks.forget_trace(trace) {
             self.note_clocks();
@@ -486,6 +569,14 @@ impl NavState {
         target.center_on(t, doc.limits());
         self.animate_to(doc, target, now);
         true
+    }
+
+    pub(crate) fn reveal_record(&mut self, doc: &mut Document, begin: u64, end: u64, now: Instant) {
+        let target = self.viewport_state(doc).target();
+        if begin as f64 <= target.end && end as f64 >= target.start {
+            return;
+        }
+        self.reveal(doc, begin, now);
     }
 
     pub fn reveal_cursor(&mut self, doc: &mut Document, now: Instant) {

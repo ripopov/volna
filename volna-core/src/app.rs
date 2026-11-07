@@ -51,6 +51,7 @@ pub enum Action {
     FocusPrevPanel,
     ToggleViewportLink,
     ToggleCursorLink,
+    ToggleTransactionLink,
     ToggleScopes,
     ZoomIn,
     ZoomOut,
@@ -132,6 +133,7 @@ impl Command {
             "focusPrevPanel" => Action::FocusPrevPanel,
             "toggleViewportLink" => Action::ToggleViewportLink,
             "toggleCursorLink" => Action::ToggleCursorLink,
+            "toggleTransactionLink" => Action::ToggleTransactionLink,
             "nextCycle" => Action::NextCycle,
             "prevCycle" => Action::PrevCycle,
             "toggleCycleOrigin" => Action::ToggleCycleOrigin,
@@ -252,6 +254,9 @@ pub enum Command {
         row: Option<usize>,
     },
     Table(PanelId, crate::table::TableCommand),
+    RevealPanelSelection {
+        panel: PanelId,
+    },
     SelectTransaction {
         panel: PanelId,
         track: Traced<TrackRef>,
@@ -918,6 +923,7 @@ impl App {
                 for (_, model) in self.panels.transactions_mut() {
                     model.refresh_parents(&mut self.doc);
                 }
+                self.sync_selection();
                 self.changed();
             }
             Some(Delivered::Signals(trace, results)) => {
@@ -1202,6 +1208,11 @@ impl App {
                     crate::transaction::TransactionCommand::CursorSelect { .. }
                 )
         );
+        let restored_history = matches!(command, Command::Undo | Command::Redo);
+        let reveal_origin = match &command {
+            Command::SelectTransaction { panel, .. } => Some(*panel),
+            _ => None,
+        };
         let pointer = matches!(command, Command::Pointer(..));
         let press = matches!(
             command,
@@ -1241,34 +1252,20 @@ impl App {
             self.sync_group_summaries();
         }
         if reveal_selection || (self.doc.selection(), self.doc.selection_range()) != selection {
-            if let Some(selected) = self
-                .doc
-                .selection()
-                .filter(|selected| !pointer || self.panels.waves(selected.origin).is_none())
-            {
-                let target = self
-                    .panels
-                    .waves(selected.origin)
-                    .filter(|waves| {
-                        waves.items().iter().any(|entry| {
-                            entry
-                                .lane()
-                                .is_some_and(|lane| lane.track() == Some(selected.track))
-                        })
-                    })
-                    .map(|_| selected.origin)
-                    .or_else(|| {
-                        self.doc
-                            .record_cursor()
-                            .map(|cursor| cursor.origin)
-                            .filter(|&origin| self.panels.waves(origin).is_some())
-                    })
-                    .or_else(|| self.panels.waves_for_track(selected.track));
-                if let Some(waves) = target.and_then(|panel| self.panels.waves_mut(panel)) {
-                    waves.reveal_transaction(&self.doc, selected.track, selected.id);
+            self.sync_selection();
+        }
+        if restored_history {
+            // Revealing here would reapply row expansions that undo just removed.
+            for panel in self.panels.iter_mut() {
+                if let Some(nav) = panel.kind.nav_mut() {
+                    nav.did_reveal_selection(nav.selection(&self.doc));
                 }
             }
-            self.sync_selection();
+        } else if !pointer
+            || press
+            || (self.doc.selection(), self.doc.selection_range()) != selection
+        {
+            self.reveal_panel_selections(now, reveal_origin);
         }
         if press {
             self.sync_transaction_analysis();
@@ -1410,6 +1407,13 @@ impl App {
                 cursor,
             } => self.select_transaction(panel, track, id, cursor),
             Command::ShowTransaction { from } => self.show_transaction(from),
+            Command::RevealPanelSelection { panel } => {
+                if let Some(panel) = self.panels.get_mut(panel)
+                    && panel.reveal_selection(&mut self.doc, now, false)
+                {
+                    self.changed();
+                }
+            }
             Command::RevealWaveTransaction { panel } => self.reveal_wave_transaction(panel),
             Command::ShowAttributeColumn { from, key } => {
                 self.show_attribute_column(from, key, now);
@@ -1759,6 +1763,16 @@ impl App {
         self.changed();
     }
 
+    fn reveal_panel_selections(&mut self, now: Instant, reveal_origin: Option<PanelId>) {
+        let mut revealed = false;
+        for panel in self.panels.iter_mut() {
+            revealed |= panel.reveal_selection(&mut self.doc, now, reveal_origin == Some(panel.id));
+        }
+        if revealed {
+            self.changed();
+        }
+    }
+
     fn select_transaction(
         &mut self,
         panel: PanelId,
@@ -1767,11 +1781,16 @@ impl App {
         cursor: Option<u64>,
     ) {
         let Self { panels, doc, .. } = self;
-        doc.select(Some(crate::document::TxSelection {
+        let selection = Some(crate::document::TxSelection {
             track,
             id,
             origin: panel,
-        }));
+        });
+        if let Some(nav) = panels.get_mut(panel).and_then(|p| p.kind.nav_mut()) {
+            nav.select(doc, selection);
+        } else {
+            doc.select(selection);
+        }
         if let Some(time) = cursor
             && let Some(nav) = panels.get_mut(panel).and_then(|p| p.kind.nav_mut())
         {
@@ -1784,7 +1803,19 @@ impl App {
         if self.panels.get(from).is_none() {
             return;
         }
-        if self.doc.selection().is_none() && self.doc.record_cursor().is_none() {
+        let selection = self
+            .panels
+            .get(from)
+            .and_then(|p| p.kind.nav())
+            .map_or(self.doc.selection(), |nav| nav.selection(&self.doc));
+        let range = self
+            .panels
+            .get(from)
+            .and_then(|p| p.kind.nav())
+            .map_or(self.doc.selection_range(), |nav| {
+                nav.selection_range(&self.doc)
+            });
+        if selection.is_none() && self.doc.record_cursor().is_none() {
             self.events
                 .push(Event::Notice("Select a record first.".into()));
             self.changed();
@@ -1798,7 +1829,16 @@ impl App {
         match self.restructure(label, |panels| {
             Ok((panels.ensure_transaction(model)?, Vec::new()))
         }) {
-            Ok(_) => self.sync_selection(),
+            Ok(panel) => {
+                if let Some(selection) = selection {
+                    self.panels.transaction_mut(panel).unwrap().follow_record(
+                        &mut self.doc,
+                        selection,
+                        range,
+                    );
+                }
+                self.changed();
+            }
             Err(error) => {
                 self.events.push(Event::Notice(error.to_string()));
                 self.changed();
@@ -2655,6 +2695,10 @@ impl App {
                 panel,
                 dim: LinkDim::Viewport,
             }),
+            Action::ToggleTransactionLink => Some(PanelsCommand::ToggleLink {
+                panel,
+                dim: LinkDim::Transaction,
+            }),
             Action::ToggleCursorLink => Some(PanelsCommand::ToggleLink {
                 panel,
                 dim: LinkDim::Cursor,
@@ -2848,6 +2892,7 @@ impl App {
                 | Action::FocusPrevPanel
                 | Action::ToggleViewportLink
                 | Action::ToggleCursorLink
+                | Action::ToggleTransactionLink
                 | Action::ToggleScopes
                 | Action::NextCycle
                 | Action::PrevCycle
@@ -2926,6 +2971,7 @@ impl App {
                 | Action::FocusPrevPanel
                 | Action::ToggleViewportLink
                 | Action::ToggleCursorLink
+                | Action::ToggleTransactionLink
                 | Action::ToggleScopes
                 | Action::NextCycle
                 | Action::PrevCycle
@@ -2988,6 +3034,7 @@ impl App {
                 | Action::FocusPrevPanel
                 | Action::ToggleViewportLink
                 | Action::ToggleCursorLink
+                | Action::ToggleTransactionLink
                 | Action::ToggleScopes
                 | Action::NextCycle
                 | Action::PrevCycle

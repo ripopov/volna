@@ -306,6 +306,7 @@ pub(crate) fn paint(
             name_x,
             viewport,
             cursor,
+            selection: model.nav.selection(doc),
             text: colors.text,
             muted: colors.text_placeholder,
             left_out: plots.left_out.get(&ix).copied(),
@@ -2189,6 +2190,7 @@ struct LaneCells<'a> {
     name_x: f32,
     viewport: Viewport,
     cursor: Option<u64>,
+    selection: Option<crate::document::TxSelection>,
     text: Color,
     muted: Color,
     left_out: Option<&'static str>,
@@ -3590,7 +3592,15 @@ fn paint_lane_row(
             }
             if let Some(index) = index {
                 let plan = lane::RenderPlan::new(lane, index, &cells.viewport, detail);
-                transactions::paint(lane, &plan, doc, &cells.viewport, waves, &geometry, p);
+                transactions::paint(
+                    lane,
+                    &plan,
+                    cells.selection,
+                    &cells.viewport,
+                    waves,
+                    &geometry,
+                    p,
+                );
                 if let Some(bar) = lane.scrollbar(doc, layout, cells.pos) {
                     let hovered = cells.pointer.is_some_and(|p| bar.track.contains(p))
                         || matches!(cells.drag, Some(Drag::TransactionScroll { row, .. }) if Some(row) == layout.entry(cells.pos));
@@ -3717,7 +3727,7 @@ mod tests {
                             &viewport,
                             &mut lane::DetailCache::default(),
                         ),
-                        &Document::new(),
+                        None,
                         &viewport,
                         Rect::from_xywh(37.0, 0.0, width, height),
                         &geometry,

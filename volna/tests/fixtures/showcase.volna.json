@@ -1,6 +1,6 @@
 {
   "format": "volna-workspace",
-  "version": 20,
+  "version": 21,
   "traces": [
     {
       "letter": "A",
@@ -28,7 +28,7 @@
   "timeline_dividers": [],
   "focused": 17,
   "panels": [
-    {"follow":"suspended","id":17,"kind":"pipeline","version":3,"title":null,"track":["soc","cpu","thread0","instructions"],"link":{"viewport":true,"cursor":true},"rows":{"top":-285.70908203125003,"row_px":0.5},"label_width":190.0,"navigator":{"visible":true,"width":64.0}}
+    {"follow":"suspended","id":17,"kind":"pipeline","version":3,"title":null,"track":["soc","cpu","thread0","instructions"],"link":{"viewport":true,"cursor":true,"transaction":true},"rows":{"top":-285.70908203125003,"row_px":0.5},"label_width":190.0,"navigator":{"visible":true,"width":64.0}}
   ],
   "shared": {
     "viewport": {

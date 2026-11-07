@@ -313,7 +313,7 @@ pub fn paint(
                 let rect = Rect::new(point(cells.left(), y), size(cells.width(), row_px));
                 let focus = t.border_focused;
                 let (into, out) = (t.tx_relation_in, t.tx_relation_out);
-                let selection = doc.selection();
+                let selection = model.nav.selection(doc);
                 p.scene.clipped(cells, |scene| {
                     scene.quad(rect, Color::TRANSPARENT, 0.0, 1.0, focus);
                     let Some(selection) = selection else { return };

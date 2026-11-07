@@ -95,6 +95,7 @@ actions!(
         FocusPrevPanel,
         ToggleViewportLink,
         ToggleCursorLink,
+        ToggleTransactionLink,
         ToggleScopes,
         ZoomIn,
         ZoomOut,

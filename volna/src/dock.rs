@@ -702,6 +702,11 @@ pub(crate) fn panel_menu(
         for (label, dim, linked) in [
             ("Follow shared viewport", LinkDim::Viewport, links.viewport),
             ("Follow shared cursor", LinkDim::Cursor, links.cursor),
+            (
+                "Follow shared transaction",
+                LinkDim::Transaction,
+                links.transaction,
+            ),
         ] {
             menu = menu
                 .item(item(label, PanelsCommand::ToggleLink { panel: id, dim }).checked(linked));
@@ -1076,7 +1081,7 @@ impl Panel for CanvasPanelView {
     }
 
     fn toolbar_buttons(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<Vec<Button>> {
-        use gpui_kit::assets::IconName;
+        use gpui_kit::{assets::IconName, component::Icon};
         use volna_core::nav::LinkDim;
         let link = self
             .ws
@@ -1088,7 +1093,7 @@ impl Panel for CanvasPanelView {
             .kind
             .nav()?
             .link;
-        let link_button = |name, icon, linked, dim, tooltip: &'static str| {
+        let link_button = |name, icon: Icon, linked, dim, tooltip: &'static str| {
             action_button(name, icon, cx)
                 .ghost()
                 .selected(linked)
@@ -1107,17 +1112,24 @@ impl Panel for CanvasPanelView {
         let mut buttons = vec![
             link_button(
                 "link-view",
-                IconName::Scan,
+                IconName::Scan.into(),
                 link.viewport,
                 LinkDim::Viewport,
                 "Follow shared viewport (L)",
             ),
             link_button(
                 "link-cursor",
-                IconName::Crosshair,
+                IconName::Crosshair.into(),
                 link.cursor,
                 LinkDim::Cursor,
                 "Follow shared cursor (Shift+L)",
+            ),
+            link_button(
+                "link-transaction",
+                Icon::empty().path(volna_core::icons::IconName::TransactionSelect.path()),
+                link.transaction,
+                LinkDim::Transaction,
+                "Follow shared transaction",
             ),
             action_button("new-tab", IconName::Plus, cx)
                 .ghost()
