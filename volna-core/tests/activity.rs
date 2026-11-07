@@ -215,7 +215,7 @@ fn view(app: &mut App, t0: u64, t1: u64) {
 }
 
 fn check_exact(app: &App, session: &Arc<dyn Session>, t0: u64, t1: u64) {
-    let t_min = session.activity().unwrap().t_min();
+    let t_min = session.info().time_range.0;
     let (want, signals) = brute(session, t_min, t0, t1);
     for (scope, &n) in want.iter().enumerate() {
         let a = app.scope_activity(node(scope)).unwrap();
@@ -639,7 +639,7 @@ fn missing_indexes_build_automatically_once_and_install_exact_meters() {
     view(&mut app, 100, 1_000);
     settle(&mut app);
     check_exact(&app, &session, 100, 1_000);
-    assert!(OpenSpec::Path(path).open().unwrap().activity().is_some());
+    assert!(OpenSpec::Path(path).open().unwrap().activity_available());
 }
 
 #[test]
@@ -711,9 +711,188 @@ fn explicit_build_installs_meters_and_reports_block_progress() {
     check_exact(&app, &session, 100, 1_000);
     let reopened = OpenSpec::Path(path).open().unwrap();
     assert!(
-        reopened.activity().is_some(),
-        "the next open uses the sidecar"
+        reopened.activity_available(),
+        "the next open finds the sidecar"
     );
+}
+
+#[test]
+fn approving_index_memory_loads_the_existing_sidecar_and_installs_exact_meters() {
+    use volna_core::app::{Command, Event};
+    use volna_core::sidebar::activity::ActivityBuildState;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("approval.vtr");
+    write_trace(&path, 6);
+    let (mut app, session) = open_asking(&path);
+    let session = volna_trace::session::account_local_session(
+        session,
+        volna_trace::remote::memory::MemoryBudget::new(512 << 20),
+    )
+    .unwrap();
+    app.set_session(session.clone());
+    settle(&mut app);
+    app.handle(Command::BuildActivity(TraceId::A));
+    let mut request = app.take_requests().pop().unwrap();
+    let LoadRequest::Trace(TraceRequest::BuildActivity {
+        load_policy,
+        budget,
+        ..
+    }) = &mut request
+    else {
+        panic!("expected build");
+    };
+    *load_policy = volna_trace::data::ActivityLoadPolicy::Approved { peak_bytes: 1 };
+    let budget = budget.clone();
+    app.deliver(request.perform());
+    let views = build_views(&app);
+    let ActivityBuildState::NeedsMemory {
+        resident_bytes,
+        peak_bytes,
+    } = views[0].state
+    else {
+        panic!("expected memory approval");
+    };
+    assert!(resident_bytes > 0 && peak_bytes > resident_bytes);
+    assert!(views[0].message().contains("MiB retained"));
+    assert!(views[0].message().contains("MiB while loading"));
+    assert!(session.activity().is_none());
+    assert!(
+        app.take_requests().is_empty(),
+        "approval must precede loading"
+    );
+    assert!(
+        !app.take_events()
+            .iter()
+            .any(|event| matches!(event, Event::Notice(_)))
+    );
+    app.handle(Command::BuildActivity(TraceId::A));
+    assert!(
+        app.take_requests().is_empty(),
+        "Build does not grant memory approval"
+    );
+    let sidecar = path.with_extension("vtr.index");
+    let modified = sidecar.metadata().unwrap().modified().unwrap();
+    let original_budget = budget.limit();
+    let retained = budget.reserve(original_budget - budget.used()).unwrap();
+    app.handle(Command::ApproveActivityMemory(TraceId::A));
+    assert!(
+        budget.limit() > original_budget,
+        "approval admits the loading peak"
+    );
+    settle(&mut app);
+    assert!(build_views(&app).is_empty());
+    assert!(session.activity().is_some());
+    assert_eq!(sidecar.metadata().unwrap().modified().unwrap(), modified);
+    drop(retained);
+    view(&mut app, 100, 1_000);
+    settle(&mut app);
+    check_exact(&app, &session, 100, 1_000);
+}
+
+#[test]
+fn dismissing_index_memory_keeps_waveforms_usable_without_loading_activity() {
+    use volna_core::app::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dismiss.vtr");
+    write_trace(&path, 6);
+    let (mut app, session) = open_asking(&path);
+    app.handle(Command::BuildActivity(TraceId::A));
+    let mut request = app.take_requests().pop().unwrap();
+    let LoadRequest::Trace(TraceRequest::BuildActivity { load_policy, .. }) = &mut request else {
+        panic!("expected build");
+    };
+    *load_policy = volna_trace::data::ActivityLoadPolicy::Approved { peak_bytes: 1 };
+    app.deliver(request.perform());
+    app.handle(Command::DismissActivity(TraceId::A));
+    settle(&mut app);
+    assert!(build_views(&app).is_empty());
+    assert!(app.take_requests().is_empty());
+    assert!(session.activity().is_none());
+    assert!(session.load_signal(SignalRef(0)).is_ok());
+}
+
+#[test]
+fn approved_index_respects_the_budget_and_can_be_retried_after_refusal() {
+    use volna_core::app::Command;
+    use volna_core::sidebar::activity::ActivityBuildState;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("budget.vtr");
+    write_trace(&path, 6);
+    let (mut app, session) = open_asking(&path);
+    app.handle(Command::BuildActivity(TraceId::A));
+    let mut request = app.take_requests().pop().unwrap();
+    let LoadRequest::Trace(TraceRequest::BuildActivity { load_policy, .. }) = &mut request else {
+        panic!("expected build");
+    };
+    *load_policy = volna_trace::data::ActivityLoadPolicy::Approved { peak_bytes: 1 };
+    app.deliver(request.perform());
+    app.handle(Command::ApproveActivityMemory(TraceId::A));
+    let mut request = app.take_requests().pop().unwrap();
+    let budget = volna_trace::remote::memory::MemoryBudget::new(1);
+    let LoadRequest::Trace(TraceRequest::BuildActivity {
+        budget: request_budget,
+        ..
+    }) = &mut request
+    else {
+        panic!("expected load");
+    };
+    *request_budget = budget.clone();
+    app.deliver(request.perform());
+    assert!(matches!(
+        build_views(&app)[0].state,
+        ActivityBuildState::Failed { .. }
+    ));
+    assert!(
+        build_views(&app)[0]
+            .message()
+            .contains("raise the memory budget")
+    );
+    assert!(session.activity().is_none());
+    assert_eq!(budget.used(), 0);
+    app.handle(Command::BuildActivity(TraceId::A));
+    settle(&mut app);
+    assert!(session.activity().is_some());
+    assert!(build_views(&app).is_empty());
+}
+
+#[test]
+fn host_managed_budget_keeps_approval_pending_without_editing_local_settings() {
+    use volna_core::app::{Command, Event};
+    use volna_core::sidebar::activity::ActivityBuildState;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("host-budget.vtr");
+    write_trace(&path, 6);
+    let (mut app, session) = open_asking(&path);
+    app.handle(Command::BuildActivity(TraceId::A));
+    let mut request = app.take_requests().pop().unwrap();
+    let LoadRequest::Trace(TraceRequest::BuildActivity {
+        load_policy,
+        budget,
+        ..
+    }) = &mut request
+    else {
+        panic!("expected build");
+    };
+    *load_policy = volna_trace::data::ActivityLoadPolicy::Approved { peak_bytes: 1 };
+    let budget = budget.clone();
+    app.deliver(request.perform());
+    app.set_host_settings(std::collections::BTreeMap::from([(
+        "memory.budgetMiB".into(),
+        volna_core::settings::Value::Integer(1),
+    )]));
+    let settings = app.settings.text().to_owned();
+    let held = budget.reserve(budget.limit() - budget.used()).unwrap();
+    app.handle(Command::ApproveActivityMemory(TraceId::A));
+    assert_eq!(app.settings.text(), settings);
+    assert!(matches!(
+        build_views(&app)[0].state,
+        ActivityBuildState::NeedsMemory { .. }
+    ));
+    assert!(app.take_requests().is_empty());
+    assert!(session.activity().is_none());
+    assert!(app.take_events().iter().any(|event| matches!(event,
+        Event::Notice(message) if message.contains("raise the memory budget in host settings"))));
+    drop(held);
 }
 
 #[test]
@@ -840,6 +1019,7 @@ fn independent_sessions_share_a_single_sidecar_build() {
                         },
                         &volna_trace::remote::memory::MemoryBudget::new(4 << 20),
                         None,
+                        volna_trace::data::ActivityLoadPolicy::Automatic,
                     )
                     .unwrap();
             });
@@ -934,7 +1114,10 @@ fn server_streams_a_cached_sidecar_and_keeps_it_after_disconnect() {
             session: 71,
             request: 2,
             sequence: 0,
-            body: Body::Command(Command::Activity { build: true }),
+            body: Body::Command(Command::Activity {
+                build: true,
+                load_policy: volna_trace::data::ActivityLoadPolicy::Automatic,
+            }),
         },
     )
     .unwrap();
@@ -962,7 +1145,10 @@ fn server_streams_a_cached_sidecar_and_keeps_it_after_disconnect() {
             session: 71,
             request: 3,
             sequence: 0,
-            body: Body::Command(Command::Activity { build: false }),
+            body: Body::Command(Command::Activity {
+                build: false,
+                load_policy: volna_trace::data::ActivityLoadPolicy::Automatic,
+            }),
         },
     )
     .unwrap();
@@ -976,7 +1162,7 @@ fn server_streams_a_cached_sidecar_and_keeps_it_after_disconnect() {
     drop(client);
     assert!(service.join().unwrap().is_err());
     assert_eq!(session.activity_image(None).unwrap(), image);
-    assert!(OpenSpec::Path(path).open().unwrap().activity().is_some());
+    assert!(OpenSpec::Path(path).open().unwrap().activity_available());
 }
 
 #[cfg(unix)]
@@ -991,6 +1177,10 @@ struct RemoteRig {
 #[cfg(unix)]
 impl RemoteRig {
     fn open(source: Arc<dyn Session>) -> (Self, Arc<dyn Session>) {
+        Self::open_with_limit(source, 8 << 20)
+    }
+
+    fn open_with_limit(source: Arc<dyn Session>, limit: u64) -> (Self, Arc<dyn Session>) {
         use volna_core::remote::client::RemoteClient;
         let (wire, server) = std::os::unix::net::UnixStream::pair().unwrap();
         for stream in [&wire, &server] {
@@ -1011,7 +1201,7 @@ impl RemoteRig {
             )
         });
         let budget = volna_trace::remote::memory::MemoryBudget::new(16 << 20);
-        let client = RemoteClient::new(TraceId::A, 1, 8 << 20, budget.clone()).unwrap();
+        let client = RemoteClient::new(TraceId::A, 1, limit, budget.clone()).unwrap();
         let mut rig = Self {
             wire,
             client,
@@ -1043,7 +1233,10 @@ impl RemoteRig {
             let mut completed = 0;
             loop {
                 let packet = read_packet(&mut self.wire).unwrap().unwrap();
-                let object_end = matches!(packet.body, Body::End | Body::Error { .. });
+                let object_end = matches!(
+                    packet.body,
+                    Body::End | Body::Error { .. } | Body::ActivityMemoryRequired { .. }
+                );
                 let opening = command.session == 0;
                 let mut step = self.client.accept(packet).unwrap();
                 let mut opened = false;
@@ -1100,6 +1293,105 @@ impl RemoteRig {
 }
 
 #[cfg(unix)]
+#[test]
+fn remote_index_memory_approval_survives_transfer_and_installs_exact_meters() {
+    use volna_core::app::Command;
+    use volna_core::sidebar::activity::ActivityBuildState;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("remote-approval.vtr");
+    write_trace(&path, 6);
+    let source = OpenSpec::Path(path).open().unwrap();
+    let (mut rig, session) = RemoteRig::open(source.clone());
+    let mut app = App::new();
+    app.settings_loaded(r#"{"hierarchy.activityIndex":"ask"}"#);
+    app.set_session(session.clone());
+    rig.settle(&mut app);
+    app.handle(Command::BuildActivity(TraceId::A));
+    let mut request = app.take_requests().pop().unwrap();
+    let LoadRequest::Trace(TraceRequest::BuildActivity { load_policy, .. }) = &mut request else {
+        panic!("expected build");
+    };
+    *load_policy = volna_trace::data::ActivityLoadPolicy::Approved { peak_bytes: 1 };
+    rig.client
+        .submit(request)
+        .unwrap_or_else(|_| panic!("build rejected"));
+    rig.pump(|result| app.deliver(result));
+    assert!(matches!(
+        build_views(&app)[0].state,
+        ActivityBuildState::NeedsMemory { .. }
+    ));
+    assert!(session.activity().is_none());
+    assert!(app.take_requests().is_empty());
+    app.handle(Command::ApproveActivityMemory(TraceId::A));
+    rig.settle(&mut app);
+    assert!(session.activity().is_some());
+    assert!(build_views(&app).is_empty());
+    view(&mut app, 100, 1_000);
+    rig.settle(&mut app);
+    check_exact(&app, &source, 100, 1_000);
+}
+
+#[cfg(unix)]
+#[test]
+fn remote_memory_prompt_precedes_an_oversized_transfer_and_approval_loads_it() {
+    use volna_core::app::Command;
+    use volna_core::sidebar::activity::ActivityBuildState;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized-sidecar.vtr");
+    let mut options = WriterOptions::default();
+    options.encoding.waveform_records = 256;
+    options.metadata.timescale = -9;
+    let mut writer = Writer::create_with(&path, options).unwrap();
+    let top = writer
+        .scope_with(
+            vtr::SourceOptions::new("top", None),
+            ScopeType::Module,
+            "top",
+        )
+        .unwrap();
+    let signal = writer
+        .signal(
+            vtr::SourceOptions::new("busy", Some(top)),
+            SignalKind::Bits {
+                width: 1,
+                states: 2,
+            },
+            VarType::Wire,
+            Direction::Implicit,
+        )
+        .unwrap();
+    for step in 0..50_000 {
+        writer.advance_time(step * 3).unwrap();
+        writer.emit_u64(signal, step & 1).unwrap();
+    }
+    writer.close().unwrap();
+    let source = OpenSpec::Path(path.clone()).open().unwrap();
+    let limit = 4096;
+    let (mut rig, session) = RemoteRig::open_with_limit(source.clone(), limit);
+    let mut app = App::new();
+    app.settings_loaded(r#"{"hierarchy.activityIndex":"ask"}"#);
+    app.set_session(session.clone());
+    rig.settle(&mut app);
+    let before = rig.budget.used();
+    app.handle(Command::BuildActivity(TraceId::A));
+    rig.settle(&mut app);
+    assert!(path.with_extension("vtr.index").metadata().unwrap().len() > limit);
+    assert!(matches!(
+        build_views(&app)[0].state,
+        ActivityBuildState::NeedsMemory { .. }
+    ));
+    assert!(session.activity().is_none());
+    assert_eq!(rig.budget.used(), before);
+    app.handle(Command::ApproveActivityMemory(TraceId::A));
+    rig.settle(&mut app);
+    assert!(session.activity().is_some());
+    assert!(build_views(&app).is_empty());
+    view(&mut app, 100, 1_000);
+    rig.settle(&mut app);
+    check_exact(&app, &source, 100, 1_000);
+}
+
+#[cfg(unix)]
 impl Drop for RemoteRig {
     fn drop(&mut self) {
         drop(self.wire.shutdown(std::net::Shutdown::Both));
@@ -1131,7 +1423,13 @@ fn remote_build_and_scope_counts_match_local_without_pan_index_requests() {
     assert_eq!(
         rig.commands
             .iter()
-            .filter(|c| matches!(c, Command::Activity { build: true }))
+            .filter(|c| matches!(
+                c,
+                Command::Activity {
+                    build: true,
+                    load_policy: volna_trace::data::ActivityLoadPolicy::Automatic
+                }
+            ))
             .count(),
         1
     );
@@ -1179,8 +1477,14 @@ fn remote_cached_index_loads_once_even_when_build_policy_is_never() {
     app.set_session(remote.clone());
     rig.settle(&mut app);
     assert!(remote.activity().is_some());
-    assert!(rig.commands.contains(&Command::Activity { build: false }));
-    assert!(!rig.commands.contains(&Command::Activity { build: true }));
+    assert!(rig.commands.contains(&Command::Activity {
+        build: false,
+        load_policy: volna_trace::data::ActivityLoadPolicy::Automatic
+    }));
+    assert!(!rig.commands.contains(&Command::Activity {
+        build: true,
+        load_policy: volna_trace::data::ActivityLoadPolicy::Automatic
+    }));
     view(&mut app, 70000, 80000);
     rig.settle(&mut app);
     check_exact(&app, &local, 70000, 80000);
@@ -1284,13 +1588,15 @@ fn a_client_disconnect_during_an_authorized_server_build_keeps_the_cache() {
             options: &vtr::activity::BuildOptions,
             budget: &volna_trace::remote::memory::MemoryBudget,
             cache: Option<&Path>,
+            load_policy: volna_trace::data::ActivityLoadPolicy,
         ) -> anyhow::Result<()> {
             self.entered.send(())?;
             self.release
                 .lock()
                 .unwrap()
                 .recv_timeout(std::time::Duration::from_secs(10))?;
-            self.inner.build_activity(options, budget, cache)
+            self.inner
+                .build_activity(options, budget, cache, load_policy)
         }
     }
     use volna_trace::remote::transport::write_packet;
@@ -1314,6 +1620,7 @@ fn a_client_disconnect_during_an_authorized_server_build_keeps_the_cache() {
                 control: Some(Arc::new(vtr::activity::BuildControl::default())),
                 ..Default::default()
             },
+            load_policy: volna_trace::data::ActivityLoadPolicy::Automatic,
             budget: rig.budget.clone(),
             cache_dir: None,
         }))
@@ -1338,7 +1645,7 @@ fn a_client_disconnect_during_an_authorized_server_build_keeps_the_cache() {
     );
     assert!(source.activity().is_some());
     assert!(
-        OpenSpec::Path(path).open().unwrap().activity().is_some(),
+        OpenSpec::Path(path).open().unwrap().activity_available(),
         "another client reuses the completed cache"
     );
 }

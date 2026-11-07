@@ -637,6 +637,7 @@ mod tests {
                 },
                 &volna_trace::remote::memory::MemoryBudget::new(u64::MAX),
                 Some(&directory.path().join("persistent cache")),
+                volna_trace::data::ActivityLoadPolicy::Automatic,
             )
             .unwrap();
             assert!(a_path.with_extension("vtr.index").exists());

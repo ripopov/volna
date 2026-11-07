@@ -218,6 +218,7 @@ pub enum Command {
     Derived(PanelId, crate::computed::Command),
     Notice(String),
     BuildActivity(TraceId),
+    ApproveActivityMemory(TraceId),
     DismissActivity(TraceId),
     CancelActivity(TraceId),
     Open(OpenSpec),
@@ -1733,6 +1734,41 @@ impl App {
                 self.changed();
             }
             Command::Settings(command) => self.settings_command(command, now),
+            Command::ApproveActivityMemory(trace) => {
+                if let Some(estimate) = self.activity.memory_request(trace) {
+                    let budget = self.viewer_memory_budget();
+                    let required = budget
+                        .used()
+                        .saturating_add(estimate.peak)
+                        .div_ceil(1 << 20);
+                    let host_budget = self.settings.is_overridden("memory.budgetMiB");
+                    if required > budget.limit().div_ceil(1 << 20) && !host_budget {
+                        self.settings_command(
+                            SettingsCommand::Set {
+                                id: "memory.budgetMiB".into(),
+                                value: Value::Integer(
+                                    required.max(self.settings.resolved().memory.budget_mib) as i64,
+                                ),
+                            },
+                            now,
+                        );
+                    }
+                    self.apply_memory_limits();
+                    if budget.limit().saturating_sub(budget.used()) >= estimate.peak {
+                        self.activity.approve_memory(trace);
+                    } else {
+                        let location = if host_budget {
+                            "host settings"
+                        } else {
+                            "settings"
+                        };
+                        self.events.push(Event::Notice(format!(
+                            "Activity index needs a memory budget of at least {required} MiB; raise the memory budget in {location} and try again"
+                        )));
+                    }
+                    self.changed();
+                }
+            }
             Command::BuildActivity(trace) => {
                 self.activity.start_build(trace);
                 self.changed();

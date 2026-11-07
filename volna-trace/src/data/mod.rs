@@ -11,7 +11,10 @@ pub mod value_view;
 pub mod vtr_source;
 mod vtr_transactions;
 
-pub use activity::{ActivityBuildInfo, ActivityIndex};
+pub use activity::{
+    AUTOMATIC_ACTIVITY_MEMORY, ActivityBuildInfo, ActivityIndex, ActivityLoadPolicy,
+    ActivityMemoryRequired,
+};
 pub use history::SignalHistory;
 pub use sizes::{ScopeSize, ScopeSizes};
 pub use source::{

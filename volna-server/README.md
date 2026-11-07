@@ -41,9 +41,20 @@ to manage decoding and client admission; the host provides pipe I/O and scheduli
 | --- | --- |
 | `Signals(ids)` | One complete history or explicit error per distinct signal, with at most 64 IDs per request |
 | `Track(id)` | Complete records and incident relations for a catalog generator |
-| `Activity { build: false }` | An existing, validated raw activity sidecar, or an error |
-| `Activity { build: true }` | The sidecar, building it first if needed |
+| `Activity { build: false, load_policy }` | An existing, validated raw activity sidecar, or an error |
+| `Activity { build: true, load_policy }` | The sidecar, building it first if needed |
 | `Close` | Release the reader and exit |
+
+Activity loading uses `ActivityLoadPolicy::Automatic` or an explicit
+`Approved { peak_bytes }` allowance. Automatic requests respect the configured
+object limit and the 256 MiB automatic loading threshold. If more memory is
+needed, `ActivityMemoryRequired { resident_bytes, peak_bytes }` completes the
+response without transferring the sidecar. An approved request applies its
+allowance to the server transfer, client receiver, and decoder; other objects
+retain their configured limits. Total client memory admission still applies.
+Sidecar selection validates every row without retaining all activity ranges,
+skips invalid adjacent files in favor of valid cached files, and rebuilds only
+when no valid candidate remains.
 
 An object becomes complete only after its `End` marker and exact declared byte
 count. Per-object failures are returned as `Error` responses. Invalid framing,
@@ -57,13 +68,13 @@ Files must remain unchanged throughout a session. Live recordings are unsupporte
 
 ## Framing and object limits
 
-Protocol **13** is independent of the VTR file-format version. Peers reject other
+Protocol **14** is independent of the VTR file-format version. Peers reject other
 protocol versions; there is no negotiation. Each packet has a 12-byte header:
 
 | Field | Encoding |
 | --- | --- |
 | Magic | Four bytes: `VLNA` |
-| Version | Little-endian `u32`, currently 13 |
+| Version | Little-endian `u32`, currently 14 |
 | Encoded body length | Little-endian `u32`, at most 1 MiB |
 
 The body is an independent checksummed LZ4 frame containing a fixed-width,

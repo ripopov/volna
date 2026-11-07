@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 testing = []
 
 [dev-dependencies]
+crc32fast = "1"
 vtr-convert = { version = "0.1.0", path = "../vtr/vtr-convert" }
 fst-reader = "0.17"
 flate2 = "1"

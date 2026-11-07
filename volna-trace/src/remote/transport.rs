@@ -6,7 +6,7 @@ use bincode::Options;
 use lz4_flex::frame::{BlockSize, FrameDecoder, FrameEncoder, FrameInfo};
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const DATA_BYTES: usize = 256 * 1024;
 pub const MAX_BATCH: usize = 64;
@@ -25,11 +25,18 @@ pub enum ObjectId {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
-    Open { max_object_bytes: u64 },
+    Open {
+        max_object_bytes: u64,
+    },
     Signals(Vec<u32>),
     Track(u32),
-    Activity { build: bool },
-    Ack { sequence: u64 },
+    Activity {
+        build: bool,
+        load_policy: crate::data::ActivityLoadPolicy,
+    },
+    Ack {
+        sequence: u64,
+    },
     Close,
 }
 
@@ -46,6 +53,10 @@ pub enum Body {
         bytes: Vec<u8>,
     },
     End,
+    ActivityMemoryRequired {
+        resident_bytes: u64,
+        peak_bytes: u64,
+    },
     Error {
         object: ObjectId,
         message: String,
@@ -78,6 +89,15 @@ fn validate(packet: &Packet) -> anyhow::Result<()> {
             anyhow::ensure!(
                 !ids.is_empty() && ids.len() <= MAX_BATCH,
                 "invalid signal batch size"
+            );
+        }
+        Body::ActivityMemoryRequired {
+            resident_bytes,
+            peak_bytes,
+        } => {
+            anyhow::ensure!(
+                *resident_bytes <= *peak_bytes && *peak_bytes != 0,
+                "invalid activity memory estimate"
             );
         }
         Body::Error { message, .. } => {
@@ -339,6 +359,11 @@ impl<R: Read, W: Write> Write for ObjectWriter<'_, R, W> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Receive {
+    ActivityMemoryRequired {
+        resident_bytes: u64,
+        peak_bytes: u64,
+    },
+
     Begin {
         object: ObjectId,
         decoded_bytes: u64,
@@ -463,6 +488,20 @@ impl Receiver {
                 anyhow::ensure!(received == total, "truncated object");
                 self.expected.retain(|id| *id != object);
                 Ok(Receive::Complete(object))
+            }
+            Body::ActivityMemoryRequired {
+                resident_bytes,
+                peak_bytes,
+            } => {
+                anyhow::ensure!(
+                    self.active.is_none() && self.expected.contains(&ObjectId::Activity),
+                    "unexpected activity memory requirement"
+                );
+                self.expected.retain(|id| *id != ObjectId::Activity);
+                Ok(Receive::ActivityMemoryRequired {
+                    resident_bytes,
+                    peak_bytes,
+                })
             }
             Body::Error { object, message } => {
                 anyhow::ensure!(self.expected.contains(&object), "unexpected object error");

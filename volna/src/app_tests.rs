@@ -5209,6 +5209,68 @@ fn activity_build_banner_drives_build_dismiss_and_cancel(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+fn activity_memory_banner_loads_only_after_approval(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, VisualTestContext};
+    use volna_core::session::LoadRequest;
+    use volna_trace::session::LoadRequest as TraceRequest;
+    init(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let trace = dir.path().join("approval.vtr");
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/picorv32.vtr"),
+        &trace,
+    )
+    .unwrap();
+    let window = cx.add_window(Workspace::new);
+    window
+        .update(cx, |ws, _, cx| {
+            ws.app
+                .settings_loaded(r#"{"hierarchy.activityIndex":"ask"}"#);
+            ws.open_path(trace.clone(), cx);
+        })
+        .unwrap();
+    let mut vcx = VisualTestContext::from_window(window.into(), cx);
+    vcx.run_until_parked();
+    window
+        .update(&mut vcx, |ws, _, cx| {
+            ws.app.handle(Command::BuildActivity(TraceId::A));
+            let mut request = ws.app.take_requests().pop().unwrap();
+            let LoadRequest::Trace(TraceRequest::BuildActivity { load_policy, .. }) = &mut request
+            else {
+                panic!("expected build");
+            };
+            *load_policy = volna_trace::data::ActivityLoadPolicy::Approved { peak_bytes: 1 };
+            ws.app.deliver(request.perform());
+            ws.after(None, cx);
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let approve = vcx
+        .debug_bounds("activity-build-A")
+        .expect("Allow and load button");
+    window
+        .update(&mut vcx, |ws, _, _| {
+            let views = ws.app.activity.builds(
+                ws.app.doc.traces(),
+                ws.app.settings.resolved().hierarchy.activity_index,
+            );
+            assert!(views[0].message().contains("MiB while loading"));
+            assert!(ws.app.doc.session(TraceId::A).unwrap().activity().is_none());
+        })
+        .unwrap();
+    vcx.simulate_click(approve.center(), Modifiers::default());
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("activity-banner-A").is_none());
+    window
+        .update(&mut vcx, |ws, _, _| {
+            assert!(ws.app.doc.session(TraceId::A).unwrap().activity().is_some());
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
 fn remote_activity_banner_names_the_reader_and_dismisses(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext};
     use volna_trace::remote::{objects::Metadata, session::RemoteSession};

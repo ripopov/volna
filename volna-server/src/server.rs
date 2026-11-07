@@ -156,7 +156,7 @@ pub fn serve(
                     )?;
                 }
             }
-            Command::Activity { build } => {
+            Command::Activity { build, load_policy } => {
                 let cache = vtr::activity::default_cache_dir();
                 let result = (|| {
                     if build && session.activity().is_none() {
@@ -165,11 +165,34 @@ pub fn serve(
                             ..Default::default()
                         };
                         let budget = volna_trace::remote::memory::MemoryBudget::new(2 << 30);
-                        session.build_activity(&options, &budget, cache.as_deref())?;
+                        if let Err(error) = session.build_activity(
+                            &options,
+                            &budget,
+                            cache.as_deref(),
+                            volna_trace::data::ActivityLoadPolicy::Automatic,
+                        ) && error
+                            .downcast_ref::<volna_trace::data::ActivityMemoryRequired>()
+                            .is_none()
+                        {
+                            return Err(error);
+                        }
                     }
                     session.activity_image(cache.as_deref())
                 })();
                 check_snapshot()?;
+                if let Ok(bytes) = &result {
+                    let identity = session
+                        .activity_identity()
+                        .ok_or_else(|| anyhow::anyhow!("missing activity identity"))?;
+                    let estimate = vtr::activity::Index::estimate_memory(bytes, &identity)?;
+                    if load_policy.check(estimate, max_object_bytes).is_err() {
+                        writer.send(Body::ActivityMemoryRequired {
+                            resident_bytes: estimate.resident,
+                            peak_bytes: estimate.peak,
+                        })?;
+                        continue;
+                    }
+                }
                 #[derive(Serialize)]
                 struct Image<'a>(#[serde(serialize_with = "serialize_bytes")] &'a [u8]);
                 reply(
@@ -179,7 +202,7 @@ pub fn serve(
                         .as_ref()
                         .map(|bytes| Image(bytes))
                         .map_err(|error| anyhow::anyhow!("{error:#}")),
-                    max_object_bytes,
+                    load_policy.limit(max_object_bytes),
                 )?;
             }
             Command::Track(id) => {

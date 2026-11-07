@@ -205,6 +205,9 @@ impl<Tag: Copy> OpenTransfer<Tag> {
                     return self.step_inner();
                 }
             }
+            Receive::ActivityMemoryRequired { .. } => {
+                anyhow::bail!("unexpected activity estimate during open")
+            }
             Receive::Failed { message, .. } => {
                 self.decoder = None;
                 self.decoded = None;

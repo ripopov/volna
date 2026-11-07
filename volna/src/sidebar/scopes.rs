@@ -157,7 +157,23 @@ impl Workspace {
                             ))),
                     );
                 match view.state {
-                    ActivityBuildState::Offer { .. } | ActivityBuildState::Failed { .. } => {
+                    ActivityBuildState::Offer { .. }
+                    | ActivityBuildState::Failed { .. }
+                    | ActivityBuildState::NeedsMemory { .. } => {
+                        let needs_memory =
+                            matches!(view.state, ActivityBuildState::NeedsMemory { .. });
+                        let label = if needs_memory {
+                            "Allow and load"
+                        } else if view.available {
+                            "Load index"
+                        } else {
+                            "Build"
+                        };
+                        let command = if needs_memory {
+                            Command::ApproveActivityMemory(trace)
+                        } else {
+                            Command::BuildActivity(trace)
+                        };
                         banner = banner.child(
                             div()
                                 .flex()
@@ -169,14 +185,10 @@ impl Workspace {
                                             Button::new(SharedString::from(format!(
                                                 "activity-build-{trace}"
                                             )))
-                                            .label("Build")
+                                            .label(label)
                                             .primary()
                                             .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.dispatch(
-                                                    Command::BuildActivity(trace),
-                                                    Some(window),
-                                                    cx,
-                                                );
+                                                this.dispatch(command.clone(), Some(window), cx);
                                             })),
                                         ),
                                 )

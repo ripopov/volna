@@ -86,6 +86,7 @@ impl Stamp {
             command,
             Command::MenuDismiss(_)
                 | Command::BuildActivity(_)
+                | Command::ApproveActivityMemory(_)
                 | Command::DismissActivity(_)
                 | Command::CancelActivity(_)
                 | Command::OpenSignalMenu(_)

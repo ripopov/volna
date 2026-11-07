@@ -142,6 +142,9 @@ impl Server {
                     .deserialize(&buffer)
                     .unwrap())),
                 Receive::Failed { message, .. } => result.push(Err(message)),
+                Receive::ActivityMemoryRequired { .. } => {
+                    result.push(Err("activity index needs approval".into()));
+                }
             }
             write_packet(&mut self.input, &ack).unwrap();
             if receiver.is_complete() {
@@ -579,10 +582,16 @@ fn activity_sidecars_are_raw_cached_objects_shared_between_processes() {
         assert!(!a.activity.as_ref().unwrap().available);
         assert_eq!(a.activity, b.activity);
         assert!(!a.server.is_empty());
-        first.command(Command::Activity { build: false });
+        first.command(Command::Activity {
+            build: false,
+            load_policy: volna_trace::data::ActivityLoadPolicy::Automatic,
+        });
         assert!(first.receive::<Vec<u8>>(vec![ObjectId::Activity])[0].is_err());
         assert!(!path.with_extension(format!("{extension}.index")).exists());
-        first.command(Command::Activity { build: true });
+        first.command(Command::Activity {
+            build: true,
+            load_policy: volna_trace::data::ActivityLoadPolicy::Automatic,
+        });
         let image = first
             .receive::<Vec<u8>>(vec![ObjectId::Activity])
             .pop()
@@ -593,7 +602,10 @@ fn activity_sidecars_are_raw_cached_objects_shared_between_processes() {
         assert_eq!(index.signal_count() as usize, a.info.signal_count);
         let index_path = path.with_extension(format!("{extension}.index"));
         let modified = std::fs::metadata(&index_path).unwrap().modified().unwrap();
-        second.command(Command::Activity { build: true });
+        second.command(Command::Activity {
+            build: true,
+            load_policy: volna_trace::data::ActivityLoadPolicy::Automatic,
+        });
         let other = second
             .receive::<Vec<u8>>(vec![ObjectId::Activity])
             .pop()

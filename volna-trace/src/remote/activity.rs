@@ -51,7 +51,7 @@ pub(super) struct ActivityTransfer<Tag = u64> {
     receiver: Receiver,
     decoder: Option<Decoder<vtr::activity::Index>>,
     decoded: Option<Arc<crate::data::ActivityIndex>>,
-    rejected: Option<String>,
+    rejected: Option<anyhow::Error>,
     pending_ack: Option<Packet>,
     limit: u64,
     budget: MemoryBudget,
@@ -69,6 +69,10 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
         let id = job
             .remote_id()
             .ok_or_else(|| anyhow::anyhow!("activity session is not remote"))?;
+        let LoadRequest::BuildActivity { load_policy, .. } = &job else {
+            unreachable!()
+        };
+        let limit = load_policy.limit(limit);
         Ok(Self {
             job,
             receiver: Receiver::new(id, request, vec![ObjectId::Activity], limit)?,
@@ -91,6 +95,10 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
             unreachable!()
         };
         super::transport::Command::Activity {
+            load_policy: match &self.job {
+                LoadRequest::BuildActivity { load_policy, .. } => *load_policy,
+                _ => unreachable!(),
+            },
             build: !session.activity_available()
                 && !options.control.as_ref().is_some_and(|c| c.is_cancelled()),
         }
@@ -112,7 +120,10 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
                 decoded_bytes,
             } => {
                 let LoadRequest::BuildActivity {
-                    session, options, ..
+                    session,
+                    options,
+                    load_policy,
+                    ..
                 } = &self.job
                 else {
                     unreachable!()
@@ -124,11 +135,14 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
                     .control
                     .clone()
                     .ok_or_else(|| anyhow::anyhow!("missing activity control"))?;
+                let load_policy = *load_policy;
                 let limit = self.limit;
                 match Decoder::new(decoded_bytes, limit, &self.budget, move |r| {
                     Box::pin(async move {
                         let bytes = r.bytes().await?;
-                        let mut charged = 0;
+                        let estimate = vtr::activity::Index::estimate_memory(&bytes, &identity)?;
+                        load_policy.check(estimate, limit)?;
+                        let mut charged = bytes.len() as u64;
                         let index = vtr::activity::Index::decode_with(
                             &bytes,
                             &identity,
@@ -158,7 +172,7 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
                     })
                 }) {
                     Ok(decoder) => self.decoder = Some(decoder),
-                    Err(error) => self.rejected = Some(format!("{error:#}")),
+                    Err(error) => self.rejected = Some(error),
                 }
             }
             Receive::Data(bytes) => {
@@ -173,7 +187,7 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
             }
             Receive::Complete(ObjectId::Activity) => {
                 let result = if let Some(message) = self.rejected.take() {
-                    Err(anyhow::anyhow!(message))
+                    Err(message)
                 } else {
                     let index = self
                         .decoded
@@ -194,6 +208,21 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
                         .and_then(|()| session.install_activity(index))
                 };
                 return Ok(self.complete(ack, result));
+            }
+            Receive::ActivityMemoryRequired {
+                resident_bytes,
+                peak_bytes,
+            } => {
+                return Ok(self.complete(
+                    ack,
+                    Err(
+                        crate::data::ActivityMemoryRequired(vtr::activity::MemoryEstimate {
+                            resident: resident_bytes,
+                            peak: peak_bytes,
+                        })
+                        .into(),
+                    ),
+                ));
             }
             Receive::Failed {
                 object: ObjectId::Activity,
@@ -226,13 +255,13 @@ impl<Tag: Copy> ActivityTransfer<Tag> {
                 reservation.shrink(reservation.bytes() - index.memory_bytes())?;
                 self.decoded = Some(Arc::new(crate::data::ActivityIndex {
                     index,
-                    _reservation: Some(reservation),
+                    _reservation: reservation,
                 }));
                 self.decoder = None;
             }
             Err(error) => {
                 self.decoder = None;
-                self.rejected = Some(format!("{error:#}"));
+                self.rejected = Some(error);
             }
         }
         Ok(ClientStep::Ack(self.pending_ack.take().unwrap()))
@@ -327,6 +356,24 @@ mod tests {
         Arc<vtr::activity::BuildControl>,
         ActivityTransfer,
     ) {
+        transfer_with_policy(
+            source,
+            limit,
+            budget,
+            crate::data::ActivityLoadPolicy::Automatic,
+        )
+    }
+
+    fn transfer_with_policy(
+        source: &dyn Session,
+        limit: u64,
+        budget: MemoryBudget,
+        load_policy: crate::data::ActivityLoadPolicy,
+    ) -> (
+        Arc<dyn Session>,
+        Arc<vtr::activity::BuildControl>,
+        ActivityTransfer,
+    ) {
         let session: Arc<dyn Session> =
             Arc::new(RemoteSession::new(73, Metadata::from_session(source)).unwrap());
         let control = Arc::new(vtr::activity::BuildControl::default());
@@ -338,6 +385,7 @@ mod tests {
                 control: Some(control.clone()),
                 ..Default::default()
             },
+            load_policy,
             cache_dir: None,
             budget: budget.clone(),
         };
@@ -473,6 +521,29 @@ mod tests {
             assert!(session.activity().is_none());
             assert_eq!(budget.used(), 0);
         }
+    }
+
+    #[test]
+    fn approved_memory_applies_to_the_transfer_and_decoder_without_changing_other_limits() {
+        let (_dir, source, image) = fixture(2000);
+        let limit = image.len() as u64 / 2;
+        let budget = MemoryBudget::new(2 << 20);
+        budget.set_object_limit(limit);
+        let identity = source.activity_identity().unwrap();
+        let estimate = vtr::activity::Index::estimate_memory(&image, &identity).unwrap();
+        let policy = crate::data::ActivityLoadPolicy::Approved {
+            peak_bytes: estimate.peak,
+        };
+        let (session, _, mut transfer) =
+            transfer_with_policy(source.as_ref(), limit, budget.clone(), policy);
+        let (end, _) = feed(&mut transfer, &image);
+        finish(&mut transfer, end).unwrap();
+        transfer.finish().unwrap();
+        assert!(session.activity().unwrap().classify(0, u64::MAX).is_empty());
+        assert_eq!(budget.object_limit(), limit);
+        assert!(budget.reserve_object("another object", limit + 1).is_err());
+        drop(session);
+        assert_eq!(budget.used(), 0);
     }
 
     #[test]

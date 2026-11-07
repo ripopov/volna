@@ -7664,6 +7664,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bincode",
+ "crc32fast",
  "flate2",
  "fst-reader",
  "lz4_flex 0.11.6",

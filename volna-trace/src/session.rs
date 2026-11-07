@@ -72,6 +72,7 @@ pub trait Session: Send + Sync {
         _options: &vtr::activity::BuildOptions,
         _budget: &crate::remote::memory::MemoryBudget,
         _cache_dir: Option<&std::path::Path>,
+        _load_policy: crate::data::ActivityLoadPolicy,
     ) -> anyhow::Result<()> {
         anyhow::bail!("this session cannot build an activity index")
     }
@@ -159,6 +160,9 @@ impl Session for AccountedSession {
     fn activity_build_info(&self) -> Option<crate::data::ActivityBuildInfo> {
         self.inner.activity_build_info()
     }
+    fn activity_available(&self) -> bool {
+        self.inner.activity_available()
+    }
     fn activity_identity(&self) -> Option<vtr::activity::Identity> {
         self.inner.activity_identity()
     }
@@ -170,8 +174,10 @@ impl Session for AccountedSession {
         options: &vtr::activity::BuildOptions,
         budget: &crate::remote::memory::MemoryBudget,
         cache_dir: Option<&std::path::Path>,
+        load_policy: crate::data::ActivityLoadPolicy,
     ) -> anyhow::Result<()> {
-        self.inner.build_activity(options, budget, cache_dir)
+        self.inner
+            .build_activity(options, budget, cache_dir, load_policy)
     }
     fn load_track(
         &self,
@@ -339,6 +345,7 @@ pub enum LoadRequest<Tag = u64> {
         generation: u64,
         session: Arc<dyn Session>,
         options: vtr::activity::BuildOptions,
+        load_policy: crate::data::ActivityLoadPolicy,
         cache_dir: Option<std::path::PathBuf>,
         budget: crate::remote::memory::MemoryBudget,
     },
@@ -409,12 +416,18 @@ impl<Tag: Copy> LoadRequest<Tag> {
                 generation,
                 session,
                 options,
+                load_policy,
                 cache_dir,
                 budget,
             } => LoadResult::ActivityBuilt {
                 tag,
                 generation,
-                result: session.build_activity(&options, &budget, cache_dir.as_deref()),
+                result: session.build_activity(
+                    &options,
+                    &budget,
+                    cache_dir.as_deref(),
+                    load_policy,
+                ),
             },
             Self::Track {
                 tag,

@@ -484,6 +484,11 @@ impl Session for LocalSession {
             .as_ref()
             .map(super::activity::ActivitySource::info)
     }
+    fn activity_available(&self) -> bool {
+        self.activity
+            .as_ref()
+            .is_some_and(super::activity::ActivitySource::available)
+    }
     fn activity_identity(&self) -> Option<vtr::activity::Identity> {
         self.activity.as_ref().map(|a| a.identity)
     }
@@ -506,6 +511,7 @@ impl Session for LocalSession {
         options: &vtr::activity::BuildOptions,
         budget: &crate::remote::memory::MemoryBudget,
         cache_dir: Option<&std::path::Path>,
+        load_policy: crate::data::ActivityLoadPolicy,
     ) -> anyhow::Result<()> {
         let source = self
             .activity
@@ -516,6 +522,7 @@ impl Session for LocalSession {
             budget,
             cache_dir.filter(|_| !self.temporary),
             self.info.signal_count,
+            load_policy,
             |w| vtr::activity::build(&self.reader, w, options),
         )
     }

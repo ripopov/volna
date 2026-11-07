@@ -536,6 +536,15 @@ The right sidebar stops shrinking at 280 logical pixels (scaled by interface
 zoom). Drag its divider past half that width and release to hide it; reopening
 restores its width from before the drag.
 
+Activity indexes above the object size limit or 256 MiB of estimated loading
+memory require approval.
+The Scopes banner shows conservative estimates for retained index memory and
+peak loading memory. **Allow and load** reuses the sidecar and raises the memory
+budget if needed; **Not now** leaves waveforms available without activity meters.
+Host-managed memory settings must be raised in the host before retrying. Approval
+applies to the current trace session and leaves other objects' size limits intact;
+the memory budget remains a saved setting.
+
 Double-clicking a hierarchy member or pressing Enter adds it to Waves. Signals,
 clocks, transactions, logs, and events share the focused Waves panel; when another
 panel has focus, an existing Waves panel is reused before creating one. Adding

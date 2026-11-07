@@ -252,6 +252,17 @@ fn activity_session() -> (tempfile::NamedTempFile, Arc<dyn volna_trace::Session>
     let session = volna_trace::session::OpenSpec::Path(file.path().into())
         .open()
         .unwrap();
+    session
+        .build_activity(
+            &vtr::activity::BuildOptions {
+                control: Some(Arc::new(vtr::activity::BuildControl::default())),
+                ..Default::default()
+            },
+            &MemoryBudget::new(8 << 20),
+            None,
+            volna_trace::data::ActivityLoadPolicy::Automatic,
+        )
+        .unwrap();
     (file, session)
 }
 

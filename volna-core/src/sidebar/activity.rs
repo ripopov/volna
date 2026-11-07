@@ -26,6 +26,7 @@ struct TraceActivity {
     classifying: Option<(u64, u64)>,
     failed: Option<(u64, u64)>,
     build: Build,
+    load_policy: volna_trace::data::ActivityLoadPolicy,
 }
 
 enum Build {
@@ -37,6 +38,7 @@ enum Build {
     },
     Dismissed,
     Failed(String),
+    NeedsMemory(vtr::activity::MemoryEstimate),
 }
 
 impl Drop for TraceActivity {
@@ -49,6 +51,10 @@ impl Drop for TraceActivity {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActivityBuildState {
+    NeedsMemory {
+        resident_bytes: u64,
+        peak_bytes: u64,
+    },
     Offer {
         estimated_seconds: u64,
     },
@@ -74,6 +80,14 @@ impl ActivityBuildView {
     #[must_use]
     pub fn message(&self) -> String {
         match &self.state {
+            ActivityBuildState::NeedsMemory {
+                resident_bytes,
+                peak_bytes,
+            } => format!(
+                "Activity index needs up to {} MiB retained and {} MiB while loading (estimated). Allow and load raises the memory budget if needed.",
+                resident_bytes.div_ceil(1 << 20),
+                peak_bytes.div_ceil(1 << 20)
+            ),
             ActivityBuildState::Offer { estimated_seconds } => {
                 if let Some(host) = &self.host {
                     format!(
@@ -154,6 +168,7 @@ impl ActivityModel {
                 classifying: None,
                 failed: None,
                 build: Build::Offered,
+                load_policy: volna_trace::data::ActivityLoadPolicy::Automatic,
             });
             let Some(index) = session.activity() else {
                 if session.activity_build_info().is_some() {
@@ -173,6 +188,7 @@ impl ActivityModel {
                             tag: trace,
                             generation: a.generation,
                             session: Arc::clone(session),
+                            load_policy: a.load_policy,
                             options: vtr::activity::BuildOptions {
                                 control: Some(control),
                                 memory: (512u64 << 20).min(
@@ -275,8 +291,15 @@ impl ActivityModel {
                         Ok(true)
                     }
                     Err(error) => {
-                        a.build = Build::Failed(format!("{error:#}"));
-                        Err(error.context(format!("Activity index of trace {trace}")))
+                        if let Some(required) =
+                            error.downcast_ref::<volna_trace::data::ActivityMemoryRequired>()
+                        {
+                            a.build = Build::NeedsMemory(required.0);
+                            Ok(true)
+                        } else {
+                            a.build = Build::Failed(format!("{error:#}"));
+                            Err(error.context(format!("Activity index of trace {trace}")))
+                        }
                     }
                 }
             }
@@ -336,9 +359,27 @@ impl ActivityModel {
             .filter(|a| a.generation == generation)
     }
 
+    pub(crate) fn memory_request(&self, trace: TraceId) -> Option<vtr::activity::MemoryEstimate> {
+        match self.traces.get(&trace)?.build {
+            Build::NeedsMemory(estimate) => Some(estimate),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn approve_memory(&mut self, trace: TraceId) {
+        if let Some(a) = self.traces.get_mut(&trace)
+            && let Build::NeedsMemory(estimate) = a.build
+        {
+            a.load_policy = volna_trace::data::ActivityLoadPolicy::Approved {
+                peak_bytes: estimate.peak,
+            };
+            a.build = Build::Queued;
+        }
+    }
+
     pub(crate) fn start_build(&mut self, trace: TraceId) {
         if let Some(a) = self.traces.get_mut(&trace)
-            && !matches!(a.build, Build::Running { .. })
+            && !matches!(a.build, Build::Running { .. } | Build::NeedsMemory(_))
         {
             a.build = Build::Queued;
         }
@@ -391,6 +432,10 @@ impl ActivityModel {
                     .get(&slot.id)
                     .filter(|a| a.generation == slot.generation())?;
                 let state = match &a.build {
+                    Build::NeedsMemory(estimate) => ActivityBuildState::NeedsMemory {
+                        resident_bytes: estimate.resident,
+                        peak_bytes: estimate.peak,
+                    },
                     Build::Running {
                         control,
                         cancelling,

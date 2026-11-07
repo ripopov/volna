@@ -140,7 +140,7 @@ and generations identify completions without entering the wire protocol.
 `RemoteClient`, rather than their blocking local query methods.
 
 The [server guide](../volna-server/README.md) describes process hosting and
-protocol version 13. Local and remote objects have the same data contract;
+protocol version 14. Local and remote objects have the same data contract;
 transport carries runtime facts. Viewport state, search, value translation,
 transaction layout, VDB design semantics, and annotations belong to consumers.
 
@@ -151,6 +151,17 @@ Reservations follow shared owners and release when the last owner is dropped.
 `account_local_session()` applies the same admission owner to local metadata
 and loads. Limits can change while the budget is live; lowering a limit
 refuses new reservations without evicting existing objects.
+
+`ActivityLoadPolicy::Automatic` also checks an index's estimated loading peak
+against the object limit and a 256 MiB automatic threshold. `ActivityMemoryRequired`
+reports the estimate without installing the index. `Approved { peak_bytes }`
+authorizes that index up to the accepted peak without changing the object limit
+for other loads. Opening a native recording discovers existing sidecars; it defers
+index allocation until the loader has the caller's policy and budget. Native and
+remote activity loads share this policy; total memory admission applies throughout
+decoding, and every installed index owns a retained reservation.
+Malformed sidecars fall back to a valid cached copy or are rebuilt. Resource
+refusal and cancellation preserve reusable sidecars.
 
 These limits do not bound total process memory, reader caches, or every
 allocation made before admission. Complete metadata and selected histories or
