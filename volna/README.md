@@ -425,7 +425,13 @@ flushes, and instructions still in flight at close.
 
 [`pipeline_showcase.rs`](examples/pipeline_showcase.rs) simulates two pipelines
 running the same instruction loop, including cache stalls, branch flushes,
-dependencies, and child memory requests. [`landing.rs`](examples/landing.rs)
+dependencies, and child memory requests. Instructions own located stage visits
+under each core's frontend, backend, and load/store hardware: buffers, pipeline
+registers, issue queues, execution pipes, and retirement queues. CPU0 is single
+issue; CPU1 shares its resources between two instructions per cycle. Open a
+resource track to inspect its occupants, or the `pipeline.instruction` track to
+follow an instruction through those resources. Stall overlays stay embedded on
+the `stall` lane. [`landing.rs`](examples/landing.rs)
 records a core, L2 cache, DRAM refills, an interrupt handler, declared clocks,
 typed logs, and located events. The landing trace includes sparse records, dense
 sequences, and hundreds of records at the same timestamp. The

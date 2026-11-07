@@ -1,4 +1,4 @@
-//! Two simulated pipelines with typed instructions, memory requests, and cycle waveforms.
+//! Two simulated pipelines with located hardware-resource visits and cycle waveforms.
 
 #[path = "support/rng.rs"]
 mod rng;
@@ -45,6 +45,34 @@ impl Payload for Instruction {
             insn_id: u64::decode(reader)?,
             pc: u64::decode(reader)?,
             iteration: u64::decode(reader)?,
+        })
+    }
+}
+
+struct ResourceVisit {
+    label: String,
+    miss: bool,
+}
+impl Payload for ResourceVisit {
+    fn bind(types: &mut vtr::Types) -> vtr::Result<vtr::TypeId> {
+        let text = String::bind(types)?;
+        let boolean = bool::bind(types)?;
+        types.structure(
+            "ResourceVisit",
+            vec![
+                vtr::schema::Field::new("vtr.label", text),
+                vtr::schema::Field::new("miss", boolean),
+            ],
+        )
+    }
+    fn encode(&self, out: &mut Vec<u8>) -> vtr::Result<()> {
+        self.label.encode(out)?;
+        self.miss.encode(out)
+    }
+    fn decode(reader: &mut PayloadReader<'_>) -> vtr::Result<Self> {
+        Ok(Self {
+            label: String::decode(reader)?,
+            miss: bool::decode(reader)?,
         })
     }
 }
@@ -175,9 +203,9 @@ const PROGRAM: &[Op] = &[
 /// How one core is recorded.
 struct CoreConfig {
     name: &'static str,
-    /// Stage names on the primary lane, in order. `execute` and `memory`
-    /// index into it.
-    stages: &'static [&'static str],
+    /// (Hardware block, resource) in pipeline order; execution and memory
+    /// indices identify where operands are consumed and results become ready.
+    stages: &'static [(&'static str, &'static str)],
     execute: usize,
     memory: usize,
     /// Instructions that may share one cycle in every stage.
@@ -198,7 +226,13 @@ struct CoreConfig {
 const CORES: [CoreConfig; 2] = [
     CoreConfig {
         name: "cpu0",
-        stages: &["F", "D", "X", "M", "W"],
+        stages: &[
+            ("frontend", "fetch_buffer"),
+            ("frontend", "decode_register"),
+            ("backend", "execute_register"),
+            ("load_store", "memory_register"),
+            ("backend", "writeback_register"),
+        ],
         execute: 2,
         memory: 3,
         width: 1,
@@ -211,7 +245,16 @@ const CORES: [CoreConfig; 2] = [
     },
     CoreConfig {
         name: "cpu1",
-        stages: &["F", "Dc", "Rn", "Ds", "Is", "Rr", "X", "Cm"],
+        stages: &[
+            ("frontend", "fetch_queue"),
+            ("frontend", "decode_queue"),
+            ("frontend", "rename_register"),
+            ("backend", "dispatch_queue"),
+            ("backend", "issue_queue"),
+            ("backend", "operand_read_register"),
+            ("backend", "execution_pipe"),
+            ("backend", "retire_queue"),
+        ],
         execute: 6,
         memory: 6,
         width: 2,
@@ -404,9 +447,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let k_detail = w.intern("detail")?;
     let k_wakeup = w.intern("wakeup")?;
     let k_causes = w.intern("causes")?;
-    let k_miss = w.intern("miss")?;
     let k_reason = w.intern("reason")?;
-    let lane0 = w.intern("0")?;
     let lane_stall = w.intern("stall")?;
     let stall_name = w.intern("stl")?;
     let reason_miss = w.intern("cache miss")?;
@@ -419,6 +460,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     struct CoreNodes {
         generator: Source<Instruction>,
+        stages: Vec<Source<ResourceVisit, vtr::recording::source::Stage>>,
         pc: SignalId,
         fetch_valid: SignalId,
         stall: SignalId,
@@ -474,8 +516,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             SourceOptions::new("instruction", Some(stream)),
             "PIPELINE",
         )?;
+        let mut units = HashMap::new();
+        let mut stages = Vec::new();
+        for &(unit, resource) in cfg.stages {
+            let parent = if let Some(&parent) = units.get(unit) {
+                parent
+            } else {
+                let parent = w.scope_with(
+                    SourceOptions::new(unit, Some(core)),
+                    ScopeType::Module,
+                    unit,
+                )?;
+                units.insert(unit, parent);
+                parent
+            };
+            stages.push(w.stages::<ResourceVisit>(SourceOptions::new(resource, Some(parent)))?);
+        }
         nodes.push(CoreNodes {
             generator,
+            stages,
             pc,
             fetch_valid,
             stall,
@@ -532,13 +591,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut stage_names: HashMap<&str, u32> = HashMap::new();
-    for cfg in &CORES {
-        for name in cfg.stages {
-            let id = w.intern(name)?;
-            stage_names.insert(name, id);
-        }
-    }
+    let mut completed_instructions = Vec::new();
+    let mut completed_requests = Vec::new();
     let mut totals = (0usize, 0usize, 0usize, 0usize); // instructions, flushed, open, requests
     for ((cfg, cutoff), (insns, n)) in CORES
         .iter()
@@ -567,24 +621,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if *b > cutoff {
                     break;
                 }
-                let name = stage_names[cfg.stages[k]];
-                let mut attrs = Vec::new();
-                if k == cfg.memory && e - b > 1 {
-                    attrs.push(Attribute {
-                        key: k_miss,
-                        value: Value::Bool(true),
-                    });
-                }
-                attrs.push(Attribute {
-                    key: k_label,
-                    value: Value::Text(format!("{} for instruction {}", cfg.stages[k], insn.index)),
-                });
-                let end = if in_flight && *e > cutoff {
-                    None
-                } else {
-                    Some(*e)
+                let payload = ResourceVisit {
+                    label: format!("{} for instruction {}", cfg.stages[k].1, insn.index),
+                    miss: k == cfg.memory && e - b > 1,
                 };
-                w.embedded_stage(tx.owner(), *b, name, lane0, end, attrs)?;
+                let visit = w.begin_stage_at(n.stages[k], tx.owner(), *b, &payload)?;
+                if !in_flight || *e <= cutoff {
+                    w.end_stage_at(visit, *e)?;
+                }
             }
 
             for (b, e) in &insn.stalls {
@@ -658,17 +702,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }],
                 )?;
                 if e <= cutoff {
-                    w.end_at(request, e, Status::Ok)?;
+                    completed_requests.push((request, e));
                 }
                 totals.3 += 1;
             }
             if insn.status == Status::Aborted {
                 let detail = w.intern("squashed by a mispredicted branch")?;
                 w.attribute(tx.owner(), k_detail, Value::Str(detail))?;
-                w.end_at(tx, insn.end, Status::Aborted)?;
+                completed_instructions.push((tx, insn.end, Status::Aborted));
                 totals.1 += 1;
             } else if !in_flight {
-                w.end_at(tx, insn.end, Status::Unset)?;
+                completed_instructions.push((tx, insn.end, Status::Unset));
             } else {
                 // Still in flight when the recording stops: left open, the
                 // writer closes it (status Open) at the final time.
@@ -676,6 +720,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             totals.0 += 1;
         }
+    }
+    // Ending an owner flushes located records; batch completed owners so visits
+    // from many instructions share blocks instead of producing tiny sections.
+    for (tx, end, status) in completed_instructions {
+        w.end_at(tx, end, status)?;
+    }
+    for (request, end) in completed_requests {
+        w.end_at(request, end, Status::Ok)?;
     }
     w.advance_time(last_cycle)?;
     w.close()?;
@@ -714,6 +766,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "record {} has an unlabeled stage",
             tx.id()
         );
+        let activity = rd.expand(tx.id()).unwrap();
+        assert!(activity.missing_blocks.is_empty());
+        for visit in &activity.located {
+            assert_eq!(visit.kind(), vtr::RecordKind::Stage);
+            assert_eq!(visit.parent(), Some(tx.id()));
+            assert!(!visit.decode::<ResourceVisit>().unwrap().label.is_empty());
+            assert!(visit.begin() >= tx.begin() && visit.end() <= tx.end());
+        }
         let generator = tx.generator().unwrap();
         *per_generator
             .entry(
@@ -722,6 +782,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .to_owned(),
             )
             .or_default() += 1;
+        if nodes.iter().any(|n| n.generator.id() == generator) {
+            assert!(!activity.located.is_empty());
+            assert!(
+                tx.stages()
+                    .iter()
+                    .all(|stage| rd.string(stage.lane).unwrap() == "stall")
+            );
+        }
         n_tx += 1;
         match tx.status() {
             Status::Aborted => flushed += 1,

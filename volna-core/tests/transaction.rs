@@ -469,9 +469,18 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
     let lane = &v.lifeline[0];
     assert!(lane.primary);
     let names: Vec<_> = lane.cells.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, ["F", "D", "X", "M", "W"]);
+    assert_eq!(
+        names,
+        [
+            "fetch_buffer",
+            "decode_register",
+            "execute_register",
+            "memory_register",
+            "writeback_register"
+        ]
+    );
     let palette = app.panels.pipeline(pipeline).unwrap().palette();
-    assert_eq!(lane.cells[3].swatch, palette.swatch("M"));
+    assert_eq!(lane.cells[3].swatch, palette.swatch("memory_register"));
     assert!((lane.cells[3].width - 10.0 / 14.0).abs() < 1e-4);
 
     let keys: Vec<_> = v.attributes.rows.iter().map(|a| a.key.as_str()).collect();
@@ -510,11 +519,16 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
         "0x80000060"
     );
 
-    let m = v.stages.rows.iter().find(|s| s.name == "M").unwrap();
+    let m = v
+        .stages
+        .rows
+        .iter()
+        .find(|s| s.name == "memory_register")
+        .unwrap();
     assert!(
         m.attributes
             .iter()
-            .any(|c| c.key == "miss" && c.value == "true")
+            .any(|c| c.key == "payload.miss" && c.value == "true")
     );
     assert!((m.share - 10.0 / 14.0).abs() < 1e-4);
 
@@ -564,7 +578,12 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
         .copy_tsv(&app.doc)
         .unwrap();
     assert!(tsv.starts_with("Generator\tID\tBegin\tEnd\tDuration\tStatus\tKind\n"));
-    assert!(tsv.contains("M\t0\t36\t46\tmiss=true"), "{tsv}");
+    assert!(
+        tsv.lines().any(|line| {
+            line.starts_with("memory_register\t0\t36\t46\t") && line.contains("payload.miss=true")
+        }),
+        "{tsv}"
+    );
 }
 
 #[test]

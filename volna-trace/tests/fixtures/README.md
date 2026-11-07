@@ -10,6 +10,7 @@ Server process tests share this directory.
 | `features.vtr`, `operators.vtr`, `pipeline.vtr` | Verilator waveforms paired with converter inputs |
 | `counter.vtr`, `picorv32.vtr`, `landing.vtr` | Hierarchy views, page transfer, declaration identity, and alias counts |
 | `feature_showcase.vtr`, `pipeline_showcase.vtr`, `landing_dram.vtr` | Scope sizes across waveform and transaction hierarchies |
+| `pipeline_showcase.vtr` | Instruction visits on shared, located hardware-resource tracks |
 
 ## Provenance
 
