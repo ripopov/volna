@@ -848,6 +848,64 @@ fn narrow_pipeline_stages_show_the_prefix_that_fits() {
 }
 
 #[test]
+fn panning_and_zooming_keep_stage_labels_centered_in_the_visible_portion() {
+    use volna_core::wave::viewport::Viewport;
+
+    let session = fixture_with_stages(2, &["scoreboard", "decode", "execute"]);
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    complete_pending(&mut app);
+    let panel = app.panels.focused_id();
+
+    for theme in [Theme::one_dark(), Theme::islands_light()] {
+        frame(&mut app, panel, &theme);
+        for (start, end, center_fraction) in [
+            (-0.5, 1.5, 0.5),
+            (-0.5, 0.5, 0.75),
+            (0.5, 1.5, 0.25),
+            (0.1, 0.3, 0.5),
+            (0.7, 0.9, 0.5),
+        ] {
+            app.panels
+                .pipeline_mut(panel)
+                .unwrap()
+                .nav
+                .viewport_state_mut(&mut app.doc)
+                .set(Viewport { start, end });
+            frame(&mut app, panel, &theme);
+            let layout = app.panels.pipeline(panel).unwrap().last_layout();
+            let (origin, width) = app
+                .scene()
+                .prims
+                .iter()
+                .find_map(|prim| match prim {
+                    Prim::Text {
+                        origin,
+                        text,
+                        font: FontRole::Mono,
+                        size,
+                        ..
+                    } if text == "scoreboard" && origin.y == layout.row_y(0) => {
+                        Some((*origin, text.chars().count() as f32 * size * 0.6))
+                    }
+                    _ => None,
+                })
+                .expect("the stage name stays readable while panning and zooming");
+            let cells = layout.cells;
+            assert!(origin.x >= cells.left());
+            assert!(origin.x + width <= cells.right());
+            let expected_center = cells.left() + cells.width() * center_fraction;
+            assert!(
+                (origin.x + width / 2.0 - expected_center).abs() <= 2.0,
+                "stage label is centered in its visible portion at {start}..{end}"
+            );
+        }
+    }
+}
+
+#[test]
 fn overlapping_stages_keep_readable_labels() {
     let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
     let mut writer = vtr::Writer::create(file.path()).unwrap();

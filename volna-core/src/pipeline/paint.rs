@@ -248,16 +248,18 @@ pub fn paint(
                             });
                         }
                         last_right = Some(last_right.map_or(xb, |r: f32| r.max(xb)));
+                        let label_left = xa.max(cells.left());
+                        let label_right = xb.min(cells.right());
                         if band_height >= TEXT_MIN_PX
                             && let Some((label, w)) = fitting_stage_label(
                                 &mut p,
                                 &stage.name,
                                 cell_font,
-                                xb - xa - z(CELL_TEXT_PAD_PX),
+                                label_right - label_left - z(CELL_TEXT_PAD_PX),
                             )
                         {
                             cell_texts.push((
-                                point(snap((xa + xb - w) / 2.0), band_y),
+                                point(snap((label_left + label_right - w) / 2.0), band_y),
                                 band_height,
                                 label,
                                 if flushed { t.editor.text } else { style.text },
