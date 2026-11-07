@@ -67,7 +67,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         heading: "Capture at instants",
-        guidance: "@ has the lowest precedence. A captured waveform holds its last captured value between triggers. The clock after @ must be one bound Boolean alias; save a Boolean expression as a formula first if needed. A capture at a source event sees the new value. Repeated equal captures remain countable. Arithmetic on a captured waveform discards its capture timestamps; put the arithmetic inside @ when its result needs counting.",
+        guidance: "@ has the lowest precedence. A captured waveform holds its last captured value between triggers. After @, a bound bit or bus captures value changes; posedge requires one bound Boolean alias. Save a Boolean expression as a formula first if needed. A capture at a source event sees the new value. Repeated equal captures remain countable. Arithmetic on a captured waveform discards its capture timestamps; put the arithmetic inside @ when its result needs counting.",
         examples: &[
             Example {
                 formula: "a - b @ 1 ns",
@@ -84,6 +84,10 @@ const SECTIONS: &[Section] = &[
             Example {
                 formula: "a - (b @ 1 ns)",
                 explanation: "Capture only b before subtracting; this differs from (a - b) @ 1 ns.",
+            },
+            Example {
+                formula: "a @sample_number",
+                explanation: "Capture once per observed counter change, including reset and wrap. Skipped counter values do not create extra samples.",
             },
         ],
     },

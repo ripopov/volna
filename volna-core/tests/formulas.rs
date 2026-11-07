@@ -1741,3 +1741,423 @@ fn editor_diagnostics_and_hints_follow_the_current_expression() {
     let expression = "a + ? + 3";
     assert!(language::Syntax::new(expression).tokens().iter().any(|token| token.kind == TokenKind::Number && &expression[token.range.clone()] == "3"));
 }
+
+// A user registers a clock from its waveform menu, saves a measurement, and changes
+// the default to a counter. Only new formulas use the new default, including after reopening.
+#[test]
+fn sampling_defaults_preserve_saved_measurements_and_survive_reopening() {
+    use volna_core::sampling::{SamplingChoice, SamplingCommand, SamplingMode};
+    let (_file, mut app) = fixture();
+    app.handle(Command::AddVars(a_all([4])));
+    let panel = app.panels.focused_id();
+    app.handle(Command::OpenSignalMenu(panel));
+    let menu = app.panels.focused_waves().unwrap().menu.as_ref().unwrap();
+    let action = menu
+        .items()
+        .find(|item| item.label == "Rising edge")
+        .unwrap()
+        .action
+        .clone();
+    app.handle(Command::MenuSelect(panel, action));
+    command(&mut app, Derive::Open(Some(0)));
+    let expression = app.derived_editor.as_ref().unwrap().draft.formula.clone();
+    formula(&mut app, &format!("interval_sum({expression})"));
+    let Some(ComputationStatus::ReadyMeasurement(measurement)) = app.derived_preview() else {
+        panic!("clock measurement unavailable")
+    };
+    assert_eq!(measurement.value, Some(2.0));
+    command(&mut app, Derive::Apply);
+    let counter = SamplingChoice::new(
+        &app.doc,
+        Traced::new(TraceId::A, 5),
+        SamplingMode::ValueChanges,
+    )
+    .unwrap();
+    app.handle(Command::Sampling(SamplingCommand::Register(
+        Traced::new(TraceId::A, 5),
+        SamplingMode::ValueChanges,
+    )));
+    command(&mut app, Derive::Open(Some(0)));
+    pump(&mut app);
+    assert_eq!(preview(&app).capture_times(), Some([2].as_slice()));
+    command(&mut app, Derive::Close);
+    app.handle(Command::Sampling(SamplingCommand::MakeDefault(counter)));
+    let bytes = saved(&app);
+    restore(&mut app, &bytes);
+    let saved = app
+        .panels
+        .focused_waves()
+        .unwrap()
+        .items()
+        .iter()
+        .filter_map(|e| e.signal())
+        .find(|s| s.name == "result")
+        .unwrap();
+    let Some(volna_core::computed::MeasurementResult::Scalar(value)) = &saved.measurement else {
+        panic!("saved measurement unavailable")
+    };
+    assert_eq!(value.value, Some(2.0));
+    command(&mut app, Derive::Open(Some(0)));
+    pump(&mut app);
+    assert_eq!(preview(&app).capture_times(), Some([3].as_slice()));
+    assert_eq!(number(preview(&app), 3), Some(8.0));
+    let expression = app.derived_editor.as_ref().unwrap().draft.formula.clone();
+    formula(&mut app, &format!("interval_sum({expression})"));
+    let Some(ComputationStatus::ReadyMeasurement(measurement)) = app.derived_preview() else {
+        panic!("counter measurement unavailable")
+    };
+    assert_eq!(measurement.value, Some(8.0));
+}
+
+// A user picks a counter while composing a measurement, then switches to a clock.
+// Sampling belongs inside the reduction and rejected bus edges leave the result intact.
+#[test]
+fn sampling_picker_updates_measurements_without_changing_their_meaning() {
+    use volna_core::sampling::SamplingMode;
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Open(Some(0)));
+    formula(&mut app, "interval_sum(a + 1)");
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 5),
+            mode: SamplingMode::ValueChanges,
+            make_default: true,
+        },
+    );
+    pump(&mut app);
+    let Some(ComputationStatus::ReadyMeasurement(value)) = app.derived_preview() else {
+        panic!("counter measurement unavailable")
+    };
+    assert_eq!(value.value, Some(9.0));
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 4),
+            mode: SamplingMode::RisingEdge,
+            make_default: false,
+        },
+    );
+    pump(&mut app);
+    let Some(ComputationStatus::ReadyMeasurement(value)) = app.derived_preview() else {
+        panic!("clock measurement unavailable")
+    };
+    assert_eq!(value.value, Some(3.0));
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 5),
+            mode: SamplingMode::RisingEdge,
+            make_default: true,
+        },
+    );
+    assert!(
+        app.derived_editor
+            .as_ref()
+            .unwrap()
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Choose a bit")
+    );
+    assert_eq!(
+        app.derived_editor
+            .as_ref()
+            .unwrap()
+            .sampling(&app.doc)
+            .unwrap()
+            .mode,
+        SamplingMode::RisingEdge
+    );
+    command(&mut app, Derive::Preview);
+    pump(&mut app);
+    let Some(ComputationStatus::ReadyMeasurement(value)) = app.derived_preview() else {
+        panic!("previous measurement was lost")
+    };
+    assert_eq!(value.value, Some(3.0));
+}
+
+// A user removes the clock default from the signal menu. The remaining counter
+// becomes the default; removing all choices restores an unsampled new formula.
+#[test]
+fn removing_sampling_choices_changes_only_new_formula_defaults() {
+    use volna_core::sampling::{SamplingChoice, SamplingCommand, SamplingMode};
+    let (_file, mut app) = fixture();
+    let clock = SamplingChoice::new(
+        &app.doc,
+        Traced::new(TraceId::A, 4),
+        SamplingMode::RisingEdge,
+    )
+    .unwrap();
+    let counter = SamplingChoice::new(
+        &app.doc,
+        Traced::new(TraceId::A, 5),
+        SamplingMode::ValueChanges,
+    )
+    .unwrap();
+    app.handle(Command::Sampling(SamplingCommand::Register(
+        Traced::new(TraceId::A, 4),
+        SamplingMode::RisingEdge,
+    )));
+    app.handle(Command::Sampling(SamplingCommand::Register(
+        Traced::new(TraceId::A, 5),
+        SamplingMode::ValueChanges,
+    )));
+    app.handle(Command::Sampling(SamplingCommand::Remove(clock)));
+    command(&mut app, Derive::Open(Some(0)));
+    pump(&mut app);
+    assert_eq!(preview(&app).capture_times(), Some([3].as_slice()));
+    command(&mut app, Derive::Close);
+    app.handle(Command::Sampling(SamplingCommand::Remove(counter)));
+    command(&mut app, Derive::Open(Some(0)));
+    pump(&mut app);
+    assert!(preview(&app).capture_times().is_none());
+    assert_eq!(number(preview(&app), 0), Some(2.0));
+}
+
+// A user samples by a 64-bit counter with adjacent large values, skipped values,
+// resets and wrap. Each observed change contributes exactly one sample to the sum.
+#[test]
+fn counter_sampling_preserves_exact_transitions_above_float_precision() {
+    use volna_core::sampling::SamplingMode;
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let a = writer
+        .signal(
+            vtr::SourceOptions::new("a", None),
+            vtr::SignalKind::Real,
+            vtr::VarType::Real,
+            vtr::Direction::Output,
+        )
+        .unwrap();
+    let counter = writer
+        .signal(
+            vtr::SourceOptions::new("sample_number", None),
+            vtr::SignalKind::Bits {
+                width: 64,
+                states: 4,
+            },
+            vtr::VarType::Wire,
+            vtr::Direction::Output,
+        )
+        .unwrap();
+    for (time, value, sample) in [
+        (0, 2.0, 1_u64 << 53),
+        (2, 4.0, (1 << 53) + 1),
+        (3, 6.0, (1 << 53) + 3),
+        (4, 8.0, 0),
+        (5, 10.0, u64::MAX),
+        (6, 12.0, 0),
+        (7, 99.0, 0),
+    ] {
+        writer.advance_time(time).unwrap();
+        writer.emit_real(a, value).unwrap();
+        writer.emit_u64(counter, sample).unwrap();
+    }
+    writer.advance_time(8).unwrap();
+    writer.close().unwrap();
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
+    app.handle(Command::AddVars(a_all([0])));
+    command(&mut app, Derive::Open(Some(0)));
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 1),
+            mode: SamplingMode::ValueChanges,
+            make_default: true,
+        },
+    );
+    pump(&mut app);
+    assert_eq!(
+        preview(&app).capture_times(),
+        Some([2, 3, 4, 5, 6].as_slice())
+    );
+    let expression = app.derived_editor.as_ref().unwrap().draft.formula.clone();
+    formula(&mut app, &format!("interval_sum({expression})"));
+    let Some(ComputationStatus::ReadyMeasurement(value)) = app.derived_preview() else {
+        panic!("counter measurement unavailable")
+    };
+    assert_eq!(value.value, Some(40.0));
+}
+
+// A user switches a two-input formula from counter sampling back to input changes.
+// Both operands must drive updates again, and saving must preserve this choice despite a trace default.
+#[test]
+fn input_change_sampling_restores_updates_from_each_operand() {
+    use volna_core::sampling::SamplingMode;
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Open(Some(0)));
+    add(&mut app, 1);
+    formula(&mut app, "a + b");
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 5),
+            mode: SamplingMode::ValueChanges,
+            make_default: true,
+        },
+    );
+    pump(&mut app);
+    assert_eq!(number(preview(&app), 2), None);
+    command(&mut app, Derive::SampleOnInputChanges);
+    pump(&mut app);
+    assert_eq!(number(preview(&app), 2), Some(6.0));
+    assert_eq!(number(preview(&app), 3), Some(12.0));
+    assert_eq!(number(preview(&app), 5), Some(8.0));
+    command(&mut app, Derive::Apply);
+    let bytes = saved(&app);
+    restore(&mut app, &bytes);
+    assert_eq!(number(result(&app), 2), Some(6.0));
+    assert_eq!(number(result(&app), 5), Some(8.0));
+    command(&mut app, Derive::Open(Some(1)));
+    pump(&mut app);
+    assert_eq!(number(preview(&app), 2), Some(6.0));
+    assert!(preview(&app).capture_times().is_none());
+}
+
+// A user changes the sampling source after filling the input slots. Replacing a
+// trigger-only binding must not require an extra slot or alter the sampled value expression.
+#[test]
+fn sampling_can_be_replaced_when_all_input_slots_are_occupied() {
+    use volna_core::sampling::SamplingMode;
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Open(Some(0)));
+    for _ in 0..14 {
+        add(&mut app, 1);
+    }
+    formula(&mut app, "a + 1");
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 4),
+            mode: SamplingMode::RisingEdge,
+            make_default: false,
+        },
+    );
+    pump(&mut app);
+    assert_eq!(number(preview(&app), 3), Some(3.0));
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 5),
+            mode: SamplingMode::ValueChanges,
+            make_default: false,
+        },
+    );
+    pump(&mut app);
+    assert_eq!(preview(&app).capture_times(), Some([3].as_slice()));
+    assert_eq!(number(preview(&app), 3), Some(9.0));
+    command(&mut app, Derive::Apply);
+    assert_eq!(number(result(&app), 3), Some(9.0));
+}
+
+// A user reopens a formula whose sampling signal has disappeared and selects a
+// replacement. The missing trigger must be repairable without manually editing input bindings.
+#[test]
+fn unavailable_sampling_can_be_repaired_from_the_sampling_picker() {
+    use volna_core::sampling::SamplingMode;
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Open(Some(0)));
+    formula(&mut app, "a");
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 4),
+            mode: SamplingMode::RisingEdge,
+            make_default: true,
+        },
+    );
+    pump(&mut app);
+    command(&mut app, Derive::Apply);
+    let mut data: serde_json::Value = serde_json::from_slice(&saved(&app)).unwrap();
+    data["panels"][0]["rows"][1]["computed"]["inputs"][1]["path"] =
+        serde_json::json!(["missing_clock"]);
+    data["sampling"]["choices"][0]["path"] = serde_json::json!(["missing_clock"]);
+    restore(&mut app, &serde_json::to_vec(&data).unwrap());
+    command(&mut app, Derive::Open(Some(1)));
+    command(
+        &mut app,
+        Derive::Sample {
+            var: Traced::new(TraceId::A, 5),
+            mode: SamplingMode::ValueChanges,
+            make_default: true,
+        },
+    );
+    pump(&mut app);
+    assert_eq!(preview(&app).capture_times(), Some([3].as_slice()));
+    assert_eq!(number(preview(&app), 3), Some(8.0));
+    command(&mut app, Derive::Apply);
+    assert_eq!(number(result(&app), 3), Some(8.0));
+}
+
+// A user binds an optional signal from a shorter recording, leaves it out of the
+// expression, and sends the result to a table. The table must include the full used recording.
+#[test]
+fn unused_short_trace_does_not_truncate_derived_table_output() {
+    let (_file, mut app) = fixture();
+    let second = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut options = vtr::WriterOptions::default();
+    options.metadata.timescale = -9;
+    let mut writer = vtr::Writer::create_with(second.path(), options).unwrap();
+    let signal = writer
+        .signal(
+            vtr::SourceOptions::new("optional", None),
+            vtr::SignalKind::Real,
+            vtr::VarType::Real,
+            vtr::Direction::Output,
+        )
+        .unwrap();
+    writer.emit_real(signal, 1.0).unwrap();
+    writer.advance_time(3).unwrap();
+    writer.emit_real(signal, 2.0).unwrap();
+    writer.close().unwrap();
+    let trace = app
+        .add_session(OpenSpec::Path(second.path().into()).open().unwrap())
+        .unwrap();
+    pump(&mut app);
+    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::AddInput(Traced::new(trace, 0)));
+    formula(&mut app, "a");
+    command(&mut app, Derive::ApplyTable);
+    pump(&mut app);
+    let table = app
+        .panels
+        .iter_mut()
+        .find_map(|panel| panel.kind.table_mut())
+        .unwrap();
+    table.selected = Some(volna_core::table::RowIdentity::SignalTime(8));
+    assert_eq!(table.copy_tsv().unwrap(), "Time\tresult\n8\t10.0");
+}
+
+// A user captures only one operand while leaving another live. The sampling
+// control must describe this as custom, since changing the live operand still updates the result.
+#[test]
+fn partially_captured_expressions_do_not_claim_one_sampling_rule() {
+    use volna_core::sampling::SamplingMode;
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Open(Some(0)));
+    add(&mut app, 1);
+    add(&mut app, 4);
+    formula(&mut app, "a + (b @posedge ready)");
+    assert_eq!(number(preview(&app), 2), Some(6.0));
+    assert_eq!(number(preview(&app), 3), Some(12.0));
+    assert!(
+        app.derived_editor
+            .as_ref()
+            .unwrap()
+            .sampling(&app.doc)
+            .is_none()
+    );
+    formula(&mut app, "(a + b) @posedge ready");
+    assert_eq!(number(preview(&app), 3), Some(6.0));
+    assert_eq!(
+        app.derived_editor
+            .as_ref()
+            .unwrap()
+            .sampling(&app.doc)
+            .unwrap()
+            .mode,
+        SamplingMode::RisingEdge
+    );
+}

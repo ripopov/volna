@@ -22,6 +22,7 @@ pub struct RecordedMatch {
 pub struct RecordedSearch {
     sessions: Vec<(TraceId, Arc<dyn Session>)>,
     query: String,
+    sampling: bool,
 }
 impl RecordedSearch {
     #[must_use]
@@ -33,8 +34,15 @@ impl RecordedSearch {
                 .map(|(id, session)| (id, session.clone()))
                 .collect(),
             query: query.to_lowercase(),
+            sampling: false,
         }
     }
+    #[must_use]
+    pub fn sampling_only(mut self) -> Self {
+        self.sampling = true;
+        self
+    }
+
     #[must_use]
     pub fn run(self, cancelled: &AtomicBool) -> Vec<RecordedMatch> {
         let mut matches = Vec::new();
@@ -51,6 +59,11 @@ impl RecordedSearch {
                         return Vec::new();
                     }
                     let v = h.var(var);
+                    if self.sampling
+                        && !crate::sampling::SamplingMode::ValueChanges.accepts(v.shape)
+                    {
+                        continue;
+                    }
                     if !matches!(
                         v.shape,
                         SignalShape::Bit | SignalShape::Vector { width: 2.. } | SignalShape::Real

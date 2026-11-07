@@ -2,6 +2,7 @@
 
 mod derived;
 mod opening;
+mod sampling;
 mod tooltip;
 mod traces;
 mod undo;
@@ -211,6 +212,7 @@ pub enum ChromeDrag {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
+    Sampling(crate::sampling::SamplingCommand),
     Derived(PanelId, crate::computed::Command),
     Notice(String),
     BuildActivity(TraceId),
@@ -1572,6 +1574,23 @@ impl App {
                     }
                     return;
                 }
+                if let MenuAction::Sampling(command) = &action {
+                    let valid = self
+                        .panels
+                        .waves(panel)
+                        .and_then(|w| w.menu.as_ref())
+                        .is_some_and(|menu| {
+                            menu.items()
+                                .any(|item| item.action == action && !item.disabled)
+                        });
+                    if valid {
+                        self.sampling_command(command.clone());
+                        if let Some(waves) = self.panels.waves_mut(panel) {
+                            waves.menu_dismiss();
+                        }
+                    }
+                    return;
+                }
                 if action == MenuAction::Derived {
                     let row = self
                         .panels
@@ -1723,6 +1742,7 @@ impl App {
                 self.changed();
             }
             Command::Recent(command) => self.recent_command(command),
+            Command::Sampling(command) => self.sampling_command(command),
             Command::Derived(panel, command) => self.derived_command(panel, command),
         }
     }

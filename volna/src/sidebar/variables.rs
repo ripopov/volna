@@ -1,7 +1,7 @@
 //! The variable list panel: GPUI rows over `MemberListModel`, with the filter text box.
 
 use gpui_kit::component::Disableable;
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Context, CursorStyle, Focusable, IntoElement, KeyDownEvent, SharedString, Window, div, px,
@@ -188,6 +188,11 @@ impl Workspace {
                             h.member_description(member).to_owned().into();
                         let track = h.member_track(member).map(|track| traced.with(track));
                         let clock = this.app.member_clock(traced).is_some();
+                        let generation = this.app.doc.generation();
+                        let sampling_items = member.var().map_or_else(Vec::new, |var| {
+                            this.app.doc.sampling_menu(traced.with(var))
+                        });
+
                         let mut row = div()
                             .id(("var", ix))
                             .debug_selector(move || format!("member-row-{}-{ix}", traced.trace))
@@ -297,7 +302,7 @@ impl Workspace {
                                     .text_color(colors.text_placeholder)
                                     .child(dims),
                             )
-                            .context_menu(move |menu, _, _cx| {
+                            .context_menu(move |menu, menu_window, menu_cx| {
                                 let owner = owner.clone();
                                 let add =
                                     |label: &'static str,
@@ -322,6 +327,32 @@ impl Workspace {
                                             }));
                                         })
                                     };
+                                let mut menu = menu;
+                                if !sampling_items.is_empty() {
+                                    let items = sampling_items.clone();
+                                    let owner = owner.clone();
+                                    let registered = items.iter().any(|item| {
+                                        matches!(
+                                            item.state,
+                                            volna_core::wave::MenuItemState::Choice {
+                                                selected: true
+                                            }
+                                        )
+                                    });
+                                    let sampling_label = if registered {
+                                        "Sampling"
+                                    } else {
+                                        "Use for sampling"
+                                    };
+                                    menu = menu.submenu(
+                                        sampling_label,
+                                        menu_window,
+                                        menu_cx,
+                                        move |menu, _, _| {
+                                            sampling_submenu(menu, &items, &owner, generation)
+                                        },
+                                    );
+                                }
                                 let menu = if clock {
                                     menu.item(add("Add as Ruler", Command::AddClockRulers))
                                         .item(add("Add as Waveform", Command::AddToWaves))
@@ -460,4 +491,39 @@ impl Workspace {
                 )
             })
     }
+}
+
+fn sampling_submenu(
+    mut menu: PopupMenu,
+    items: &[volna_core::wave::MenuItem],
+    owner: &gpui_kit::WeakEntity<Workspace>,
+    generation: u64,
+) -> PopupMenu {
+    for item in items {
+        let volna_core::wave::model::MenuAction::Sampling(command) = &item.action else {
+            continue;
+        };
+        let command = command.clone();
+        let owner = owner.clone();
+        let checked = matches!(
+            item.state,
+            volna_core::wave::MenuItemState::Choice { selected: true }
+        );
+        menu = menu.item(
+            PopupMenuItem::new(item.label.clone())
+                .checked(checked)
+                .disabled(item.disabled)
+                .on_click(move |_, window, cx| {
+                    drop(owner.update(cx, |workspace, cx| {
+                        workspace.dispatch_if_current(
+                            generation,
+                            Command::Sampling(command.clone()),
+                            Some(window),
+                            cx,
+                        );
+                    }));
+                }),
+        );
+    }
+    menu
 }

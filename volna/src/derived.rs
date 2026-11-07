@@ -3,6 +3,7 @@
 mod editor;
 mod inputs;
 mod reference;
+mod sampling;
 mod search;
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests;
@@ -86,6 +87,7 @@ pub(crate) struct DerivedEditor {
     search: Entity<InputState>,
     picker: Option<InputPicker>,
     input_search: InputSearch,
+    sampling_default: bool,
     bindings: Vec<BindingFields>,
     skip_unknown: bool,
     scope: volna_core::computed::MeasurementScope,
@@ -193,6 +195,7 @@ impl DerivedEditor {
             search,
             picker: None,
             input_search: InputSearch::default(),
+            sampling_default: false,
             bindings: Vec::new(),
             skip_unknown: draft.skip_unknown,
             scope: draft.scope,
@@ -272,11 +275,8 @@ impl DerivedEditor {
         let scope = if analysis.result.as_ref().is_ok_and(|program| {
             program.kind == volna_core::computed::ResultKind::ScalarMeasurement
         }) {
-            let Ok(scope) = self.resolved_scope(cx) else {
-                cx.notify();
-                return false;
-            };
-            scope
+            self.resolved_scope(cx)
+                .unwrap_or_else(|_| self.scope.clone())
         } else {
             self.scope.clone()
         };
@@ -590,14 +590,29 @@ impl DerivedEditor {
         if let Some(owner) = self.owner.upgrade() {
             let ws = owner.read(cx);
             if let Some(editor) = &ws.app.derived_editor {
-                return editor::adapt_example(formula, &editor.bindings, &ws.app.doc);
+                return editor::adapt_example(formula, editor, &ws.app.doc);
             }
         }
         formula.into()
     }
 
     fn use_example(&mut self, formula: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let formula = self.example_text(formula, cx);
+        let mut formula = self.example_text(formula, cx);
+        if !formula.contains('@')
+            && let Some(owner) = self.owner.upgrade()
+        {
+            let ws = owner.read(cx);
+            if let Some(editor) = &ws.app.derived_editor
+                && let Some(choice) = editor.sampling(&ws.app.doc)
+                && let Some(binding) = editor.bindings.iter().find(|input| {
+                    input.source.var() == choice.resolve(&ws.app.doc) && input.slice.is_empty()
+                })
+                && let Ok(sampled) =
+                    volna_core::computed::capture_expression(&formula, choice.mode, &binding.alias)
+            {
+                formula = sampled;
+            }
+        }
         self.expression
             .update(cx, |input, cx| input.set_value(formula, window, cx));
         self.expression.read(cx).focus_handle(cx).focus(window, cx);
@@ -621,18 +636,11 @@ impl DerivedEditor {
             return;
         };
         let ws = owner.read(cx);
-        let Some(input) = ws
-            .app
-            .derived_editor
-            .as_ref()
-            .and_then(|editor| editor.bindings.first())
+        let Some(alias) = self
+            .analysis(cx)
+            .and_then(|analysis| analysis.preset_input())
         else {
             return;
-        };
-        let alias = if input.effective_shape(&ws.app.doc) == volna_trace::data::SignalShape::Bit {
-            format!("real({})", input.alias)
-        } else {
-            input.alias.clone()
         };
         let step = self.interval.read(cx).value().to_string();
         let expression = match function {
@@ -705,8 +713,23 @@ impl Render for DerivedEditor {
             }
             Some(ComputationStatus::ReadyMeasurement(measurement)) => {
                 ready = editor.error.is_none();
+                let detail = match measurement.status {
+                    volna_core::computed::MeasurementStatus::UnknownData
+                        if measurement.policy == volna_core::computed::UnknownPolicy::Gap =>
+                    {
+                        " · contains unknown values; use Skip unknown time to exclude them"
+                    }
+                    volna_core::computed::MeasurementStatus::UnknownData => {
+                        " · unknown values excluded"
+                    }
+                    volna_core::computed::MeasurementStatus::NoKnownData => {
+                        " · no known values in this interval"
+                    }
+                    volna_core::computed::MeasurementStatus::NonFinite => " · result is not finite",
+                    volna_core::computed::MeasurementStatus::Complete => "",
+                };
                 format!(
-                    "{} · {:.1}% known · live preview",
+                    "{} · {:.1}% known · live preview{detail}",
                     measurement
                         .value
                         .map_or_else(|| "unavailable".into(), |value| value.to_string()),
@@ -847,6 +870,7 @@ impl Render for DerivedEditor {
                 .child(marker_controls)
             });
         let close = Button::new("derived-close")
+            .debug_selector(|| "derived-close".into())
             .label("Cancel")
             .ghost()
             .xsmall()
@@ -1088,7 +1112,7 @@ impl Render for DerivedEditor {
             .child(
                 div()
                     .text_color(t.panel.text_muted)
-                    .child("Replace with preset"),
+                    .child("Apply to expression"),
             )
             .child(
                 div().flex().flex_wrap().gap_1().children(
@@ -1102,7 +1126,7 @@ impl Render for DerivedEditor {
                         Button::new(format!("preset-{function}"))
                             .label(label)
                             .small()
-                            .disabled(inputs.is_empty())
+                            .disabled(analysis.preset_input().is_none())
                             .debug_selector(move || format!("preset-{function}"))
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 view.preset(function, window, cx);
@@ -1122,6 +1146,7 @@ impl Render for DerivedEditor {
             .flex_col()
             .gap_3()
             .child(field("Name", &self.name, "derived-name"))
+            .child(self.sampling_controls(cx))
             .child(self.input_controls(&inputs, window, cx))
             .when(default_step, |el| {
                 el.child(field(

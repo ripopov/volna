@@ -100,6 +100,87 @@ impl Syntax {
     }
 
     #[must_use]
+    pub fn measurement_input(&self) -> Option<&str> {
+        let (mut first, mut last) = (0, self.tokens.len().checked_sub(1)?);
+        while first < last
+            && self.token_text(first) == Some("(")
+            && self.matching_paren(first) == Some(last)
+        {
+            first += 1;
+            last -= 1;
+        }
+        if first > last || self.matching_paren(first + 1) != Some(last) {
+            return None;
+        }
+        let argument = self.measurement_argument(first)?;
+        let value = self.expression[argument].trim();
+        (!value.is_empty()).then_some(value)
+    }
+
+    pub(crate) fn measurement_arguments(&self) -> anyhow::Result<Vec<Range<usize>>> {
+        use anyhow::Context;
+        self.tokens
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| {
+                self.is_measurement(*index) && self.token_text(index + 1) == Some("(")
+            })
+            .map(|(index, _)| {
+                self.measurement_argument(index)
+                    .context("Finish the measurement expression first.")
+            })
+            .collect()
+    }
+
+    fn measurement_argument(&self, index: usize) -> Option<Range<usize>> {
+        if !self.is_measurement(index) {
+            return None;
+        }
+        let open = index + 1;
+        let close = self.matching_paren(open)?;
+        Some(self.tokens[open].range.end..self.tokens[close].range.start)
+    }
+
+    fn is_measurement(&self, index: usize) -> bool {
+        matches!(
+            self.token_text(index),
+            Some(
+                "interval_mean"
+                    | "interval_sum"
+                    | "interval_integral"
+                    | "interval_min"
+                    | "interval_max"
+            )
+        )
+    }
+
+    fn token_text(&self, index: usize) -> Option<&str> {
+        self.tokens
+            .get(index)
+            .map(|token| &self.expression[token.range.clone()])
+    }
+
+    fn matching_paren(&self, open: usize) -> Option<usize> {
+        if self.token_text(open) != Some("(") {
+            return None;
+        }
+        let mut depth = 0_usize;
+        for index in open..self.tokens.len() {
+            match self.token_text(index)? {
+                "(" => depth += 1,
+                ")" => {
+                    depth = depth.checked_sub(1)?;
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    #[must_use]
     pub fn signature(&self, offset: usize) -> Option<&'static str> {
         let mut stack = Vec::new();
         let mut previous = None;

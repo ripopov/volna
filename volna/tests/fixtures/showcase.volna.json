@@ -1,6 +1,6 @@
 {
   "format": "volna-workspace",
-  "version": 19,
+  "version": 20,
   "traces": [
     {
       "letter": "A",
@@ -113,5 +113,8 @@
       ]
     ],
     "filter": ""
+  },
+  "sampling": {
+    "choices": []
   }
 }

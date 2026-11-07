@@ -230,13 +230,19 @@ Select recorded numeric waveforms or applied waveform formulas and choose
 **Derive**, or right-click one and choose **Derive signal…**. The docked
 inspector opens a formula with the selected input bindings. The formula editor
 uses an accent-colored frame and tinted surface in both themes. Moving average,
-Low-pass, and Mean over intervals presets insert complete formulas using the
-first binding; Boolean inputs are converted with `real(...)` when needed.
+Low-pass, and Mean over intervals actions apply to the current expression,
+retaining its arithmetic and sampling. When switching from a single interval
+measurement, they use that measurement's input. Boolean expressions are converted
+with `real(...)` when needed. Invalid expressions and combined scalar measurements
+must be edited before applying these actions.
 **Add recorded input…** searches all loaded traces, including signals that are not
 displayed. Each compact binding row shows its alias, source, and numeric type. Click an
 alias to insert it at the formula cursor. **Edit** expands the alias, numeric
 interpretation, optional bit or slice, and **Replace…** and **Remove** actions.
-Aliases are independent of row names.
+Aliases are independent of row names. Unused bindings do not narrow the output domain
+or truncate rows when adding results to a table. In windows narrower than 500 px,
+the hierarchy temporarily yields its space to the formula inspector and returns
+when the inspector closes.
 
 A temporary **Draft** row previews the result on the waveform timeline, sharing
 zoom, markers, cursor, and value readout. Initial settings compute automatically;
@@ -246,7 +252,8 @@ Enter inserts a new line in the formula. Ctrl+Space opens completion for live
 input aliases and functions with their argument signatures. Function hints appear
 beneath the editor, and errors appear directly below the expression. The
 collapsible guide provides searchable examples, **Insert** at the cursor, and
-**Replace formula** using available input aliases. **Copy** preserves the original
+**Replace formula** using available value-input aliases. Replacements retain the
+selected sampling unless the example specifies its own capture. **Copy** preserves the original
 example text. Default sampling step appears only when a sampled function omits
 `step`; measurement scope and missing-value controls appear for interval
 measurements. Scope and missing-value menus show their choices directly. Renaming the output does not recompute it. The
@@ -291,8 +298,8 @@ unknown is false, true OR unknown is true, and unresolved cases remain unknown.
 Values are held between events. Pointwise expressions use the sorted union of
 input events, while temporal children keep independent grids anchored at their
 resolved domain starts. Viewport and zoom changes never move those grids.
-`x @ 1 ns` captures on a fixed grid, `x @clk` captures every published clock
-state change, and `x @posedge clk` captures only known false-to-known true
+`x @ 1 ns` captures on a fixed grid, `x @sample_number` captures each
+observed bus value change, `x @clk` captures published Boolean clock state changes, and `x @posedge clk` captures only known false-to-known true
 transitions. Repeated captures remain available even when their values repeat.
 Captures use timestamp-coalesced histories, so delta-cycle edges cannot be
 recovered.
@@ -335,6 +342,35 @@ Bit inputs contribute 0 and 1; undefined logic follows the missing-data policy.
 Text and event signals cannot be averaged. Output follows the explicit fixed
 grid over the input trace's domain, with at most 1,000,000 samples.
 
+### Reusable sampling
+
+In Variables or a recorded waveform's context menu, choose **Use for sampling**
+and then **Rising edge** for a bit or **Value changes** for a bit or bus. The first
+choice for each trace becomes its default; additional choices remain available
+without replacing it. The sampling submenu can make a choice the default or
+remove it. Removing the default promotes that trace's next choice.
+
+The formula editor's **Sampling** control always offers **@* · Any input change**,
+which restores ordinary event-driven evaluation by removing explicit captures.
+`@*` labels this existing mode in the control; formulas use their usual syntax
+without a capture suffix. Partially captured expressions and mixed sampling
+rules are shown as **Custom sampling**, since one rule does not describe all values. The control also lists registered choices and opens the
+recorded-signal picker through **Choose another signal…**. The picker can also
+set the chosen signal as the default for new formulas. Escape closes the picker
+and returns focus to the expression. Failed selections preserve the draft and
+keep the picker open. Unavailable saved choices can be removed from the menu. Choosing sampling binds
+the signal and writes its capture into the expression, inside interval
+measurements. New formulas use their input trace's default; formulas combining
+traces require an explicit choice. Saved formulas keep their explicit captures
+when defaults change. Value-change sampling observes bus transitions exactly,
+including reset and wrap, without creating samples for skipped counter values.
+
+For a native sampling specimen, open `volna/examples/feature_showcase.vtr`, find
+`soc.clk` in Variables, and register its rising edge. Derive `soc.temperature_c`
+and select **Mean over intervals**; the formula retains `@posedge clk`. Register
+`soc.data` with **Value changes**, then switch sampling from the editor. Check the
+menus and picker in both themes, including a narrow inspector.
+
 ### Execution and saved definitions
 
 Formulas use the native/background Web Worker executor and perform
@@ -343,7 +379,7 @@ cancellation, and calculation changes cancel abandoned work. **Resume** and
 **Retry** restart stopped or failed work. Late completions cannot replace a
 newer preview. Invalid drafts and failed previews preserve the applied row.
 
-Workspace version 19 and wave panel version 20 store formula expressions,
+Workspace version 20 and wave panel version 20 store formula expressions,
 persistent formula IDs and revisions, ordered aliases, stable recorded paths and
 duplicate-path ordinals, recursive applied-formula inputs, source shapes,
 numeric interpretations, slices, default steps, saved ranges, marker scopes,

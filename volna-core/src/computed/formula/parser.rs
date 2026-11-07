@@ -284,9 +284,9 @@ impl Parser<'_> {
             }
             Some(Token::Identifier(name)) => {
                 self.at += 1;
-                Trigger::Changes(self.clock_named(&name)?)
+                Trigger::Changes(self.clock_named(&name, false)?)
             }
-            _ => bail!("Expected a duration, posedge clock, or Boolean clock after '@'."),
+            _ => bail!("Expected a duration, posedge clock, or bound signal after '@'."),
         };
         ensure!(
             !matches!(self.tokens.get(self.at), Some(Token::Capture)),
@@ -311,10 +311,10 @@ impl Parser<'_> {
             bail!("The capture clock must be one bound Boolean alias.");
         };
         self.at += 1;
-        self.clock_named(&name)
+        self.clock_named(&name, true)
     }
 
-    fn clock_named(&mut self, name: &str) -> Result<usize> {
+    fn clock_named(&mut self, name: &str, rising: bool) -> Result<usize> {
         let (index, (_, ty)) = self
             .inputs
             .iter()
@@ -322,13 +322,13 @@ impl Parser<'_> {
             .find(|(_, (alias, _))| alias == name)
             .with_context(|| format!("Unknown capture clock '{name}'."))?;
         ensure!(
-            *ty == Type::Boolean,
-            "Capture clocks must be Boolean bindings."
+            !rising || *ty == Type::Boolean,
+            "Rising-edge sampling requires a Boolean binding."
         );
         self.used_inputs[index] = true;
         self.push(
             Node::Input(index),
-            Type::Boolean,
+            *ty,
             NodeKind::Waveform {
                 captured: self.captured[index],
             },
@@ -774,7 +774,7 @@ impl Parser<'_> {
                 if reduction == Reduction::Sum {
                     ensure!(
                         x.kind == NodeKind::Waveform { captured: true },
-                        "interval_sum needs sample times. Add @ after the entire value expression, for example: interval_sum((a - b) @ 1 us)."
+                        "interval_sum needs sample times. Choose a sampling signal or put @ after the entire value expression, for example: interval_sum((a - b) @ 1 us)."
                     );
                 }
                 self.push(

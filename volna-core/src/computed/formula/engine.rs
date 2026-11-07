@@ -807,6 +807,62 @@ impl<'a> Evaluator<'a> {
         }))
     }
 
+    // Adjacent counter values above 2^53 can become the same f64; compare logic values.
+    fn capture_bus(&mut self, child: Arc<Waveform>, input: usize) -> Result<Arc<Waveform>> {
+        use volna_trace::data::value_view::ValueView;
+        let source = &self.sources[input];
+        let domain = (
+            child.domain.0.max(source.domain.0),
+            child.domain.1.min(source.domain.1),
+        );
+        ensure!(
+            domain.0 <= domain.1,
+            "Capture input and sampling signal have no common range."
+        );
+        let reader = InputHistory {
+            source: source.history,
+            projection: source.interpretation.projection,
+        };
+        let mut previous = reader.index_at(if domain.0 > source.domain.0 {
+            domain.0 - 1
+        } else {
+            domain.0
+        });
+        let mut next = previous.map_or(0, |i| i + 1);
+        let mut events = Buffer::new(self.budget)?;
+        let mut captures = Buffer::new(self.budget)?;
+        while next < reader.len() {
+            let time = reader.time(next);
+            if time > domain.1 {
+                break;
+            }
+            self.work.spend(1)?;
+            let changed = match (reader.value_view(previous), reader.value_view(Some(next))) {
+                (ValueView::Logic(a), ValueView::Logic(b)) => {
+                    self.work.spend(a.width)?;
+                    a.width != b.width || (0..a.width).any(|i| a.bit(i) != b.bit(i))
+                }
+                (ValueView::Unavailable, ValueView::Unavailable) => false,
+                _ => true,
+            };
+            previous = Some(next);
+            next += 1;
+            if time < domain.0 || !changed {
+                continue;
+            }
+            push(&mut events, time, child.value_at(time), true)?;
+            if captures.last().copied() != Some(time) {
+                captures.push(time)?;
+            }
+        }
+        Ok(Arc::new(Waveform {
+            domain,
+            ty: child.ty,
+            events,
+            captures,
+        }))
+    }
+
     fn capture(&mut self, child: Arc<Waveform>, trigger: Trigger) -> Result<Arc<Waveform>> {
         let warning =
             "Captures use timestamp-coalesced histories; delta-cycle edges cannot be recovered.";
@@ -832,6 +888,15 @@ impl<'a> Evaluator<'a> {
             }
             Trigger::Posedge(clock) | Trigger::Changes(clock) => {
                 let rising = matches!(trigger, Trigger::Posedge(_));
+                if !rising
+                    && let Node::Input(input) = self.program.nodes[clock].node
+                    && matches!(
+                        self.sources[input].history.shape(),
+                        SignalShape::Vector { .. }
+                    )
+                {
+                    return self.capture_bus(child, input);
+                }
                 let clock = self.waveform(clock)?;
                 let domain = (
                     child.domain.0.max(clock.domain.0),

@@ -84,7 +84,7 @@ impl App {
             let signal = waves
                 .signal(row)
                 .context("Select a recorded numeric signal.")?;
-            let (inputs, definition) = if let RowSource::Computed { inputs, definition } =
+            let (mut inputs, definition) = if let RowSource::Computed { inputs, definition } =
                 &signal.source
                 && !(waves.selected.len() > 1 && waves.selected.contains(&row))
             {
@@ -159,6 +159,27 @@ impl App {
                     }
                 }
             }
+            if definition.is_none()
+                && let Some(first) = inputs.first()
+                && inputs.iter().all(|input| {
+                    self.doc.traces().iter().all(|trace| {
+                        trace.id == first.source.trace() || !input.source.uses_trace(trace.id)
+                    })
+                })
+                && let Some(choice) = self.doc.sampling.default_for(first.source.trace())
+            {
+                let mut sampled_draft = draft.clone();
+                let mut sampled_inputs = inputs.clone();
+                match self.sample_draft(&mut sampled_draft, &mut sampled_inputs, choice) {
+                    Ok(()) => {
+                        draft = sampled_draft;
+                        inputs = sampled_inputs;
+                    }
+                    Err(error) => self.events.push(crate::Event::Notice(format!(
+                        "Default sampling was not applied: {error:#}"
+                    ))),
+                }
+            }
             let (definition_id, definition_revision) = definition
                 .as_ref()
                 .map(|definition| (definition.id, definition.revision))
@@ -212,6 +233,32 @@ impl App {
             if let Some(waves) = self.panels.waves_mut(panel) {
                 waves.menu_dismiss();
             }
+            return self.edit_derived(panel, Command::Preview);
+        }
+        if let Command::Sample {
+            var,
+            mode,
+            make_default,
+        } = command
+        {
+            self.sample_editor(panel, var, mode, make_default)?;
+            return self.edit_derived(panel, Command::Preview);
+        }
+        if command == Command::SampleOnInputChanges {
+            let editor = self
+                .derived_editor
+                .as_mut()
+                .filter(|e| e.panel == panel)
+                .context("Open the formula editor first.")?;
+            let sampling_aliases = crate::computed::sampling_only_aliases(&editor.draft.formula)?;
+            editor.draft.formula = crate::computed::input_change_expression(&editor.draft.formula)?;
+            editor
+                .bindings
+                .retain(|input| !sampling_aliases.contains(&input.alias));
+            editor.calculation_revision += 1;
+            editor.preview = None;
+            editor.stopped = false;
+            editor.error = None;
             return self.edit_derived(panel, Command::Preview);
         }
         let replacement = match &command {
@@ -283,10 +330,11 @@ impl App {
                 editor.preview = None;
                 editor.stopped = false;
                 let inputs = editor.inputs(&self.doc)?;
-                editor.domain = input_domain(&inputs, &self.doc)?;
                 let definition =
                     editor.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
-                editor.preview = Some(Key::new(&self.doc, &inputs, &definition)?);
+                let key = Key::new(&self.doc, &inputs, &definition)?;
+                editor.domain = key.domain();
+                editor.preview = Some(key);
                 editor.display_definition = definition;
                 self.computations.retry();
             }
@@ -301,10 +349,10 @@ impl App {
             }
             Command::Apply | Command::ApplyTable => {
                 let inputs = editor.inputs(&self.doc)?;
-                editor.domain = input_domain(&inputs, &self.doc)?;
                 let mut definition =
                     editor.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
                 let current = Key::new(&self.doc, &inputs, &definition)?;
+                editor.domain = current.domain();
                 ensure!(
                     editor.preview.as_ref() == Some(&current),
                     "Wait for the current draft to finish updating."
@@ -411,7 +459,9 @@ impl App {
                 self.derived_editor = None;
                 return Ok(());
             }
-            Command::Open(_) => unreachable!(),
+            Command::Open(_) | Command::Sample { .. } | Command::SampleOnInputChanges => {
+                unreachable!()
+            }
         }
         if inputs_changed {
             editor.calculation_revision += 1;
@@ -419,12 +469,16 @@ impl App {
             editor.stopped = false;
         }
         let inputs = editor.inputs(&self.doc)?;
-        editor.domain = input_domain(&inputs, &self.doc)?;
-        editor.error = editor
+        match editor
             .definition(self.doc.limits(), self.doc.time_base(), &inputs)
-            .and_then(|d| Key::new(&self.doc, &inputs, &d))
-            .err()
-            .map(|e| format!("{e:#}"));
+            .and_then(|definition| Key::new(&self.doc, &inputs, &definition))
+        {
+            Ok(key) => {
+                editor.domain = key.domain();
+                editor.error = None;
+            }
+            Err(error) => editor.error = Some(format!("{error:#}")),
+        }
         Ok(())
     }
     pub(super) fn derived_demand(&self) -> HashSet<Key> {
@@ -520,12 +574,12 @@ impl App {
             return;
         };
         let current = editor.inputs(&self.doc).and_then(|inputs| {
-            editor.domain = input_domain(&inputs, &self.doc)?;
             let definition = editor.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
             Key::new(&self.doc, &inputs, &definition)
         });
         match current {
             Ok(key) => {
+                editor.domain = key.domain();
                 editor.preview = Some(key);
                 editor.error = None;
             }
@@ -652,7 +706,7 @@ fn duration_text(ticks: u64, base: crate::wave::timeline::TimeBase<'_>) -> Strin
     }
 }
 
-fn unique_alias<'a>(name: &str, inputs: impl Iterator<Item = &'a str>) -> String {
+pub(super) fn unique_alias<'a>(name: &str, inputs: impl Iterator<Item = &'a str>) -> String {
     let aliases = inputs.collect::<HashSet<_>>();
     let base = name
         .chars()

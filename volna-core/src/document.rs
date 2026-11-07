@@ -102,6 +102,7 @@ pub(crate) enum TraceEdit {
 }
 
 pub struct Document {
+    pub sampling: crate::sampling::SamplingChoices,
     traces: TraceSet,
     epoch: u64,
     generations: u64,
@@ -170,6 +171,7 @@ impl Document {
     #[must_use]
     pub fn new() -> Self {
         Document {
+            sampling: Default::default(),
             traces: TraceSet::default(),
             epoch: 0,
             generations: 0,
@@ -446,6 +448,7 @@ impl Document {
     }
 
     fn reset_state(&mut self) {
+        self.sampling = Default::default();
         self.tracks.clear();
         self.select(None);
         self.pending.clear();
@@ -598,6 +601,7 @@ impl Document {
     }
 
     fn forget_trace(&mut self, trace: TraceId) {
+        self.sampling.remove_trace(trace);
         if self
             .record_cursor
             .is_some_and(|cursor| cursor.track.trace == trace)

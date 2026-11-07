@@ -19,6 +19,7 @@ mod occupancy_plot;
 pub mod panels;
 pub mod pipeline;
 pub mod remote;
+pub mod sampling;
 pub mod scene;
 pub mod selection;
 pub mod session;

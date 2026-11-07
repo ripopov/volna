@@ -1,10 +1,12 @@
 //! Recorded binding controls; validation and interpretation belong to the core draft.
 
 use super::*;
+use gpui_kit::component::checkbox::Checkbox;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputPicker {
     Add,
+    Sampling,
     Replace(usize),
 }
 
@@ -274,8 +276,8 @@ impl DerivedEditor {
                             .ghost()
                             .xsmall()
                             .debug_selector(move || format!("replace-input-{index}"))
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.open_picker(InputPicker::Replace(index), cx);
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.open_picker(InputPicker::Replace(index), window, cx);
                             })),
                     )
                     .child(
@@ -307,20 +309,130 @@ impl DerivedEditor {
                 .small()
                 .disabled(inputs.len() >= 16)
                 .debug_selector(|| "add-formula-input".into())
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.open_picker(InputPicker::Add, cx);
+                .on_click(cx.listener(|view, _, window, cx| {
+                    view.open_picker(InputPicker::Add, window, cx);
                 })),
         );
+        if self.picker != Some(InputPicker::Sampling) {
+            result = result.child(self.recorded_picker(cx));
+        }
+        result.into_any_element()
+    }
+    pub(super) fn recorded_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let mut result = div().flex().flex_col().gap_2();
         if let Some(target) = self.picker {
             let candidates = self.input_search.results.as_deref().unwrap_or_default();
             let loading = self.input_search.results.is_none();
             let empty = candidates.is_empty();
-            let mut picker = div().flex().flex_col().gap_1().child(
-                div()
-                    .debug_selector(|| "recorded-input-search".into())
-                    .child(Input::new(&self.search).small()),
-            );
+            let mut picker = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        view.close_picker();
+                        view.expression.read(cx).focus_handle(cx).focus(window, cx);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                }))
+                .child(
+                    div()
+                        .debug_selector(|| "recorded-input-search".into())
+                        .child(Input::new(&self.search).small()),
+                );
+            if target == InputPicker::Sampling {
+                picker = picker.child(
+                    Checkbox::new("sampling-use-default")
+                        .debug_selector(|| "sampling-use-default".into())
+                        .label("Make this the trace default")
+                        .checked(self.sampling_default)
+                        .on_click(cx.listener(|view, checked, _, cx| {
+                            view.sampling_default = *checked;
+                            cx.notify();
+                        })),
+                );
+            }
+            if target == InputPicker::Sampling {
+                picker = picker.child(
+                    div()
+                        .text_color(theme(cx).panel.text_muted)
+                        .child("The first choice for each trace becomes its default."),
+                );
+            }
             for candidate in candidates {
+                if target == InputPicker::Sampling {
+                    let var = candidate.var;
+                    let Some(owner) = self.owner.upgrade() else {
+                        continue;
+                    };
+                    let Some(shape) = owner
+                        .read(cx)
+                        .app
+                        .doc
+                        .hierarchy(var.trace)
+                        .and_then(|h| h.get_var(var.item))
+                        .map(|v| v.shape)
+                    else {
+                        continue;
+                    };
+                    if !volna_core::sampling::SamplingMode::ValueChanges.accepts(shape) {
+                        continue;
+                    }
+                    let view = cx.entity().downgrade();
+                    let selector = format!("sampling-candidate-{}", candidate.label);
+                    picker = picker.child(
+                        Button::new(gpui_kit::SharedString::from(format!(
+                            "sampling-candidate-{}-{}",
+                            var.trace, var.item
+                        )))
+                        .label(candidate.label.clone())
+                        .tooltip(candidate.label.clone())
+                        .w_full()
+                        .overflow_hidden()
+                        .debug_selector(move || selector)
+                        .ghost()
+                        .xsmall()
+                        .dropdown_caret(true)
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for mode in volna_core::sampling::SamplingMode::ALL
+                                .into_iter()
+                                .filter(|mode| mode.accepts(shape))
+                            {
+                                let view = view.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::element(move |_, _| {
+                                        div()
+                                            .id(gpui_kit::SharedString::from(format!(
+                                                "sampling-mode-{mode:?}"
+                                            )))
+                                            .debug_selector(move || {
+                                                format!("sampling-mode-{mode:?}")
+                                            })
+                                            .aria_label(mode.label())
+                                            .child(mode.label())
+                                    })
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            drop(view.update(cx, |view, cx| {
+                                                view.choose_sampling(
+                                                    var,
+                                                    mode,
+                                                    view.sampling_default,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }));
+                                        },
+                                    ),
+                                );
+                            }
+                            menu
+                        }),
+                    );
+                    continue;
+                }
+
                 let var = candidate.var;
                 let label = candidate.label.clone();
                 picker = picker.child(
@@ -328,7 +440,10 @@ impl DerivedEditor {
                         "recorded-candidate-{}-{}",
                         var.trace, var.item
                     )))
-                    .label(label)
+                    .label(label.clone())
+                    .tooltip(label)
+                    .w_full()
+                    .overflow_hidden()
                     .debug_selector(move || {
                         format!("recorded-candidate-{}-{}", var.trace, var.item)
                     })
@@ -340,6 +455,7 @@ impl DerivedEditor {
                         }
                         view.send(
                             match target {
+                                InputPicker::Sampling => unreachable!(),
                                 InputPicker::Add => DerivedCommand::AddInput(var),
                                 InputPicker::Replace(index) => DerivedCommand::Rebind(index, var),
                             },
@@ -349,6 +465,13 @@ impl DerivedEditor {
                         view.picker = None;
                         view.send(DerivedCommand::Preview, window, cx);
                     })),
+                );
+            }
+            if candidates.len() == 20 {
+                picker = picker.child(
+                    div()
+                        .text_color(theme(cx).panel.text_muted)
+                        .child("Showing up to 20 matches · refine the signal path to find more."),
                 );
             }
             if loading {
@@ -362,8 +485,9 @@ impl DerivedEditor {
                         .label("Close picker")
                         .ghost()
                         .xsmall()
-                        .on_click(cx.listener(|view, _, _, cx| {
+                        .on_click(cx.listener(|view, _, window, cx| {
                             view.close_picker();
+                            view.expression.read(cx).focus_handle(cx).focus(window, cx);
                             cx.notify();
                         })),
                 ),

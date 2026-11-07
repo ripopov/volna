@@ -33,6 +33,23 @@ impl Analysis {
             result,
         }
     }
+
+    pub(super) fn preset_input(&self) -> Option<String> {
+        let program = self.result.as_ref().ok()?;
+        let expression = self.syntax.expression();
+        let value = if program.kind == volna_core::computed::ResultKind::ScalarMeasurement {
+            self.syntax.measurement_input()?
+        } else {
+            expression
+        };
+        Some(
+            if program.output == volna_core::computed::FormulaType::Boolean {
+                format!("real({value})")
+            } else {
+                value.to_owned()
+            },
+        )
+    }
 }
 
 impl DerivedEditor {
@@ -197,15 +214,15 @@ impl gpui_kit::component::input::InputHighlighter for Highlighting {
 
 pub(super) fn adapt_example(
     template: &str,
-    inputs: &[volna_core::computed::InputDraft],
+    editor: &volna_core::computed::Editor,
     doc: &volna_core::Document,
 ) -> String {
-    let real = inputs
-        .iter()
+    let real = editor
+        .value_bindings()
         .filter(|i| i.effective_shape(doc) != volna_trace::data::SignalShape::Bit)
         .collect::<Vec<_>>();
-    let boolean = inputs
-        .iter()
+    let boolean = editor
+        .value_bindings()
         .filter(|i| i.effective_shape(doc) == volna_trace::data::SignalShape::Bit)
         .collect::<Vec<_>>();
     let mut result = String::new();
@@ -216,14 +233,29 @@ pub(super) fn adapt_example(
         let word = &template[token.range.clone()];
         let binding = if token.kind == language::TokenKind::Identifier {
             match word {
-                "a" => real.first(),
-                "b" => real.get(1),
-                "valid" => boolean.first(),
-                "ready" => boolean.get(1),
-                "clk" => boolean
+                "a" => real.first().copied(),
+                "b" => real.get(1).copied(),
+                "valid" => boolean.first().copied(),
+                "ready" => boolean.get(1).copied(),
+                "sample_number" => editor.bindings.iter().find(|input| {
+                    editor.sampling(doc).is_some_and(|choice| {
+                        choice.mode == volna_core::sampling::SamplingMode::ValueChanges
+                            && choice.resolve(doc) == input.source.var()
+                    })
+                }),
+                "clk" => editor
+                    .bindings
                     .iter()
-                    .find(|i| i.alias.contains("clk"))
-                    .or_else(|| boolean.first()),
+                    .find(|i| {
+                        i.effective_shape(doc) == volna_trace::data::SignalShape::Bit
+                            && i.alias.contains("clk")
+                    })
+                    .or_else(|| {
+                        editor
+                            .bindings
+                            .iter()
+                            .find(|i| i.effective_shape(doc) == volna_trace::data::SignalShape::Bit)
+                    }),
                 _ => None,
             }
         } else {

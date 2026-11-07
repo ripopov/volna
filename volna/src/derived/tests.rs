@@ -865,6 +865,12 @@ fn aliases_insert_at_the_cursor_and_settings_follow_the_formula(cx: &mut TestApp
     assert!(vcx.debug_bounds("formula-default-step").is_some());
     click_control(&mut vcx, "preset-interval_mean");
     vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("formula-default-step").is_some());
+    set_formula(&mut vcx, "input");
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "preset-interval_mean");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("formula-default-step").is_none());
     assert!(vcx.debug_bounds("formula-scope").is_some());
 }
@@ -1027,4 +1033,326 @@ fn completion_and_argument_help_follow_functions_and_renamed_inputs(cx: &mut Tes
             volna_trace::data::WaveValue::Real(0.0)
         );
     });
+}
+
+// A user finds a clock in the existing picker, makes it the default, then switches
+// to a counter. Measurement presets must retain the selected explicit sampling.
+#[gpui_kit::test]
+fn sampling_picker_and_presets_keep_the_selected_capture(cx: &mut TestAppContext) {
+    let session = OpenSpec::Bytes {
+        name: "feature.vtr".into(),
+        bytes: include_bytes!("../../examples/feature_showcase.vtr").to_vec(),
+    }
+    .open()
+    .unwrap();
+    let var = |name: &str| {
+        session
+            .hierarchy()
+            .vars()
+            .position(|v| v.name == name)
+            .unwrap()
+    };
+    let temperature = var("temperature_c");
+    let (ws, mut vcx) = formula_workspace_session(cx, session, vec![temperature]);
+    let click = |vcx: &mut VisualTestContext, selector: &'static str| {
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let bounds = vcx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("missing {selector}"));
+        vcx.simulate_click(bounds.center(), Modifiers::default());
+        vcx.run_until_parked();
+    };
+    click(&mut vcx, "formula-sampling");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("sampling-input-changes").is_some());
+    click(&mut vcx, "choose-sampling-signal");
+    vcx.simulate_input("soc.clk");
+    vcx.run_until_parked();
+    click(&mut vcx, "sampling-use-default");
+    click(&mut vcx, "sampling-candidate-A: soc.clk");
+    click(&mut vcx, "sampling-mode-RisingEdge");
+    click(&mut vcx, "preset-interval_mean");
+    ws.read_with(&vcx, |ws, _| {
+        let expression = &ws.app.derived_editor.as_ref().unwrap().draft.formula;
+        assert!(expression.starts_with("interval_mean("), "{expression}");
+        assert!(expression.contains("@posedge clk"), "{expression}");
+    });
+    for dark in [false, true] {
+        vcx.update(|_, cx| crate::theme::set(crate::theme::CoreTheme::volna(dark), cx));
+        click(&mut vcx, "formula-sampling");
+        click(&mut vcx, "choose-sampling-signal");
+        click(&mut vcx, "recorded-input-search");
+        vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-a"
+        } else {
+            "ctrl-a"
+        });
+        vcx.simulate_input("soc.data");
+        vcx.run_until_parked();
+        click(&mut vcx, "sampling-candidate-A: soc.data");
+        click(&mut vcx, "sampling-mode-ValueChanges");
+        ws.read_with(&vcx, |ws, _| {
+            let expression = &ws.app.derived_editor.as_ref().unwrap().draft.formula;
+            assert!(expression.contains("@data"), "{expression}");
+            assert!(!expression.contains("@posedge"), "{expression}");
+        });
+    }
+    click(&mut vcx, "formula-sampling");
+    click(&mut vcx, "sampling-input-changes");
+    ws.read_with(&vcx, |ws, _| {
+        let expression = &ws.app.derived_editor.as_ref().unwrap().draft.formula;
+        assert!(expression.starts_with("interval_mean("), "{expression}");
+        assert!(!expression.contains('@'), "{expression}");
+    });
+    vcx.simulate_keystrokes("ctrl-end");
+    vcx.simulate_input(" + 1");
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    ws.read_with(&vcx, |ws, _| {
+        let expression = &ws.app.derived_editor.as_ref().unwrap().draft.formula;
+        assert!(expression.ends_with(" + 1"), "{expression}");
+        assert!(!expression.contains('@'), "{expression}");
+    });
+}
+
+fn enter_formula(vcx: &mut VisualTestContext, expression: &str) {
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let field = vcx.debug_bounds("formula-expression").unwrap();
+    vcx.simulate_click(field.center(), Modifiers::default());
+    vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    vcx.simulate_input(expression);
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+}
+
+// A user measures a ratio, reopens it, then filters a Boolean expression and measures
+// a literal. Actions must preserve the entire value expression and work without data bindings.
+#[gpui_kit::test]
+fn expression_actions_preserve_arithmetic_and_support_boolean_and_literal_values(
+    cx: &mut TestAppContext,
+) {
+    let (ws, mut vcx) = formula_workspace(cx, vec![0, 1]);
+    enter_formula(&mut vcx, "(input * 0 + 12) / (cosine * 0 + 3)");
+    click_control(&mut vcx, "preset-interval_mean");
+    ws.read_with(&vcx, |ws, _| {
+        let Some(ComputationStatus::ReadyMeasurement(value)) = ws.app.derived_preview() else {
+            panic!("ratio mean did not preview")
+        };
+        assert_eq!(value.value, Some(4.0));
+    });
+    click_control(&mut vcx, "preset-lowpass");
+    ws.read_with(&vcx, |ws, _| {
+        let Some(ComputationStatus::Ready(history)) = ws.app.derived_preview() else {
+            panic!("ratio filter did not preview")
+        };
+        assert_eq!(
+            history.value(history.index_at(0)),
+            volna_trace::data::WaveValue::Real(4.0)
+        );
+    });
+    click_control(&mut vcx, "preset-interval_mean");
+    click_control(&mut vcx, "derived-apply");
+    vcx.simulate_keystrokes("shift-f10");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "wave-menu-derived");
+    ws.read_with(&vcx, |ws, _| {
+        let Some(ComputationStatus::ReadyMeasurement(value)) = ws.app.derived_preview() else {
+            panic!("saved ratio mean did not reopen")
+        };
+        assert_eq!(value.value, Some(4.0));
+    });
+    enter_formula(&mut vcx, "input == input");
+    click_control(&mut vcx, "preset-lowpass");
+    ws.read_with(&vcx, |ws, _| {
+        let Some(ComputationStatus::Ready(history)) = ws.app.derived_preview() else {
+            panic!(
+                "Boolean filter did not preview: {:?}",
+                ws.app
+                    .derived_editor
+                    .as_ref()
+                    .map(|e| (&e.draft.formula, &e.error))
+            )
+        };
+        assert_eq!(
+            history.value(history.index_at(0)),
+            volna_trace::data::WaveValue::Real(1.0)
+        );
+    });
+    enter_formula(&mut vcx, "8");
+    for _ in 0..2 {
+        click_control(&mut vcx, "input-details-0");
+        click_control(&mut vcx, "remove-input-0");
+    }
+    click_control(&mut vcx, "preset-interval_mean");
+    ws.read_with(&vcx, |ws, _| {
+        let Some(ComputationStatus::ReadyMeasurement(value)) = ws.app.derived_preview() else {
+            panic!("literal mean did not preview")
+        };
+        assert_eq!(value.value, Some(8.0));
+    });
+}
+
+// A user tries to choose sampling while an expression is unfinished. The picker
+// must remain available, Escape must return to the formula, and typing must repair the draft.
+#[gpui_kit::test]
+fn failed_sampling_selection_preserves_the_draft_and_keyboard_recovery(cx: &mut TestAppContext) {
+    let session = OpenSpec::Bytes {
+        name: "feature.vtr".into(),
+        bytes: include_bytes!("../../examples/feature_showcase.vtr").to_vec(),
+    }
+    .open()
+    .unwrap();
+    let temperature = session
+        .hierarchy()
+        .vars()
+        .position(|v| v.name == "temperature_c")
+        .unwrap();
+    let (ws, mut vcx) = formula_workspace_session(cx, session, vec![temperature]);
+    enter_formula(&mut vcx, "temperature_c + ");
+    click_control(&mut vcx, "formula-sampling");
+    click_control(&mut vcx, "choose-sampling-signal");
+    vcx.simulate_input("soc.clk");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "sampling-candidate-A: soc.clk");
+    click_control(&mut vcx, "sampling-mode-RisingEdge");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("recorded-input-search").is_some());
+    assert!(vcx.debug_bounds("derived-error").is_some());
+    vcx.simulate_keystrokes("escape");
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("recorded-input-search").is_none());
+    vcx.simulate_input("2");
+    vcx.simulate_keystrokes("ctrl-enter");
+    vcx.run_until_parked();
+    ws.read_with(&vcx, |ws, _| {
+        assert_eq!(
+            ws.app.derived_editor.as_ref().unwrap().draft.formula,
+            "temperature_c + 2"
+        );
+        assert!(matches!(
+            ws.app.derived_preview(),
+            Some(ComputationStatus::Ready(_))
+        ));
+    });
+}
+
+// A user adds a statistics sampling counter before adding another measurement input.
+// Guide replacements must use value inputs rather than the counter, while retaining sampling.
+#[gpui_kit::test]
+fn guide_replacements_keep_sampling_separate_from_measurement_operands(cx: &mut TestAppContext) {
+    let session = OpenSpec::Bytes {
+        name: "feature.vtr".into(),
+        bytes: include_bytes!("../../examples/feature_showcase.vtr").to_vec(),
+    }
+    .open()
+    .unwrap();
+    let temperature = session
+        .hierarchy()
+        .vars()
+        .position(|v| v.name == "temperature_c")
+        .unwrap();
+    let (ws, mut vcx) = formula_workspace_session(cx, session, vec![temperature]);
+    click_control(&mut vcx, "formula-sampling");
+    click_control(&mut vcx, "choose-sampling-signal");
+    vcx.simulate_input("soc.data");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "sampling-candidate-A: soc.data");
+    click_control(&mut vcx, "sampling-mode-ValueChanges");
+    click_control(&mut vcx, "add-formula-input");
+    vcx.simulate_input("sine_fast");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "recorded-candidate-A-9");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "formula-guide-toggle");
+    click_control(&mut vcx, "use-example-0-0");
+    ws.read_with(&vcx, |ws, _| {
+        let expression = &ws.app.derived_editor.as_ref().unwrap().draft.formula;
+        assert!(
+            expression.contains("temperature_c - sine_fast"),
+            "{expression}"
+        );
+        assert!(expression.contains("@data"), "{expression}");
+    });
+}
+
+// A user edits measurement bounds, leaves an unfinished bound, changes the value
+// expression, and chooses sampling. Neither the expression nor the invalid bound may be replaced by an older draft.
+#[gpui_kit::test]
+fn sampling_preserves_expression_edits_while_measurement_bounds_are_invalid(
+    cx: &mut TestAppContext,
+) {
+    let session = OpenSpec::Bytes {
+        name: "feature.vtr".into(),
+        bytes: include_bytes!("../../examples/feature_showcase.vtr").to_vec(),
+    }
+    .open()
+    .unwrap();
+    let temperature = session
+        .hierarchy()
+        .vars()
+        .position(|v| v.name == "temperature_c")
+        .unwrap();
+    let (ws, mut vcx) = formula_workspace_session(cx, session, vec![temperature]);
+    click_control(&mut vcx, "preset-interval_mean");
+    choose_scope(&mut vcx, 2);
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let field = vcx.debug_bounds("formula-scope-start").unwrap();
+    vcx.simulate_click(
+        gpui_kit::point(field.center().x, field.bottom() - px(10.0)),
+        Modifiers::default(),
+    );
+    vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    vcx.simulate_input("unfinished");
+    enter_formula(&mut vcx, "interval_mean(temperature_c + 7)");
+    click_control(&mut vcx, "formula-sampling");
+    click_control(&mut vcx, "choose-sampling-signal");
+    vcx.simulate_input("soc.data");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "sampling-candidate-A: soc.data");
+    click_control(&mut vcx, "sampling-mode-ValueChanges");
+    ws.read_with(&vcx, |ws, _| {
+        let expression = &ws.app.derived_editor.as_ref().unwrap().draft.formula;
+        assert!(expression.contains("temperature_c + 7"), "{expression}");
+        assert!(expression.contains("@data"), "{expression}");
+    });
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("derived-error").is_some());
+    choose_scope(&mut vcx, 1);
+    ws.read_with(&vcx, |ws, _| {
+        assert!(matches!(
+            ws.app.derived_preview(),
+            Some(ComputationStatus::ReadyMeasurement(_))
+        ));
+    });
+}
+
+// A user narrows the window while deriving a signal. The inspector must remain
+// usable at 360 px, and closing it must restore the hierarchy without changing layout preferences.
+#[gpui_kit::test]
+fn a_narrow_formula_editor_temporarily_yields_the_hierarchy_space(cx: &mut TestAppContext) {
+    let (_ws, mut vcx) = formula_workspace(cx, vec![0]);
+    vcx.simulate_resize(size(px(360.0), px(800.0)));
+    for dark in [false, true] {
+        vcx.update(|window, cx| {
+            crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+            window.draw(cx).clear(cx);
+        });
+        let editor = vcx.debug_bounds("derived-signal-editor").unwrap();
+        let sampling = vcx.debug_bounds("formula-sampling").unwrap();
+        assert!(editor.size.width >= px(350.0));
+        assert!(sampling.left() >= px(0.0) && sampling.right() <= px(360.0));
+        assert!(vcx.debug_bounds("scopes-panel").is_none());
+    }
+    click_control(&mut vcx, "derived-close");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("scopes-panel").is_some());
 }

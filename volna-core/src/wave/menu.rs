@@ -138,6 +138,31 @@ impl WaveModel {
                 "Show all overlay lines",
             ));
         }
+        if targets.len() == 1
+            && let Some(signal) = self.signal(row)
+            && signal.projection.is_none()
+            && let Some(var) = signal.source.var()
+        {
+            let items = doc.sampling_menu(var);
+            if !items.is_empty() {
+                entries.push(MenuEntry::Submenu {
+                    label: if items.iter().any(|item| {
+                        matches!(
+                            item.state,
+                            super::model::MenuItemState::Choice { selected: true }
+                        )
+                    }) {
+                        "Sampling"
+                    } else {
+                        "Use for sampling"
+                    }
+                    .into(),
+                    value: None,
+                    description: None,
+                    items,
+                });
+            }
+        }
         entries.push(MenuEntry::Separator);
         if let Some(signal) = self
             .signal(row)

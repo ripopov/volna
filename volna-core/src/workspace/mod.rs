@@ -20,7 +20,7 @@ use std::collections::HashSet;
 use volna_trace::data::source::Lookup;
 
 pub const FORMAT: &str = "volna-workspace";
-pub const VERSION: u32 = 19;
+pub const VERSION: u32 = 20;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ROWS: usize = 100_000;
 
@@ -62,6 +62,7 @@ pub struct Workspace {
     pub panels: Vec<Box<RawValue>>,
     pub shared: Shared,
     pub sidebar: Sidebar,
+    pub sampling: crate::sampling::SamplingChoices,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -116,6 +117,7 @@ pub struct RestorePlan {
     panels: Panels,
     shared: Shared,
     sidebar: Sidebar,
+    sampling: crate::sampling::SamplingChoices,
     scopes: ScopeTreeModel,
     report: RestoreReport,
 }
@@ -225,6 +227,7 @@ impl Workspace {
             format: FORMAT.into(),
             version: VERSION,
             supersedes,
+            sampling: app.doc.sampling.clone(),
             traces,
             timescale: app.doc.timescale(),
             layout,
@@ -258,6 +261,7 @@ impl Workspace {
             self.format == FORMAT && self.version == VERSION,
             "unsupported workspace format/version"
         );
+        self.sampling.validate()?;
         let owner = self
             .traces
             .iter()
@@ -428,6 +432,7 @@ impl Workspace {
             panels,
             shared: self.shared.clone(),
             sidebar: self.sidebar.clone(),
+            sampling: self.sampling.clone(),
             scopes,
             report,
         })
@@ -454,6 +459,7 @@ impl RestorePlan {
         ensure!(app.doc.is_loaded(), "no trace open");
         app.retire_panels();
         app.doc.restart();
+        app.doc.sampling = self.sampling;
         for (trace, name) in self.renames {
             app.doc.restore_trace_name(trace, name);
         }

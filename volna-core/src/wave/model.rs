@@ -854,6 +854,7 @@ pub enum Drag {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuAction {
+    Sampling(crate::sampling::SamplingCommand),
     Derived,
     CopyValues,
     CopyPaths,
@@ -921,7 +922,7 @@ pub enum MenuEntry {
 }
 
 impl MenuItem {
-    pub(super) fn plain(action: MenuAction, label: &str) -> Self {
+    pub(crate) fn plain(action: MenuAction, label: &str) -> Self {
         Self {
             action,
             label: label.into(),
@@ -931,7 +932,7 @@ impl MenuItem {
         }
     }
 
-    pub(super) fn choice(action: MenuAction, label: &str, selected: bool) -> Self {
+    pub(crate) fn choice(action: MenuAction, label: &str, selected: bool) -> Self {
         Self {
             state: MenuItemState::Choice { selected },
             ..Self::plain(action, label)

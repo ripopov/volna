@@ -26,6 +26,7 @@ pub(crate) struct Stamp {
     unresolved_selected: Option<Traced<Vec<String>>>,
     unresolved_expanded: Option<Vec<Traced<Vec<String>>>>,
     filter: String,
+    sampling: Option<crate::sampling::SamplingChoices>,
     wave: Option<WaveStamp>,
     wave_revisions: Vec<(PanelId, u64)>,
     pipeline: Option<PipelineStamp>,
@@ -133,6 +134,13 @@ impl Stamp {
             unresolved_selected: app.scopes.unresolved_selected.clone(),
             unresolved_expanded: scope.then(|| app.scopes.unresolved_expanded.clone()),
             filter: app.variables.filter.clone(),
+            sampling: matches!(
+                command,
+                Command::Sampling(_)
+                    | Command::MenuSelect(_, crate::wave::model::MenuAction::Sampling(_))
+                    | Command::Derived(_, crate::computed::Command::Sample { .. })
+            )
+            .then(|| app.doc.sampling.clone()),
             wave_revisions: app
                 .panels
                 .iter()

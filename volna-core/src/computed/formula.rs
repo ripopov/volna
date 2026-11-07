@@ -311,6 +311,22 @@ impl Program {
         parser::parse(expression, inputs, captured)
     }
 
+    pub(super) fn has_uncaptured_values(&self) -> bool {
+        fn visit(nodes: &[TypedNode], index: usize) -> bool {
+            match nodes[index].node {
+                Node::Number(_) | Node::Boolean(_) | Node::Capture { .. } => false,
+                Node::Input(_) | Node::Sine { .. } | Node::Clock { .. } => true,
+                Node::Unary(_, child)
+                | Node::MovingAverage { x: child, .. }
+                | Node::Lowpass { x: child, .. }
+                | Node::Reduce { x: child, .. } => visit(nodes, child),
+                Node::Binary(_, left, right) => visit(nodes, left) || visit(nodes, right),
+                Node::Integrate { x, initial, .. } => visit(nodes, x) || visit(nodes, initial),
+            }
+        }
+        visit(&self.nodes, self.nodes.len() - 1)
+    }
+
     #[must_use]
     pub fn uses_input(&self, index: usize) -> bool {
         self.used_inputs.get(index).copied().unwrap_or(false)

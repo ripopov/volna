@@ -1,6 +1,9 @@
 //! Row-owned waveform and measurement computations, including applied-formula composition.
 
 pub(crate) mod formula;
+mod sampling;
+pub(crate) use sampling::sampling_only_aliases;
+pub use sampling::{capture_expression, input_change_expression};
 mod search;
 pub use search::{RecordedMatch, RecordedSearch};
 mod jobs;
@@ -164,13 +167,17 @@ pub struct Definition {
 }
 impl Definition {
     pub fn validate(&self, inputs: &[Input]) -> Result<SignalShape> {
+        self.validate_program(inputs)
+            .map(|program| program.output.shape())
+    }
+    fn validate_program(&self, inputs: &[Input]) -> Result<Arc<formula::Program>> {
         ensure!(
             !self.name.trim().is_empty()
                 && self.name.len() <= 256
                 && !self.name.chars().any(char::is_control),
             "Use a name of 1–256 bytes without control characters."
         );
-        self.calculation(inputs).map(|c| c.output.shape())
+        self.calculation(inputs)
     }
     pub(crate) fn calculation(&self, inputs: &[Input]) -> Result<Arc<formula::Program>> {
         let Operation::Formula { expression, .. } = &self.operation;
@@ -234,13 +241,18 @@ impl Draft {
                 },
             },
         };
-        let definition = Definition {
+        let mut definition = Definition {
             id: FormulaId::default(),
             revision: 0,
             name: self.name.trim().into(),
             operation,
         };
-        definition.validate(inputs)?;
+        let program = definition.validate_program(inputs)?;
+        if program.kind != ResultKind::ScalarMeasurement {
+            let Operation::Formula { settings, .. } = &mut definition.operation;
+            // Retain the measurement scope in the draft for switching back to a measurement.
+            settings.scope = MeasurementScope::WholeRange;
+        }
         Ok(definition)
     }
     #[must_use]
@@ -255,6 +267,12 @@ impl Draft {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Open(Option<usize>),
+    SampleOnInputChanges,
+    Sample {
+        var: Traced<VarId>,
+        mode: crate::sampling::SamplingMode,
+        make_default: bool,
+    },
     Update(Draft),
     AddInput(Traced<VarId>),
     Rebind(usize, Traced<VarId>),

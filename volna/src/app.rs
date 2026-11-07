@@ -2539,7 +2539,9 @@ impl Render for Workspace {
         let t = *theme(cx);
         let colors = t.editor;
         let drag = self.app.drag;
-        let sidebar_visible = self.app.sidebar_visible;
+        let narrow_formula =
+            self.app.derived_editor.is_some() && window.viewport_size().width < t.px(500.0);
+        let sidebar_visible = self.app.sidebar_visible && !narrow_formula;
         let mut root = div()
             .id("workspace")
             .key_context(if self.embedded {

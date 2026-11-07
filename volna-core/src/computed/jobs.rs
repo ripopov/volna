@@ -109,6 +109,11 @@ pub(crate) struct KeyInput {
 }
 
 impl Key {
+    #[must_use]
+    pub(crate) fn domain(&self) -> (u64, u64) {
+        self.domain
+    }
+
     pub fn new(
         doc: &crate::Document,
         inputs: &[Input],
