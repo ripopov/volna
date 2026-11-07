@@ -76,6 +76,15 @@ foreground (`--viewer-text`), which is near white in dark themes and dark in lig
 themes. Muted foregrounds remain available for secondary information and disabled
 controls.
 
+The standalone viewer's main menu is the specimen for window navigation. Its
+32px hamburger button sits to the left of the main window title, outside the
+window drag area. Detached windows retain only their panel toolbars and panel
+overflow menu. F10 opens the main menu; arrows navigate groups, Enter activates
+a command, and Escape dismisses it and restores focus. File, Edit, View, Navigate, Signals,
+Markers, and Panels group the actions. Shortcut hints use the target panel's
+bindings, checked rows show current toggles, and unavailable actions stay visible
+but disabled. Command palette opens search across commands and settings.
+
 The sample viewer's Table panel is the specimen for native column dividers.
 Its numeric-format toolbar button pairs a number-sign icon with the current mode
 (for example, `hex`) and defaults numeric data to hexadecimal.

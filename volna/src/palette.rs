@@ -8,14 +8,12 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{Action, Context, Focusable, SharedString, WeakEntity, Window, div, px};
-use volna_core::app::{ClockCommand, SettingsCommand};
+use volna_core::app::SettingsCommand;
 use volna_core::marker::{LaneVerb, NavigatorRow};
 use volna_core::settings::{self, Kind, Value};
-use volna_core::wave::Tint;
 use volna_core::{App as CoreApp, Command};
 
-use crate::app::{self, Workspace};
-use crate::settings_panel::ToggleSettingsJson;
+use crate::app::Workspace;
 use crate::theme::ThemePx;
 
 pub(crate) struct PaletteModel {
@@ -46,202 +44,6 @@ pub(crate) fn key_bindings() -> Vec<gpui_kit::KeyBinding> {
     ]
 }
 
-pub(crate) fn commands(app: &CoreApp, query: &str) -> Vec<(String, Box<dyn Action>)> {
-    let mut all: Vec<(String, Box<dyn Action>)> = vec![
-        (
-            app.undo_label()
-                .map_or_else(|| "Undo".into(), |label| format!("Undo: {label}")),
-            Box::new(app::Undo),
-        ),
-        (
-            app.redo_label()
-                .map_or_else(|| "Redo".into(), |label| format!("Redo: {label}")),
-            Box::new(app::Redo),
-        ),
-    ];
-    all.push(("Expand All Groups".into(), Box::new(app::ExpandAllGroups)));
-    all.push((
-        "Collapse All Groups".into(),
-        Box::new(app::CollapseAllGroups),
-    ));
-    all.extend(
-        fixed_commands()
-            .into_iter()
-            .map(|(label, action)| (label.to_owned(), action)),
-    );
-    for n in 1..=6 {
-        all.push((
-            format!("Place or Move Marker {n} at Cursor"),
-            Box::new(app::SetMarker { n }),
-        ));
-    }
-    if let Some(choices) = app.clock_choices() {
-        let clock = |command| Box::new(app::ClockAction { command }) as Box<dyn Action>;
-        if let Some(cycle) = query.split_whitespace().find_map(|w| w.parse::<i64>().ok()) {
-            all.push((
-                format!("Go to Cycle {cycle}"),
-                clock(ClockCommand::GoToCycle(cycle)),
-            ));
-        }
-        let combined = app.doc.traces().is_combined();
-        for (key, ruler) in &choices.clocks {
-            let verb = if *ruler { "Hide" } else { "Show" };
-            let path = if combined {
-                format!("{} · {}", key.trace, key.item)
-            } else {
-                key.item.clone()
-            };
-            all.push((
-                format!("{verb} Clock Ruler: {path}"),
-                clock(ClockCommand::ToggleRuler(key.clone())),
-            ));
-            all.push((
-                format!("Snap and Step to Clock: {path}"),
-                clock(ClockCommand::Select(key.clone())),
-            ));
-        }
-        all.push((
-            if choices.origin {
-                "Reset Cycle Origin".into()
-            } else {
-                "Set Cycle Origin at Cursor".into()
-            },
-            Box::new(app::ToggleCycleOrigin),
-        ));
-        all.push(("Next Cycle".into(), Box::new(app::NextCycle)));
-        all.push(("Previous Cycle".into(), Box::new(app::PrevCycle)));
-    }
-    for (ix, label) in app::recent_labels(app).into_iter().flatten().enumerate() {
-        all.push((
-            format!("Open Recent: {label}"),
-            Box::new(app::OpenRecent { ix }),
-        ));
-    }
-    if app::recent_labels(app).is_some_and(|labels| !labels.is_empty()) {
-        all.push(("Clear Recent".into(), Box::new(app::ClearRecent)));
-    }
-    let chips = app.trace_chips();
-    for chip in chips.iter().filter(|_| chips.len() > 1) {
-        let what = format!("{} {}", chip.trace, chip.name);
-        let verb = |verb| {
-            Box::new(app::TraceAction {
-                trace: chip.trace,
-                verb,
-            }) as Box<dyn Action>
-        };
-        all.push((format!("Reveal Trace {what}"), verb(app::TraceVerb::Reveal)));
-        all.push((
-            format!("Rename Trace {what}…"),
-            verb(app::TraceVerb::Rename),
-        ));
-        if chip.closable {
-            all.push((format!("Close Trace {what}"), verb(app::TraceVerb::Close)));
-        }
-    }
-    for (path, track) in app::pipeline_generators(app) {
-        all.push((
-            format!("Open Pipeline: {path}"),
-            Box::new(app::OpenPipelineTrack { track }),
-        ));
-    }
-    all
-}
-
-fn fixed_commands() -> Vec<(&'static str, Box<dyn Action>)> {
-    vec![
-        ("Open Trace…", Box::new(app::OpenFile)),
-        ("Add Trace…", Box::new(app::AddTrace)),
-        ("Close Trace", Box::new(app::CloseTrace)),
-        ("Open Workspace…", Box::new(app::OpenWorkspace)),
-        ("Save Workspace", Box::new(app::SaveWorkspace)),
-        ("Save Workspace As…", Box::new(app::SaveWorkspaceAs)),
-        ("Preferences: Open Settings", Box::new(app::OpenSettings)),
-        (
-            "Preferences: Open Settings (JSON)",
-            Box::new(ToggleSettingsJson),
-        ),
-        ("Interface: Zoom In", Box::new(app::UiZoomIn)),
-        ("Interface: Zoom Out", Box::new(app::UiZoomOut)),
-        ("Interface: Reset Zoom", Box::new(app::UiZoomReset)),
-        ("Toggle Sidebar", Box::new(app::ToggleSidebar)),
-        (
-            "Developer: Cycle GPUI Frame Overlay",
-            Box::new(app::CycleFrameOverlay),
-        ),
-        ("Split Right", Box::new(app::SplitRight)),
-        ("Split Down", Box::new(app::SplitDown)),
-        ("New Waveform Tab", Box::new(app::NewPanel)),
-        ("Close Panel", Box::new(app::ClosePanel)),
-        ("Focus Next Panel", Box::new(app::FocusNextPanel)),
-        ("Focus Previous Panel", Box::new(app::FocusPrevPanel)),
-        ("Follow Shared Viewport", Box::new(app::ToggleViewportLink)),
-        ("Follow Shared Cursor", Box::new(app::ToggleCursorLink)),
-        ("Zoom In", Box::new(app::ZoomIn)),
-        ("Zoom Out", Box::new(app::ZoomOut)),
-        ("Zoom to Fit", Box::new(app::ZoomFit)),
-        ("Collapse / Expand Scopes", Box::new(app::ToggleScopes)),
-        ("Zoom to Cursor", Box::new(app::ZoomToCursor)),
-        ("Go to Start", Box::new(app::GoToStart)),
-        ("Go to End", Box::new(app::GoToEnd)),
-        ("Show Transaction", Box::new(app::ShowTransaction)),
-        ("Copy Signals", Box::new(app::CopySignals)),
-        ("Cut Signals", Box::new(app::CutSignals)),
-        ("Paste Signals", Box::new(app::PasteSignals)),
-        ("Increase Row Height", Box::new(app::IncreaseRowHeight)),
-        ("Decrease Row Height", Box::new(app::DecreaseRowHeight)),
-        ("Reset Row Height", Box::new(app::ResetRowHeight)),
-        ("Toggle Analog Drawing", Box::new(app::ToggleAnalog)),
-        ("Toggle Stacked Area", Box::new(app::ToggleStack)),
-        ("Toggle Overlaid Lines", Box::new(app::ToggleOverlaid)),
-        ("Color: Default", Box::new(app::SetTint { tint: None })),
-        (
-            "Color: Blue",
-            Box::new(app::SetTint {
-                tint: Some(Tint::Blue),
-            }),
-        ),
-        (
-            "Color: Cyan",
-            Box::new(app::SetTint {
-                tint: Some(Tint::Cyan),
-            }),
-        ),
-        (
-            "Color: Violet",
-            Box::new(app::SetTint {
-                tint: Some(Tint::Violet),
-            }),
-        ),
-        (
-            "Color: Pink",
-            Box::new(app::SetTint {
-                tint: Some(Tint::Pink),
-            }),
-        ),
-        (
-            "Color: Grey",
-            Box::new(app::SetTint {
-                tint: Some(Tint::Grey),
-            }),
-        ),
-        (
-            "Add or Name Marker at Cursor",
-            Box::new(app::AddOrRenameMarker),
-        ),
-        (
-            "Remove Marker at Cursor",
-            Box::new(app::RemoveMarkerAtCursor),
-        ),
-        ("Remove All Markers", Box::new(app::RemoveAllMarkers)),
-        ("Next Marker", Box::new(app::NextMarker)),
-        ("Previous Marker", Box::new(app::PrevMarker)),
-        ("Return to Before the Last Jump", Box::new(app::JumpBack)),
-        ("Measure from Cursor", Box::new(app::SetReference)),
-        ("Clear Reference", Box::new(app::ClearReference)),
-        ("Zoom to Measurement", Box::new(app::ZoomToMeasurement)),
-    ]
-}
-
 const MAX_SETTINGS: usize = 8;
 
 impl PaletteModel {
@@ -256,7 +58,7 @@ impl PaletteModel {
             };
         }
         let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-        let commands = commands(app, query)
+        let commands = crate::commands::palette(app, query)
             .into_iter()
             .filter(|(label, _)| {
                 let lower = label.to_lowercase();

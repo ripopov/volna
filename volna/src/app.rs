@@ -7,6 +7,9 @@ mod tests;
 #[path = "window_actions.rs"]
 mod window_actions;
 
+#[path = "main_menu.rs"]
+mod main_menu;
+
 #[path = "workspace_toolbar.rs"]
 mod workspace_toolbar;
 
@@ -17,9 +20,9 @@ use gpui_kit::base::{Disableable, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Animation, AnimationExt, App, Context, CursorStyle, Entity, FocusHandle, Focusable,
-    IntoElement, KeyBinding, Menu, MenuItem, MouseButton, MouseMoveEvent, MouseUpEvent, OsAction,
-    ParentElement, Pixels, Render, ShapedLine, SharedString, Styled, Transformation,
-    UniformListScrollHandle, Window, actions, anchored, deferred, div, percentage, point, px,
+    IntoElement, KeyBinding, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    Render, ShapedLine, SharedString, Styled, Transformation, UniformListScrollHandle, Window,
+    actions, anchored, deferred, div, percentage, point, px,
 };
 use volna_core::app::{Action, ChromeDrag, Command, Event, SettingsCommand};
 use volna_core::document::TraceState;
@@ -48,6 +51,8 @@ use gpui_kit::component::{
 actions!(
     workspace,
     [
+        OpenMainMenu,
+        ToggleRightSidebar,
         OpenFile,
         AddTrace,
         OpenWorkspace,
@@ -269,7 +274,7 @@ impl ShapedCache {
     }
 }
 
-type MenuKey = (u64, u64, u64, u64);
+type MenuKey = (u64, u64, crate::commands::MenuState);
 
 pub(crate) type OnWavesKey = (u64, u64);
 pub(crate) type OnWaves = std::collections::HashSet<Traced<volna_trace::data::Member>>;
@@ -297,6 +302,7 @@ pub struct Workspace {
     pub(crate) filter: Entity<TextInput>,
     pub(crate) scopes_scroll: UniformListScrollHandle,
     pub(crate) variables_scroll: UniformListScrollHandle,
+    main_menu: main_menu::MainMenu,
     pub(crate) status_menu: Option<HostedMenu>,
     pub(crate) trace_rename: Option<crate::traces::TraceRename>,
     pub(crate) on_waves: Option<(OnWavesKey, std::rc::Rc<OnWaves>)>,
@@ -355,6 +361,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-z", Redo, Some("Workspace && !Embedded")),
         KeyBinding::new("ctrl-y", Redo, Some("Workspace && !Embedded")),
     ]);
+    main_menu::init(cx);
     crate::ui::text_input::bind_keys(cx);
     cx.bind_keys(crate::palette::key_bindings());
     {
@@ -572,126 +579,8 @@ pub fn init(cx: &mut App) {
         ),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.set_menus(menus(&[], None, None, None));
-}
-
-pub(crate) fn edit_menu_title(verb: &str, label: Option<&str>) -> String {
-    label.map_or_else(|| verb.to_owned(), |label| format!("{verb} {label}"))
-}
-
-pub(crate) fn menus(
-    pipelines: &[(String, Traced<TrackRef>)],
-    undo: Option<&str>,
-    redo: Option<&str>,
-    recent: Option<&[String]>,
-) -> Vec<Menu> {
-    let mut file = vec![
-        MenuItem::action("Open…", OpenFile),
-        MenuItem::action("Add Trace…", AddTrace),
-    ];
-    if let Some(recent) = recent {
-        let mut items: Vec<MenuItem> = recent
-            .iter()
-            .enumerate()
-            .map(|(ix, label)| MenuItem::action(label.clone(), OpenRecent { ix }))
-            .collect();
-        if items.is_empty() {
-            items.push(MenuItem::action("No Recent Files", ClearRecent).disabled(true));
-        }
-        items.push(MenuItem::separator());
-        items.push(MenuItem::action("Clear Recent", ClearRecent).disabled(recent.is_empty()));
-        file.push(MenuItem::submenu(Menu {
-            name: "Open Recent".into(),
-            items,
-            disabled: false,
-        }));
-    }
-    file.extend([
-        MenuItem::action("Close Trace", CloseTrace),
-        MenuItem::separator(),
-        MenuItem::action("Open Workspace…", OpenWorkspace),
-        MenuItem::action("Save Workspace", SaveWorkspace),
-        MenuItem::action("Save Workspace As…", SaveWorkspaceAs),
-    ]);
-    let pipeline_items = if pipelines.is_empty() {
-        vec![MenuItem::action(
-            "No pipeline generators in the trace",
-            NoPipelines,
-        )]
-    } else {
-        pipelines
-            .iter()
-            .map(|(path, track)| {
-                MenuItem::action(path.clone(), OpenPipelineTrack { track: *track })
-            })
-            .collect()
-    };
-    vec![
-        Menu {
-            name: "Volna".into(),
-            items: vec![
-                MenuItem::action("Settings…", OpenSettings),
-                MenuItem::separator(),
-                MenuItem::action("Quit", Quit),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "File".into(),
-            items: file,
-            disabled: false,
-        },
-        Menu {
-            name: "Edit".into(),
-            items: vec![
-                MenuItem::os_action(edit_menu_title("Undo", undo), Undo, OsAction::Undo)
-                    .disabled(undo.is_none()),
-                MenuItem::os_action(edit_menu_title("Redo", redo), Redo, OsAction::Redo)
-                    .disabled(redo.is_none()),
-                MenuItem::separator(),
-                MenuItem::action("Cut Signals", CutSignals),
-                MenuItem::action("Copy Signals", CopySignals),
-                MenuItem::action("Paste Signals", PasteSignals),
-            ],
-            disabled: false,
-        },
-        Menu {
-            name: "View".into(),
-            items: vec![
-                MenuItem::action("Command Palette…", CommandPalette),
-                MenuItem::action("Toggle Sidebar", ToggleSidebar),
-                MenuItem::action("Split Right", SplitRight),
-                MenuItem::action("Split Down", SplitDown),
-                MenuItem::action("New Waveform Tab", NewPanel),
-                MenuItem::submenu(Menu {
-                    name: "Pipeline".into(),
-                    items: pipeline_items,
-                    disabled: false,
-                }),
-                MenuItem::action("Close Panel", ClosePanel),
-                MenuItem::action("Follow Shared Viewport", ToggleViewportLink),
-                MenuItem::action("Follow Shared Cursor", ToggleCursorLink),
-                MenuItem::action("Collapse / Expand Scopes", ToggleScopes),
-                MenuItem::action("Expand All Groups", ExpandAllGroups),
-                MenuItem::action("Collapse All Groups", CollapseAllGroups),
-                MenuItem::separator(),
-                MenuItem::action("Zoom In", ZoomIn),
-                MenuItem::action("Zoom Out", ZoomOut),
-                MenuItem::action("Zoom to Fit", ZoomFit),
-                MenuItem::separator(),
-                MenuItem::submenu(Menu {
-                    name: "Appearance".into(),
-                    items: vec![
-                        MenuItem::action("Zoom In", UiZoomIn),
-                        MenuItem::action("Zoom Out", UiZoomOut),
-                        MenuItem::action("Reset Zoom", UiZoomReset),
-                    ],
-                    disabled: false,
-                }),
-            ],
-            disabled: false,
-        },
-    ]
+    let app = CoreApp::new();
+    cx.set_menus(crate::commands::native(&app, crate::commands::menu(&app)));
 }
 
 pub(crate) const MEMORY_PILL_W: f32 = 112.0;
@@ -848,6 +737,7 @@ impl Workspace {
             filter,
             scopes_scroll: UniformListScrollHandle::new(),
             variables_scroll: UniformListScrollHandle::new(),
+            main_menu: main_menu::MainMenu::default(),
             status_menu: None,
             frame_view: Default::default(),
             wave_menu: None,
@@ -1106,22 +996,20 @@ impl Workspace {
     }
 
     fn sync_menus(&mut self, cx: &mut Context<Self>) {
+        if self.embedded {
+            return;
+        }
+        let entries = crate::commands::menu(&self.app);
         let key = (
             self.app.doc.generation(),
-            self.app.history.revision(),
-            self.app.workspace.recent.revision,
             self.app.doc.traces().revision(),
+            crate::commands::menu_state(&entries),
         );
-        if self.embedded || self.menu_generation == Some(key) {
+        if self.menu_generation.as_ref() == Some(&key) {
             return;
         }
         self.menu_generation = Some(key);
-        cx.set_menus(menus(
-            &pipeline_generators(&self.app),
-            self.app.undo_label(),
-            self.app.redo_label(),
-            recent_labels(&self.app).as_deref(),
-        ));
+        cx.set_menus(crate::commands::native(&self.app, entries));
     }
 
     fn run_requests(&mut self, cx: &mut Context<Self>) {
@@ -1648,6 +1536,7 @@ impl Workspace {
     fn render_titlebar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
         let colors = t.bar;
+        let main_menu = self.render_main_menu_button(cx);
         let chips = self.render_trace_chips(cx);
         let file: Option<SharedString> = chips
             .is_none()
@@ -1685,6 +1574,7 @@ impl Workspace {
             .font_family(t.ui_font)
             .text_size(px(t.ui_size))
             .when_some(left_controls, gpui_kit::ParentElement::child)
+            .child(main_menu)
             .child(
                 div()
                     .id("titlebar-drag")
@@ -2549,7 +2439,7 @@ impl Render for Workspace {
             .key_context(if self.embedded {
                 "Workspace Embedded"
             } else {
-                "Workspace"
+                "Workspace MainWindow"
             })
             .track_focus(&self.focus_handle)
             .flex()
@@ -2718,6 +2608,7 @@ impl Workspace {
             overlays
                 .push(popup_at(menu.position, menu.popup.clone(), window, cx).into_any_element());
         }
+        overlays.extend(self.main_menu_overlay(window, cx));
         overlays.extend(self.render_rename(window));
         overlays
     }

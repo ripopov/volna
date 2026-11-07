@@ -4,6 +4,7 @@ pub mod app;
 pub mod assets;
 mod canvas;
 mod clipboard;
+mod commands;
 mod derived;
 #[cfg(not(target_family = "wasm"))]
 pub mod desktop;

@@ -35,6 +35,11 @@ fn workspace_listener<E: 'static>(
 impl Workspace {
     pub(crate) fn panel_actions(mut root: Stateful<Div>, owner: WeakEntity<Self>) -> Stateful<Div> {
         root = root
+            .on_action(workspace_listener(owner.clone(), Self::open_main_menu))
+            .on_action(workspace_listener(
+                owner.clone(),
+                Self::toggle_right_sidebar,
+            ))
             .on_action(workspace_listener(owner.clone(), Self::open_file))
             .on_action(workspace_listener(owner.clone(), Self::add_trace))
             .on_action(workspace_listener(

@@ -3388,7 +3388,7 @@ fn color_submenu_and_palette_commands_colour_the_selection(cx: &mut TestAppConte
     vcx.run_until_parked();
     let labels = window
         .update(&mut vcx, |ws, _, _| {
-            crate::palette::commands(&ws.app, "color")
+            crate::commands::palette(&ws.app, "color")
                 .into_iter()
                 .map(|(label, _)| label)
                 .filter(|l| l.starts_with("Color: "))
@@ -3509,7 +3509,7 @@ fn shift_a_and_the_group_menu_stack_and_unstack_a_group(cx: &mut TestAppContext)
     assert_eq!(style(&mut vcx), (GroupStyle::Activity, 1));
     let labels = window
         .update(&mut vcx, |ws, _, _| {
-            crate::palette::commands(&ws.app, "stacked")
+            crate::commands::palette(&ws.app, "stacked")
                 .into_iter()
                 .map(|(label, _)| label)
                 .collect::<Vec<_>>()
@@ -3844,7 +3844,7 @@ fn undo_keys_reach_the_history_and_text_fields_keep_their_own(cx: &mut TestAppCo
     );
     let labels = window
         .update(&mut vcx, |ws, _, _| {
-            crate::palette::commands(&ws.app, "")
+            crate::commands::palette(&ws.app, "")
                 .into_iter()
                 .map(|(label, _)| label)
                 .take(2)
@@ -4762,7 +4762,7 @@ fn start_page_reopens_recent_traces_and_workspaces(cx: &mut TestAppContext) {
     assert!(vcx.debug_bounds("recent-2").is_none());
     let labels = window
         .update(&mut vcx, |ws, _, _| {
-            crate::palette::commands(&ws.app, "")
+            crate::commands::palette(&ws.app, "")
                 .into_iter()
                 .map(|(label, _)| label)
                 .filter(|label| label.contains("Recent"))
@@ -4965,7 +4965,7 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
     draw(&mut vcx);
     window
         .update(&mut vcx, |ws, _, _| {
-            let labels: Vec<String> = crate::palette::commands(&ws.app, "")
+            let labels: Vec<String> = crate::commands::palette(&ws.app, "")
                 .into_iter()
                 .map(|(label, _)| label)
                 .filter(|label| label.contains("Trace"))
@@ -5427,7 +5427,7 @@ fn shift_o_toggles_group_overlays_and_hosts_their_menu(cx: &mut TestAppContext) 
                     .style,
                 GroupStyle::Activity
             );
-            let labels: Vec<_> = crate::palette::commands(&ws.app, "overlaid")
+            let labels: Vec<_> = crate::commands::palette(&ws.app, "overlaid")
                 .into_iter()
                 .map(|(l, _)| l)
                 .collect();
@@ -7922,4 +7922,357 @@ fn hovering_hierarchy_rows_shows_wrapped_descriptions_in_both_themes(cx: &mut Te
             }
         }
     }
+}
+
+fn menu_item_position(
+    view: &mut gpui_kit::VisualTestContext,
+    label: &str,
+) -> gpui_kit::Point<gpui_kit::Pixels> {
+    use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        let items: Vec<_> = window
+            .find_all_by_label(label)
+            .into_iter()
+            .filter(|item| item.role() == Some(gpui_kit::Role::MenuItem) && item.visible())
+            .collect();
+        assert_eq!(
+            items.len(),
+            1,
+            "expected one visible menu item named {label}"
+        );
+        items[0].bounds().center()
+    })
+}
+
+fn hover_menu_group(view: &mut gpui_kit::VisualTestContext, label: &str) {
+    let position = menu_item_position(view, label);
+    view.simulate_mouse_move(position, None, Default::default());
+    view.run_until_parked();
+}
+
+fn choose_menu_action(view: &mut gpui_kit::VisualTestContext, path: &[&str]) {
+    let (label, groups) = path.split_last().unwrap();
+    for group in groups {
+        hover_menu_group(view, group);
+    }
+    let position = menu_item_position(view, label);
+    view.simulate_click(position, Default::default());
+    view.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn main_menu_keyboard_navigation_restores_focus_and_opens_command_search(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use gpui_kit::test::TestWindowExt as _;
+    init(cx);
+    let window = RootWindow::new(cx);
+    window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+        })
+        .unwrap();
+    let mut view = VisualTestContext::from_window(window.root.into(), cx);
+    view.run_until_parked();
+    let original_focus = window
+        .update(&mut view, |ws, window, cx| {
+            let focus = ws.filter.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+            focus
+        })
+        .unwrap();
+    view.run_until_parked();
+    view.simulate_keystrokes("f10");
+    view.run_until_parked();
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.find("main-menu").bounds().right() < window.find("open-file").bounds().left()
+        );
+    });
+    view.simulate_keystrokes("escape");
+    view.run_until_parked();
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("popup-menu").is_empty());
+        assert!(original_focus.contains_focused(window, cx));
+    });
+    for _ in 0..2 {
+        view.update(|window, cx| {
+            window.render_frame(cx);
+            window.click("main-menu", cx);
+        });
+        view.run_until_parked();
+    }
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("popup-menu").is_empty());
+    });
+    view.simulate_keystrokes("f10");
+    view.run_until_parked();
+    view.simulate_keystrokes("down enter");
+    view.run_until_parked();
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("popup-menu").is_empty());
+        assert!(gpui_kit::component::WindowExt::has_active_dialog(
+            window, cx
+        ));
+    });
+}
+
+#[gpui_kit::test]
+fn main_menu_actions_toggle_the_sidebar_and_undo_row_addition(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    init(cx);
+    let window = RootWindow::new(cx);
+    window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+        })
+        .unwrap();
+    let mut view = VisualTestContext::from_window(window.root.into(), cx);
+    view.run_until_parked();
+    for visible in [false, true] {
+        view.simulate_keystrokes("f10");
+        view.run_until_parked();
+        choose_menu_action(&mut view, &["View", "Show left sidebar"]);
+        window
+            .update(&mut view, |ws, _, _| {
+                assert_eq!(ws.app.sidebar_visible, visible);
+            })
+            .unwrap();
+        view.update(|_, cx| {
+            let menus = cx.get_menus().unwrap();
+            let menu = menus.iter().find(|menu| menu.name == "View").unwrap();
+            let checked = menu.items.iter().find_map(|item| match item {
+                gpui_kit::OwnedMenuItem::Action { name, checked, .. }
+                    if name == "Show left sidebar" =>
+                {
+                    Some(*checked)
+                }
+                _ => None,
+            });
+            assert_eq!(checked, Some(visible));
+        });
+    }
+    let undo = window
+        .update(&mut view, |ws, _, _| {
+            format!("Undo {}", ws.app.undo_label().unwrap())
+        })
+        .unwrap();
+    view.simulate_keystrokes("f10");
+    view.run_until_parked();
+    choose_menu_action(&mut view, &["Edit", &undo]);
+    window
+        .update(&mut view, |ws, _, _| {
+            assert!(!ws.app.panels.iter().any(|panel| {
+                panel
+                    .kind
+                    .waves()
+                    .is_some_and(|waves| !waves.items().is_empty())
+            }));
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn main_menu_stays_in_main_window_and_fits_small_windows(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{VisualTestContext, size};
+    init(cx);
+    let (owner, main, auxiliary) = workspace_with_auxiliary_panel(cx);
+    let mut detached = VisualTestContext::from_window(auxiliary, cx);
+    detached.run_until_parked();
+    detached.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("main-menu").is_none());
+        assert!(window.try_find("auxiliary-panel-toolbar").is_some());
+        assert!(window.try_find("auxiliary-panel-menu").is_some());
+    });
+    detached.simulate_keystrokes("f10");
+    detached.run_until_parked();
+    detached.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("popup-menu").is_none());
+    });
+    let mut view = VisualTestContext::from_window(main, &detached);
+    view.update(|window, cx| {
+        window.focus(&owner.read(cx).window_focus(window), cx);
+    });
+    for dark in [true, false] {
+        for (width, zoom) in [(900.0, 1.0), (360.0, 1.0), (360.0, 1.5)] {
+            view.simulate_resize(size(px(width), px(700.0)));
+            view.update(|_, cx| {
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                crate::theme::set_zoom(zoom, cx);
+            });
+            view.run_until_parked();
+            view.simulate_keystrokes("f10");
+            view.run_until_parked();
+            view.update(|window, cx| {
+                window.render_frame(cx);
+                let menu = window.find("popup-menu").bounds();
+                assert!(
+                    menu.left() >= px(0.0) && menu.right() <= px(width),
+                    "{menu:?}"
+                );
+                assert!(menu.top() >= px(0.0) && menu.bottom() <= px(700.0));
+            });
+            view.simulate_keystrokes("escape");
+            view.run_until_parked();
+        }
+    }
+    owner.update(&mut view, |ws, cx| ws.windows.close(cx));
+    main.update(&mut view, |_, window, _| window.remove_window())
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn main_menu_rejects_a_command_after_a_recording_is_replaced(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    use gpui_kit::test::TestWindowExt as _;
+    init(cx);
+    let window = RootWindow::new(cx);
+    window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
+        })
+        .unwrap();
+    let mut view = VisualTestContext::from_window(window.root.into(), cx);
+    view.run_until_parked();
+    view.simulate_keystrokes("f10");
+    view.run_until_parked();
+    hover_menu_group(&mut view, "View");
+    let before = window
+        .update(&mut view, |ws, _, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(200)), cx);
+            ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
+            ws.app.doc.shared.viewport.value
+        })
+        .unwrap();
+    view.run_until_parked();
+    choose_menu_action(&mut view, &["View", "Zoom in"]);
+    window
+        .update(&mut view, |ws, _, _| {
+            assert_eq!(ws.app.doc.shared.viewport.value, before);
+        })
+        .unwrap();
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("popup-menu").is_empty());
+    });
+}
+
+#[gpui_kit::test]
+fn main_menu_settings_opens_after_the_recording_is_replaced(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    init(cx);
+    let window = RootWindow::new(cx);
+    window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+        })
+        .unwrap();
+    let mut view = VisualTestContext::from_window(window.root.into(), cx);
+    view.run_until_parked();
+    view.simulate_keystrokes("f10");
+    view.run_until_parked();
+    window
+        .update(&mut view, |ws, _, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(200)), cx);
+        })
+        .unwrap();
+    view.run_until_parked();
+    choose_menu_action(&mut view, &["Settings…"]);
+    window
+        .update(&mut view, |ws, _, _| {
+            let settings = ws
+                .app
+                .panels
+                .settings_id()
+                .expect("Settings opens for the current recording");
+            assert_eq!(ws.app.panels.focused_id(), settings);
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn main_menu_recording_actions_survive_a_panel_switch(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    init(cx);
+    let window = RootWindow::new(cx);
+    let first = window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            let first = ws.app.panels.focused_id();
+            ws.dispatch(Command::Action(Action::SplitRight), Some(window), cx);
+            ws.app.doc.add_marker(10).unwrap();
+            first
+        })
+        .unwrap();
+    let mut view = VisualTestContext::from_window(window.root.into(), cx);
+    view.run_until_parked();
+    view.simulate_keystrokes("f10");
+    view.run_until_parked();
+    hover_menu_group(&mut view, "Markers");
+    window
+        .update(&mut view, |ws, window, cx| {
+            ws.dispatch(
+                Command::Panels(volna_core::panels::PanelsCommand::Focus(first)),
+                Some(window),
+                cx,
+            );
+        })
+        .unwrap();
+    view.run_until_parked();
+    choose_menu_action(&mut view, &["Markers", "Remove all markers"]);
+    window
+        .update(&mut view, |ws, _, _| {
+            assert!(ws.app.doc.markers().is_empty());
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn main_menu_zoom_does_not_follow_a_panel_switch(cx: &mut TestAppContext) {
+    use gpui_kit::VisualTestContext;
+    init(cx);
+    let window = RootWindow::new(cx);
+    let original = window
+        .update(cx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            ws.dispatch(Command::Action(Action::SplitRight), Some(window), cx);
+            ws.app.doc.navigation.animation = volna_core::settings::Animation::Off;
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    let mut view = VisualTestContext::from_window(window.root.into(), cx);
+    view.run_until_parked();
+    let before = window
+        .update(&mut view, |ws, _, _| ws.app.doc.shared.viewport.value)
+        .unwrap();
+    view.simulate_keystrokes("f10");
+    view.run_until_parked();
+    hover_menu_group(&mut view, "View");
+    view.simulate_keystrokes("ctrl-tab");
+    view.run_until_parked();
+    window
+        .update(&mut view, |ws, _, _| {
+            assert_ne!(ws.app.panels.focused_id(), original);
+        })
+        .unwrap();
+    choose_menu_action(&mut view, &["View", "Zoom in"]);
+    window
+        .update(&mut view, |ws, _, _| {
+            assert_eq!(ws.app.doc.shared.viewport.value, before);
+        })
+        .unwrap();
 }

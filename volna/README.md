@@ -515,6 +515,17 @@ list and owns window chrome. Local and remote sessions return the same
 immutable trace objects. Remote transport carries raw trace data; settings,
 presentation, and workspace edits stay in the viewer.
 
+### Main menu
+
+The hamburger button at the left of the main window header opens the main menu.
+F10 opens it from the keyboard; use arrows to move through groups, Enter to run
+an action, and Escape to return to the previous focus. File, Edit, View,
+Navigate, Signals, Markers, and Panels expose workspace and focused-panel actions.
+Shortcuts appear beside commands, toggles show their current state, and actions
+that need a trace, cursor, or selection are disabled until available.
+Detached windows keep their panel toolbars and panel overflow menu.
+Command palette provides searchable access to commands and settings.
+
 ### Docking and transaction details
 
 Record details keeps attribute names and values in separate, single-line columns.
