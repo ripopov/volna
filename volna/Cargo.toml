@@ -21,6 +21,10 @@ name = "analog_showcase"
 path = "examples/analog_showcase.rs"
 
 [[example]]
+name = "derived"
+path = "examples/derived.rs"
+
+[[example]]
 name = "gpu_transaction_trace"
 path = "examples/gpu_transaction_trace.rs"
 

@@ -447,6 +447,17 @@ After regenerating `landing.vtr`, retarget the transaction inspector in
 `landing-page.volna.json` to the instruction labelled
 `80000054: addi a4, a4, 4`; record IDs include embedded events and stages.
 
+## Derived-signal playground
+
+[`examples/derived.vtr`](examples/derived.vtr) and its
+[`example workspace`](examples/derived.vtr.volna.example.json) provide
+four prepared views with 25 formulas and measurements: clocked handshakes,
+backpressure, queue conservation, signed ADC conversion, real-valued power and
+energy, and sample-counter-driven GPU performance metrics. The compact trace
+combines synthetic digital/sensor data with 64 complete LDS statistics windows
+from a gem5 experiment. See the [demo guide](examples/derived.md) for signal
+semantics, units, expected results, provenance, and Rust regeneration commands.
+
 ## GPU transaction example
 
 [`examples/gpu_transaction_trace.rs`](examples/gpu_transaction_trace.rs) generates
