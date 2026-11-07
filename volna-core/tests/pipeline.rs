@@ -848,6 +848,146 @@ fn narrow_pipeline_stages_show_the_prefix_that_fits() {
 }
 
 #[test]
+fn overlapping_stages_keep_readable_labels() {
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let scope = writer.scope("cpu", None).unwrap();
+    let source = writer
+        .transactions::<()>(
+            vtr::SourceOptions::new("operations", Some(scope)),
+            "PIPELINE",
+        )
+        .unwrap();
+    let lane = writer.intern("0").unwrap();
+    let owner = writer.begin_at(source, 0, &(), None).unwrap();
+    for (name, begin, end) in [
+        ("memory_request", 0, 100),
+        ("memory_service", 1, 100),
+        ("return_wait", 100, 120),
+    ] {
+        let name = writer.intern(name).unwrap();
+        writer
+            .embedded_stage(owner.owner(), begin, name, lane, Some(end), vec![])
+            .unwrap();
+    }
+    let overlay_lane = writer.intern("overlay").unwrap();
+    let stall = writer.intern("memory_stall").unwrap();
+    writer
+        .embedded_stage(owner.owner(), 20, stall, overlay_lane, Some(40), vec![])
+        .unwrap();
+    writer.end_at(owner, 120, vtr::Status::Ok).unwrap();
+    writer.close().unwrap();
+    let session = OpenSpec::Path(file.path().into()).open().unwrap();
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline {
+        track: a(TrackRef(source.id())),
+    });
+    complete_pending(&mut app);
+    let panel = app.panels.focused_id();
+    let theme = Theme::one_dark();
+    frame(&mut app, panel, &theme);
+    app.handle(Command::Action(Action::ZoomFit));
+    app.tick(Instant::now() + Duration::from_secs(1));
+    for theme in [Theme::one_dark(), Theme::islands_light()] {
+        for row_px in [24.0, 36.0, 48.0] {
+            app.panels
+                .pipeline_mut(panel)
+                .unwrap()
+                .rows
+                .set(RowView { top: 0.0, row_px });
+            app.doc
+                .shared
+                .viewport
+                .set(volna_core::wave::viewport::Viewport {
+                    start: 0.0,
+                    end: 120.0,
+                });
+            frame(&mut app, panel, &theme);
+            let layout = app.panels.pipeline(panel).unwrap().last_layout();
+            let labels: Vec<_> = app
+                .scene()
+                .prims
+                .iter()
+                .filter_map(|prim| match prim {
+                    Prim::Text {
+                        origin,
+                        height,
+                        text,
+                        font: FontRole::Mono,
+                        size: font_size,
+                        ..
+                    } if layout.cells.contains(*origin)
+                        && origin.y >= layout.row_y(0)
+                        && origin.y < layout.row_y(0) + row_px =>
+                    {
+                        Some((
+                            text.clone(),
+                            Rect::from_xywh(
+                                origin.x,
+                                origin.y,
+                                text.chars().count() as f32 * font_size * 0.6,
+                                *height,
+                            ),
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                labels
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>(),
+                ["memory_request", "memory_service", "return_wait"]
+            );
+            for (index, (_, rect)) in labels.iter().enumerate() {
+                for (_, other) in &labels[index + 1..] {
+                    assert!(
+                        rect.bottom() <= other.top()
+                            || other.bottom() <= rect.top()
+                            || rect.right() <= other.left()
+                            || other.right() <= rect.left()
+                    );
+                }
+            }
+            let row_y = layout.row_y(0);
+            let cells_left = layout.cells.left();
+            let cells_width = layout.cells_width_f64();
+            for (time, row_fraction, expected) in [
+                (30.0, 0.25, "memory_request"),
+                (30.0, 0.52, "memory_service"),
+                (30.0, 0.75, "memory_stall"),
+                (30.0, 0.99, "memory_service"),
+                (50.0, 0.75, "memory_service"),
+            ] {
+                let viewport = app.panels.pipeline(panel).unwrap().nav.viewport(&app.doc);
+                let position = point(
+                    cells_left + viewport.x_of(time, cells_width) as f32,
+                    row_y + row_fraction * row_px,
+                );
+                app.handle(Command::Pointer(panel, PointerEvent::Move { position }));
+                let hover = app.status().hover.unwrap();
+                assert!(hover.contains(expected), "expected {expected}, got {hover}");
+            }
+            for (name, label) in labels {
+                let position = point(label.left() + 1.0, label.top() + label.height() / 2.0);
+                let style = app
+                    .panels
+                    .pipeline(panel)
+                    .unwrap()
+                    .palette()
+                    .style(&name, &theme);
+                assert!(app.scene().prims.iter().any(|prim| matches!(prim,
+                    Prim::Quad { rect, fill, .. } if rect.contains(position) && *fill == style.fill)));
+                app.handle(Command::Pointer(panel, PointerEvent::Move { position }));
+                assert!(app.status().hover.as_ref().unwrap().contains(&name));
+            }
+        }
+    }
+}
+
+#[test]
 fn opening_a_pipeline_loads_the_track_once_and_paints_cells() {
     let (mut app, session, waves, pipeline) = opened(40);
     assert!(app.status().sidebar_notice.is_none());

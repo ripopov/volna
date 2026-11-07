@@ -701,6 +701,10 @@ impl PipelineModel {
         let (_, tx) = set.get(row)?;
         let t = layout.time_at(&self.nav.viewport(doc), p.x);
         let primary = self.palette.primary_lane();
+        let bands = super::stage_layout::stage_bands(tx, primary);
+        let row_fraction = (p.y - layout.row_y(row)) / layout.rows.row_px;
+        let overlay_band =
+            super::stage_layout::overlay_band(layout.row_y(row), layout.rows.row_px, layout.zoom);
         let mut best: Option<(usize, bool)> = None;
         for (ix, stage) in tx.stages.iter().enumerate() {
             let end = Self::stage_end(tx, stage);
@@ -709,6 +713,12 @@ impl PipelineModel {
                 continue;
             }
             let overlay = stage.lane != primary;
+            let band = bands[ix];
+            if (overlay && !overlay_band.contains(&p.y))
+                || (!overlay && (row_fraction * band.count as f32).floor() as usize != band.index)
+            {
+                continue;
+            }
             if best.is_none_or(|(_, was_overlay)| overlay || !was_overlay) {
                 best = Some((ix, overlay));
             }

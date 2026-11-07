@@ -17,6 +17,7 @@ pub mod palette;
 mod raster;
 mod row_set;
 mod selection;
+mod stage_layout;
 pub use selection::ZoomSelection;
 pub mod rows;
 pub mod zoom;

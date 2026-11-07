@@ -555,6 +555,13 @@ margin and a readable cycle width matching the default row height. Tracks withou
 a usable clock estimate the scale from the first transaction's stage durations
 or lifetime. Reusing a panel or restoring a workspace preserves its view;
 navigation during loading takes precedence over the automatic opening view.
+
+Concurrent primary stages occupy separate colored bands within their transaction
+row. Each band keeps its stage name and color; sequential stages use the full
+row height. Point at a band to inspect its full stage name and time range. Zoom
+in vertically when bands are too small to label. Aborted stages retain their
+hollow, diagonally hatched appearance within each band.
+
 The right-hand instruction navigator shows sampled record lifetimes across the
 whole stream. Click or drag it to reveal a row at its beginning without changing
 zoom, cursor, or selection. Its accent-colored stream and tinted viewport follow

@@ -136,13 +136,7 @@ pub fn paint(
     match &rows {
         Rows::Ready(set) if !set.is_empty() => {
             let row_px = layout.rows.row_px;
-            let pad = if row_px >= 8.0 {
-                z(1.5)
-            } else if row_px >= 4.0 {
-                z(0.5)
-            } else {
-                0.0
-            };
+            let pad = super::stage_layout::row_padding(row_px, t.zoom);
             let gap = 2.0 * pad;
             let wave_wf = column.width_f64();
             let x_of = |time: u64| cells.left() + viewport.x_of_tick(time, wave_wf) as f32;
@@ -154,8 +148,6 @@ pub fn paint(
                     .clipped(cells, |scene| scene.presence(map.rect, mask, t.editor.text));
             } else {
                 let border = row_px >= EDGE_MIN_PX;
-                let show_text = row_px >= TEXT_MIN_PX;
-                let cell_font = (row_px * 0.62).clamp(z(6.0), t.mono_size);
                 let palette = model.palette();
                 let primary = palette.primary_lane();
                 let band = t.editor.text.with_alpha(0.28);
@@ -180,7 +172,8 @@ pub fn paint(
                         continue;
                     }
                     let mut last_right: Option<f32> = None;
-                    for stage in &tx.stages {
+                    let bands = super::stage_layout::stage_bands(tx, primary);
+                    for (stage, stage_band) in tx.stages.iter().zip(bands) {
                         let sb = stage.begin;
                         let se = PipelineModel::stage_end(tx, stage);
                         let visible = if sb == se {
@@ -198,9 +191,9 @@ pub fn paint(
                             xb = xa + 1.0;
                         }
                         if stage.lane != primary {
-                            let ya = y + row_px * 0.55;
-                            let yb = y + row_px - pad;
-                            let rect = Rect::from_xywh(xa, ya, xb - xa, (yb - ya).max(1.0));
+                            let band_y = super::stage_layout::overlay_band(y, row_px, t.zoom);
+                            let ya = band_y.start;
+                            let rect = Rect::from_xywh(xa, ya, xb - xa, band_y.end - ya);
                             p.scene.clipped(cells, |scene| {
                                 scene.fill(rect, band);
                                 if border {
@@ -210,8 +203,21 @@ pub fn paint(
                             continue;
                         }
                         let style = palette.style(&stage.name, t);
-                        let rect =
-                            Rect::from_xywh(xa, y + pad, xb - xa, (row_px - 2.0 * pad).max(1.0));
+                        let band_height = row_px / stage_band.count as f32;
+                        let band_y = y + band_height * stage_band.index as f32;
+                        let band_pad = if stage_band.count == 1 {
+                            pad
+                        } else {
+                            pad.min(band_height * 0.15)
+                        };
+                        let font_ratio = if stage_band.count == 1 { 0.62 } else { 0.72 };
+                        let cell_font = (band_height * font_ratio).clamp(z(6.0), t.mono_size);
+                        let rect = Rect::from_xywh(
+                            xa,
+                            band_y + band_pad,
+                            xb - xa,
+                            (band_height - 2.0 * band_pad).max(1.0),
+                        );
                         let flushed = tx.status == Status::Aborted;
                         if flushed {
                             let ink = if contrast(style.fill, t.editor.bg)
@@ -242,7 +248,7 @@ pub fn paint(
                             });
                         }
                         last_right = Some(last_right.map_or(xb, |r: f32| r.max(xb)));
-                        if show_text
+                        if band_height >= TEXT_MIN_PX
                             && let Some((label, w)) = fitting_stage_label(
                                 &mut p,
                                 &stage.name,
@@ -251,10 +257,11 @@ pub fn paint(
                             )
                         {
                             cell_texts.push((
-                                point(snap((xa + xb - w) / 2.0), y),
-                                row_px,
+                                point(snap((xa + xb - w) / 2.0), band_y),
+                                band_height,
                                 label,
                                 if flushed { t.editor.text } else { style.text },
+                                cell_font,
                             ));
                         }
                     }
@@ -292,7 +299,7 @@ pub fn paint(
                     }
                 }
                 p.scene.clipped(cells, |scene| {
-                    for (origin, height, text, color) in cell_texts {
+                    for (origin, height, text, color, cell_font) in cell_texts {
                         scene.text(origin, height, text, FontRole::Mono, cell_font, color);
                     }
                     scene.lines(open_edges, t.editor.text, 1.0);
