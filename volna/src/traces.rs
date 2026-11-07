@@ -398,7 +398,7 @@ impl Workspace {
         }
         let workspaces = paths
             .iter()
-            .any(|p| p.to_string_lossy().ends_with(".volna.json"));
+            .any(|p| crate::native_workspace::is_workspace_path(p));
         if self.app.doc.traces().is_empty() || workspaces {
             self.open_paths(paths, cx);
             return;

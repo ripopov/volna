@@ -313,7 +313,7 @@ pub struct Workspace {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) config_watcher: Option<notify::RecommendedWatcher>,
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) opening_workspace: Option<String>,
+    pub(crate) opening_workspace: Option<crate::native_workspace::OpeningWorkspace>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) recent_checked: Option<(u64, u64)>,
 }
@@ -933,6 +933,8 @@ impl Workspace {
             self.app.handle(Command::CommitText(h.target, Some(text)));
         }
         loop {
+            #[cfg(not(target_family = "wasm"))]
+            self.finish_opening_workspace();
             let events = self.app.take_events();
             if events.is_empty() {
                 break;
@@ -1340,7 +1342,7 @@ impl Workspace {
 
     #[cfg(not(target_family = "wasm"))]
     pub fn open_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
-        if path.to_string_lossy().ends_with(".volna.json") {
+        if crate::native_workspace::is_workspace_path(&path) {
             self.open_workspace_path(path, cx);
             return;
         }

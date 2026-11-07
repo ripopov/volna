@@ -23,6 +23,13 @@ pub struct State {
     waiting: Option<Waiting>,
 }
 
+impl State {
+    #[must_use]
+    pub fn is_loading(&self) -> bool {
+        self.loading
+    }
+}
+
 struct Waiting {
     workspace: Box<Workspace>,
     origin: Target,
@@ -149,9 +156,7 @@ impl App {
                 }
             }
             Transition::OpenWorkspace(waiting) => {
-                if !self.begin_unsaved() {
-                    return;
-                }
+                self.workspace.loading = true;
                 let target = waiting.target.clone();
                 if let Err(error) = self.restore_when_open(*waiting) {
                     self.restore_failed(target, error);
@@ -167,6 +172,7 @@ impl App {
                         self.notice(error.to_string());
                     }
                     self.workspace.loading = false;
+                    self.workspace.scheduler.changed(Instant::now());
                     self.notice_all(report.notices);
                 }
                 Err(error) => self.notice(error.to_string()),
@@ -383,7 +389,7 @@ impl App {
         self.changed();
     }
 
-    pub fn open_workspace(&mut self, target: Target, bytes: &[u8]) -> Result<()> {
+    pub fn open_workspace(&mut self, origin: Target, bytes: &[u8]) -> Result<()> {
         ensure!(
             self.workspace.scheduler.enabled(),
             "workspace persistence is disabled"
@@ -394,12 +400,18 @@ impl App {
             .as_deref()
             .context("open the referenced trace first")?;
         let workspace = Workspace::parse(bytes)?;
-        workspace.prepare(self, trace_uri, target.location())?;
+        workspace.prepare(self, trace_uri, origin.location())?;
+        let target = self
+            .workspace
+            .scheduler
+            .target()
+            .cloned()
+            .context("Wait for the trace workspace to finish loading.")?;
         let waiting = Waiting {
             workspace: Box::new(workspace),
-            origin: target.clone(),
+            origin,
             target,
-            supersedes: None,
+            supersedes: self.workspace.scheduler.supersedes().map(str::to_owned),
             notices: Vec::new(),
             explicit: true,
             traces: BTreeSet::default(),
@@ -410,7 +422,7 @@ impl App {
 
     pub fn save_workspace(&mut self, destination: Option<Target>) {
         if let Some(target) = destination {
-            self.workspace.scheduler.save_as(target);
+            self.workspace.scheduler.save_to(target);
         } else {
             self.workspace.scheduler.save();
         }

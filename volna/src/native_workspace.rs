@@ -15,6 +15,17 @@ const STATE_FILE: &str = "state.json";
 const SCHEMA_FILE: &str = "settings.schema.json";
 const THEMES_DIR: &str = "themes";
 
+pub(crate) struct OpeningWorkspace {
+    origin: Target,
+    trace_uri: String,
+    bytes: Vec<u8>,
+}
+
+pub(crate) fn is_workspace_path(path: &Path) -> bool {
+    let name = path.to_string_lossy();
+    name.ends_with(".volna.json") || name.ends_with(".volna.example.json")
+}
+
 pub struct Store {
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
@@ -394,14 +405,14 @@ impl crate::Workspace {
             return;
         }
         let opened = crate::app::unix_now();
-        let entry = match self.opening_workspace.take() {
-            Some(uri) => Recent {
-                uri,
+        let entry = match &self.opening_workspace {
+            Some(opening) if opening.trace_uri == trace_uri => Recent {
+                uri: opening.origin.location().into(),
                 kind: RecentKind::Workspace,
                 trace: Some(trace_uri),
                 opened,
             },
-            None => Recent {
+            _ => Recent {
                 uri: trace_uri,
                 kind: RecentKind::Trace,
                 trace: None,
@@ -409,6 +420,23 @@ impl crate::Workspace {
             },
         };
         self.app.remember_recent(entry);
+    }
+
+    pub(crate) fn finish_opening_workspace(&mut self) {
+        let Some(opening) = self.opening_workspace.as_ref() else {
+            return;
+        };
+        if self.app.workspace.is_loading()
+            || !self.app.doc.is_loaded()
+            || self.app.workspace.trace_uri.as_deref() != Some(opening.trace_uri.as_str())
+        {
+            return;
+        }
+        let opening = self.opening_workspace.take().expect("checked above");
+        if let Err(error) = self.app.open_workspace(opening.origin, &opening.bytes) {
+            self.app
+                .report_workspace_error(format!("Cannot open workspace: {error:#}"));
+        }
     }
 
     pub(crate) fn save_recent(&mut self) {
@@ -536,7 +564,7 @@ impl crate::Workspace {
             );
             let bytes = read_limited(&path, MAX_BYTES)?.context("workspace file does not exist")?;
             let uri = file_uri(&path)?;
-            let target = Target::File { uri: uri.clone() };
+            let origin = Target::File { uri: uri.clone() };
             let workspace = volna_core::workspace::Workspace::parse(&bytes)?;
             let owner = workspace
                 .traces
@@ -549,7 +577,7 @@ impl crate::Workspace {
             if self.app.doc.is_loaded()
                 && self.app.workspace.trace_uri.as_deref() == Some(trace_uri.as_str())
             {
-                self.app.open_workspace(target, &bytes)?;
+                self.app.open_workspace(origin, &bytes)?;
                 if self.native_store.is_some() {
                     self.app.remember_recent(Recent {
                         uri,
@@ -559,9 +587,11 @@ impl crate::Workspace {
                     });
                 }
             } else {
-                self.app
-                    .configure_persistence(Persistence::Explicit(target));
-                self.opening_workspace = Some(uri);
+                self.opening_workspace = Some(OpeningWorkspace {
+                    origin,
+                    trace_uri: trace_uri.clone(),
+                    bytes,
+                });
                 self.app
                     .open_resource(volna_trace::session::OpenSpec::Path(trace), trace_uri);
             }
@@ -629,11 +659,7 @@ impl Options {
             options.policy = Persistence::Disabled;
         }
         ensure!(
-            options.files.len() == 1
-                || !options
-                    .files
-                    .iter()
-                    .any(|f| f.to_string_lossy().ends_with(".volna.json")),
+            options.files.len() == 1 || !options.files.iter().any(|f| is_workspace_path(f)),
             "a workspace file opens alone; it names its traces"
         );
         Ok(options)

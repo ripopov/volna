@@ -8,9 +8,8 @@ five GPU performance counters, and two statistics sampling signals. It is under
 100,000 bytes; generation enforces that limit.
 
 ```sh
-# Start or reset your editable workspace from the example.
-cp volna/examples/derived.vtr.volna.example.json volna/examples/derived.vtr.volna.json
-cargo run --locked -p volna -- volna/examples/derived.vtr
+# Open the prepared example directly.
+cargo run --locked -p volna -- volna/examples/derived.vtr.volna.example.json
 # Regenerate both assets from the bundled statistics excerpt.
 cargo run --locked -p volna --example derived
 # Generate elsewhere without changing the delivered example.
@@ -18,9 +17,13 @@ cargo run --locked -p volna --example derived -- /tmp/derived.vtr
 cargo test --locked -p volna --example derived
 ```
 
-Volna autosaves your experiments to `derived.vtr.volna.json`. The generator
-updates the `.volna.example.json` template and leaves that personal workspace
-alone. Copy the template again when you want to reset the demo.
+In a running Volna window, choose **Open Workspace…** from the File menu or the
+command palette and select `derived.vtr.volna.example.json`. Loading the example
+keeps your autosave destination: normally `derived.vtr.volna.json`, or the
+configured fallback storage. Reopen the example to reset the demo. To update the
+example itself, choose **Save Workspace As…** and select its filename; that
+one-time write does not redirect autosave. The generator also updates only the
+example template and leaves your personal workspace alone.
 
 The generator is [`derived.rs`](derived.rs). The streaming queue and sensors are
 deterministic synthetic data. The GPU statistics are real interval counts copied

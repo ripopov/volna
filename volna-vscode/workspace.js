@@ -127,7 +127,7 @@ function createWorkspaceHost(vscode, context, panel, uri) {
       case "saveWorkspaceAs": {
         const picked = await vscode.window.showSaveDialog({
           defaultUri: sidecar,
-          filters: { "Volna workspace": ["volna.json"] },
+          filters: { "Volna workspace": ["json"] },
         });
         if (picked)
           return post({
@@ -139,7 +139,7 @@ function createWorkspaceHost(vscode, context, panel, uri) {
       case "openWorkspace": {
         const picked = await vscode.window.showOpenDialog({
           canSelectMany: false,
-          filters: { "Volna workspace": ["volna.json"] },
+          filters: { "Volna workspace": ["json"] },
           openLabel: "Open Workspace",
         });
         if (picked?.[0])

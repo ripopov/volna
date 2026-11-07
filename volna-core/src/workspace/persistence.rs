@@ -144,7 +144,7 @@ mod decimal {
 #[derive(Clone, Debug)]
 struct Pending {
     ticket: SaveTicket,
-    switch: bool,
+    autosave: bool,
 }
 
 #[derive(Debug, Default)]
@@ -196,7 +196,9 @@ impl Scheduler {
         self.policy != Persistence::Disabled
     }
     pub(crate) fn wants_write(&self) -> bool {
-        self.enabled() && self.dirty() && !self.suspended && self.target.is_some()
+        self.enabled()
+            && (self.explicit || (self.dirty() && !self.suspended))
+            && (self.destination.is_some() || self.target.is_some())
     }
 
     pub fn begin(&mut self, target: Option<Target>, supersedes: Option<String>) -> Result<()> {
@@ -239,7 +241,7 @@ impl Scheduler {
     pub fn save(&mut self) {
         self.explicit = true;
     }
-    pub fn save_as(&mut self, target: Target) {
+    pub fn save_to(&mut self, target: Target) {
         self.destination = Some(target);
         self.explicit = true;
     }
@@ -263,8 +265,8 @@ impl Scheduler {
         {
             return None;
         }
-        let switch = self.destination.is_some();
         let target = self.destination.take().or_else(|| self.target.clone())?;
+        let autosave = self.target.as_ref() == Some(&target);
         let ticket = SaveTicket {
             target,
             epoch: self.epoch,
@@ -272,7 +274,7 @@ impl Scheduler {
         };
         self.outstanding = Some(Pending {
             ticket: ticket.clone(),
-            switch,
+            autosave,
         });
         self.explicit = false;
         Some(ticket)
@@ -295,12 +297,12 @@ impl Scheduler {
             self.last_error = Some(error);
             self.changed_at = Some(now);
         } else {
-            self.acked = ticket.revision;
-            self.last_error = None;
-            self.suspended = false;
-            if pending.switch {
-                self.target = Some(ticket.target.clone());
-                self.supersedes = None;
+            if pending.autosave {
+                self.acked = ticket.revision;
+                self.suspended = false;
+            }
+            if !self.suspended {
+                self.last_error = None;
             }
         }
         true

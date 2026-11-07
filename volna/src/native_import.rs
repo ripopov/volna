@@ -548,6 +548,28 @@ mod tests {
 
     fn drain(app: &mut volna_core::App, imports: &mut Imports) {
         loop {
+            for event in app.take_events() {
+                if let volna_core::Event::LoadWorkspace { trace_uri } = event {
+                    use volna_core::workspace::persistence::{Candidate, Content, Target};
+                    app.restore_candidates(
+                        &trace_uri,
+                        Candidate {
+                            target: Target::File {
+                                uri: format!("{trace_uri}.volna.json"),
+                            },
+                            content: Content::Missing,
+                            writable: true,
+                        },
+                        Candidate {
+                            target: Target::Storage {
+                                key: trace_uri.clone(),
+                            },
+                            content: Content::Missing,
+                            writable: true,
+                        },
+                    );
+                }
+            }
             let requests = app.take_requests();
             if requests.is_empty() {
                 break;

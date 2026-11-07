@@ -632,14 +632,14 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
     let (old, mut w2) = writes(&mut app).pop().unwrap();
     w2["traces"][1]["path"] = "y.vtr".into();
     app.handle(Command::AddVars(vec![var(&app, TraceId::A, "soc.cpu0.pc")]));
-    let w2_target = Target::File {
+    let w2_source = Target::File {
         uri: url::Url::from_file_path(directory.join("w2.volna.json"))
             .unwrap()
             .to_string(),
     };
     let ticket = app.workspace.scheduler.outstanding().cloned().unwrap();
     app.workspace_saved(ticket, None, volna_core::Instant::now());
-    app.open_workspace(w2_target.clone(), &serde_json::to_vec(&w2).unwrap())
+    app.open_workspace(w2_source, &serde_json::to_vec(&w2).unwrap())
         .unwrap();
     let flushed = writes(&mut app);
     assert_eq!(flushed.len(), 1, "the old workspace is flushed first");
@@ -650,9 +650,9 @@ fn open_workspace_flushes_the_old_one_before_changing_traces() {
     app.workspace_saved(ticket, None, volna_core::Instant::now());
     complete_pending(&mut app);
     assert_eq!(app.doc.traces().get(b()).unwrap().uri, Some(uri(&y)));
-    assert!(
-        writes(&mut app).iter().all(|(target, _)| *target != old),
-        "nothing more is written to the old workspace"
-    );
-    assert_eq!(app.workspace.scheduler.target(), Some(&w2_target));
+    app.tick(volna_core::Instant::now() + volna_core::workspace::persistence::IDLE * 2);
+    let restored = writes(&mut app);
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].0, old);
+    assert_eq!(restored[0].1["traces"][1]["path"], "y.vtr");
 }

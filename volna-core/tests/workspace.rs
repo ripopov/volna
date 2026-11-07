@@ -246,29 +246,190 @@ fn idle_scheduler_serializes_writes_and_only_acknowledges_the_exact_ticket() {
     assert!(!s.acknowledge(&latest, None, now));
 }
 
+// Loading and explicitly overwriting a preset must leave subsequent autosaves beside the trace.
 #[test]
-fn save_as_switches_only_after_success_and_preserves_later_edits() {
+fn opening_and_saving_a_named_workspace_keep_the_autosave_destination() {
+    let mut app = persistent_app();
     let now = Instant::now();
-    let mut s = scheduler();
-    let destination = file("file:///tmp/chosen.volna.json");
-    s.changed(now);
-    let old = s.next(now, false, true).unwrap();
-    s.save_as(destination.clone());
-    assert!(s.next(now, false, true).is_none());
-    s.acknowledge(&old, None, now);
-    let failed = s.next(now, false, false).unwrap();
-    assert_eq!(failed.target, destination);
-    s.acknowledge(&failed, Some("permission denied".into()), now);
-    assert_eq!(s.target(), Some(&file(LOCATION)));
-    s.save_as(destination.clone());
-    let new = s.next(now, false, false).unwrap();
-    s.changed(now);
-    s.acknowledge(&new, None, now);
-    assert_eq!(s.target(), Some(&destination));
-    assert!(s.dirty());
+    let source = file("vscode-remote://ssh-remote+board/home/user/presets/demo.volna.example.json");
+    let mut preset = capture(&app);
+    preset.traces[0].path = TRACE.into();
+    preset.sidebar.filter = "from preset".into();
+    app.open_workspace(source.clone(), &preset.to_bytes().unwrap())
+        .unwrap();
+    assert_eq!(app.variables.filter, "from preset");
+    app.tick(now + IDLE * 2);
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, file(LOCATION));
     assert_eq!(
-        s.next(now + IDLE, false, false).unwrap().target,
-        destination
+        Workspace::parse(&bytes).unwrap().sidebar.filter,
+        "from preset"
+    );
+    app.workspace_saved(ticket, None, now + IDLE * 2);
+
+    app.handle_at(
+        Command::SetFilter("explicit snapshot".into()),
+        now + IDLE * 2,
+    );
+    app.save_workspace(Some(source.clone()));
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, source);
+    assert_eq!(
+        Workspace::parse(&bytes).unwrap().sidebar.filter,
+        "explicit snapshot"
+    );
+    app.workspace_saved(ticket, None, now + IDLE * 2);
+    app.tick(now + IDLE * 4);
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, file(LOCATION));
+    assert_eq!(
+        Workspace::parse(&bytes).unwrap().sidebar.filter,
+        "explicit snapshot"
+    );
+    app.workspace_saved(ticket, None, now + IDLE * 4);
+    app.handle_at(
+        Command::SetFilter("after explicit save".into()),
+        now + IDLE * 4,
+    );
+    app.tick(now + IDLE * 6);
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, file(LOCATION));
+    assert_eq!(
+        Workspace::parse(&bytes).unwrap().sidebar.filter,
+        "after explicit save"
+    );
+}
+
+// A read-only trace keeps saving to its fallback after loading and explicitly saving a preset.
+#[test]
+fn preset_loads_and_named_copies_preserve_fallback_storage_and_its_base() {
+    for target in [
+        Target::Storage {
+            key: "trace-workspace".into(),
+        },
+        Target::FallbackFile {
+            uri: "file:///tmp/volna-fallback.volna.json".into(),
+        },
+    ] {
+        let mut app = App::new();
+        app.configure_persistence(Persistence::Auto);
+        open(&mut app);
+        let bytes = capture(&app).to_bytes().unwrap();
+        let base = persistence::hash(&bytes);
+        app.restore_candidates(
+            TRACE,
+            Candidate {
+                target: file(LOCATION),
+                content: Content::Bytes(bytes),
+                writable: false,
+            },
+            Candidate {
+                target: target.clone(),
+                content: Content::Missing,
+                writable: true,
+            },
+        );
+        let mut preset = capture(&app);
+        preset.sidebar.filter = "preset in fallback".into();
+        let source = file(&resolve_trace("demo.volna.example.json", LOCATION).unwrap());
+        app.open_workspace(source.clone(), &preset.to_bytes().unwrap())
+            .unwrap();
+        let now = Instant::now();
+        app.tick(now + IDLE * 2);
+        let (ticket, bytes) = emitted_save(&mut app);
+        assert_eq!(ticket.target, target);
+        let saved = Workspace::parse(&bytes).unwrap();
+        assert_eq!(saved.supersedes, Some(base.clone()));
+        assert_eq!(saved.sidebar.filter, "preset in fallback");
+        app.workspace_saved(ticket, None, now + IDLE * 2);
+        app.save_workspace(Some(source.clone()));
+        let (ticket, bytes) = emitted_save(&mut app);
+        assert_eq!(ticket.target, source);
+        assert_eq!(Workspace::parse(&bytes).unwrap().supersedes, None);
+        app.workspace_saved(ticket, None, now + IDLE * 2);
+        app.handle_at(Command::SetFilter("later edit".into()), now + IDLE * 2);
+        app.tick(now + IDLE * 4);
+        let (ticket, bytes) = emitted_save(&mut app);
+        assert_eq!(ticket.target, target);
+        let saved = Workspace::parse(&bytes).unwrap();
+        assert_eq!(saved.supersedes, Some(base));
+        assert_eq!(saved.sidebar.filter, "later edit");
+    }
+}
+
+// A named save queued behind an autosave must finish before another workspace replaces the visible view.
+#[test]
+fn a_pending_named_copy_saves_the_current_view_before_loading_a_preset() {
+    let mut app = persistent_app();
+    let now = Instant::now();
+    let mut preset = capture(&app);
+    preset.sidebar.filter = "loaded preset".into();
+    app.handle(Command::SetFilter("first edit".into()));
+    app.save_workspace(None);
+    let (first, _) = emitted_save(&mut app);
+    app.handle(Command::SetFilter("named snapshot".into()));
+    let destination = file(&resolve_trace("copy.volna.json", LOCATION).unwrap());
+    app.save_workspace(Some(destination.clone()));
+    let source = file(&resolve_trace("demo.volna.example.json", LOCATION).unwrap());
+    app.open_workspace(source.clone(), &preset.to_bytes().unwrap())
+        .unwrap();
+    app.workspace_saved(first, None, now);
+    let mut copied = None;
+    for _ in 0..6 {
+        let writes = app
+            .take_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                volna_core::Event::PersistWorkspace { ticket, bytes } => Some((ticket, bytes)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if writes.is_empty() {
+            break;
+        }
+        for (ticket, bytes) in writes {
+            assert_ne!(ticket.target, source);
+            if ticket.target == destination {
+                copied = Some(Workspace::parse(&bytes).unwrap().sidebar.filter);
+            }
+            app.workspace_saved(ticket, None, now);
+        }
+    }
+    assert_eq!(copied.as_deref(), Some("named snapshot"));
+    assert_eq!(app.variables.filter, "loaded preset");
+    app.tick(now + IDLE * 2);
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, file(LOCATION));
+    assert_eq!(
+        Workspace::parse(&bytes).unwrap().sidebar.filter,
+        "loaded preset"
+    );
+}
+
+// A failed named save can be retried without consuming the pending personal autosave.
+#[test]
+fn retrying_a_failed_named_copy_does_not_redirect_or_acknowledge_autosave() {
+    let mut app = persistent_app();
+    let now = Instant::now();
+    app.handle_at(Command::SetFilter("unsaved edit".into()), now);
+    let destination = file(&resolve_trace("copy.volna.json", LOCATION).unwrap());
+    app.save_workspace(Some(destination.clone()));
+    let (ticket, _) = emitted_save(&mut app);
+    app.workspace_saved(ticket, Some("permission denied".into()), now);
+    app.save_workspace(Some(destination.clone()));
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, destination);
+    assert_eq!(
+        Workspace::parse(&bytes).unwrap().sidebar.filter,
+        "unsaved edit"
+    );
+    app.workspace_saved(ticket, None, now);
+    app.tick(now + IDLE * 2);
+    let (ticket, bytes) = emitted_save(&mut app);
+    assert_eq!(ticket.target, file(LOCATION));
+    assert_eq!(
+        Workspace::parse(&bytes).unwrap().sidebar.filter,
+        "unsaved edit"
     );
 }
 
@@ -295,7 +456,7 @@ fn errors_retry_the_same_target_and_suspension_requires_explicit_save() {
     assert!(!s.dirty());
     let mut disabled = Scheduler::default();
     disabled.changed(now);
-    disabled.save_as(file(LOCATION));
+    disabled.save_to(file(LOCATION));
     assert!(disabled.next(now, false, true).is_none());
 }
 
@@ -588,8 +749,8 @@ fn assert_cancelled_workspace_trace_open_can_save(in_flight: bool) {
     secondary.name = "other.vtr".into();
     saved.traces.push(secondary);
     saved.shared.cursor = Some(23);
-    let destination = file(&resolve_trace("cancelled.volna.json", LOCATION).unwrap());
-    app.open_workspace(destination.clone(), &saved.to_bytes().unwrap())
+    let source = file(&resolve_trace("cancelled.volna.json", LOCATION).unwrap());
+    app.open_workspace(source, &saved.to_bytes().unwrap())
         .unwrap();
     assert!(app.doc.traces().get(b).is_some());
     assert!(app.doc.session(b).is_none());
@@ -628,8 +789,8 @@ fn assert_cancelled_workspace_trace_open_can_save(in_flight: bool) {
     app.take_events();
     app.save_workspace(None);
     let (ticket, bytes) = emitted_save(&mut app);
-    assert_eq!(ticket.target, destination);
-    assert_eq!(app.workspace.scheduler.target(), Some(&destination));
+    assert_eq!(ticket.target, file(LOCATION));
+    assert_eq!(app.workspace.scheduler.target(), Some(&file(LOCATION)));
     let restored = Workspace::parse(&bytes).unwrap();
     assert_eq!(restored.shared.cursor, Some(23), "the restore must finish");
     assert_eq!(restored.traces.len(), 1);
@@ -642,7 +803,7 @@ fn assert_cancelled_workspace_trace_open_can_save(in_flight: bool) {
     app.handle_at(Command::SetFilter("after cancelled open".into()), now);
     app.tick(now + IDLE * 2);
     let (ticket, bytes) = emitted_save(&mut app);
-    assert_eq!(ticket.target, destination);
+    assert_eq!(ticket.target, file(LOCATION));
     assert_eq!(
         Workspace::parse(&bytes).unwrap().sidebar.filter,
         "after cancelled open"

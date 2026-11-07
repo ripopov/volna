@@ -115,8 +115,15 @@ cargo run --locked -p volna -- --help
 ```
 
 The launcher accepts VTR, FST, and Kanata paths, multiple traces, and saved
-`.volna.json` workspaces. `--no-workspace` disables workspace reads and writes;
-`--config-dir DIR` chooses the settings directory.
+`.volna.json` or `.volna.example.json` workspaces. `--no-workspace` disables
+workspace reads and writes; `--config-dir DIR` chooses the settings directory.
+
+**Open Workspace…** restores a saved view without changing the trace's autosave
+destination. **Save Workspace** writes to that destination. **Save Workspace As…**
+writes a one-time snapshot to the filename you choose, including overwriting an
+existing example; later autosaves continue to use the trace's destination.
+The explicit `--workspace FILE` startup option still configures that file as the
+autosave destination.
 
 Each trace name in the title bar has a source-path tooltip and an actions menu,
 including when only one file is open. Open the menu with its dropdown arrow or

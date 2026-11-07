@@ -1622,6 +1622,94 @@ fn theme_changes_preserve_trace_and_interaction_state(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn native_example_workspace_loads_and_explicit_saves_preserve_personal_autosaves(
+    cx: &mut TestAppContext,
+) {
+    use crate::native_workspace::{Store, file_uri};
+    use volna_core::workspace::{
+        Workspace as SavedWorkspace,
+        persistence::{Persistence, Target},
+    };
+
+    init(cx);
+    for already_open in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        let trace = temporary.path().join("derived.vtr");
+        std::fs::copy(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/examples/derived.vtr"),
+            &trace,
+        )
+        .unwrap();
+        let source = temporary.path().join("derived.vtr.volna.example.json");
+        let source_bytes = include_bytes!("../examples/derived.vtr.volna.example.json");
+        std::fs::write(&source, source_bytes).unwrap();
+        let personal = temporary.path().join("derived.vtr.volna.json");
+        let mut saved = SavedWorkspace::parse(source_bytes).unwrap();
+        saved.sidebar.filter = "personal starting view".into();
+        std::fs::write(&personal, saved.to_bytes().unwrap()).unwrap();
+        let mut store = Store::new(Some(temporary.path().join("config"))).unwrap();
+        store.data_dir = temporary.path().join("fallback");
+        let host = cx.add_window(Workspace::new);
+        host.update(cx, |ws, _, cx| {
+            ws.enable_native_persistence(store, Persistence::Auto, false, cx);
+            if already_open {
+                ws.open_path(trace.clone(), cx);
+            }
+        })
+        .unwrap();
+        cx.run_until_parked();
+        host.update(cx, |ws, _, cx| {
+            if already_open {
+                assert_eq!(ws.app.variables.filter, "personal starting view");
+            }
+            ws.open_path(source.clone(), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        host.update(cx, |ws, _, cx| {
+            assert!(ws.app.doc.is_loaded());
+            assert_eq!(ws.app.panels.len(), 4);
+            assert_eq!(ws.app.variables.filter, "");
+            assert!(
+                ws.app.workspace.notices.is_empty(),
+                "{:?}",
+                ws.app.workspace.notices
+            );
+            ws.dispatch(Command::SetFilter("first edit".into()), None, cx);
+            ws.app.tick(Instant::now() + Duration::from_secs(2));
+            ws.after(None, cx);
+        })
+        .unwrap();
+        let autosaved = SavedWorkspace::parse(&std::fs::read(&personal).unwrap()).unwrap();
+        assert_eq!(autosaved.sidebar.filter, "first edit");
+        assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+
+        host.update(cx, |ws, _, cx| {
+            ws.app.save_workspace(Some(Target::File {
+                uri: file_uri(&source).unwrap(),
+            }));
+            ws.after(None, cx);
+        })
+        .unwrap();
+        let explicit = std::fs::read(&source).unwrap();
+        assert_eq!(
+            SavedWorkspace::parse(&explicit).unwrap().sidebar.filter,
+            "first edit"
+        );
+        host.update(cx, |ws, _, cx| {
+            ws.dispatch(Command::SetFilter("later personal edit".into()), None, cx);
+            ws.app.tick(Instant::now() + Duration::from_secs(2));
+            ws.after(None, cx);
+            ws.dispatch(Command::CloseTrace, None, cx);
+        })
+        .unwrap();
+        let autosaved = SavedWorkspace::parse(&std::fs::read(&personal).unwrap()).unwrap();
+        assert_eq!(autosaved.sidebar.filter, "later personal edit");
+        assert_eq!(std::fs::read(&source).unwrap(), explicit);
+    }
+}
+
+#[gpui_kit::test]
 fn native_idle_save_reopens_a_copied_trace_with_its_workspace(cx: &mut TestAppContext) {
     use crate::native_workspace::Store;
     use volna_core::workspace::persistence::Persistence;
