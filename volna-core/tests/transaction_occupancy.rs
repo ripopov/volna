@@ -153,12 +153,12 @@ fn row_activity_preserves_gaps_and_point_errors_at_boundaries() {
     ]);
     let row = index.row(0).unwrap();
     for (start, end, expected) in [
-        (9.0, 10.0, (true, true)),
-        (10.0, 11.0, (false, false)),
-        (11.0, 12.0, (true, false)),
-        (20.0, 21.0, (false, false)),
-        (21.0, 22.0, (true, true)),
-        (22.0, 23.0, (false, false)),
+        (9.0, 10.0, Some(Status::Error)),
+        (10.0, 11.0, None),
+        (11.0, 12.0, Some(Status::Ok)),
+        (20.0, 21.0, None),
+        (21.0, 22.0, Some(Status::Error)),
+        (22.0, 23.0, None),
     ] {
         assert_eq!(row.activity(start, end), expected, "{start}..{end}");
     }

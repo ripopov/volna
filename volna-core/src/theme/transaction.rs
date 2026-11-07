@@ -2,6 +2,7 @@
 
 use super::{Theme, fallback_text, over, stroke};
 use crate::color::Color;
+use volna_trace::data::transactions::Status;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TransactionStyle {
@@ -12,11 +13,11 @@ pub struct TransactionStyle {
 
 impl Theme {
     #[must_use]
-    pub fn transaction_style(&self, failed: bool) -> TransactionStyle {
-        let ink = if failed {
-            self.editor.error
-        } else {
-            self.wave_signal
+    pub fn transaction_style(&self, status: Status) -> TransactionStyle {
+        let ink = match status {
+            Status::Error => self.editor.error,
+            Status::Aborted => self.wave_weak,
+            _ => self.wave_signal,
         };
         let fill = over(ink.with_alpha(0.20), self.editor.bg);
         TransactionStyle {

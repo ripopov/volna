@@ -13,15 +13,23 @@ use crate::geometry::push_horizontal_run;
 const PIXELS: usize = 4096;
 const LABELS: usize = 384;
 
+const STATUSES: [Status; 4] = [Status::Unset, Status::Error, Status::Aborted, Status::Open];
+
+fn batch(status: Status) -> usize {
+    match status {
+        Status::Unset | Status::Ok => 0,
+        Status::Error => 1,
+        Status::Aborted => 2,
+        Status::Open => 3,
+    }
+}
+
 #[derive(Default)]
 struct Bars {
     solid: Vec<Rect>,
-    failed: Vec<Rect>,
     dense: Vec<Rect>,
-    failed_dense: Vec<Rect>,
     edges: Vec<[Point; 2]>,
-    failed_edges: Vec<[Point; 2]>,
-    labels: Vec<(Point, String, bool)>,
+    labels: Vec<(Point, String)>,
 }
 
 pub(super) fn paint(
@@ -36,8 +44,7 @@ pub(super) fn paint(
     let index = plan.index;
     let generator = index.source();
     let t = p.theme;
-    let normal = t.transaction_style(false);
-    let error = t.transaction_style(true);
+    let styles = STATUSES.map(|status| t.transaction_style(status));
     let z = |v: f32| v * t.zoom;
     let width = f64::from(waves.width()).max(1.0);
     let x_of = |time: u64| {
@@ -47,7 +54,8 @@ pub(super) fn paint(
     let bar_h = (geometry.sub_h - 2.0 * inset).max(1.0);
     let font = (bar_h * 0.9).min(t.mono_size);
     let records = generator.transactions();
-    let mut bars = Bars::default();
+    let mut batches: [Bars; 4] = std::array::from_fn(|_| Bars::default());
+    let mut label_count = 0;
     let columns = (waves.width().ceil().max(1.0) as usize).min(PIXELS);
     let pixel_time = viewport.width() / columns as f64;
 
@@ -62,18 +70,25 @@ pub(super) fn paint(
                 let xa = x_of(tx.begin);
                 let xb = x_of(tx.end).max(xa + z(2.0)).min(waves.right());
                 let rect = Rect::from_xywh(xa, top, (xb - xa).max(0.0), bar_h);
-                let failed = tx.status == Status::Error;
-                let solids = if failed {
-                    &mut bars.failed
-                } else {
-                    &mut bars.solid
-                };
-                push_horizontal_run(solids, rect);
-                outline(bars.edges(failed), rect);
-                if bars.labels.len() < LABELS && bar_h >= z(8.0) && xb - xa > z(16.0) {
+                let bars = &mut batches[batch(tx.status)];
+                push_horizontal_run(&mut bars.solid, rect);
+                outline(
+                    &mut bars.edges,
+                    rect,
+                    tx.status,
+                    z(3.0),
+                    tx.end as f64 <= viewport.end,
+                );
+                if label_count < LABELS && bar_h >= z(8.0) && xb - xa > z(16.0) {
                     let text = lane::label(tx);
-                    if let Some(label) = fit_mono_prefix(p, &text, font, xb - xa - z(8.0)) {
-                        bars.labels.push((point(xa + z(4.0), top), label, failed));
+                    let padding = if tx.status == Status::Aborted {
+                        14.0
+                    } else {
+                        8.0
+                    };
+                    if let Some(label) = fit_mono_prefix(p, &text, font, xb - xa - z(padding)) {
+                        bars.labels.push((point(xa + z(4.0), top), label));
+                        label_count += 1;
                     }
                 }
             }
@@ -81,18 +96,12 @@ pub(super) fn paint(
             let mut outlined = None;
             for x in 0..columns {
                 let a = viewport.start + x as f64 * pixel_time;
-                let (active, failed) = row.activity(a, a + pixel_time);
                 let left = waves.left() + waves.width() * x as f32 / columns as f32;
                 let w = waves.width() / columns as f32;
                 let rect = Rect::from_xywh(left, top, w, bar_h);
                 let candidates = row.window(a, a + pixel_time);
-                if active {
-                    let fills = if failed {
-                        &mut bars.failed_dense
-                    } else {
-                        &mut bars.dense
-                    };
-                    push_horizontal_run(fills, rect);
+                if let Some(status) = row.activity(a, a + pixel_time) {
+                    push_horizontal_run(&mut batches[batch(status)].dense, rect);
                 }
                 if let Some(&ordinal) = candidates.last()
                     && outlined != Some(ordinal)
@@ -103,14 +112,15 @@ pub(super) fn paint(
                     let xb = x_of(tx.end);
                     if xb - xa > 2.0 {
                         let rect = Rect::from_xywh(xa, top, xb - xa, bar_h);
-                        let failed = tx.status == Status::Error;
-                        let fills = if failed {
-                            &mut bars.failed
-                        } else {
-                            &mut bars.solid
-                        };
-                        push_horizontal_run(fills, rect);
-                        outline(bars.edges(failed), rect);
+                        let bars = &mut batches[batch(tx.status)];
+                        push_horizontal_run(&mut bars.solid, rect);
+                        outline(
+                            &mut bars.edges,
+                            rect,
+                            tx.status,
+                            z(3.0),
+                            tx.end as f64 <= viewport.end,
+                        );
                     }
                 }
             }
@@ -126,15 +136,17 @@ pub(super) fn paint(
     p.scene.clipped(
         Rect::from_xywh(waves.left(), geometry.top, waves.width(), geometry.height),
         |scene| {
-            scene.rects(bars.dense, normal.edge);
-            scene.rects(bars.failed_dense, error.edge);
-            scene.rects(bars.solid, normal.fill);
-            scene.rects(bars.failed, error.fill);
-            scene.lines(bars.edges, normal.edge, 1.0);
-            scene.lines(bars.failed_edges, error.edge, 1.0);
-            for (origin, label, failed) in bars.labels {
-                let color = if failed { error.text } else { normal.text };
-                scene.text(origin, bar_h, label, FontRole::Mono, font, color);
+            for (bars, style) in batches.iter_mut().zip(styles) {
+                scene.rects(std::mem::take(&mut bars.dense), style.edge);
+            }
+            for (bars, style) in batches.iter_mut().zip(styles) {
+                scene.rects(std::mem::take(&mut bars.solid), style.fill);
+            }
+            for (bars, style) in batches.into_iter().zip(styles) {
+                scene.lines(bars.edges, style.edge, 1.0);
+                for (origin, label) in bars.labels {
+                    scene.text(origin, bar_h, label, FontRole::Mono, font, style.text);
+                }
             }
             if lane.occupancy {
                 crate::occupancy_plot::paint(scene, &index.occupancy, viewport, area, t);
@@ -175,17 +187,13 @@ pub(super) fn paint(
     );
 }
 
-impl Bars {
-    fn edges(&mut self, failed: bool) -> &mut Vec<[Point; 2]> {
-        if failed {
-            &mut self.failed_edges
-        } else {
-            &mut self.edges
-        }
-    }
-}
-
-fn outline(edges: &mut Vec<[Point; 2]>, rect: Rect) {
+fn outline(
+    edges: &mut Vec<[Point; 2]>,
+    rect: Rect,
+    status: Status,
+    marker: f32,
+    end_visible: bool,
+) {
     // Keep the entire stroke inside the lifetime so one-pixel gaps stay empty.
     let rect = Rect::from_xywh(
         rect.left() + 0.5,
@@ -199,7 +207,19 @@ fn outline(edges: &mut Vec<[Point; 2]>, rect: Rect) {
         point(rect.right(), rect.bottom()),
         point(rect.left(), rect.bottom()),
     );
-    edges.extend([[a, b], [b, c], [c, d], [d, a]]);
+    edges.extend([[a, b], [c, d], [d, a]]);
+    if status != Status::Open {
+        edges.push([b, c]);
+    }
+    if status == Status::Aborted && end_visible {
+        let x = (rect.right() - marker * 2.0).max(rect.left());
+        let mid = (rect.top() + rect.bottom()) / 2.0;
+        let dy = marker.min(rect.height() / 2.0);
+        edges.extend([
+            [point(x, mid - dy), point(rect.right(), mid + dy)],
+            [point(x, mid + dy), point(rect.right(), mid - dy)],
+        ]);
+    }
 }
 
 fn occupancy_ribbon(

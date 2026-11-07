@@ -53,8 +53,14 @@ fn transaction_borders_and_labels_contrast_in_every_theme() {
         .into_iter()
         .map(|p| (format!("{:?}", p.appearance), Theme::from_host(&p)));
     for (name, theme) in bundled.chain(host) {
-        for failed in [false, true] {
-            let style = theme.transaction_style(failed);
+        for status in [
+            vtr::Status::Unset,
+            vtr::Status::Ok,
+            vtr::Status::Error,
+            vtr::Status::Aborted,
+            vtr::Status::Open,
+        ] {
+            let style = theme.transaction_style(status);
             assert_eq!(style.fill.a, 1.0, "{name}");
             assert_eq!(style.edge.a, 1.0, "{name}");
             for background in [
@@ -63,7 +69,7 @@ fn transaction_borders_and_labels_contrast_in_every_theme() {
                 over(theme.wave_row_hover, theme.editor.bg),
                 style.fill,
             ] {
-                assert!(contrast(style.edge, background) >= 2.99, "{name}: {failed}");
+                assert!(contrast(style.edge, background) >= 2.99, "{name}: {status}");
             }
             assert!(
                 contrast(over(style.text, style.fill), style.fill) >= 4.49,

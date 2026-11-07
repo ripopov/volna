@@ -970,7 +970,7 @@ fn bars_keep_separate_rows_and_occupancy_expands_only_on_request() {
     );
     assert!(scene.texts().any(|t| t == format!("Rows 1–4 of {depth}")));
     assert!(!scene.texts().any(|t| t.starts_with("occupancy ·")));
-    let style = theme.transaction_style(false);
+    let style = theme.transaction_style(vtr::Status::Ok);
     let mut bar_rows: Vec<_> = scene
         .quads()
         .filter(|(_, c)| *c == style.fill)
@@ -1064,7 +1064,7 @@ fn a_failed_record_is_red_in_bars_and_values() {
     assert!(
         scene
             .quads()
-            .any(|(_, c)| c == theme.transaction_style(true).fill),
+            .any(|(_, c)| c == theme.transaction_style(vtr::Status::Error).fill),
         "red bar"
     );
     assert!(scene.prims.iter().any(|prim| matches!(

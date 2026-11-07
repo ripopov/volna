@@ -272,7 +272,7 @@ fn one_row_fills_the_track_and_expanding_occupancy_preserves_bars() {
         end: 100.0,
     };
     draw(&index, &lane, viewport, &mut cache, &mut scene, &mut text);
-    let fill = Theme::volna(true).transaction_style(false).fill;
+    let fill = Theme::volna(true).transaction_style(Status::Ok).fill;
     let bars: Vec<_> = scene.quads().filter(|(_, color)| *color == fill).collect();
     assert_eq!(bars.len(), 1);
     assert_eq!((bars[0].0.top(), bars[0].0.height()), (2.0, 20.0));
@@ -389,7 +389,7 @@ fn touching_transactions_and_one_pixel_gaps_remain_distinct_in_every_theme() {
             let theme = builtin::resolve(id, dark).unwrap().canvas;
             for count in [2, 100] {
                 for status in [Status::Ok, Status::Error] {
-                    let style = theme.transaction_style(status == Status::Error);
+                    let style = theme.transaction_style(status);
                     for gap in [0, 1] {
                         let records = (0..count)
                             .map(|id| {
@@ -494,7 +494,7 @@ fn sampled_rows_keep_fill_until_transaction_borders_leave_no_interior() {
                         let width = (tx.end - tx.begin) as f64 * 1000.0 / end;
                         let center =
                             (tx.begin as f64 + (tx.end - tx.begin) as f64 / 2.0) * 1000.0 / end;
-                        let style = theme.transaction_style(tx.status == Status::Error);
+                        let style = theme.transaction_style(tx.status);
                         assert_eq!(
                             bar_ink_at(&scene, point(center as f32, 12.0)),
                             Some(if width > 2.0 { style.fill } else { style.edge }),
@@ -767,6 +767,109 @@ fn profile_dense_navigation() {
                 scene.prims.len(),
                 scene.quads().count()
             );
+        }
+    }
+}
+
+#[test]
+fn transaction_outcomes_remain_visible_when_zooming_between_detail_and_dense_views() {
+    let lane = TxLane::unresolved(TraceId::A, vec![], RowHeight::PRESETS[3]);
+    for (id, _) in builtin::choices() {
+        for dark in [true, false] {
+            let theme = builtin::resolve(id, dark).unwrap().canvas;
+            for count in [5, 100] {
+                let records = (0..count)
+                    .map(|id| {
+                        let mut tx = record(id, id * 10, id * 10 + 8, 0);
+                        tx.status = match id % 5 {
+                            0 => Status::Unset,
+                            1 => Status::Ok,
+                            2 => Status::Error,
+                            3 => Status::Aborted,
+                            _ => Status::Open,
+                        };
+                        tx
+                    })
+                    .collect();
+                let generator =
+                    LoadedGenerator::new(TrackRef(1), records, Default::default(), vec![]).unwrap();
+                let index = TransactionIndex::build(Arc::new(generator), None).unwrap();
+                let mut scene = Scene::default();
+                draw_with_theme(
+                    &index,
+                    &lane,
+                    Viewport {
+                        start: 0.0,
+                        end: 1000.0,
+                    },
+                    &mut DetailCache::default(),
+                    &mut scene,
+                    &mut TextCache::default(),
+                    &theme,
+                );
+                let normal = bar_ink_at(&scene, point(2.0, 6.0)).unwrap();
+                let success = bar_ink_at(&scene, point(12.0, 6.0)).unwrap();
+                let error = bar_ink_at(&scene, point(22.0, 6.0)).unwrap();
+                let aborted = bar_ink_at(&scene, point(32.0, 6.0)).unwrap();
+                let open = bar_ink_at(&scene, point(42.0, 6.0)).unwrap();
+                assert_eq!(normal, success);
+                assert_eq!(normal, open);
+                assert_ne!(error, normal);
+                assert_ne!(aborted, normal);
+                assert_ne!(aborted, error);
+                assert_ne!(bar_ink_at(&scene, point(17.5, 8.0)), Some(normal));
+                assert_eq!(bar_ink_at(&scene, point(47.5, 8.0)), Some(open));
+                assert_ne!(bar_ink_at(&scene, point(34.5, 12.0)), Some(aborted));
+                assert!(bar_ink_at(&scene, point(38.5, 8.0)).is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn zoomed_out_transactions_preserve_aborts_and_error_priority_without_filling_gaps() {
+    let lane = TxLane::unresolved(TraceId::A, vec![], RowHeight::PRESETS[3]);
+    let mut aborted = record(0, 0, 1, 0);
+    aborted.status = Status::Aborted;
+    let mut error = record(2, 10, 11, 0);
+    error.status = Status::Error;
+    let mut second_abort = record(3, 11, 12, 0);
+    second_abort.status = Status::Aborted;
+    let mut records = vec![
+        aborted,
+        record(1, 1, 9, 0),
+        error,
+        second_abort,
+        record(4, 12, 19, 0),
+    ];
+    records.extend((5..100).map(|id| record(id, id * 100, id * 100 + 8, 0)));
+    let generator = LoadedGenerator::new(TrackRef(1), records, Default::default(), vec![]).unwrap();
+    let index = TransactionIndex::build(Arc::new(generator), None).unwrap();
+    for (id, _) in builtin::choices() {
+        for dark in [true, false] {
+            let theme = builtin::resolve(id, dark).unwrap().canvas;
+            let mut scene = Scene::default();
+            draw_with_theme(
+                &index,
+                &lane,
+                Viewport {
+                    start: 0.0,
+                    end: 10000.0,
+                },
+                &mut DetailCache::default(),
+                &mut scene,
+                &mut TextCache::default(),
+                &theme,
+            );
+            assert_eq!(
+                bar_ink_at(&scene, point(0.5, 10.0)),
+                Some(theme.transaction_style(Status::Aborted).edge),
+            );
+            assert_eq!(
+                bar_ink_at(&scene, point(1.5, 10.0)),
+                Some(theme.transaction_style(Status::Error).edge),
+            );
+            assert!(bar_ink_at(&scene, point(2.5, 10.0)).is_none());
         }
     }
 }

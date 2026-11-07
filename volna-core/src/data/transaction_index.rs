@@ -20,6 +20,7 @@ struct Span {
 struct RowData {
     ordinals: Vec<usize>,
     errors: Vec<Span>,
+    aborted: Vec<Span>,
 }
 
 pub struct TransactionRow<'a> {
@@ -53,16 +54,23 @@ impl<'a> TransactionRow<'a> {
     }
 
     #[must_use]
-    pub fn activity(&self, start: f64, end: f64) -> (bool, bool) {
+    pub fn activity(&self, start: f64, end: f64) -> Option<Status> {
         let last = self
             .data
             .ordinals
             .partition_point(|&i| (self.records[i].begin as f64) < end);
-        let records = last.checked_sub(1).is_some_and(|i| {
-            let tx = &self.records[self.data.ordinals[i]];
-            tx.end as f64 > start || tx.begin == tx.end && tx.begin as f64 >= start
-        });
-        (records, intersects(&self.data.errors, start, end))
+        let ordinal = *self.data.ordinals.get(last.checked_sub(1)?)?;
+        let tx = &self.records[ordinal];
+        if !(tx.end as f64 > start || tx.begin == tx.end && tx.begin as f64 >= start) {
+            return None;
+        }
+        Some(if intersects(&self.data.errors, start, end) {
+            Status::Error
+        } else if intersects(&self.data.aborted, start, end) {
+            Status::Aborted
+        } else {
+            tx.status
+        })
     }
 }
 
@@ -109,17 +117,19 @@ impl TransactionIndex {
         let records = source.transactions();
         let intervals = Intervals::build(records, &mut storage)?;
         let mut counts = storage.vec(source.depth())?;
-        counts.resize(source.depth(), [0usize; 2]);
+        counts.resize(source.depth(), [0usize; 3]);
         for (ordinal, tx) in records.iter().enumerate() {
             let count = &mut counts[source.sub_row(ordinal)];
             count[0] += 1;
             count[1] += usize::from(tx.status == Status::Error);
+            count[2] += usize::from(tx.status == Status::Aborted);
         }
         let mut rows = storage.vec(source.depth())?;
         for count in &counts {
             rows.push(RowData {
                 ordinals: storage.vec(count[0])?,
                 errors: storage.vec(count[1])?,
+                aborted: storage.vec(count[2])?,
             });
         }
         storage.release(counts)?;
@@ -133,8 +143,13 @@ impl TransactionIndex {
             boundaries.extend([tx.begin, tx.end]);
             let row = &mut rows[source.sub_row(ordinal)];
             row.ordinals.push(ordinal);
-            if tx.status == Status::Error {
-                row.errors.push(Span {
+            let spans = match tx.status {
+                Status::Error => Some(&mut row.errors),
+                Status::Aborted => Some(&mut row.aborted),
+                _ => None,
+            };
+            if let Some(spans) = spans {
+                spans.push(Span {
                     begin: tx.begin,
                     end: tx.end,
                 });
@@ -142,6 +157,7 @@ impl TransactionIndex {
         }
         for row in &mut rows {
             union(&mut row.errors);
+            union(&mut row.aborted);
         }
         boundaries.sort_unstable();
         boundaries.dedup();
@@ -184,7 +200,7 @@ impl TransactionIndex {
                 .iter()
                 .map(|row| {
                     row.ordinals.capacity() * size_of::<usize>()
-                        + row.errors.capacity() * size_of::<Span>()
+                        + (row.errors.capacity() + row.aborted.capacity()) * size_of::<Span>()
                 })
                 .sum::<usize>()) as u64
     }
