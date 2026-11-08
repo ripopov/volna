@@ -110,7 +110,7 @@ pub fn paint(
         );
     });
 
-    let selected = model.selected.as_ref();
+    let active = model.active.as_ref();
     scene.clipped(layout.gutter, |scene| {
         for row in &model.window.rows {
             let y = layout.body.top() + model.viewport.y_of(row.ordinal, layout.row_height);
@@ -137,8 +137,18 @@ pub fn paint(
                 layout.body.width(),
                 layout.row_height,
             );
-            if selected == Some(&row.identity) {
+            let selected = model.row_selected(row.ordinal);
+            if selected {
                 scene.fill(row_rect, theme.selection.bg);
+            }
+            if active == Some(&row.identity) {
+                scene.quad(
+                    row_rect,
+                    Color::TRANSPARENT,
+                    0.0,
+                    theme.zoom,
+                    theme.border_focused,
+                );
             }
             for column in &layout.columns {
                 let Some(cell) = row.cells.get(column.prepared_index) else {
@@ -152,7 +162,7 @@ pub fn paint(
                 );
                 let color = if cell.missing {
                     theme.editor.text_muted
-                } else if cell.changed || selected == Some(&row.identity) {
+                } else if cell.changed || selected {
                     theme.selection.text
                 } else {
                     theme.editor.text
@@ -162,15 +172,25 @@ pub fn paint(
         }
     });
 
-    let selected_text = match selected {
-        Some(RowIdentity::Transaction(id)) => format!(" · selected ID {}", id.0),
-        Some(RowIdentity::SignalTime(time)) => format!(" · selected @{time}"),
+    let selected_text = match active {
+        Some(RowIdentity::Transaction(id)) => format!(" · active ID {}", id.0),
+        Some(RowIdentity::SignalTime(time)) => format!(" · active @{time}"),
         None => String::new(),
     };
     label(
         scene,
         layout.status,
-        &format!("{}{}", model.status(), selected_text),
+        &format!(
+            "{} selected · {}{}{}",
+            model.selection_count(),
+            model.status(),
+            if model.applied_filter_count() > 0 {
+                " (visible rows copied)"
+            } else {
+                ""
+            },
+            selected_text
+        ),
         theme.panel.text_muted,
     );
 }

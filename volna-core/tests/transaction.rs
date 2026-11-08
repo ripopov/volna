@@ -1020,13 +1020,7 @@ fn a_table_row_is_the_document_selection() {
         },
     ));
     assert_eq!(
-        app.panels
-            .get(table)
-            .unwrap()
-            .kind
-            .table()
-            .unwrap()
-            .selected,
+        app.panels.get(table).unwrap().kind.table().unwrap().active,
         Some(volna_core::table::RowIdentity::Transaction(other))
     );
 }

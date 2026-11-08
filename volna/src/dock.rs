@@ -1014,6 +1014,7 @@ pub(crate) struct CanvasPanelView {
     derived_signal: Option<Entity<crate::derived::DerivedEditor>>,
     pub(crate) table_columns: Option<Entity<crate::table_columns::ColumnPicker>>,
     pub(crate) table_filters: Option<Entity<crate::table_filters::FilterRow>>,
+    pub(crate) table_copy: Option<gpui_kit::Task<()>>,
     pub(crate) ws: WeakEntity<Workspace>,
     pub(crate) id: PanelId,
     pub(crate) generation: u64,
@@ -1049,6 +1050,7 @@ impl CanvasPanelView {
             focus,
             table_columns: None,
             table_filters: None,
+            table_copy: None,
         }
     }
 }

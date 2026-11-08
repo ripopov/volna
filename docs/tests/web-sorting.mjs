@@ -124,8 +124,31 @@ try {
   };
   await settled();
   await page.mouse.click(350, 148);
-  const selected = (await state()).match(/selected=(.*?) sort=/)[1];
+  const selected = (await state()).match(/active=(.*?) sort=/)[1];
   assert.notEqual(selected, 'None');
+  await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
+    configurable: true, value: { writeText: async text => { window.copiedTableText = text; } },
+  }));
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.down('Control');
+  await page.mouse.click(350, 172);
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => window.volnaCurrentState?.includes('selected_rows=2'));
+  await page.keyboard.press('Control+c');
+  await page.waitForFunction(() => !!window.copiedTableText);
+  assert.equal(await page.evaluate(() => window.copiedTableText),
+    'Label · vtr.label\tBegin\tDuration\tStatus\tAttributes · preview\n' +
+    '00000000000001000000\t0\t1\tok\trecord.kind=transaction\n00000000000000999998\t2\t1\tok\trecord.kind=transaction');
+  await page.screenshot({ path: `${results}/multi-selection-dark.png` });
+  await page.setViewportSize({ width: 360, height: 800 });
+  await settings({ 'appearance.theme': 'volna-light' });
+  await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+  await page.screenshot({ path: `${results}/multi-selection-light-360.png` });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await settings({ 'appearance.theme': 'volna-dark' });
+  await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+  await page.mouse.click(350, 148);
   await page.evaluate(() => {
     window.sortFrames = 0;
     const frame = () => {
@@ -142,7 +165,7 @@ try {
   });
   await settled();
   assert.match(await state(), /column: 0, descending: false.*first_time=Some\(999999\)/);
-  assert.equal((await state()).match(/selected=(.*?) sort=/)[1], selected);
+  assert.equal((await state()).match(/active=(.*?) sort=/)[1], selected);
   assert.ok(await page.evaluate(() => window.sortFrames) >= 2, 'animation frames must continue during the worker sort');
   await page.screenshot({ path: `${results}/ascending-dark.png` });
 

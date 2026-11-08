@@ -1,10 +1,24 @@
-//! Durable declaration references captured when a table is opened.
+//! Durable table declarations and immutable loaded row storage.
 
+use crate::data::loaded_tracks::LoadedGenerator;
 use crate::pipeline::TrackSource;
 use crate::trace::{TraceId, Traced};
+use std::sync::Arc;
 use volna_trace::data::source::Lookup;
 use volna_trace::data::transactions::TrackRef;
-use volna_trace::data::{Hierarchy, SignalRef, VarId};
+use volna_trace::data::{Hierarchy, SignalHistory, SignalRef, VarId};
+use volna_trace::remote::memory::Reservation;
+
+#[derive(Clone)]
+pub(super) enum Rows {
+    None,
+    Generator(Arc<LoadedGenerator>),
+    Signals {
+        histories: Vec<Arc<dyn SignalHistory>>,
+        axis: Option<Arc<[u64]>>,
+        axis_reservation: Option<Arc<Reservation>>,
+    },
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignalSource {

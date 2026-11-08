@@ -229,7 +229,7 @@ impl Drop for Job {
     }
 }
 
-pub(in crate::table) fn retire(order: Order) {
+pub(in crate::table) fn retire(order: Arc<Order>) {
     // Releasing a large index and its source must not run in GPUI's frame callback.
     drop(spawn(move || drop(order)));
 }

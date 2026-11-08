@@ -384,7 +384,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     let now = Instant::now();
     app.handle_at(Command::Table(panel, TableCommand::GoTo(10)), now);
     let table = app.panels.get(panel).unwrap().kind.table().unwrap();
-    assert!(matches!(table.selected, Some(RowIdentity::Transaction(_))));
+    assert!(matches!(table.active, Some(RowIdentity::Transaction(_))));
     assert_eq!(app.doc.shared.cursor, table.row_time(10));
     assert!(
         table
@@ -397,13 +397,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     assert_eq!(selection.origin, panel);
     assert_eq!(
         Some(volna_core::table::RowIdentity::Transaction(selection.id)),
-        app.panels
-            .get(panel)
-            .unwrap()
-            .kind
-            .table()
-            .unwrap()
-            .selected
+        app.panels.get(panel).unwrap().kind.table().unwrap().active
     );
     app.handle(Command::Table(
         panel,
@@ -557,7 +551,7 @@ fn fixed_signal_set_builds_shared_change_axis_and_workspace_reopens_at_first_row
     let restored = app.panels.get(panel).unwrap().kind.table().unwrap();
     assert!(matches!(restored.source, TableSource::Signals(_)));
     assert_eq!(restored.viewport.top, 0);
-    assert_eq!(restored.selected, None);
+    assert_eq!(restored.active, None);
     assert_eq!(restored.widths[1], Some(750.0));
     assert_eq!(restored.formats.get(), &formats);
     app.handle(Command::Table(panel, TableCommand::ToggleSignalColumn(1)));
@@ -595,12 +589,21 @@ fn single_signal_table_ignores_out_of_range_rows_and_next_starts_at_the_first() 
     app.handle_at(Command::Table(panel, TableCommand::GoTo(len + 3)), now);
     app.handle_at(Command::Table(panel, TableCommand::Select(len)), now);
     let table = app.panels.get(panel).unwrap().kind.table().unwrap();
-    assert_eq!(table.selected, None);
+    assert_eq!(table.active, None);
     assert_eq!(table.row_time(len), None);
 
-    app.handle_at(Command::Table(panel, TableCommand::Next), now);
+    app.handle_at(
+        Command::Table(
+            panel,
+            TableCommand::Navigate {
+                direction: volna_core::table::RowNavigation::Next,
+                extend: false,
+            },
+        ),
+        now,
+    );
     let table = app.panels.get(panel).unwrap().kind.table().unwrap();
-    assert_eq!(table.selected_ordinal(), Some(0));
+    assert_eq!(table.active_ordinal(), Some(0));
 }
 
 #[test]
@@ -768,4 +771,151 @@ fn transaction_attribute_shortcut_reuses_a_table_and_never_toggles_it_off() {
         .expect("opens a table from details");
     assert!(table.columns.transaction_visible(TransactionColumn::Label));
     assert_eq!(table.columns.len(), 7);
+}
+
+fn open_logs(app: &mut App) -> volna_core::panels::PanelId {
+    app.set_session(log_fixture());
+    app.handle(Command::OpenTable {
+        selected: a_all(vec![Member::Generator(0)]),
+        clicked: None,
+    });
+    let panel = app.panels.focused_id();
+    complete_pending(app);
+    frame(app, panel);
+    panel
+}
+
+fn click_log_row(
+    app: &mut App,
+    panel: volna_core::panels::PanelId,
+    row: u64,
+    modifiers: volna_core::geometry::Modifiers,
+) {
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    let position = volna_core::geometry::point(
+        table.layout.body.left() + 12.0,
+        table.layout.body.top() + (row as f32 + 0.5) * table.layout.row_height,
+    );
+    app.handle(Command::Pointer(
+        panel,
+        volna_core::wave::PointerEvent::Down {
+            position,
+            button: volna_core::geometry::MouseButton::Left,
+            modifiers,
+        },
+    ));
+    app.handle(Command::Pointer(panel, volna_core::wave::PointerEvent::Up));
+}
+
+#[test]
+fn mouse_ranges_toggles_and_shared_navigation_keep_copy_selection_independent() {
+    use volna_core::geometry::Modifiers;
+    let mut app = App::new();
+    let panel = open_logs(&mut app);
+    click_log_row(&mut app, panel, 0, Modifiers::default());
+    click_log_row(
+        &mut app,
+        panel,
+        2,
+        Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+    );
+    let toggle = Modifiers {
+        control: true,
+        platform: true,
+        ..Modifiers::default()
+    };
+    click_log_row(&mut app, panel, 1, toggle);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.selection_count(), 2);
+    assert_eq!(table.active_ordinal(), Some(1));
+    assert_eq!(
+        table.copy_tsv().unwrap(),
+        "Time\tSeverity\tMessage\n10\twarn (3)\tmessage: zebra\n30\terror (4)\tmessage: omega"
+    );
+    let track = table.source.generator_track().unwrap();
+    let id = table.loaded_generator().unwrap().transactions()[2].id;
+    app.handle(Command::OpenPipeline { track });
+    let pipeline = app.panels.focused_id();
+    complete_pending(&mut app);
+    app.handle(Command::SelectTransaction {
+        panel: pipeline,
+        track,
+        id,
+        cursor: None,
+    });
+    frame(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    let rows: Vec<_> = table.accessible_rows().collect();
+    assert!(rows[2].active);
+    assert!(rows[0].selected && rows[2].selected);
+    assert!(!rows[1].selected && !rows[1].active);
+    assert_eq!(table.selection_count(), 2);
+    assert_eq!(
+        table.copy_tsv().unwrap(),
+        "Time\tSeverity\tMessage\n10\twarn (3)\tmessage: zebra\n30\terror (4)\tmessage: omega"
+    );
+    click_log_row(&mut app, panel, 0, toggle);
+    click_log_row(&mut app, panel, 2, toggle);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.selection_count(), 0);
+    assert_eq!(table.active_ordinal(), Some(2));
+    assert!(table.copy_tsv().is_err());
+}
+
+#[test]
+fn copy_selection_follows_row_identity_through_sorting_and_filtering() {
+    use volna_core::table::filter::{ColumnFilter, FilterMode};
+    let mut app = App::new();
+    let panel = open_logs(&mut app);
+    app.handle(Command::Table(panel, TableCommand::Select(0)));
+    app.handle(Command::Table(panel, TableCommand::ExtendTo(1)));
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    let message = table.layout.columns[2].source_index;
+    let time = table.layout.columns[0].source_index;
+    app.handle(Command::Table(panel, TableCommand::SortColumn(message)));
+    finish_query(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(
+        table.copy_tsv().unwrap(),
+        "Time\tSeverity\tMessage\n20\tinfo (2)\tmessage: alpha\n10\twarn (3)\tmessage: zebra"
+    );
+    app.handle(Command::Table(
+        panel,
+        TableCommand::SetFilter {
+            source_index: time,
+            filter: Some(ColumnFilter {
+                mode: FilterMode::Expression,
+                query: "> 10".into(),
+                ..ColumnFilter::default()
+            }),
+        },
+    ));
+    finish_query(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(table.selection_count(), 2);
+    assert_eq!(
+        table.copy_tsv().unwrap(),
+        "Time\tSeverity\tMessage\n20\tinfo (2)\tmessage: alpha"
+    );
+    app.handle(Command::Table(panel, TableCommand::ToggleRow(1)));
+    app.handle(Command::Table(panel, TableCommand::ClearFilters));
+    finish_query(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(
+        table.copy_tsv().unwrap(),
+        "Time\tSeverity\tMessage\n20\tinfo (2)\tmessage: alpha\n30\terror (4)\tmessage: omega\n10\twarn (3)\tmessage: zebra"
+    );
+    app.handle(Command::Table(panel, TableCommand::Select(0)));
+    app.handle(Command::Table(panel, TableCommand::ExtendTo(2)));
+    app.handle(Command::Table(panel, TableCommand::ExtendTo(1)));
+    app.handle(Command::Table(panel, TableCommand::SortColumn(time)));
+    finish_query(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(
+        table.copy_tsv().unwrap(),
+        "Time\tSeverity\tMessage\n20\tinfo (2)\tmessage: alpha\n30\terror (4)\tmessage: omega"
+    );
 }

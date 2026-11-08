@@ -603,8 +603,9 @@ impl Element for PanelCanvas {
             .parent_node()
             .set_label(prepaint.table_status.as_deref().unwrap_or("Table rows"));
         builder.parent_node().set_description(
-            "Arrow keys navigate rows. Enter opens record details. Only visible rows are exposed.",
+            "Shift extends row selection. Control or Command toggles rows. Enter opens the active record. Copy includes selected visible rows.",
         );
+        builder.parent_node().set_multiselectable();
         for (row, id) in &mut prepaint.accessible {
             let node_id = builder.synthetic_node_id((self.generation, self.panel.0, row.ordinal));
             let mut node = Node::new(Role::ListBoxOption);
@@ -619,7 +620,7 @@ impl Element for PanelCanvas {
             ));
             node.add_action(Action::Click);
             node.add_action(Action::Focus);
-            if row.selected {
+            if row.active {
                 builder.parent_node().set_active_descendant(node_id);
             }
             builder.push_child(node_id, node);

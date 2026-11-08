@@ -5338,7 +5338,7 @@ fn selecting_table_pipeline_and_waveform_records_reveals_every_other_view() {
             .table()
             .unwrap()
             .accessible_rows()
-            .any(|row| row.selected && row.ordinal == 85)
+            .any(|row| row.active && row.ordinal == 85)
     );
     assert_ne!(app.doc.selection().unwrap().id, selected.id);
 
@@ -5390,13 +5390,7 @@ fn selecting_table_pipeline_and_waveform_records_reveals_every_other_view() {
     frame(&mut app, pipeline, &theme);
     assert_eq!(app.doc.selection().unwrap().id, wanted);
     assert_eq!(
-        app.panels
-            .get(table)
-            .unwrap()
-            .kind
-            .table()
-            .unwrap()
-            .selected,
+        app.panels.get(table).unwrap().kind.table().unwrap().active,
         Some(RowIdentity::Transaction(wanted))
     );
     assert!(
@@ -5407,7 +5401,7 @@ fn selecting_table_pipeline_and_waveform_records_reveals_every_other_view() {
             .table()
             .unwrap()
             .accessible_rows()
-            .any(|row| row.selected)
+            .any(|row| row.active)
     );
     let p = app.panels.pipeline(pipeline).unwrap();
     assert!(
@@ -5622,7 +5616,7 @@ fn transaction_following_reveals_locally_without_cursor_or_viewport_links_and_re
             .table()
             .unwrap()
             .accessible_rows()
-            .any(|row| row.selected && row.ordinal == 90)
+            .any(|row| row.active && row.ordinal == 90)
     );
     app.handle(Command::Table(table, TableCommand::SortColumn(1)));
     finish_query(&mut app);
@@ -5652,7 +5646,7 @@ fn transaction_following_reveals_locally_without_cursor_or_viewport_links_and_re
             .table()
             .unwrap()
             .accessible_rows()
-            .any(|row| row.selected && row.ordinal == 119)
+            .any(|row| row.active && row.ordinal == 119)
     );
 }
 
@@ -5736,7 +5730,7 @@ fn revealing_a_selection_when_a_table_first_appears_requests_a_redraw() {
             .table()
             .unwrap()
             .accessible_rows()
-            .any(|row| row.selected && row.ordinal == 90)
+            .any(|row| row.active && row.ordinal == 90)
     );
     assert!(
         app.take_events()

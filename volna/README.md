@@ -738,6 +738,34 @@ It measures the sorter, independently of trace loading and frame latency:
 cargo test --release -p volna-core --lib hundred_million_rows -- --ignored --nocapture
 ```
 
+### Table selection and copying
+
+Click a row to select it and make it the active transaction. Ctrl-click (Cmd-click
+on macOS) toggles individual rows; Shift-click selects a range in the displayed
+order. Shift with arrows, Home, End, or Page Up/Down extends the range from its
+anchor. Unmodified navigation selects only its destination. Ctrl/Cmd+A selects
+all rows in the current result; Escape clears the selection.
+
+Selected rows have a filled background. A separate outline marks the active
+transaction used by shared navigation and Enter to open details. Selecting a
+transaction in another panel moves that outline without changing the local rows
+selected for copying. The active transaction can be outside the copy selection.
+
+Ctrl/Cmd+C copies selected rows in displayed order, with one header and the visible
+columns, including columns scrolled offscreen. Sorting preserves selected row
+identities. Filtering preserves the selection but excludes hidden rows from the
+copy; the status count includes selected rows hidden by filters. If no local
+selection has been made, Copy uses the active visible row. Explicitly deselecting
+every row leaves nothing to copy.
+
+Copying runs in the background against the selection and formats captured when
+Copy was pressed. Tab, newline, carriage-return, and quote characters in cells
+are quoted in TSV. The complete result must fit the 64 KiB clipboard limit;
+an oversized result reports an error and leaves the clipboard unchanged.
+Large range selections retain an immutable row order and sparse toggle exceptions
+rather than allocating an entry for every selected row. Retained query indexes
+remain charged to the shared memory budget.
+
 ### Column filtering
 
 In a Table panel, **Filter** after **Columns** shows an entry row below the

@@ -99,6 +99,13 @@ an unsorted column. These controls scale with interface zoom.
 Time columns retain their time representation, and format changes preserve row
 selection, scroll position, and sorting. These preferences are saved with the table.
 
+The Table panel also demonstrates independent row selection and shared navigation.
+Selected rows use the selection background; a 1px focused-border outline marks
+the active transaction, even when it is excluded from the selected rows.
+Click selects one row, Ctrl-click (Cmd-click on macOS) toggles a row, and Shift
+extends a range. The status line reports the selection count. Shared transaction
+changes move the active outline without replacing the local copy selection.
+
 The Table toolbar's Filter button follows Columns. It reveals a 36px entry row
 below the headers, with each editor aligned to the same column geometry as the
 cells. Its count remains visible when the row is collapsed. Each editor exposes

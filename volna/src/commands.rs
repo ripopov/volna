@@ -207,7 +207,7 @@ command_definitions! {
     CutSignals => ("Cut signals", "Cut Signals", Panel, actions::CutSignals, |s| (s.loaded() && s.selection(), false)),
     CopySignals => ("Copy signals", "Copy Signals", Panel, actions::CopySignals, |s| (s.loaded() && s.selection(), false)),
     PasteSignals => ("Paste signals", "Paste Signals", Panel, actions::PasteSignals, |s| (s.loaded() && s.waves().is_some(), false)),
-    SelectAll => ("Select all signals", "Select all signals", Panel, actions::SelectAll, |s| (s.loaded() && s.has_rows(), false)),
+    SelectAll => ("Select all", "Select all", Panel, actions::SelectAll, |s| (s.loaded() && (s.has_rows() || s.kind().table().is_some_and(|table| !table.is_empty())), false)),
     ClearSelection => ("Clear selection", "Clear selection", Panel, actions::ClearSelection, |s| (s.timed(), false)),
     RemoveSelected => ("Remove selected signals", "Remove selected signals", Panel, actions::RemoveSelected, |s| (s.loaded() && s.selection(), false)),
     OpenSignalMenu => ("Signal options…", "Signal options…", Panel, actions::OpenSignalMenu, |s| (s.loaded() && s.selection(), false)),

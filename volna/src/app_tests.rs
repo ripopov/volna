@@ -5613,7 +5613,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
                 .update(&mut vcx, |ws, _, _| {
                     let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
                     assert_eq!(table.applied_sort().map(|s| s.descending), expected);
-                    assert_eq!(table.selected, None);
+                    assert_eq!(table.active, None);
                     assert_eq!(ws.app.panels.len(), 1);
                 })
                 .unwrap();
@@ -5660,7 +5660,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
                 .update(&mut vcx, |ws, window, cx| {
                     let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
                     assert_eq!(table.widths[0], Some(360.0));
-                    assert_eq!(table.selected, None);
+                    assert_eq!(table.active, None);
                     assert!(!table.dragging());
                     assert_eq!(ws.app.panels.len(), 1);
                     ws.dispatch(Command::Undo, Some(window), cx);
@@ -5754,7 +5754,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
             .update(&mut vcx, |ws, window, cx| {
                 let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
                 assert!(table.widths[0].unwrap() > 48.0);
-                assert_eq!(table.selected, None);
+                assert_eq!(table.active, None);
                 assert_eq!(ws.app.panels.len(), 1);
                 ws.dispatch(
                     Command::Table(panel, TableCommand::ResetColumns),
@@ -5853,7 +5853,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
         window
             .update(&mut vcx, |ws, _, _| {
                 let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
-                assert!(table.selected.is_some());
+                assert!(table.active.is_some());
                 assert!(!table.dragging());
                 assert_eq!(table.applied_sort(), None);
                 assert_eq!(ws.app.panels.len(), 1);
@@ -6769,7 +6769,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
                         .kind
                         .table()
                         .unwrap()
-                        .selected
+                        .active
                         .clone()
                 })
                 .unwrap();
@@ -6798,7 +6798,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
                     let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
                     assert_eq!(table.number_format(), "dec");
                     assert_eq!(table.formats.columns[4].as_deref(), Some("bin"));
-                    assert_eq!(table.selected, selected);
+                    assert_eq!(table.active, selected);
                     assert_eq!(table.sort_requested, None);
                 })
                 .unwrap();
@@ -6811,7 +6811,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
                     let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
                     assert!(table.formats.columns[4].is_none());
                     assert_eq!(table.column_translator(4).unwrap().id(), "hex");
-                    assert_eq!(table.selected, selected);
+                    assert_eq!(table.active, selected);
                 })
                 .unwrap();
             for _ in 0..40 {
@@ -6841,7 +6841,7 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
             window
                 .update(&mut vcx, |ws, _, _| {
                     let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
-                    assert_eq!(table.selected, selected);
+                    assert_eq!(table.active, selected);
                     assert_eq!(table.sort_requested, None);
                     assert!(table.formats.columns[4].is_some());
                 })
@@ -6886,7 +6886,7 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
                         .unwrap()
                         .key
                         .clone();
-                    (key, table.selected.clone())
+                    (key, table.active.clone())
                 })
                 .unwrap();
             vcx.update(|window, cx| window.draw(cx).clear(cx));
@@ -6957,7 +6957,7 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
                             .columns
                             .transaction_visible(TransactionColumn::Attribute(key.clone()))
                     );
-                    assert_eq!(table.selected, selected);
+                    assert_eq!(table.active, selected);
                     assert!(ws.app.panels.iter().all(|p| p.kind.transaction().is_none()));
                     assert!(ws.app.take_requests().is_empty());
                 })
@@ -6995,7 +6995,7 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
                             .columns
                             .transaction_visible(TransactionColumn::Attribute(key.clone()))
                     );
-                    assert_eq!(table.selected, selected);
+                    assert_eq!(table.active, selected);
                 })
                 .unwrap();
             if width == 1000.0 {
@@ -7068,7 +7068,7 @@ fn table_attribute_picker_searches_toggles_and_preserves_selection(cx: &mut Test
                                 .columns
                                 .transaction_visible(TransactionColumn::Attribute(key.clone()))
                         );
-                        assert_eq!(table.selected, selected);
+                        assert_eq!(table.active, selected);
                     })
                     .unwrap();
             }
@@ -7120,7 +7120,7 @@ fn column_filters_keep_input_focus_and_table_shortcuts_out_of_edits(cx: &mut Tes
                         table.filters[0].as_ref().map(|f| f.query.as_str()),
                         Some("lw")
                     );
-                    assert_eq!(table.selected, None);
+                    assert_eq!(table.active, None);
                     assert_eq!(
                         ws.app.panels.len(),
                         1,
@@ -8337,4 +8337,141 @@ fn main_menu_zoom_does_not_follow_a_panel_switch(cx: &mut TestAppContext) {
             assert_eq!(ws.app.doc.shared.viewport.value, before);
         })
         .unwrap();
+}
+
+#[gpui_kit::test]
+fn table_mouse_and_keyboard_selection_copy_only_selected_rows(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton, VisualTestContext, size};
+    use volna_core::table::{TableCommand, columns::TransactionColumn};
+    init(cx);
+    for (dark, width, zoom) in [(true, 1000., 1.), (false, 360., 1.5)] {
+        let window = RootWindow::new(cx);
+        let mut vcx = VisualTestContext::from_window(window.root.into(), cx);
+        vcx.simulate_resize(size(px(width), px(700.)));
+        let panel = window
+            .update(&mut vcx, |ws, window, cx| {
+                let panel = open_pipeline_table(ws, window, cx);
+                for column in [
+                    TransactionColumn::Label,
+                    TransactionColumn::Duration,
+                    TransactionColumn::Status,
+                    TransactionColumn::Attributes,
+                ] {
+                    ws.dispatch(
+                        Command::Table(panel, TableCommand::ToggleTransactionColumn(column)),
+                        Some(window),
+                        cx,
+                    );
+                }
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                crate::theme::set_zoom(zoom, cx);
+                panel
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        let (first, second, expected, len) = window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                let body = table.layout.body;
+                let position = |row: f32| {
+                    gpui_kit::point(
+                        px(body.left() + 20.),
+                        px(body.top() + (row + 0.5) * table.layout.row_height),
+                    )
+                };
+                let records = table.loaded_generator().unwrap().transactions();
+                (
+                    position(0.),
+                    position(1.),
+                    format!("Begin\n{}\n{}", records[0].begin, records[2].begin),
+                    records.len(),
+                )
+            })
+            .unwrap();
+        vcx.simulate_mouse_down(first, MouseButton::Left, Modifiers::default());
+        vcx.simulate_mouse_up(first, MouseButton::Left, Modifiers::default());
+        vcx.simulate_keystrokes("shift-down shift-down");
+        let toggle = Modifiers {
+            control: true,
+            platform: true,
+            ..Modifiers::default()
+        };
+        vcx.simulate_mouse_down(second, MouseButton::Left, toggle);
+        vcx.simulate_mouse_up(second, MouseButton::Left, toggle);
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                assert_eq!(table.selection_count(), 2);
+                assert_eq!(table.active_ordinal(), Some(1));
+            })
+            .unwrap();
+        let (copy, all) = if cfg!(target_os = "macos") {
+            ("cmd-c", "cmd-a")
+        } else {
+            ("ctrl-c", "ctrl-a")
+        };
+        vcx.simulate_keystrokes(copy);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            vcx.run_until_parked();
+            if vcx.update(|_, cx| {
+                cx.read_from_clipboard()
+                    .is_some_and(|item| item.text().as_deref() == Some(expected.as_str()))
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "copy did not match the selected rows"
+            );
+            std::thread::yield_now();
+        }
+        vcx.simulate_keystrokes(all);
+        window
+            .update(&mut vcx, |ws, _, _| {
+                assert_eq!(
+                    ws.app
+                        .panels
+                        .get(panel)
+                        .unwrap()
+                        .kind
+                        .table()
+                        .unwrap()
+                        .selection_count(),
+                    len as u64
+                );
+            })
+            .unwrap();
+        vcx.simulate_keystrokes(copy);
+        vcx.run_until_parked();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            vcx.run_until_parked();
+            if vcx.update(|_, cx| {
+                cx.read_from_clipboard()
+                    .unwrap()
+                    .text()
+                    .unwrap()
+                    .lines()
+                    .count()
+                    == len + 1
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "multi-row copy did not complete"
+            );
+            std::thread::yield_now();
+        }
+        vcx.simulate_keystrokes("escape");
+        window
+            .update(&mut vcx, |ws, _, _| {
+                let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                assert_eq!(table.selection_count(), 0);
+                assert!(table.active.is_none());
+            })
+            .unwrap();
+    }
 }

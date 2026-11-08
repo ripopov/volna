@@ -2875,16 +2875,51 @@ impl App {
         match &mut self.panels.focused_mut().kind {
             PanelKind::Table(table) => match action {
                 Action::GoToStart => {
-                    table.command(doc, panel, crate::table::TableCommand::First, now);
+                    table.command(
+                        doc,
+                        panel,
+                        crate::table::TableCommand::Navigate {
+                            direction: crate::table::RowNavigation::First,
+                            extend: false,
+                        },
+                        now,
+                    );
                 }
                 Action::GoToEnd => {
-                    table.command(doc, panel, crate::table::TableCommand::Last, now);
+                    table.command(
+                        doc,
+                        panel,
+                        crate::table::TableCommand::Navigate {
+                            direction: crate::table::RowNavigation::Last,
+                            extend: false,
+                        },
+                        now,
+                    );
                 }
                 Action::MoveSelectionUp => {
-                    table.command(doc, panel, crate::table::TableCommand::Previous, now);
+                    table.command(
+                        doc,
+                        panel,
+                        crate::table::TableCommand::Navigate {
+                            direction: crate::table::RowNavigation::Previous,
+                            extend: false,
+                        },
+                        now,
+                    );
                 }
                 Action::MoveSelectionDown => {
-                    table.command(doc, panel, crate::table::TableCommand::Next, now);
+                    table.command(
+                        doc,
+                        panel,
+                        crate::table::TableCommand::Navigate {
+                            direction: crate::table::RowNavigation::Next,
+                            extend: false,
+                        },
+                        now,
+                    );
+                }
+                Action::SelectAll => {
+                    table.command(doc, panel, crate::table::TableCommand::SelectAll, now);
                 }
                 Action::ClearSelection => {
                     table.command(doc, panel, crate::table::TableCommand::ClearSelection, now);
@@ -2904,7 +2939,6 @@ impl App {
                 | Action::CopySignals
                 | Action::CutSignals
                 | Action::PasteSignals
-                | Action::SelectAll
                 | Action::CycleFormat
                 | Action::ToggleAnalog
                 | Action::ToggleStack
@@ -3765,12 +3799,13 @@ impl App {
         }
         if let Some(table) = panel.kind.table() {
             return format!(
-                "panel={} table focused={} rows={} top={} selected={:?} sort={:?} first_time={:?} status={}",
+                "panel={} table focused={} rows={} selected_rows={} top={} active={:?} sort={:?} first_time={:?} status={}",
                 id.0,
                 id == self.panels.focused_id(),
                 table.len(),
+                table.selection_count(),
                 table.viewport.top,
-                table.selected,
+                table.active,
                 table.applied_sort(),
                 table.row_time(0),
                 table.status()

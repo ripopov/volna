@@ -1329,7 +1329,7 @@ fn interval_statistics_open_in_a_persistent_table() {
     assert_eq!(table.row_time(0), Some(0));
     assert_eq!(table.row_time(1), Some(3));
     assert_eq!(table.row_time(2), Some(8));
-    table.selected = Some(volna_core::table::RowIdentity::SignalTime(8));
+    table.active = Some(volna_core::table::RowIdentity::SignalTime(8));
     assert_eq!(
         table.copy_tsv().unwrap(),
         "Start\tresult\tEnd (ticks)\n8\t10.0\t10"
@@ -1353,7 +1353,7 @@ fn interval_statistics_open_in_a_persistent_table() {
         .table_mut()
         .unwrap();
     assert_eq!(table.len(), 3);
-    table.selected = Some(volna_core::table::RowIdentity::SignalTime(0));
+    table.active = Some(volna_core::table::RowIdentity::SignalTime(0));
     assert_eq!(
         table.copy_tsv().unwrap(),
         "Start\tresult\tEnd (ticks)\n0\t2.0\t3"
@@ -1652,7 +1652,7 @@ fn waveform_table_preserves_the_terminal_sample_after_restore() {
         for index in 0..6 {
             assert_eq!(table.row_time(index), Some(index * 2));
         }
-        table.selected = Some(volna_core::table::RowIdentity::SignalTime(10));
+        table.active = Some(volna_core::table::RowIdentity::SignalTime(10));
         assert_eq!(table.copy_tsv().unwrap(), "Time\tresult\n10\t0.0");
     }
 }
@@ -2126,7 +2126,7 @@ fn unused_short_trace_does_not_truncate_derived_table_output() {
         .iter_mut()
         .find_map(|panel| panel.kind.table_mut())
         .unwrap();
-    table.selected = Some(volna_core::table::RowIdentity::SignalTime(8));
+    table.active = Some(volna_core::table::RowIdentity::SignalTime(8));
     assert_eq!(table.copy_tsv().unwrap(), "Time\tresult\n8\t10.0");
 }
 

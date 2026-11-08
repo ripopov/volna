@@ -5,15 +5,16 @@ use std::sync::Arc;
 
 use web_time::Instant;
 
-use super::columns::{CellValue, ColumnSet, TransactionColumn, TransactionColumns, attributes};
+use super::columns::{CellValue, ColumnSet, TransactionColumn, TransactionColumns};
+use super::copy::{CopyColumn, CopyRequest};
 use super::format::{self, FormatChoice, TableFormats};
 use super::layout::{
     CELL_PADDING, ColumnHeader, HEADER_HEIGHT, MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, ROW_HEIGHT,
     RowViewport, TableLayout,
 };
-use super::source::TableSource;
+use super::selection::{RowOrder, RowSelection, SelectionMode};
+use super::source::{Rows, TableSource};
 use crate::data::loaded_tracks::LoadedGenerator;
-use crate::data::text::{append_exact, push_limited};
 use crate::data::translator::{Translated, Translator, Translators};
 use crate::document::{Document, TrackLoadState};
 use crate::geometry::{MouseButton, Point, Rect};
@@ -22,8 +23,7 @@ use crate::scene::{FontRole, TextMeasure};
 use crate::theme::Theme;
 use crate::trace::Traced;
 use crate::wave::model::PointerEvent;
-use volna_trace::data::transactions::{AttributeType, AttributeValue, Transaction, TransactionRef};
-use volna_trace::data::value_view::ValueView;
+use volna_trace::data::transactions::{AttributeType, Transaction, TransactionRef};
 use volna_trace::data::{SignalHistory, SignalRef};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
@@ -68,6 +68,7 @@ pub struct AccessibleRow {
     pub ordinal: u64,
     pub label: String,
     pub selected: bool,
+    pub active: bool,
     pub bounds: Rect,
 }
 
@@ -79,16 +80,6 @@ pub enum TableState {
     Failed(String),
     Refused(String),
     Unavailable,
-}
-
-enum Rows {
-    None,
-    Generator(Arc<LoadedGenerator>),
-    Signals {
-        histories: Vec<Arc<dyn SignalHistory>>,
-        axis: Option<Arc<[u64]>>,
-        axis_reservation: Option<Arc<Reservation>>,
-    },
 }
 
 struct SignalAxisBuild {
@@ -115,6 +106,15 @@ enum TableDrag {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowNavigation {
+    First,
+    Last,
+    Previous,
+    Next,
+    Page(i8),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TableCommand {
     ToggleFilters,
@@ -131,12 +131,14 @@ pub enum TableCommand {
     },
     Scroll(f32),
     Select(u64),
+    ToggleRow(u64),
+    ExtendTo(u64),
+    SelectAll,
+    Navigate {
+        direction: RowNavigation,
+        extend: bool,
+    },
     GoTo(u64),
-    First,
-    Last,
-    Previous,
-    Next,
-    Page(i8),
     ToggleTransactionColumn(TransactionColumn),
     ShowTransactionColumn(TransactionColumn),
     ToggleSignalColumn(usize),
@@ -166,7 +168,8 @@ pub struct TableModel {
     pub filters: Vec<Option<super::filter::ColumnFilter>>,
     filter_unit: crate::trace::Unit,
     pub viewport: RowViewport,
-    pub selected: Option<RowIdentity>,
+    pub active: Option<RowIdentity>,
+    selection: RowSelection,
     pub nav: NavState,
     pub window: PreparedWindow,
     pub horizontal: f32,
@@ -174,7 +177,7 @@ pub struct TableModel {
     pub request: u64,
     pub sort_requested: Option<super::sort::Sort>,
     pub query_error: Option<String>,
-    query_order: Option<super::query::Order>,
+    query_order: Option<Arc<super::query::Order>>,
     query_job: Option<(u64, super::query::Job)>,
     query_revision: u64,
     reveal_column: Option<usize>,
@@ -254,7 +257,8 @@ impl TableModel {
                 name: None,
             },
             viewport: RowViewport::default(),
-            selected: None,
+            active: None,
+            selection: RowSelection::default(),
             nav,
             window: PreparedWindow::default(),
             horizontal: 0.0,
@@ -359,6 +363,7 @@ impl TableModel {
     }
 
     pub fn detach(&mut self, doc: &mut Document) {
+        self.selection = RowSelection::default();
         self.reset_query();
         if !self.attached {
             return;
@@ -676,6 +681,9 @@ impl TableModel {
     }
 
     fn source_index(&self, ordinal: u64) -> Option<usize> {
+        if ordinal >= self.len() {
+            return None;
+        }
         if let Some(order) = &self.query_order {
             return usize::try_from(order.source_row(ordinal)?).ok();
         }
@@ -717,6 +725,13 @@ impl TableModel {
     #[must_use]
     pub fn applied_filter(&self, column: usize) -> Option<&super::filter::ColumnFilter> {
         self.query_order.as_ref()?.filters.get(column)?.as_ref()
+    }
+
+    #[must_use]
+    pub fn applied_filter_count(&self) -> usize {
+        self.query_order.as_ref().map_or(0, |order| {
+            order.filters.iter().filter(|f| f.is_some()).count()
+        })
     }
 
     fn filters_applied(&self) -> bool {
@@ -849,10 +864,10 @@ impl TableModel {
             if revision == self.query_revision {
                 match result {
                     Ok(order) => {
-                        if let Some(old) = self.query_order.replace(order) {
+                        if let Some(old) = self.query_order.replace(Arc::new(order)) {
                             super::query::retire(old);
                         }
-                        if let Some(rank) = self.selected_ordinal() {
+                        if let Some(rank) = self.active_ordinal() {
                             self.viewport.reveal(
                                 rank,
                                 self.len(),
@@ -865,7 +880,7 @@ impl TableModel {
                     Err(error) => self.query_error = Some(format!("{error:#}")),
                 }
             } else if let Ok(order) = result {
-                super::query::retire(order);
+                super::query::retire(Arc::new(order));
             }
         }
         if self.query_job.is_none() && self.querying() {
@@ -929,7 +944,7 @@ impl TableModel {
     pub fn len(&self) -> u64 {
         self.query_order
             .as_ref()
-            .map_or_else(|| self.source_len(), super::query::Order::len)
+            .map_or_else(|| self.source_len(), |order| order.len())
     }
 
     #[must_use]
@@ -1010,7 +1025,7 @@ impl TableModel {
             self.rows = Rows::None;
             self.query_changed();
         }
-        if let Some(RowIdentity::SignalTime(time)) = &mut self.selected {
+        if let Some(RowIdentity::SignalTime(time)) = &mut self.active {
             crate::trace::Retime::retime(time, by);
         }
     }
@@ -1043,13 +1058,49 @@ impl TableModel {
     }
 
     #[must_use]
-    pub fn selected_ordinal(&self) -> Option<u64> {
-        self.selected
+    pub fn active_ordinal(&self) -> Option<u64> {
+        self.active
             .as_ref()
             .and_then(|identity| self.ordinal_of(identity))
     }
 
+    fn row_order(&self) -> RowOrder {
+        RowOrder {
+            len: self.len(),
+            query: self.query_order.clone(),
+        }
+    }
+
+    #[must_use]
+    pub fn selection_count(&self) -> u64 {
+        self.selection.len()
+    }
+
+    #[must_use]
+    pub fn row_selected(&self, ordinal: u64) -> bool {
+        self.source_index(ordinal)
+            .is_some_and(|source| self.selection.contains(source as u64))
+    }
+
+    fn select_rows(&mut self, ordinal: u64, mode: SelectionMode) -> bool {
+        self.selection
+            .select(self.row_order(), ordinal, mode, self.active_ordinal())
+    }
+
     pub fn select(
+        &mut self,
+        doc: &mut Document,
+        panel: crate::panels::PanelId,
+        ordinal: u64,
+        now: Instant,
+    ) -> bool {
+        if !self.select_rows(ordinal, SelectionMode::Replace) {
+            return false;
+        }
+        self.activate(doc, panel, ordinal, now)
+    }
+
+    fn activate(
         &mut self,
         doc: &mut Document,
         panel: crate::panels::PanelId,
@@ -1071,7 +1122,7 @@ impl TableModel {
                 }),
             );
         }
-        self.selected = Some(identity);
+        self.active = Some(identity);
         self.viewport.reveal(
             ordinal,
             self.len(),
@@ -1094,8 +1145,8 @@ impl TableModel {
             Some(_) => return false,
             None => None,
         };
-        let changed = self.selected != wanted;
-        self.selected = wanted;
+        let changed = self.active != wanted;
+        self.active = wanted;
         changed
     }
 
@@ -1103,7 +1154,7 @@ impl TableModel {
         if self.nav.selection(doc).map(|s| s.track) != self.source.generator_track() {
             return false;
         }
-        let Some(ordinal) = self.selected_ordinal() else {
+        let Some(ordinal) = self.active_ordinal() else {
             return false;
         };
         if self.layout.body.height() <= 0.0 {
@@ -1224,34 +1275,57 @@ impl TableModel {
                 self.prepare_visible();
                 true
             }
+            TableCommand::ToggleRow(row) | TableCommand::ExtendTo(row) => {
+                let extend = matches!(command, TableCommand::ExtendTo(_));
+                self.select_rows(
+                    row,
+                    if extend {
+                        SelectionMode::Extend
+                    } else {
+                        SelectionMode::Toggle
+                    },
+                ) && self.activate(doc, panel, row, now)
+            }
+            TableCommand::SelectAll => self.selection.select_all(self.row_order()),
+            TableCommand::Navigate { direction, extend } => {
+                if self.is_empty() {
+                    return false;
+                }
+                let current = if extend {
+                    self.selection
+                        .focus_rank(&self.row_order())
+                        .or_else(|| self.active_ordinal())
+                } else {
+                    self.active_ordinal()
+                };
+                let page = RowViewport::full_rows(self.layout.body.height(), self.row_px());
+                let target = match direction {
+                    RowNavigation::First => 0,
+                    RowNavigation::Last => self.len() - 1,
+                    RowNavigation::Previous => current.unwrap_or(0).saturating_sub(1),
+                    RowNavigation::Next => current
+                        .map_or(0, |r| r.saturating_add(1))
+                        .min(self.len() - 1),
+                    RowNavigation::Page(direction) => {
+                        let current = current.unwrap_or(self.viewport.top);
+                        if direction < 0 {
+                            current.saturating_sub(page)
+                        } else {
+                            current.saturating_add(page).min(self.len() - 1)
+                        }
+                    }
+                };
+                self.select_rows(
+                    target,
+                    if extend {
+                        SelectionMode::Extend
+                    } else {
+                        SelectionMode::Replace
+                    },
+                ) && self.activate(doc, panel, target, now)
+            }
             TableCommand::Select(row) | TableCommand::GoTo(row) => {
                 self.select(doc, panel, row, now)
-            }
-            TableCommand::First => self.select(doc, panel, 0, now),
-            TableCommand::Last => self
-                .len()
-                .checked_sub(1)
-                .is_some_and(|row| self.select(doc, panel, row, now)),
-            TableCommand::Previous => self
-                .selected_ordinal()
-                .and_then(|r| r.checked_sub(1))
-                .is_some_and(|r| self.select(doc, panel, r, now)),
-            TableCommand::Next => self
-                .selected_ordinal()
-                .map_or(Some(0), |r| r.checked_add(1))
-                .filter(|&r| r < self.len())
-                .is_some_and(|r| self.select(doc, panel, r, now)),
-            TableCommand::Page(direction) => {
-                let page = RowViewport::full_rows(self.layout.body.height(), self.row_px());
-                let current = self.selected_ordinal().unwrap_or(self.viewport.top);
-                let target = if direction < 0 {
-                    current.saturating_sub(page)
-                } else {
-                    current
-                        .saturating_add(page)
-                        .min(self.len().saturating_sub(1))
-                };
-                self.select(doc, panel, target, now)
             }
             TableCommand::ShowTransactionColumn(column) => {
                 let column = column.canonical();
@@ -1308,7 +1382,8 @@ impl TableModel {
                 columns || widths
             }
             TableCommand::ClearSelection => {
-                let changed = self.selected.take().is_some();
+                let changed = self.active.take().is_some() || self.selection.len() > 0;
+                self.selection.clear();
                 if changed && self.nav.selection(doc).is_some_and(|s| s.origin == panel) {
                     self.nav.select(doc, None);
                 }
@@ -1454,18 +1529,21 @@ impl TableModel {
                             .find(|a| &a.key == key)
                             .map(|a| a.example_row),
                         _ => self
-                            .selected_ordinal()
+                            .active_ordinal()
                             .and_then(|i| self.source_index(i))
                             .or(Some(0)),
                     };
                     example
                         .and_then(|i| generator.transactions().get(i))
-                        .map(|tx| self.transaction_cell(tx, column, 48, Some(translator.as_ref())))
+                        .map(|tx| {
+                            self.transaction_cell(tx, column, 48, Some(translator.as_ref()))
+                                .text
+                        })
                 }
                 Rows::Signals { histories, .. } => {
                     let history = &histories[column - 1];
                     let time = self
-                        .selected_ordinal()
+                        .active_ordinal()
                         .and_then(|i| self.row_time(i))
                         .or_else(|| self.row_time(self.viewport.top));
                     time.and_then(|t| history.index_at(t)).map(|i| {
@@ -1786,12 +1864,23 @@ impl TableModel {
             PointerEvent::Down {
                 position,
                 button: MouseButton::Left,
-                ..
+                modifiers,
             } if self.layout.body.contains(position) || self.layout.gutter.contains(position) => {
                 let y = position.y - self.layout.body.top();
                 self.viewport
                     .row_at(y, self.len(), self.layout.row_height)
-                    .is_some_and(|row| self.select(doc, panel, row, now))
+                    .is_some_and(|row| {
+                        self.select_rows(
+                            row,
+                            if modifiers.shift {
+                                SelectionMode::Extend
+                            } else if modifiers.secondary() {
+                                SelectionMode::Toggle
+                            } else {
+                                SelectionMode::Replace
+                            },
+                        ) && self.activate(doc, panel, row, now)
+                    })
             }
             PointerEvent::Wheel { dx, dy, .. } => {
                 self.horizontal = (self.horizontal + dx).max(0.0);
@@ -2182,12 +2271,16 @@ impl TableModel {
                             .expect("transaction column")
                             .value(tx);
                         PreparedCell {
-                            text: self.cell_value_text(
-                                value,
-                                column.source_index,
-                                column.preview_bytes,
-                                None,
-                            ),
+                            text: self
+                                .formats
+                                .format_cell(
+                                    &self.translators,
+                                    value,
+                                    column.source_index,
+                                    column.preview_bytes,
+                                    None,
+                                )
+                                .text,
                             changed: false,
                             missing: matches!(value, CellValue::Missing),
                         }
@@ -2233,7 +2326,9 @@ impl TableModel {
                     let missing = sample.is_none();
                     let changed = sample.is_some_and(|i| history.time(i) == row_time);
                     let text = self
-                        .signal_value(
+                        .formats
+                        .format_signal(
+                            &self.translators,
                             column.source_index,
                             history.as_ref(),
                             sample,
@@ -2261,7 +2356,7 @@ impl TableModel {
         match &self.rows {
             Rows::Generator(generator) => {
                 let tx = generator.transactions().get(self.source_index(ordinal)?)?;
-                Some(self.transaction_cell(tx, source_index, limit, None))
+                Some(self.transaction_cell(tx, source_index, limit, None).text)
             }
             Rows::Signals { histories, .. } => {
                 let time = self.row_time(ordinal)?;
@@ -2271,33 +2366,19 @@ impl TableModel {
                 let history = histories.get(source_index - 1)?;
                 let sample = history.index_at(time);
                 Some(
-                    self.signal_value(source_index, history.as_ref(), sample, limit)
+                    self.formats
+                        .format_signal(
+                            &self.translators,
+                            source_index,
+                            history.as_ref(),
+                            sample,
+                            limit,
+                        )
                         .text,
                 )
             }
             Rows::None => None,
         }
-    }
-
-    fn signal_value(
-        &self,
-        column: usize,
-        history: &dyn SignalHistory,
-        sample: Option<usize>,
-        limit: usize,
-    ) -> Translated {
-        let value = if sample.is_none() {
-            ValueView::Unavailable
-        } else {
-            history.value_view(sample)
-        };
-        format::translate(
-            self.formats
-                .translator(&self.translators, column, history.shape())
-                .as_ref(),
-            &value,
-            limit,
-        )
     }
 
     pub fn accessible_rows(&self) -> impl Iterator<Item = AccessibleRow> + '_ {
@@ -2322,56 +2403,41 @@ impl TableModel {
                             .collect::<Vec<_>>()
                             .join(", ")
                     ),
-                    selected: self.selected.as_ref() == Some(&row.identity),
+                    selected: self.row_selected(row.ordinal),
+                    active: self.active.as_ref() == Some(&row.identity),
                     bounds,
                 })
         })
     }
 
+    fn copy_request(&self) -> CopyRequest {
+        CopyRequest {
+            rows: self.rows.clone(),
+            order: self.row_order(),
+            selection: self.selection.clone(),
+            active: self.active_ordinal(),
+            columns: self
+                .columns
+                .get()
+                .visible_indices()
+                .map(|source_index| CopyColumn {
+                    source_index,
+                    title: self.column_title(source_index).to_owned(),
+                    transaction: self.transaction_column(source_index).cloned(),
+                })
+                .collect(),
+            formats: self.formats.get().clone(),
+            translators: self.translators.clone(),
+        }
+    }
+
+    pub fn copy_task(&self) -> impl FnOnce() -> anyhow::Result<String> + Send + 'static {
+        let request = self.copy_request();
+        move || request.run()
+    }
+
     pub fn copy_tsv(&self) -> anyhow::Result<String> {
-        let ordinal = self
-            .selected_ordinal()
-            .ok_or_else(|| anyhow::anyhow!("Select a row to copy."))?;
-        let index = self
-            .source_index(ordinal)
-            .ok_or_else(|| anyhow::anyhow!("Selected row is unavailable"))?;
-        let mut text = String::new();
-        for (position, column) in self.columns.get().visible_indices().enumerate() {
-            if position > 0 {
-                append_exact(&mut text, "\t", COPY_BYTES)?;
-            }
-            append_exact(&mut text, self.column_title(column), COPY_BYTES)?;
-        }
-        append_exact(&mut text, "\n", COPY_BYTES)?;
-        for (position, column) in self.columns.get().visible_indices().enumerate() {
-            if position > 0 {
-                append_exact(&mut text, "\t", COPY_BYTES)?;
-            }
-            let value = match &self.rows {
-                Rows::Generator(generator) => self.transaction_cell(
-                    &generator.transactions()[index],
-                    column,
-                    COPY_BYTES,
-                    None,
-                ),
-                Rows::Signals { .. } if column == 0 => self.row_time(ordinal).unwrap().to_string(),
-                Rows::Signals { histories, .. } => {
-                    let time = self.row_time(ordinal).unwrap();
-                    let history = &histories[column - 1];
-                    let value = self.signal_value(
-                        column,
-                        history.as_ref(),
-                        history.index_at(time),
-                        COPY_BYTES.saturating_sub(text.len()),
-                    );
-                    anyhow::ensure!(!value.truncated, "Row exceeds the 64 KiB clipboard limit.");
-                    value.text
-                }
-                Rows::None => return Err(anyhow::anyhow!("Source is not ready.")),
-            };
-            append_exact(&mut text, &value, COPY_BYTES)?;
-        }
-        Ok(text)
+        self.copy_request().run()
     }
 }
 
@@ -2393,78 +2459,17 @@ impl TableModel {
         source_index: usize,
         limit: usize,
         requested: Option<&dyn Translator>,
-    ) -> String {
+    ) -> Translated {
         let column = self
             .transaction_column(source_index)
             .expect("transaction column");
-        self.cell_value_text(column.value(tx), source_index, limit, requested)
-    }
-
-    fn cell_value_text(
-        &self,
-        value: CellValue<'_>,
-        source_index: usize,
-        limit: usize,
-        requested: Option<&dyn Translator>,
-    ) -> String {
-        match value {
-            CellValue::Missing => "—".into(),
-            CellValue::Time(value) => value.to_string(),
-            CellValue::Number(value) => {
-                self.attribute_text(&AttributeValue::U64(value), source_index, requested, limit)
-            }
-            CellValue::Text(value) => value.into(),
-            CellValue::Attribute(value) => {
-                self.attribute_text(value, source_index, requested, limit)
-            }
-            CellValue::Attributes(items) => {
-                let mut text = String::new();
-                let mut attributes = attributes(items).peekable();
-                if attributes.peek().is_none() {
-                    return "—".into();
-                }
-                let budget = limit.saturating_sub("…".len());
-                let mut cut = false;
-                'attributes: while let Some(attribute) = attributes.next() {
-                    let separator = if text.is_empty() { "" } else { " · " };
-                    for part in [separator, attribute.key.as_str(), "="] {
-                        let room = budget.saturating_sub(text.len());
-                        push_limited(&mut text, part, budget);
-                        if part.len() > room {
-                            cut = true;
-                            break 'attributes;
-                        }
-                    }
-                    let remaining = budget.saturating_sub(text.len());
-                    text.push_str(&self.attribute_text(
-                        &attribute.value,
-                        source_index,
-                        requested,
-                        remaining,
-                    ));
-                    if budget.saturating_sub(text.len()) < " · ".len() + 1 {
-                        cut = attributes.peek().is_some() || remaining < "…".len();
-                        break;
-                    }
-                }
-                if cut && limit >= "…".len() && !text.ends_with('…') {
-                    text.push('…');
-                }
-                text
-            }
-        }
-    }
-
-    fn attribute_text(
-        &self,
-        value: &AttributeValue,
-        column: usize,
-        requested: Option<&dyn Translator>,
-        limit: usize,
-    ) -> String {
-        let translator = format::attribute_shape(value)
-            .map(|shape| self.formats.translator(&self.translators, column, shape));
-        format::attribute(value, requested.or(translator.as_deref()), limit)
+        self.formats.format_cell(
+            &self.translators,
+            column.value(tx),
+            source_index,
+            limit,
+            requested,
+        )
     }
 }
 
@@ -2765,7 +2770,7 @@ mod tests {
         );
         assert!(model.window.rows[0].cells[1].text.len() > PREVIEW_BYTES);
         assert!(model.window.rows[0].cells[1].text.ends_with('…'));
-        model.selected = Some(RowIdentity::SignalTime(7));
+        model.active = Some(RowIdentity::SignalTime(7));
         assert!(model.copy_tsv().unwrap_err().to_string().contains("64 KiB"));
     }
 
@@ -2893,19 +2898,19 @@ mod tests {
         model.cycle_sort(1);
         model.cycle_sort(1);
         finish_sort(&mut model);
-        model.selected = Some(RowIdentity::Transaction(TransactionRef(20)));
+        model.active = Some(RowIdentity::Transaction(TransactionRef(20)));
         set_filter(&mut model, 0, FilterMode::Wildcard, "*LOAD*");
         set_filter(&mut model, 1, FilterMode::Expression, "> 100 AND < 300");
         finish_sort(&mut model);
         assert_eq!(model.len(), 9);
         assert_eq!(model.row_time(0), Some(280));
-        assert_eq!(model.selected_ordinal(), Some(4));
+        assert_eq!(model.active_ordinal(), Some(4));
         assert!(model.applied_sort().unwrap().descending);
         set_filter(&mut model, 7, FilterMode::Expression, "= 9007199254740993");
         finish_sort(&mut model);
         assert_eq!(model.len(), 1);
         assert_eq!(model.row_time(0), Some(200));
-        assert_eq!(model.selected_ordinal(), Some(0));
+        assert_eq!(model.active_ordinal(), Some(0));
         let mut doc = Document::new();
         let panel = crate::panels::PanelId(1);
         model.command(&mut doc, panel, TableCommand::ToggleFilters, Instant::now());
@@ -3178,7 +3183,7 @@ mod tests {
         let panel = crate::panels::PanelId(1);
         let now = Instant::now();
         model.select(&mut doc, panel, 20, now);
-        let selected = model.selected.clone();
+        let selected = model.active.clone();
         let viewport = model.viewport;
         let sort = model.applied_sort();
         assert_eq!(model.cell_text(0, 7, 64).unwrap(), "0x80");
@@ -3207,7 +3212,7 @@ mod tests {
         assert_eq!(model.cell_text(0, 7, 64).unwrap(), "128");
         assert_eq!(model.cell_text(0, 4, 64).unwrap(), "0b1");
         assert_eq!(model.cell_text(0, 1, 64).unwrap(), "1");
-        assert_eq!(model.selected, selected);
+        assert_eq!(model.active, selected);
         assert_eq!(model.viewport, viewport);
         assert_eq!(model.applied_sort(), sort);
         assert!(!model.command(
@@ -3312,7 +3317,7 @@ mod tests {
         );
         assert_eq!(model.window.rows[0].cells[1].text, "1.5");
         assert_eq!(model.window.rows[0].cells[2].text, "-1");
-        model.selected = Some(RowIdentity::SignalTime(7));
+        model.active = Some(RowIdentity::SignalTime(7));
         assert_eq!(model.copy_tsv().unwrap(), "Time\ta\tb\n7\t1.5\t-1");
     }
 
@@ -3381,6 +3386,135 @@ mod tests {
             Instant::now(),
         );
         assert!(model.copy_tsv().unwrap_err().to_string().contains("64 KiB"));
+    }
+
+    #[test]
+    fn copying_an_oversized_numeric_attribute_rejects_shortened_translations() {
+        let mut record = transaction(1, 10, "wide");
+        record.attributes[1].value = AttributeValue::Logic {
+            width: 300_000,
+            states: 2,
+            data: vec![0xff; 37_500],
+        };
+        let mut model = generator_model(vec![record]);
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::NumberFormat("udec".into()),
+            Instant::now(),
+        );
+        model.command(&mut doc, panel, TableCommand::Select(0), Instant::now());
+        assert!(model.copy_tsv().unwrap_err().to_string().contains("64 KiB"));
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::ToggleTransactionColumn(TransactionColumn::Attributes),
+            Instant::now(),
+        );
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::ShowTransactionColumn(TransactionColumn::Attribute("addr".into())),
+            Instant::now(),
+        );
+        assert!(model.copy_tsv().unwrap_err().to_string().contains("64 KiB"));
+    }
+
+    #[test]
+    fn copy_keeps_rows_columns_and_formats_after_the_table_closes() {
+        let mut model = generator_model(vec![
+            transaction(1, 10, "load\t\"a\"\nnext"),
+            transaction(2, 20, "store"),
+        ]);
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        for column in [
+            TransactionColumn::Begin,
+            TransactionColumn::Duration,
+            TransactionColumn::Status,
+            TransactionColumn::Attributes,
+        ] {
+            model.command(
+                &mut doc,
+                panel,
+                TableCommand::ToggleTransactionColumn(column),
+                Instant::now(),
+            );
+        }
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::ShowTransactionColumn(TransactionColumn::Id),
+            Instant::now(),
+        );
+        model.command(&mut doc, panel, TableCommand::SelectAll, Instant::now());
+        let copy = model.copy_task();
+        for command in [
+            TableCommand::Select(1),
+            TableCommand::NumberFormat("udec".into()),
+            TableCommand::ToggleTransactionColumn(TransactionColumn::Label),
+        ] {
+            model.command(&mut doc, panel, command, Instant::now());
+        }
+        assert_eq!(model.copy_tsv().unwrap(), "ID\n2");
+        drop(model);
+        assert_eq!(
+            copy().unwrap(),
+            "Label · vtr.label\tID\n\"load\t\"\"a\"\"\nnext\"\t0x1\nstore\t0x2"
+        );
+    }
+
+    #[test]
+    fn selecting_a_ten_million_row_signal_remains_copyable_after_narrowing() {
+        struct Clock;
+        impl SignalHistory for Clock {
+            fn shape(&self) -> SignalShape {
+                SignalShape::Bit
+            }
+            fn len(&self) -> usize {
+                10_000_000
+            }
+            fn time(&self, index: usize) -> u64 {
+                index as u64
+            }
+            fn value(&self, _: Option<usize>) -> WaveValue {
+                WaveValue::Bits("1".into())
+            }
+            fn bit(&self, _: Option<usize>) -> volna_trace::data::Bit {
+                volna_trace::data::Bit::One
+            }
+        }
+        let mut model = TableModel::new(
+            TableSource::Signals(vec![signal_source("clock", 1)]),
+            Link::default(),
+            MemoryBudget::new(16 * 1024 * 1024),
+            Translators::builtin(),
+        );
+        model.build_signal_rows(vec![Arc::new(Clock)]).unwrap();
+        model.state = TableState::Ready;
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        model.command(&mut doc, panel, TableCommand::SelectAll, Instant::now());
+        assert_eq!(model.selection_count(), 10_000_000);
+        assert!(model.copy_tsv().unwrap_err().to_string().contains("64 KiB"));
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::Select(9_999_998),
+            Instant::now(),
+        );
+        model.command(
+            &mut doc,
+            panel,
+            TableCommand::ExtendTo(9_999_999),
+            Instant::now(),
+        );
+        assert_eq!(
+            model.copy_tsv().unwrap(),
+            "Time\tclock\n9999998\t1\n9999999\t1"
+        );
     }
 
     fn finish_sort(model: &mut TableModel) {
@@ -3486,7 +3620,7 @@ mod tests {
             transaction(10, big + 1, "a"),
             transaction(20, big + 1, "a"),
         ]);
-        model.selected = Some(RowIdentity::Transaction(TransactionRef(30)));
+        model.active = Some(RowIdentity::Transaction(TransactionRef(30)));
         model.cycle_sort(1);
         finish_sort(&mut model);
         assert_eq!(
@@ -3499,7 +3633,7 @@ mod tests {
                 RowIdentity::Transaction(TransactionRef(30))
             ]
         );
-        assert_eq!(model.selected_ordinal(), Some(2));
+        assert_eq!(model.active_ordinal(), Some(2));
         assert!(
             model
                 .copy_tsv()
@@ -3509,7 +3643,7 @@ mod tests {
         assert_eq!(model.window.rows[0].time, big + 1);
         model.cycle_sort(1);
         finish_sort(&mut model);
-        assert_eq!(model.selected_ordinal(), Some(0));
+        assert_eq!(model.active_ordinal(), Some(0));
         assert_eq!(
             model.identity_and_time(1).unwrap().0,
             RowIdentity::Transaction(TransactionRef(10))
@@ -3522,17 +3656,20 @@ mod tests {
         model.command(
             &mut doc,
             crate::panels::PanelId(1),
-            TableCommand::Last,
+            TableCommand::Navigate {
+                direction: crate::table::RowNavigation::Last,
+                extend: false,
+            },
             Instant::now(),
         );
         assert_eq!(
-            model.selected,
+            model.active,
             Some(RowIdentity::Transaction(TransactionRef(20)))
         );
         model.cycle_sort(1);
         finish_sort(&mut model);
         assert_eq!(model.applied_sort(), None);
-        assert_eq!(model.selected_ordinal(), Some(1));
+        assert_eq!(model.active_ordinal(), Some(1));
         assert_eq!(model.row_time(0), Some(big + 1));
     }
 
@@ -3564,7 +3701,7 @@ mod tests {
                 if column == 2 { "8" } else { "28" }
             );
         }
-        model.selected = Some(RowIdentity::Transaction(TransactionRef(1)));
+        model.active = Some(RowIdentity::Transaction(TransactionRef(1)));
         assert_eq!(
             model
                 .copy_tsv()
@@ -3629,7 +3766,7 @@ mod tests {
             ])
             .unwrap();
         model.state = TableState::Ready;
-        model.selected = Some(RowIdentity::SignalTime(4));
+        model.active = Some(RowIdentity::SignalTime(4));
         model.cycle_sort(1);
         finish_sort(&mut model);
         assert_eq!(
@@ -3638,7 +3775,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![4, 5, 2, 6, 1]
         );
-        assert_eq!(model.selected_ordinal(), Some(0));
+        assert_eq!(model.active_ordinal(), Some(0));
         assert_eq!(model.window.rows[0].cells[1].text, "0");
         assert!(model.window.rows[4].cells[1].missing);
         model.cycle_sort(1);
@@ -3649,7 +3786,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2, 6, 4, 5, 1]
         );
-        assert_eq!(model.selected_ordinal(), Some(2));
+        assert_eq!(model.active_ordinal(), Some(2));
     }
 
     #[test]
@@ -3826,7 +3963,7 @@ mod tests {
             model.widths[column.source_index],
             Some(column.rect.width() / theme.zoom + 60.0),
         );
-        assert_eq!(model.selected, None);
+        assert_eq!(model.active, None);
         assert_eq!(model.viewport.top, 20);
         assert_eq!(model.horizontal, 80.0);
         assert!(!model.dragging());
@@ -4029,7 +4166,7 @@ mod tests {
         model.pointer(&mut doc, panel, PointerEvent::Up, now);
         let width = attributes.rect.width() / theme.zoom + 80.0;
         assert!((model.widths[attributes.source_index].unwrap() - width).abs() < 0.01);
-        assert_eq!(model.selected, None);
+        assert_eq!(model.active, None);
         assert!(!model.dragging());
         model.layout(bounds, &theme, &mut crate::scene::MonoMeasure);
         assert!(model.layout.content_width > model.layout.header.width());
@@ -4093,7 +4230,7 @@ mod tests {
 
         let mut record = transaction(1, 0, "row");
         record.attributes[1].key = "α".repeat(1000);
-        let preview = model.transaction_cell(&record, 6, 32, None);
+        let preview = model.transaction_cell(&record, 6, 32, None).text;
         assert!(preview.ends_with('…'));
         assert!(preview.len() <= 32);
     }
@@ -4166,8 +4303,8 @@ mod tests {
         model.layout.row_height = ROW_HEIGHT;
         model.prepare_visible();
         assert_eq!(model.window.rows.len(), MAX_PREPARED_ROWS as usize);
-        model.selected = Some(RowIdentity::Transaction(TransactionRef(900)));
-        assert_eq!(model.selected_ordinal(), Some(899));
+        model.active = Some(RowIdentity::Transaction(TransactionRef(900)));
+        assert_eq!(model.active_ordinal(), Some(899));
         assert_eq!(
             model.copy_tsv().unwrap(),
             "Label · vtr.label\tBegin\tDuration\tStatus\tAttributes · preview\nrow 900\t3600\t8\tok\taddr=0x80"

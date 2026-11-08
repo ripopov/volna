@@ -169,7 +169,7 @@ impl CanvasPanelView {
             return Empty.into_any_element();
         };
         let t = *theme(cx);
-        let has_selection = table.selected.is_some();
+        let has_selection = table.active.is_some();
         let failed = matches!(table.state, TableState::Failed(_) | TableState::Refused(_))
             || table.query_error.is_some();
         let loading = matches!(table.state, TableState::Loading) || table.querying();
@@ -218,25 +218,37 @@ impl CanvasPanelView {
                 "table-first",
                 IconName::TableFirst,
                 "First row (Home)",
-                TableCommand::First,
+                TableCommand::Navigate {
+                    direction: volna_core::table::RowNavigation::First,
+                    extend: false,
+                },
             ),
             (
                 "table-previous",
                 IconName::TablePrevious,
                 "Previous row (Arrow Up)",
-                TableCommand::Previous,
+                TableCommand::Navigate {
+                    direction: volna_core::table::RowNavigation::Previous,
+                    extend: false,
+                },
             ),
             (
                 "table-next",
                 IconName::TableNext,
                 "Next row (Arrow Down)",
-                TableCommand::Next,
+                TableCommand::Navigate {
+                    direction: volna_core::table::RowNavigation::Next,
+                    extend: false,
+                },
             ),
             (
                 "table-last",
                 IconName::TableLast,
                 "Last row (End)",
-                TableCommand::Last,
+                TableCommand::Navigate {
+                    direction: volna_core::table::RowNavigation::Last,
+                    extend: false,
+                },
             ),
         ] {
             let owner = owner.clone();
@@ -393,16 +405,39 @@ impl CanvasPanelView {
                     }
                     let key = event.keystroke.key.as_str();
                     let modifiers = crate::app::to_modifiers(event.keystroke.modifiers);
-                    let command = match key {
-                        "home" => Some(TableCommand::First),
-                        "end" => Some(TableCommand::Last),
-                        "up" => Some(TableCommand::Previous),
-                        "down" => Some(TableCommand::Next),
-                        "pageup" => Some(TableCommand::Page(-1)),
-                        "pagedown" => Some(TableCommand::Page(1)),
+                    let mut command = match key {
+                        "home" => Some(TableCommand::Navigate {
+                            direction: volna_core::table::RowNavigation::First,
+                            extend: false,
+                        }),
+                        "end" => Some(TableCommand::Navigate {
+                            direction: volna_core::table::RowNavigation::Last,
+                            extend: false,
+                        }),
+                        "up" => Some(TableCommand::Navigate {
+                            direction: volna_core::table::RowNavigation::Previous,
+                            extend: false,
+                        }),
+                        "down" => Some(TableCommand::Navigate {
+                            direction: volna_core::table::RowNavigation::Next,
+                            extend: false,
+                        }),
+                        "pageup" => Some(TableCommand::Navigate {
+                            direction: volna_core::table::RowNavigation::Page(-1),
+                            extend: false,
+                        }),
+                        "pagedown" => Some(TableCommand::Navigate {
+                            direction: volna_core::table::RowNavigation::Page(1),
+                            extend: false,
+                        }),
                         "escape" => Some(TableCommand::ClearSelection),
                         _ => None,
                     };
+                    if modifiers.shift
+                        && let Some(TableCommand::Navigate { extend, .. }) = &mut command
+                    {
+                        *extend = true;
+                    }
                     if key == "enter" {
                         view.show_transaction(window, cx);
                         cx.stop_propagation();
@@ -431,18 +466,29 @@ impl CanvasPanelView {
         }));
     }
 
-    fn copy_table_row(&self, cx: &mut Context<Self>) {
+    fn copy_table_row(&mut self, cx: &mut Context<Self>) {
         let Some(owner) = self.ws.upgrade() else {
             return;
         };
-        let result = owner
+        let Some(copy) = owner
             .read(cx)
             .app
             .panels
             .get(self.id)
             .and_then(|panel| panel.kind.table())
-            .map(volna_core::table::TableModel::copy_tsv);
-        crate::app::Workspace::copy_result(&owner, self.generation, result, cx);
+            .map(volna_core::table::TableModel::copy_task)
+        else {
+            return;
+        };
+        let generation = self.generation;
+        self.table_copy = Some(cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { copy() }).await;
+            drop(this.update(cx, |_, cx| {
+                if owner.read(cx).app.doc.generation() == generation {
+                    crate::app::Workspace::copy_result(&owner, generation, Some(result), cx);
+                }
+            }));
+        }));
     }
 
     fn table_go_to(&self, window: &mut Window, cx: &mut Context<Self>) {

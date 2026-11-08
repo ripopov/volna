@@ -164,7 +164,7 @@ impl Panel {
             PanelKind::Table(table) => {
                 table.layout.body.height() > 0.0
                     && table.source.generator_track() == Some(selected.track)
-                    && table.selected_ordinal().is_some()
+                    && table.active_ordinal().is_some()
             }
             _ => false,
         }

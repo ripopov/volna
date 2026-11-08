@@ -84,11 +84,9 @@ impl App {
                 panel,
                 TableCommand::Select(_)
                 | TableCommand::GoTo(_)
-                | TableCommand::First
-                | TableCommand::Last
-                | TableCommand::Previous
-                | TableCommand::Next
-                | TableCommand::Page(_),
+                | TableCommand::ToggleRow(_)
+                | TableCommand::ExtendTo(_)
+                | TableCommand::Navigate { .. },
             )
             | Command::MenuSelect(
                 panel,
