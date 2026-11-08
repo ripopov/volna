@@ -80,7 +80,7 @@ pub(super) fn paint(
                     tx.end as f64 <= viewport.end,
                 );
                 if label_count < LABELS && bar_h >= z(8.0) && xb - xa > z(16.0) {
-                    let text = lane::label(tx);
+                    let text = lane::label(generator, tx);
                     let padding = if tx.status == Status::Aborted {
                         14.0
                     } else {

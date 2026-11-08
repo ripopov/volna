@@ -82,7 +82,7 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
     Ok(TrackPayload {
         track: TrackRef(r.u32().await?),
         generators: r
-            .vector(28, || async {
+            .vector(36, || async {
                 let before = r.charged();
                 let mut generator = GeneratorPayload {
                     reservation: None,
@@ -97,6 +97,11 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
                                     generator: optional_track(r).await?,
                                 },
                             ))
+                        })
+                        .await?,
+                    parent_labels: r
+                        .vector(16, || async {
+                            Ok((TransactionRef(r.u64().await?), r.string().await?))
                         })
                         .await?,
                     relations: r
@@ -122,6 +127,13 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
                     .and_then(|n| {
                         generator
                             .parents
+                            .len()
+                            .checked_mul(64)
+                            .and_then(|p| n.checked_add(p))
+                    })
+                    .and_then(|n| {
+                        generator
+                            .parent_labels
                             .len()
                             .checked_mul(64)
                             .and_then(|p| n.checked_add(p))
@@ -266,6 +278,7 @@ mod tests {
                         )
                     })
                     .collect(),
+                parent_labels: vec![],
                 relations: (0..2)
                     .map(|id| LoadedRelation {
                         id,
@@ -390,7 +403,10 @@ mod tests {
         unknown.generators[0].transactions[0].events[0].generator = Some(TrackRef(99));
         let mut misplaced = sample();
         misplaced.generators[0].relations[0].from_generator = Some(TrackRef(1));
-        for payload in [unknown, misplaced] {
+        let mut orphan_label = sample();
+        orphan_label.generators[0].parent_labels =
+            vec![(TransactionRef(99), "missing parent".into())];
+        for payload in [unknown, misplaced, orphan_label] {
             let bytes = bincode::serialize(&payload).unwrap();
             let budget = MemoryBudget::new(8 * 1024 * 1024);
             let mut decoder =

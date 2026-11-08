@@ -334,6 +334,7 @@ impl LoadedGenerator {
             transactions,
             parents,
             relations,
+            raw.parent_labels().clone(),
         )?);
         self.median_lifetime = self.median_lifetime.saturating_mul(scale);
         if let Some(index) = &mut self.row_index {
@@ -354,6 +355,7 @@ impl LoadedGenerator {
                 transactions,
                 parents,
                 relations,
+                Default::default(),
             )?),
             None,
         )
@@ -607,6 +609,7 @@ mod tests {
                 (0..5000).map(|id| tx(id, id * 10, id * 10 + 5)).collect(),
                 HashMap::new(),
                 vec![],
+                Default::default(),
             )
             .unwrap(),
         );
@@ -662,6 +665,7 @@ mod tests {
                 (0..5000).map(|id| tx(id, id, id + 5)).collect(),
                 HashMap::new(),
                 vec![],
+                Default::default(),
             )
             .unwrap(),
         );

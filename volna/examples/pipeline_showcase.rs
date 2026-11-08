@@ -50,32 +50,9 @@ impl Payload for Instruction {
 }
 
 struct ResourceVisit {
-    label: String,
     miss: bool,
 }
-impl Payload for ResourceVisit {
-    fn bind(types: &mut vtr::Types) -> vtr::Result<vtr::TypeId> {
-        let text = String::bind(types)?;
-        let boolean = bool::bind(types)?;
-        types.structure(
-            "ResourceVisit",
-            vec![
-                vtr::schema::Field::new("vtr.label", text),
-                vtr::schema::Field::new("miss", boolean),
-            ],
-        )
-    }
-    fn encode(&self, out: &mut Vec<u8>) -> vtr::Result<()> {
-        self.label.encode(out)?;
-        self.miss.encode(out)
-    }
-    fn decode(reader: &mut PayloadReader<'_>) -> vtr::Result<Self> {
-        Ok(Self {
-            label: String::decode(reader)?,
-            miss: bool::decode(reader)?,
-        })
-    }
-}
+vtr::impl_payload!(ResourceVisit { miss });
 
 struct MemoryRequest {
     label: String,
@@ -622,7 +599,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 let payload = ResourceVisit {
-                    label: format!("{} for instruction {}", cfg.stages[k].1, insn.index),
                     miss: k == cfg.memory && e - b > 1,
                 };
                 let visit = w.begin_stage_at(n.stages[k], tx.owner(), *b, &payload)?;
@@ -771,7 +747,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for visit in &activity.located {
             assert_eq!(visit.kind(), vtr::RecordKind::Stage);
             assert_eq!(visit.parent(), Some(tx.id()));
-            assert!(!visit.decode::<ResourceVisit>().unwrap().label.is_empty());
             assert!(visit.begin() >= tx.begin() && visit.end() <= tx.end());
         }
         let generator = tx.generator().unwrap();

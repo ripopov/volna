@@ -18,9 +18,15 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
     );
     let mut records = Vec::new();
     let mut failure = None;
+    let mut stage_owners = HashSet::new();
     let mut accept = |record: vtr::Record| {
         if failure.is_some() {
             return false;
+        }
+        if record.kind() == vtr::RecordKind::Stage
+            && let Some(parent) = record.parent()
+        {
+            stage_owners.insert(TransactionRef(parent));
         }
         match transaction(&session.reader, &record) {
             Ok(record) => {
@@ -68,6 +74,7 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
                 )
         })
         .collect();
+    let mut parent_labels = HashMap::new();
     let mut external = HashSet::new();
     for record in &records {
         if let Some(parent) = record.parent
@@ -105,6 +112,12 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
                 None => None,
             };
         }
+        if stage_owners.contains(&id)
+            && let Some(record) = &record
+            && let Some(label) = record_label(&session.reader, record)?
+        {
+            parent_labels.insert(id, label);
+        }
         owners.insert(
             id,
             record.and_then(|record| record.generator()).map(TrackRef),
@@ -133,11 +146,10 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
             })
         })
         .collect();
+    let generator = LoadedGenerator::new(track, records, parents, edges, parent_labels)?;
     Ok(LoadedTrack {
         track,
-        generators: vec![Arc::new(LoadedGenerator::new(
-            track, records, parents, edges,
-        )?)],
+        generators: vec![Arc::new(generator)],
     })
 }
 
@@ -314,7 +326,40 @@ fn payload_value(
 
 use anyhow::Context as _;
 
-fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transaction> {
+fn record_label(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Option<String>> {
+    for attr in record.attributes() {
+        if reader.string(attr.key)? == "vtr.label" {
+            match &attr.value {
+                Value::Text(label) => return Ok(Some(label.clone())),
+                Value::Str(label) => return Ok(Some(reader.string(*label)?.to_owned())),
+                _ => {}
+            }
+        }
+    }
+    let payload = record.payload();
+    let TypeKind::Struct(fields) = &payload.schema().get(payload.datatype())?.kind else {
+        return Ok(None);
+    };
+    let Some(field) = fields.iter().find(|field| field.name == "vtr.label") else {
+        return Ok(None);
+    };
+    if !matches!(
+        payload.schema().get(field.datatype)?.kind,
+        TypeKind::Scalar(vtr::schema::Primitive::Text | vtr::schema::Primitive::Str)
+    ) {
+        return Ok(None);
+    }
+    match payload.field("vtr.label")?.scalar()? {
+        Value::Text(label) => Ok(Some(label)),
+        Value::Str(label) => Ok(Some(reader.string(label)?.to_owned())),
+        _ => unreachable!("label has a text schema"),
+    }
+}
+
+fn record_attributes(
+    reader: &Reader,
+    record: &vtr::Record,
+) -> anyhow::Result<Vec<TransactionAttribute>> {
     let mut attrs: Vec<_> = attributes(reader, record.attributes())
         .into_iter()
         .map(|(key, value)| TransactionAttribute {
@@ -391,6 +436,11 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
             value: message,
         });
     }
+    Ok(attrs)
+}
+
+fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transaction> {
+    let attrs = record_attributes(reader, record)?;
     let mut transaction = Transaction {
         id: TransactionRef(record.id()),
         generator: TrackRef(record.generator().context("record has no source")?),

@@ -92,6 +92,84 @@ fn with_lanes(paths: &[&str]) -> (App, Arc<dyn Session>, PanelId, Vec<TrackRef>)
 const CPU0: &str = "soc.cpu0.pipeline.instruction";
 const CPU1: &str = "soc.cpu1.pipeline.instruction";
 
+#[test]
+fn resource_bars_and_cursor_values_show_the_owning_instruction_label() {
+    let (mut app, _session, waves, _) = with_lanes(&["soc.cpu0.frontend.fetch_buffer"]);
+    show(&mut app, waves, 0.0, 3.0);
+    let App { panels, doc, .. } = &mut app;
+    let panel = panels.waves_mut(waves).unwrap();
+    panel.values_width = 400.0;
+    panel.set_cursor(doc, Some(1));
+    for theme in [Theme::one_dark(), Theme::islands_light()] {
+        let scene = frame_theme(&mut app, waves, 1800.0, &theme);
+        assert_eq!(
+            scene
+                .texts()
+                .filter(|text| *text == "80000000: lw   a1, 0(a2)")
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
+fn resource_captions_survive_adding_a_trace_with_a_finer_time_base() {
+    use vtr::{Recorder, SourceOptions, Status};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("resources.vtr");
+    let mut options = vtr::WriterOptions::default();
+    options.metadata.timescale = -9;
+    let mut writer = vtr::Writer::create_with(&path, options).unwrap();
+    let instructions = writer
+        .transactions::<()>(SourceOptions::new("instructions", None), "INSTRUCTION")
+        .unwrap();
+    let resources = writer
+        .stages::<()>(SourceOptions::new("fetch_buffer", None))
+        .unwrap();
+    let label = writer.intern("vtr.label").unwrap();
+    let owner = writer.begin_at(instructions, 0, &(), None).unwrap();
+    writer
+        .attribute(
+            owner.owner(),
+            label,
+            vtr::Value::Text("80000000: add a0,a1,a2".into()),
+        )
+        .unwrap();
+    let visit = writer
+        .begin_stage_at(resources, owner.owner(), 1, &())
+        .unwrap();
+    writer.end_stage_at(visit, 2).unwrap();
+    writer.end_at(owner, 3, Status::Ok).unwrap();
+    writer.close().unwrap();
+
+    let session = OpenSpec::Path(path).open().unwrap();
+    let mut app = App::new();
+    app.set_session(session.clone());
+    app.handle(Command::AddToWaves(a_all([generator(
+        session.as_ref(),
+        TrackRef(resources.id()),
+    )])));
+    complete_pending(&mut app);
+    let waves = app.panels.focused_id();
+    show(&mut app, waves, 0.0, 3.0);
+    assert!(
+        frame(&mut app, waves)
+            .texts()
+            .any(|text| text == "80000000: add a0,a1,a2")
+    );
+    app.handle(Command::AddTrace(OpenSpec::Path(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../volna-trace/tests/fixtures/values.vtr"),
+    )));
+    complete_pending(&mut app);
+    assert_eq!(app.doc.time_base().timescale, -12);
+    show(&mut app, waves, 0.0, 3000.0);
+    assert!(
+        frame(&mut app, waves)
+            .texts()
+            .any(|text| text == "80000000: add a0,a1,a2")
+    );
+}
+
 fn show(app: &mut App, waves: PanelId, start: f64, end: f64) {
     let volna_core::App { panels, doc, .. } = app;
     panels
@@ -950,19 +1028,23 @@ fn cursor_labels_align_with_bar_rows_in_both_themes_and_at_zoom() {
 fn bars_keep_separate_rows_and_occupancy_expands_only_on_request() {
     let (mut app, _session, waves, _tracks) = with_lanes(&[CPU1]);
     let theme = Theme::one_dark();
-    let (median, depth, first) = {
+    let (median, depth, first, label) = {
         let g = app.panels.waves(waves).unwrap().items()[0]
             .lane()
             .unwrap()
             .generator(&app.doc)
             .unwrap();
-        (g.median_lifetime(), g.depth(), g.transactions()[0].clone())
+        (
+            g.median_lifetime(),
+            g.depth(),
+            g.transactions()[0].clone(),
+            lane::label(g, &g.transactions()[0]),
+        )
     };
     assert!(depth > 5);
 
     show(&mut app, waves, 0.0, (median * 6) as f64);
     let scene = frame_w(&mut app, waves, 1560.0);
-    let label = lane::label(&first);
     let caption = |t: &str| t.starts_with("800000") && t.contains(": ");
     assert!(
         scene.texts().filter(|t| caption(t)).count() > 5,

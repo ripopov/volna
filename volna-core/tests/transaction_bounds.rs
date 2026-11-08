@@ -112,7 +112,14 @@ fn project_relations(
     let loaded = LoadedTrack {
         track: TrackRef(1),
         generators: vec![Arc::new(
-            LoadedGenerator::new(TrackRef(1), vec![tx], HashMap::new(), relations).unwrap(),
+            LoadedGenerator::new(
+                TrackRef(1),
+                vec![tx],
+                HashMap::new(),
+                relations,
+                HashMap::new(),
+            )
+            .unwrap(),
         )],
     };
     let tracks = vec![

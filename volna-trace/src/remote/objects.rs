@@ -124,6 +124,7 @@ pub struct GeneratorPayload {
     pub generator: TrackRef,
     pub transactions: Vec<Transaction>,
     pub parents: Vec<(TransactionRef, TransactionLocation)>,
+    pub parent_labels: Vec<(TransactionRef, String)>,
     pub relations: Vec<LoadedRelation>,
 }
 
@@ -141,6 +142,7 @@ impl TrackPayload {
             generator: TrackRef,
             transactions: &'a [Transaction],
             parents: Vec<(TransactionRef, TransactionLocation)>,
+            parent_labels: Vec<(TransactionRef, &'a str)>,
             relations: &'a [LoadedRelation],
         }
         #[derive(Serialize)]
@@ -160,6 +162,11 @@ impl TrackPayload {
                         .transactions()
                         .iter()
                         .filter_map(|tx| generator.parent(tx.id).map(|p| (tx.id, p)))
+                        .collect(),
+                    parent_labels: generator
+                        .parent_labels()
+                        .iter()
+                        .map(|(&id, label)| (id, label.as_str()))
                         .collect(),
                     relations: generator.relations(),
                 })
@@ -200,11 +207,20 @@ impl TrackPayload {
                     "duplicate parent reference"
                 );
             }
+            let mut parent_labels = HashMap::new();
+            for (parent, label) in payload.parent_labels {
+                checkpoint().await;
+                anyhow::ensure!(
+                    parent_labels.insert(parent, label).is_none(),
+                    "duplicate parent label"
+                );
+            }
             let mut generator = LoadedGenerator::from_sorted(
                 payload.generator,
                 payload.transactions,
                 parents,
                 payload.relations,
+                parent_labels,
                 &mut checkpoint,
             )
             .await?;

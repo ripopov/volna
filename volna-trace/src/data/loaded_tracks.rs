@@ -31,6 +31,8 @@ pub struct LoadedGenerator {
     attributes: Vec<AttributeSummary>,
     by_id: HashMap<TransactionRef, (usize, TrackRef)>,
     parents: HashMap<TransactionRef, TransactionLocation>,
+    // Resource tracks can display their occupants without loading the owners' full tracks.
+    parent_labels: HashMap<TransactionRef, String>,
     children: HashMap<TransactionLocation, Vec<TransactionRef>>,
     relations: Vec<LoadedRelation>,
     by_endpoint: HashMap<TransactionRef, Vec<u32>>,
@@ -100,6 +102,7 @@ impl LoadedGenerator {
                             .saturating_add(attributes_bytes(&stage.attributes))
                     }))
             });
+        let transactions = transactions.saturating_add(self.parent_labels_bytes());
         self.relations.iter().fold(transactions, |bytes, edge| {
             bytes
                 .saturating_add(edge.relation.kind.capacity() as u64)
@@ -112,6 +115,7 @@ impl LoadedGenerator {
         mut transactions: Vec<Transaction>,
         parents: HashMap<TransactionRef, TransactionLocation>,
         relations: Vec<LoadedRelation>,
+        parent_labels: HashMap<TransactionRef, String>,
     ) -> anyhow::Result<Self> {
         transactions.sort_by_key(|tx| (tx.begin, tx.end, tx.id.0));
         let mut build = std::pin::pin!(Self::from_sorted(
@@ -119,6 +123,7 @@ impl LoadedGenerator {
             transactions,
             parents,
             relations,
+            parent_labels,
             || std::future::ready(()),
         ));
         match std::future::Future::poll(
@@ -135,6 +140,7 @@ impl LoadedGenerator {
         transactions: Vec<Transaction>,
         parents: HashMap<TransactionRef, TransactionLocation>,
         relations: Vec<LoadedRelation>,
+        parent_labels: HashMap<TransactionRef, String>,
         mut checkpoint: impl FnMut() -> F,
     ) -> anyhow::Result<Self> {
         let mut by_id = HashMap::with_capacity(transactions.len());
@@ -199,8 +205,14 @@ impl LoadedGenerator {
                 "unknown child in parent locations"
             );
         }
+        let mut unresolved_labels = HashSet::new();
+        for parent in parent_labels.keys() {
+            checkpoint().await;
+            unresolved_labels.insert(*parent);
+        }
         for parent in parents.values() {
             checkpoint().await;
+            unresolved_labels.remove(&parent.transaction);
             if parent.generator == Some(generator) {
                 anyhow::ensure!(
                     by_id.contains_key(&parent.transaction),
@@ -208,6 +220,7 @@ impl LoadedGenerator {
                 );
             }
         }
+        anyhow::ensure!(unresolved_labels.is_empty(), "label for an unknown parent");
         let mut relation_ids = HashSet::with_capacity(relations.len());
         for edge in &relations {
             checkpoint().await;
@@ -297,12 +310,47 @@ impl LoadedGenerator {
             transactions,
             by_id,
             parents,
+            parent_labels,
             children,
             relations,
             by_endpoint,
             max_end,
             leaves,
         })
+    }
+
+    #[must_use]
+    pub fn parent_labels(&self) -> &HashMap<TransactionRef, String> {
+        &self.parent_labels
+    }
+
+    pub(crate) fn parent_labels_bytes(&self) -> u64 {
+        (self.parent_labels.capacity() as u64)
+            .saturating_mul(std::mem::size_of::<(TransactionRef, String)>() as u64)
+            .saturating_add(
+                self.parent_labels
+                    .values()
+                    .map(|label| label.capacity() as u64)
+                    .sum::<u64>(),
+            )
+    }
+
+    #[must_use]
+    pub fn display_label<'a>(&'a self, record: &'a Transaction) -> Option<&'a str> {
+        record
+            .attributes
+            .iter()
+            .find_map(|attr| match (&*attr.key, &attr.value) {
+                ("vtr.label", super::transactions::AttributeValue::Text(text)) => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                record
+                    .parent
+                    .and_then(|parent| self.parent_labels.get(&parent).map(String::as_str))
+            })
     }
 
     #[must_use]
@@ -540,8 +588,14 @@ mod tests {
                 value: AttributeValue::Map(vec![("nested".into(), AttributeValue::Null)]),
             },
         ];
-        let loaded =
-            LoadedGenerator::new(TrackRef(1), vec![late, early], HashMap::new(), vec![]).unwrap();
+        let loaded = LoadedGenerator::new(
+            TrackRef(1),
+            vec![late, early],
+            HashMap::new(),
+            vec![],
+            Default::default(),
+        )
+        .unwrap();
         let catalogue = loaded.attribute_catalogue();
         assert_eq!(
             catalogue.iter().map(|a| a.key.as_str()).collect::<Vec<_>>(),
@@ -567,7 +621,14 @@ mod tests {
             let begin = (id * 37) % 100;
             records.push(tx(id, begin, begin + (id * 19) % 50));
         }
-        let loaded = LoadedGenerator::new(TrackRef(1), records, HashMap::new(), vec![]).unwrap();
+        let loaded = LoadedGenerator::new(
+            TrackRef(1),
+            records,
+            HashMap::new(),
+            vec![],
+            Default::default(),
+        )
+        .unwrap();
         for start in 0..160 {
             for end in [start, start + 7, u64::MAX] {
                 let expected: Vec<_> = loaded
@@ -609,8 +670,14 @@ mod tests {
         let records: Vec<_> = (0..2000)
             .map(|id| tx(id, id, if id == 0 { 10000 } else { id + 3 }))
             .collect();
-        let local =
-            LoadedGenerator::new(TrackRef(1), records.clone(), HashMap::new(), vec![]).unwrap();
+        let local = LoadedGenerator::new(
+            TrackRef(1),
+            records.clone(),
+            HashMap::new(),
+            vec![],
+            Default::default(),
+        )
+        .unwrap();
         let credits = Cell::new(0);
         let checkpoint = || {
             poll_fn(|_| {
@@ -627,6 +694,7 @@ mod tests {
             records,
             HashMap::new(),
             vec![],
+            HashMap::new(),
             checkpoint
         ));
         let mut polls = 0;
@@ -657,6 +725,7 @@ mod tests {
             vec![tx(1, 2, 3), tx(2, 1, 2)],
             HashMap::new(),
             vec![],
+            HashMap::new(),
             || std::future::ready(())
         ));
         assert!(matches!(
@@ -688,14 +757,22 @@ mod tests {
         };
         let parents = HashMap::from([(child.id, parent)]);
         assert!(
-            LoadedGenerator::new(TrackRef(1), vec![child.clone()], HashMap::new(), vec![]).is_err()
+            LoadedGenerator::new(
+                TrackRef(1),
+                vec![child.clone()],
+                HashMap::new(),
+                vec![],
+                Default::default()
+            )
+            .is_err()
         );
         assert!(
             LoadedGenerator::new(
                 TrackRef(1),
                 vec![child.clone(), child.clone()],
                 parents.clone(),
-                vec![]
+                vec![],
+                Default::default()
             )
             .is_err()
         );
@@ -704,14 +781,22 @@ mod tests {
                 TrackRef(1),
                 vec![child.clone()],
                 parents.clone(),
-                vec![edge.clone(), edge.clone()]
+                vec![edge.clone(), edge.clone()],
+                Default::default()
             )
             .is_err()
         );
         let mut parallel = edge.clone();
         parallel.id = 1;
         let loaded = Arc::new(
-            LoadedGenerator::new(TrackRef(1), vec![child], parents, vec![edge, parallel]).unwrap(),
+            LoadedGenerator::new(
+                TrackRef(1),
+                vec![child],
+                parents,
+                vec![edge, parallel],
+                Default::default(),
+            )
+            .unwrap(),
         );
         assert_eq!(loaded.relations().len(), 2);
         assert_eq!(loaded.parent(TransactionRef(2)), Some(parent));
@@ -730,7 +815,14 @@ mod tests {
         drop(stream);
         drop(generator);
         assert!(weak.upgrade().is_none());
-        let empty = LoadedGenerator::new(TrackRef(1), vec![], HashMap::new(), vec![]).unwrap();
+        let empty = LoadedGenerator::new(
+            TrackRef(1),
+            vec![],
+            HashMap::new(),
+            vec![],
+            Default::default(),
+        )
+        .unwrap();
         assert!(
             empty
                 .visit_window(0, u64::MAX, |_| panic!("empty"))

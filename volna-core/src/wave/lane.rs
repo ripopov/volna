@@ -4,7 +4,7 @@
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::data::transaction_index::TransactionIndex;
 use crate::document::{Document, TrackLoadState};
-use crate::pipeline::{PipelineModel, TrackSource};
+use crate::pipeline::TrackSource;
 use crate::trace::{TraceId, Traced};
 use crate::wave::model::RowHeight;
 use crate::wave::viewport::Viewport;
@@ -403,8 +403,8 @@ pub(crate) fn edges<'a>(lane: &TxLane, doc: &'a Document) -> Option<Edges<'a>> {
 }
 
 #[must_use]
-pub fn label(tx: &Transaction) -> String {
-    let label = PipelineModel::label(tx);
+pub fn label(generator: &LoadedGenerator, tx: &Transaction) -> String {
+    let label = generator.display_label(tx).unwrap_or_default();
     if label.is_empty() {
         format!("#{}", tx.id.0)
     } else {
@@ -435,7 +435,7 @@ pub fn row_values(
                 .and_then(|row| row.at(cursor))
                 .map(|i| &index.source().transactions()[i]);
             tx.map_or_else(LaneReadout::default, |tx| {
-                let text = label(tx);
+                let text = label(index.source(), tx);
                 LaneReadout {
                     truncated: text.len() > limit,
                     text: truncate(text, limit),
