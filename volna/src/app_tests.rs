@@ -5499,6 +5499,77 @@ fn shift_o_toggles_group_overlays_and_hosts_their_menu(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn table_wheel_and_touchpad_scroll_reveal_rows_and_columns_in_both_directions(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{Modifiers, ScrollDelta, ScrollEvent, VisualTestContext, point, size};
+
+    init(cx);
+    let window = RootWindow::new(cx);
+    let mut vcx = VisualTestContext::from_window(window.root.into(), cx);
+    vcx.simulate_resize(size(px(360.0), px(300.0)));
+    let panel = window.update(&mut vcx, open_pipeline_table).unwrap();
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    let (cell, column_left) = window
+        .update(&mut vcx, |ws, _, _| {
+            let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+            (
+                point(
+                    px(table.layout.body.left() + 20.0),
+                    px(table.layout.body.top() + 12.0),
+                ),
+                table.layout.columns[0].rect.left(),
+            )
+        })
+        .unwrap();
+
+    for precise in [false, true] {
+        for (dx, dy, selected_row, column_offset) in [
+            (0.0, -48.0, 2, 0.0),
+            (0.0, 48.0, 0, 0.0),
+            (-48.0, 0.0, 0, -48.0),
+            (48.0, 0.0, 0, 0.0),
+        ] {
+            vcx.simulate_mouse_move(cell, None, Modifiers::default());
+            vcx.simulate_event(ScrollEvent {
+                position: cell,
+                delta: if precise {
+                    ScrollDelta::Pixels(point(px(dx), px(dy)))
+                } else {
+                    ScrollDelta::Lines(point(dx / 24.0, dy / 24.0))
+                },
+                ..Default::default()
+            });
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert_eq!(
+                        table.layout.columns[0].rect.left(),
+                        column_left + column_offset,
+                        "column movement for precise={precise}, dx={dx}"
+                    );
+                })
+                .unwrap();
+            vcx.simulate_click(cell, Modifiers::default());
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
+                    assert_eq!(
+                        table.active_ordinal(),
+                        Some(selected_row),
+                        "row under the pointer for precise={precise}, dy={dy}"
+                    );
+                })
+                .unwrap();
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, MouseButton, MouseDownEvent, VisualTestContext, point, size};
     use volna_core::{panels::PanelsCommand, table::TableCommand};
@@ -5865,7 +5936,7 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
         vcx.simulate_mouse_move(at(x, y), None, Modifiers::default());
         vcx.simulate_event(gpui_kit::ScrollEvent {
             position: at(x, y),
-            delta: gpui_kit::ScrollDelta::Pixels(at(0.0, 48.0)),
+            delta: gpui_kit::ScrollDelta::Pixels(at(0.0, -48.0)),
             ..Default::default()
         });
         vcx.run_until_parked();

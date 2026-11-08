@@ -1883,9 +1883,9 @@ impl TableModel {
                     })
             }
             PointerEvent::Wheel { dx, dy, .. } => {
-                self.horizontal = (self.horizontal + dx).max(0.0);
+                self.horizontal = (self.horizontal - dx).max(0.0);
                 self.viewport.scroll(
-                    dy,
+                    -dy,
                     self.len(),
                     self.layout.body.height(),
                     self.layout.row_height,
