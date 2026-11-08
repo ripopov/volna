@@ -254,6 +254,24 @@ fn log_table_customization_survives_waveform_activation_restore_and_reset_undo()
 }
 
 #[test]
+fn copying_a_log_row_uses_the_displayed_columns_and_formatted_message() {
+    let mut app = App::new();
+    app.set_session(log_fixture());
+    app.handle(Command::OpenTable {
+        selected: a_all(vec![Member::Generator(0)]),
+        clicked: None,
+    });
+    let panel = app.panels.focused_id();
+    complete_pending(&mut app);
+    app.handle(Command::Table(panel, TableCommand::Select(0)));
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    assert_eq!(
+        table.copy_tsv().unwrap(),
+        "Time\tSeverity\tMessage\n10\twarn (3)\tmessage: zebra"
+    );
+}
+
+#[test]
 fn log_table_keeps_generic_attribute_sizing_when_message_is_hidden_or_resized() {
     for hide_message in [false, true] {
         let mut app = App::new();
@@ -372,7 +390,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
         table
             .copy_tsv()
             .unwrap()
-            .starts_with("Generator\tID\tBegin\tEnd\tDuration\tStatus\n")
+            .starts_with("Label · vtr.label\tBegin\tDuration\tStatus\tAttributes · preview\n")
     );
 
     let selection = app.doc.selection().expect("the row is the selection");

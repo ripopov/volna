@@ -2073,33 +2073,24 @@ impl TableModel {
     }
 
     fn visible_column_widths(&self) -> Vec<(usize, f32)> {
-        match self.columns.get() {
-            ColumnSet::Transactions(columns) => columns
-                .iter()
-                .filter(|(_, _, visible)| *visible)
-                .map(|(i, c, _)| {
-                    let width = self.widths[i].unwrap_or_else(|| match c {
-                        TransactionColumn::Attribute(key) if self.log && key == "log.message" => {
+        self.columns
+            .get()
+            .visible_indices()
+            .map(|index| {
+                let width =
+                    self.widths[index].unwrap_or_else(|| match self.transaction_column(index) {
+                        Some(TransactionColumn::Attribute(key))
+                            if self.log && key == "log.message" =>
+                        {
                             480.0
                         }
-                        _ => c.width(),
+                        Some(column) => column.width(),
+                        None if index == 0 => 130.0,
+                        None => 180.0,
                     });
-                    (i, width)
-                })
-                .collect(),
-            ColumnSet::Signals { time, visible } => {
-                std::iter::once((0, self.widths[0].unwrap_or(130.0)))
-                    .filter(|_| *time)
-                    .chain(
-                        visible
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, show)| **show)
-                            .map(|(i, _)| (i + 1, self.widths[i + 1].unwrap_or(180.0))),
-                    )
-                    .collect()
-            }
-        }
+                (index, width)
+            })
+            .collect()
     }
 
     #[must_use]
@@ -2345,60 +2336,40 @@ impl TableModel {
             .source_index(ordinal)
             .ok_or_else(|| anyhow::anyhow!("Selected row is unavailable"))?;
         let mut text = String::new();
-        match (&self.rows, &self.source) {
-            (Rows::Generator(generator), TableSource::Generator(source)) => {
-                let tx = &generator.transactions()[index];
-                append_exact(
-                    &mut text,
-                    "Generator\tID\tBegin\tEnd\tDuration\tStatus\n",
-                    COPY_BYTES,
-                )?;
-                for (part_index, part) in source.path().iter().enumerate() {
-                    if part_index > 0 {
-                        append_exact(&mut text, ".", COPY_BYTES)?;
-                    }
-                    append_exact(&mut text, part, COPY_BYTES)?;
-                }
-                use TransactionColumn::{Begin, Duration, End, Id, Status};
-                for column in [Id, Begin, End, Duration, Status] {
-                    let index = TransactionColumn::ALL
-                        .iter()
-                        .position(|c| *c == column)
-                        .expect("built-in column");
-                    append_exact(&mut text, "\t", COPY_BYTES)?;
-                    append_exact(
-                        &mut text,
-                        &self.cell_value_text(column.value(tx), index, COPY_BYTES, None),
-                        COPY_BYTES,
-                    )?;
-                }
+        for (position, column) in self.columns.get().visible_indices().enumerate() {
+            if position > 0 {
+                append_exact(&mut text, "\t", COPY_BYTES)?;
             }
-            (
-                Rows::Signals { histories, .. },
-                TableSource::Signals(_) | TableSource::Statistics(_),
-            ) => {
-                let time = self.row_time(ordinal).unwrap();
-                append_exact(&mut text, "Time", COPY_BYTES)?;
-                for column in 1..=histories.len() {
-                    append_exact(&mut text, "\t", COPY_BYTES)?;
-                    append_exact(&mut text, self.column_title(column), COPY_BYTES)?;
-                }
-                append_exact(&mut text, "\n", COPY_BYTES)?;
-                append_exact(&mut text, &time.to_string(), COPY_BYTES)?;
-                for (column, history) in histories.iter().enumerate() {
-                    append_exact(&mut text, "\t", COPY_BYTES)?;
-                    let sample = history.index_at(time);
+            append_exact(&mut text, self.column_title(column), COPY_BYTES)?;
+        }
+        append_exact(&mut text, "\n", COPY_BYTES)?;
+        for (position, column) in self.columns.get().visible_indices().enumerate() {
+            if position > 0 {
+                append_exact(&mut text, "\t", COPY_BYTES)?;
+            }
+            let value = match &self.rows {
+                Rows::Generator(generator) => self.transaction_cell(
+                    &generator.transactions()[index],
+                    column,
+                    COPY_BYTES,
+                    None,
+                ),
+                Rows::Signals { .. } if column == 0 => self.row_time(ordinal).unwrap().to_string(),
+                Rows::Signals { histories, .. } => {
+                    let time = self.row_time(ordinal).unwrap();
+                    let history = &histories[column - 1];
                     let value = self.signal_value(
-                        column + 1,
+                        column,
                         history.as_ref(),
-                        sample,
+                        history.index_at(time),
                         COPY_BYTES.saturating_sub(text.len()),
                     );
                     anyhow::ensure!(!value.truncated, "Row exceeds the 64 KiB clipboard limit.");
-                    append_exact(&mut text, &value.text, COPY_BYTES)?;
+                    value.text
                 }
-            }
-            _ => return Err(anyhow::anyhow!("Source is not ready.")),
+                Rows::None => return Err(anyhow::anyhow!("Source is not ready.")),
+            };
+            append_exact(&mut text, &value, COPY_BYTES)?;
         }
         Ok(text)
     }
@@ -3345,6 +3316,73 @@ mod tests {
         assert_eq!(model.copy_tsv().unwrap(), "Time\ta\tb\n7\t1.5\t-1");
     }
 
+    #[test]
+    fn copying_an_instruction_preserves_visible_columns_order_and_full_values() {
+        let label = format!("addi {}", "operand".repeat(100));
+        let mut instruction = transaction(1, 10, &label);
+        instruction.attributes[1].key = "pc".into();
+        let mut model = generator_model(vec![instruction]);
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        for command in [
+            TableCommand::ShowTransactionColumn(TransactionColumn::Attribute("pc".into())),
+            TableCommand::ToggleTransactionColumn(TransactionColumn::Duration),
+            TableCommand::ToggleTransactionColumn(TransactionColumn::Status),
+            TableCommand::ToggleTransactionColumn(TransactionColumn::Attributes),
+            TableCommand::MoveColumn {
+                source_index: 7,
+                before: Some(0),
+            },
+            TableCommand::ColumnFormat {
+                source_index: 7,
+                translator: Some("udec".into()),
+            },
+            TableCommand::Select(0),
+        ] {
+            model.command(&mut doc, panel, command, Instant::now());
+        }
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 180.0, 240.0),
+            &Theme::one_dark(),
+            &mut crate::scene::MonoMeasure,
+        );
+        assert_eq!(
+            model.copy_tsv().unwrap(),
+            format!("pc\tLabel · vtr.label\tBegin\n128\t{label}\t10")
+        );
+    }
+
+    #[test]
+    fn copying_signals_omits_hidden_time_and_data_columns() {
+        let mut model = signal_model(MemoryBudget::new(16 * 1024 * 1024));
+        model
+            .build_signal_rows(vec![history(&[7], &["1"]), history(&[7], &["0"])])
+            .unwrap();
+        model.state = TableState::Ready;
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        for command in [
+            TableCommand::ToggleSignalColumn(0),
+            TableCommand::ToggleSignalColumn(1),
+            TableCommand::Select(0),
+        ] {
+            model.command(&mut doc, panel, command, Instant::now());
+        }
+        assert_eq!(model.copy_tsv().unwrap(), "b\n0");
+    }
+
+    #[test]
+    fn copying_an_instruction_rejects_values_above_the_clipboard_limit() {
+        let mut model = generator_model(vec![transaction(1, 10, &"x".repeat(COPY_BYTES + 1))]);
+        model.command(
+            &mut Document::new(),
+            crate::panels::PanelId(1),
+            TableCommand::Select(0),
+            Instant::now(),
+        );
+        assert!(model.copy_tsv().unwrap_err().to_string().contains("64 KiB"));
+    }
+
     fn finish_sort(model: &mut TableModel) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while model.querying() {
@@ -3466,7 +3504,7 @@ mod tests {
             model
                 .copy_tsv()
                 .unwrap()
-                .contains(&format!("\t0x1e\t{}", big + 2))
+                .contains(&format!("z\t{}\t8\tok", big + 2))
         );
         assert_eq!(model.window.rows[0].time, big + 1);
         model.cycle_sort(1);
@@ -3536,7 +3574,7 @@ mod tests {
                 .unwrap()
                 .split('\t')
                 .collect::<Vec<_>>(),
-            ["request", "0x1", "10", "—", "—", "open"]
+            ["open", "10", "—", "—", "open", "addr=0x80"]
         );
         let mut doc = Document::new();
         let panel = crate::panels::PanelId(1);
@@ -4132,7 +4170,7 @@ mod tests {
         assert_eq!(model.selected_ordinal(), Some(899));
         assert_eq!(
             model.copy_tsv().unwrap(),
-            "Generator\tID\tBegin\tEnd\tDuration\tStatus\nsoc.request\t0x384\t3600\t3608\t8\tok"
+            "Label · vtr.label\tBegin\tDuration\tStatus\tAttributes · preview\nrow 900\t3600\t8\tok\taddr=0x80"
         );
     }
 

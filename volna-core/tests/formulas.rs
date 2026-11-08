@@ -1332,7 +1332,7 @@ fn interval_statistics_open_in_a_persistent_table() {
     table.selected = Some(volna_core::table::RowIdentity::SignalTime(8));
     assert_eq!(
         table.copy_tsv().unwrap(),
-        "Time\tresult\tEnd (ticks)\n8\t10.0\t10"
+        "Start\tresult\tEnd (ticks)\n8\t10.0\t10"
     );
     let markers = app
         .doc
@@ -1356,7 +1356,7 @@ fn interval_statistics_open_in_a_persistent_table() {
     table.selected = Some(volna_core::table::RowIdentity::SignalTime(0));
     assert_eq!(
         table.copy_tsv().unwrap(),
-        "Time\tresult\tEnd (ticks)\n0\t2.0\t3"
+        "Start\tresult\tEnd (ticks)\n0\t2.0\t3"
     );
 }
 

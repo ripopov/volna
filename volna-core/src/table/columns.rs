@@ -246,6 +246,23 @@ impl ColumnSet {
             visible: vec![true; count],
         }
     }
+    /// Source indices of visible columns in display order.
+    pub(super) fn visible_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.len()).filter_map(|position| match self {
+            Self::Transactions(columns) => {
+                let index = columns.order[position];
+                columns.entries[index].1.then_some(index)
+            }
+            Self::Signals { time, visible } => {
+                let show = if position == 0 {
+                    *time
+                } else {
+                    visible[position - 1]
+                };
+                show.then_some(position)
+            }
+        })
+    }
     #[must_use]
     pub fn transaction_visible(&self, column: TransactionColumn) -> bool {
         matches!(self, Self::Transactions(columns) if columns.visible(&column.canonical()))
