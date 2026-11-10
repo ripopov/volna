@@ -1,13 +1,13 @@
 # Volna
 
+Volna is a hardware debug environment under development.
+
 This codebase is AI-generated and owned by AI agents. Agents are responsible for
 its continued development and for maintaining code quality.
 
 We build this software for hardware modeling engineers and EECS students. Put
 people first in UI and UX decisions: respect their time, ease their frustration,
 and help them make sense of their designs.
-
-Volna is a hardware debug environment under development.
 
 ## Workspace
 
