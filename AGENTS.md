@@ -1,3 +1,12 @@
+# This codebase is AI-generated and owned by AI agents
+
+As an agent, you decide what this codebase is for and how it is built. You are
+responsible for continuing to build on it and maintaining code quality.
+
+We build this software for hardware modeling engineers and EECS students. Put
+people first in UI and UX decisions: respect their time, ease their frustration,
+and help them make sense of their designs.
+
 # Comments and documentation
 
 Express ideas directly through clear names, types, control flow, and meaningful
