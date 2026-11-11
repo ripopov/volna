@@ -1,5 +1,9 @@
 //! Raw transaction records and catalog.
 
+pub mod comparison;
+mod shared;
+pub use shared::SharedValue;
+
 use serde::{Deserialize, Serialize};
 pub use vtr::{SpanKind, Status};
 
@@ -11,7 +15,7 @@ pub struct TransactionRef(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TrackRef(pub u32);
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AttributeValue {
     Null,
     Bool(bool),
@@ -41,6 +45,95 @@ pub enum AttributeValue {
     },
     List(Vec<AttributeValue>),
     Map(Attributes),
+    Shared(SharedValue),
+}
+
+impl PartialEq for AttributeValue {
+    fn eq(&self, other: &Self) -> bool {
+        use comparison::{Comparison, References, Step};
+        if !matches!(self, Self::List(_) | Self::Map(_) | Self::Shared(_)) {
+            return self.scalar_eq(other);
+        }
+        Comparison::new(self, other, References::Preserve).all(|step| match step {
+            Step::Value(a, b) => a.scalar_eq(b),
+            Step::Key(a, b) => a == b,
+            Step::Length(a, b) => a == b,
+            Step::Progress => true,
+        })
+    }
+}
+
+impl AttributeValue {
+    #[must_use]
+    pub fn shared(value: Self) -> Self {
+        Self::Shared(SharedValue::new(value))
+    }
+
+    fn scalar_eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::I64(a), Self::I64(b)) => a == b,
+            (Self::U64(a), Self::U64(b))
+            | (Self::Time(a), Self::Time(b))
+            | (Self::Pointer(a), Self::Pointer(b)) => a == b,
+            (Self::F64(a), Self::F64(b)) => a == b,
+            (Self::Text(a), Self::Text(b)) => a == b,
+            (Self::Bytes(a), Self::Bytes(b)) => a == b,
+            (
+                Self::Logic {
+                    width: a_width,
+                    states: a_states,
+                    data: a,
+                },
+                Self::Logic {
+                    width: b_width,
+                    states: b_states,
+                    data: b,
+                },
+            ) => a_width == b_width && a_states == b_states && a == b,
+            (
+                Self::Enum {
+                    value: a,
+                    name: a_name,
+                },
+                Self::Enum {
+                    value: b,
+                    name: b_name,
+                },
+            ) => a == b && a_name == b_name,
+            (
+                Self::Fixed {
+                    raw: a,
+                    scale: a_scale,
+                },
+                Self::Fixed {
+                    raw: b,
+                    scale: b_scale,
+                },
+            ) => a == b && a_scale == b_scale,
+            (
+                Self::UFixed {
+                    raw: a,
+                    scale: a_scale,
+                },
+                Self::UFixed {
+                    raw: b,
+                    scale: b_scale,
+                },
+            ) => a == b && a_scale == b_scale,
+            _ => false,
+        }
+    }
+
+    #[must_use]
+    pub fn resolved(&self) -> &Self {
+        let mut value = self;
+        while let Self::Shared(shared) = value {
+            value = shared;
+        }
+        value
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +159,8 @@ pub enum AttributeType {
 impl AttributeType {
     #[must_use]
     pub fn of(value: &AttributeValue) -> Self {
-        match value {
+        match value.resolved() {
+            AttributeValue::Shared(_) => unreachable!("resolved value"),
             AttributeValue::Null => Self::Null,
             AttributeValue::Bool(_) => Self::Bool,
             AttributeValue::I64(_) => Self::I64,

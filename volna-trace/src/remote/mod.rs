@@ -1,6 +1,7 @@
 //! Raw complete-object transport.
 
 pub mod activity;
+mod attributes;
 pub mod client;
 mod decode;
 mod equality;

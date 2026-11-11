@@ -276,6 +276,163 @@ fn same_value(a: WaveValue, b: WaveValue) {
 }
 
 #[test]
+fn remote_open_and_tracks_preserve_compact_shared_graphs_within_object_limits() {
+    use std::sync::Arc;
+    use volna_trace::data::transactions::AttributeValue;
+    use volna_trace::session::LoadRequest;
+    use vtr::{Attribute, Value};
+
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let key = writer.intern("description").unwrap();
+    let mask = writer.intern("mask").unwrap();
+    let data = writer
+        .intern_value(Value::Bytes(vec![0x5a; 64 * 1024]))
+        .unwrap();
+    let mut chain = data;
+    for _ in 0..80 {
+        chain = writer
+            .intern_value(Value::List(vec![Value::Ref(chain)]))
+            .unwrap();
+    }
+    let mut graph = writer.intern_value(Value::U64(u64::MAX)).unwrap();
+    for _ in 0..16 {
+        graph = writer
+            .intern_value(Value::List(vec![Value::Ref(graph); 2]))
+            .unwrap();
+    }
+    let description = writer
+        .intern_value(Value::List(vec![
+            Value::Ref(data),
+            Value::Ref(chain),
+            Value::Ref(graph),
+        ]))
+        .unwrap();
+    let attributes = vec![Attribute {
+        key,
+        value: Value::Ref(description),
+    }];
+    let mut options = vtr::SourceOptions::new("instructions", None);
+    options.attributes = attributes.clone();
+    let source = writer.transactions::<()>(options, "INSTRUCTION").unwrap();
+    for time in 0..128 {
+        let tx = writer.begin_at(source, time, &(), None).unwrap();
+        writer
+            .attribute(tx.owner(), key, Value::Ref(description))
+            .unwrap();
+        writer
+            .attribute(tx.owner(), mask, Value::U64(1 << (time % 32)))
+            .unwrap();
+        writer
+            .embedded_event(tx.owner(), time, key, attributes.clone())
+            .unwrap();
+        writer
+            .embedded_stage(tx.owner(), time, key, 0, Some(time + 1), attributes.clone())
+            .unwrap();
+        writer.end_at(tx, time + 1, vtr::Status::Ok).unwrap();
+        writer
+            .relate(key, tx.id(), tx.id(), attributes.clone())
+            .unwrap();
+    }
+    writer.close().unwrap();
+
+    fn check(value: &AttributeValue) {
+        let AttributeValue::List(parts) = value.resolved() else {
+            panic!("description type");
+        };
+        let AttributeValue::Bytes(bytes) = parts[0].resolved() else {
+            panic!("byte type");
+        };
+        assert_eq!(bytes.len(), 64 * 1024);
+        assert!(bytes.iter().all(|byte| *byte == 0x5a));
+        let mut chain = &parts[1];
+        for _ in 0..80 {
+            let AttributeValue::List(items) = chain.resolved() else {
+                panic!("chain type");
+            };
+            assert_eq!(items.len(), 1);
+            chain = &items[0];
+        }
+        assert_eq!(chain.resolved(), parts[0].resolved());
+        let mut graph = &parts[2];
+        for _ in 0..16 {
+            let AttributeValue::List(items) = graph.resolved() else {
+                panic!("graph type");
+            };
+            assert_eq!(items.len(), 2);
+            let (AttributeValue::Shared(a), AttributeValue::Shared(b)) = (&items[0], &items[1])
+            else {
+                panic!("shared children");
+            };
+            assert!(a.ptr_eq(b));
+            graph = &items[0];
+        }
+        assert_eq!(graph.resolved(), &AttributeValue::U64(u64::MAX));
+    }
+
+    let mut server = Server::start(file.path());
+    let budget = MemoryBudget::new(4 * 1024 * 1024);
+    let mut client = RemoteClient::new(0, 10, 1024 * 1024, budget.clone()).unwrap();
+    let LoadResult::Opened { result, .. } = server.drive(&mut client) else {
+        panic!("open");
+    };
+    let session = result.unwrap();
+    check(&session.tracks()[0].attributes[0].1);
+    assert!(
+        client
+            .submit(LoadRequest::Track {
+                tag: 0,
+                session: session.clone(),
+                generation: 10,
+                request_id: 1,
+                track: TrackRef(source.id())
+            })
+            .is_ok()
+    );
+    let LoadResult::Track { result, .. } = server.drive(&mut client) else {
+        panic!("track");
+    };
+    let loaded = result.unwrap();
+    assert_eq!(loaded.generators[0].transactions().len(), 128);
+    let first = &loaded.generators[0].transactions()[0].attributes[0].value;
+    for row in loaded.generators[0].transactions() {
+        check(&row.attributes[0].value);
+        assert_eq!(
+            row.attributes[1].value,
+            AttributeValue::U64(1 << (row.begin % 32))
+        );
+        for value in [
+            &row.attributes[0].value,
+            &row.events[0].attributes[0].1,
+            &row.stages[0].attributes[0].1,
+        ] {
+            let (AttributeValue::Shared(a), AttributeValue::Shared(b)) = (first, value) else {
+                panic!("shared description");
+            };
+            assert!(a.ptr_eq(b));
+        }
+    }
+    for relation in loaded.generators[0].relations() {
+        let (AttributeValue::Shared(a), AttributeValue::Shared(b)) =
+            (first, &relation.relation.attributes[0].1)
+        else {
+            panic!("shared relation");
+        };
+        assert!(a.ptr_eq(b));
+    }
+    let retained = Arc::clone(&loaded.generators[0]);
+    drop(loaded);
+    drop(session);
+    drop(client);
+    server.close();
+    assert!(budget.used() >= 64 * 1024);
+    assert!(budget.used() < 1024 * 1024);
+    check(&retained.transactions()[0].attributes[0].value);
+    drop(retained);
+    assert_eq!(budget.used(), 0);
+}
+
+#[test]
 fn foreign_recordings_return_an_actionable_open_error() {
     let dir = tempfile::tempdir().unwrap();
     for bytes in [
@@ -620,4 +777,165 @@ fn activity_sidecars_are_raw_cached_objects_shared_between_processes() {
         first.close();
         second.close();
     }
+}
+
+#[test]
+fn deep_shared_values_close_after_local_remote_and_concurrent_owners_release() {
+    const CHILD_DIRECTORY: &str = "VOLNA_TEST_SHARED_TEARDOWN_DIRECTORY";
+    const LEVELS: usize = 100_000;
+    let Some(directory) = std::env::var_os(CHILD_DIRECTORY) else {
+        let directory = tempfile::tempdir().unwrap();
+        let mut child = Process::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "deep_shared_values_close_after_local_remote_and_concurrent_owners_release",
+                "--nocapture",
+            ])
+            .env(CHILD_DIRECTORY, directory.path())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while child.try_wait().unwrap().is_none() {
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                let output = child.wait_with_output().unwrap();
+                panic!(
+                    "shared teardown exceeded its deadline: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "shared teardown child failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    };
+    use std::sync::{Arc, Barrier};
+    use volna_trace::{
+        data::transactions::AttributeValue,
+        session::{LoadRequest, LocalSession, Session},
+    };
+    use vtr::{Attribute, SourceOptions, Status, Value, Writer};
+
+    fn check(mut value: &AttributeValue, levels: usize) {
+        for _ in 0..levels {
+            let AttributeValue::List(values) = value.resolved() else {
+                panic!("description structure changed");
+            };
+            assert_eq!(values.len(), 1);
+            value = &values[0];
+        }
+        assert!(matches!(value.resolved(), AttributeValue::U64(1)));
+    }
+
+    let path = std::path::PathBuf::from(directory).join("deep.vtr");
+    let mut writer = Writer::create(&path).unwrap();
+    let key = writer.intern("description").unwrap();
+    let mut value = writer.intern_value(Value::U64(1)).unwrap();
+    for _ in 0..LEVELS {
+        value = writer
+            .intern_value(Value::List(vec![Value::Ref(value)]))
+            .unwrap();
+    }
+    let mut options = SourceOptions::new("instructions", None);
+    options.attributes = vec![Attribute {
+        key,
+        value: Value::Ref(value),
+    }];
+    let source = writer.transactions::<()>(options, "INSTRUCTION").unwrap();
+    let tx = writer.begin_at(source, 0, &(), None).unwrap();
+    writer
+        .attribute(tx.owner(), key, Value::Ref(value))
+        .unwrap();
+    writer.end_at(tx, 1, Status::Ok).unwrap();
+    writer.close().unwrap();
+
+    let session = LocalSession::open(&path).unwrap();
+    check(&session.tracks()[0].attributes[0].1, LEVELS);
+    drop(session);
+    println!("closed local recording");
+
+    let session = LocalSession::open(&path).unwrap();
+    let loaded = session.load_track(TrackRef(source.id())).unwrap();
+    let retained = loaded.generators[0].transactions()[0].attributes[0]
+        .value
+        .clone();
+    drop(loaded);
+    drop(session);
+    check(&retained, LEVELS);
+    drop(retained);
+    println!("released retained description");
+
+    let mut server = Server::start(&path);
+    let budget = MemoryBudget::new(128 << 20);
+    let mut client = RemoteClient::new(0, 10, 4 << 20, budget.clone()).unwrap();
+    let LoadResult::Opened { result, .. } = server.drive(&mut client) else {
+        panic!("open");
+    };
+    let session = result.unwrap();
+    check(&session.tracks()[0].attributes[0].1, LEVELS);
+    assert!(
+        client
+            .submit(LoadRequest::Track {
+                tag: 0,
+                session: session.clone(),
+                generation: 10,
+                request_id: 1,
+                track: TrackRef(source.id())
+            })
+            .is_ok()
+    );
+    let LoadResult::Track { result, .. } = server.drive(&mut client) else {
+        panic!("track");
+    };
+    let loaded = result.unwrap();
+    let retained = Arc::clone(&loaded.generators[0]);
+    drop(loaded);
+    drop(session);
+    drop(client);
+    server.close();
+    assert!(budget.used() > 0);
+    check(&retained.transactions()[0].attributes[0].value, LEVELS);
+    drop(retained);
+    assert_eq!(budget.used(), 0);
+    println!("closed remote recording and released its retained generator");
+
+    let mut value = AttributeValue::U64(1);
+    for level in 0..LEVELS {
+        value = match level % 3 {
+            0 => AttributeValue::shared(AttributeValue::Map(vec![
+                ("previous".into(), value),
+                ("sibling".into(), AttributeValue::Text("kept".into())),
+            ])),
+            1 => AttributeValue::shared(AttributeValue::List(vec![
+                AttributeValue::Bool(true),
+                value,
+            ])),
+            _ => AttributeValue::shared(value),
+        };
+    }
+    let barrier = Arc::new(Barrier::new(9));
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let value = value.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                drop(value);
+            })
+        })
+        .collect();
+    drop(value);
+    barrier.wait();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    println!("released concurrent map, list, and alias owners");
 }

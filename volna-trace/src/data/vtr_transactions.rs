@@ -2,10 +2,10 @@
 
 use super::loaded_tracks::{LoadedGenerator, LoadedRelation, LoadedTrack, TransactionLocation};
 use super::transactions::{
-    AttributeValue, Attributes, DEFAULT_LANE, Relation, Track, TrackRef, Transaction,
+    AttributeValue, Attributes, DEFAULT_LANE, Relation, SharedValue, Track, TrackRef, Transaction,
     TransactionAttribute, TransactionEvent, TransactionRef, TransactionStage,
 };
-use super::vtr_source::LocalSession;
+use super::vtr_source::{LocalReader, LocalSession};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use vtr::{NodeData, Reader, Value, schema::TypeKind};
@@ -153,8 +153,17 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
     })
 }
 
-pub(super) fn value(reader: &Reader, value: &Value) -> AttributeValue {
+pub(super) fn value(reader: &LocalReader, value: &Value) -> AttributeValue {
+    project_value(reader, &reader.values, value)
+}
+
+pub(super) fn project_value(
+    reader: &Reader,
+    shared: &[SharedValue],
+    value: &Value,
+) -> AttributeValue {
     match value {
+        Value::Ref(id) => AttributeValue::Shared(shared[id.0 as usize].clone()),
         Value::Null => AttributeValue::Null,
         Value::Bool(x) => AttributeValue::Bool(*x),
         Value::I8(x) => AttributeValue::I64(i64::from(*x)),
@@ -202,14 +211,24 @@ pub(super) fn value(reader: &Reader, value: &Value) -> AttributeValue {
         Value::List(values) => AttributeValue::List(
             values
                 .iter()
-                .map(|item| self::value(reader, item))
+                .map(|item| project_value(reader, shared, item))
                 .collect(),
         ),
-        Value::Map(values) => AttributeValue::Map(attributes(reader, values)),
+        Value::Map(values) => AttributeValue::Map(
+            values
+                .iter()
+                .map(|attr| {
+                    (
+                        reader.string(attr.key).expect("attribute name").into(),
+                        project_value(reader, shared, &attr.value),
+                    )
+                })
+                .collect(),
+        ),
     }
 }
 
-pub(super) fn attributes(reader: &Reader, attrs: &[vtr::Attribute]) -> Attributes {
+pub(super) fn attributes(reader: &LocalReader, attrs: &[vtr::Attribute]) -> Attributes {
     attrs
         .iter()
         .map(|attr| {
@@ -221,7 +240,7 @@ pub(super) fn attributes(reader: &Reader, attrs: &[vtr::Attribute]) -> Attribute
         .collect()
 }
 
-pub(super) fn tracks(reader: &Reader) -> Vec<Track> {
+pub(super) fn tracks(reader: &LocalReader) -> Vec<Track> {
     reader
         .declarations()
         .nodes
@@ -257,7 +276,7 @@ fn spend(budget: &mut usize, bytes: usize) -> anyhow::Result<()> {
 }
 
 fn payload_value(
-    reader: &Reader,
+    reader: &LocalReader,
     payload: &vtr::PayloadView,
     budget: &mut usize,
 ) -> anyhow::Result<AttributeValue> {
@@ -326,10 +345,10 @@ fn payload_value(
 
 use anyhow::Context as _;
 
-fn record_label(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Option<String>> {
+fn record_label(reader: &LocalReader, record: &vtr::Record) -> anyhow::Result<Option<String>> {
     for attr in record.attributes() {
         if reader.string(attr.key)? == "vtr.label" {
-            match &attr.value {
+            match reader.resolve_value(&attr.value)? {
                 Value::Text(label) => return Ok(Some(label.clone())),
                 Value::Str(label) => return Ok(Some(reader.string(*label)?.to_owned())),
                 _ => {}
@@ -357,13 +376,13 @@ fn record_label(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Option<
 }
 
 fn record_attributes(
-    reader: &Reader,
+    reader: &LocalReader,
     record: &vtr::Record,
 ) -> anyhow::Result<Vec<TransactionAttribute>> {
     let mut attrs: Vec<_> = attributes(reader, record.attributes())
         .into_iter()
         .map(|(key, value)| TransactionAttribute {
-            key: if key == "vtr.label" && matches!(value, AttributeValue::Text(_)) {
+            key: if key == "vtr.label" && matches!(value.resolved(), AttributeValue::Text(_)) {
                 key
             } else {
                 format!("attributes.{key}")
@@ -400,7 +419,7 @@ fn record_attributes(
     match payload_value(reader, &payload, &mut budget)? {
         AttributeValue::Map(fields) => {
             attrs.extend(fields.into_iter().map(|(key, value)| TransactionAttribute {
-                key: if key == "vtr.label" && matches!(value, AttributeValue::Text(_)) {
+                key: if key == "vtr.label" && matches!(value.resolved(), AttributeValue::Text(_)) {
                     key
                 } else {
                     format!("payload.{key}")
@@ -439,7 +458,7 @@ fn record_attributes(
     Ok(attrs)
 }
 
-fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transaction> {
+fn transaction(reader: &LocalReader, record: &vtr::Record) -> anyhow::Result<Transaction> {
     let attrs = record_attributes(reader, record)?;
     let mut transaction = Transaction {
         id: TransactionRef(record.id()),
@@ -533,7 +552,7 @@ fn transaction(reader: &Reader, record: &vtr::Record) -> anyhow::Result<Transact
     Ok(transaction)
 }
 
-fn relation(reader: &Reader, edge: vtr::Relation) -> Relation {
+fn relation(reader: &LocalReader, edge: vtr::Relation) -> Relation {
     Relation {
         kind: reader.string(edge.kind).expect("relation kind").into(),
         from: TransactionRef(edge.source),

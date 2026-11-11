@@ -150,11 +150,45 @@ fn values(a: ValueView<'_>, b: ValueView<'_>) -> (Ordering, bool) {
 }
 
 fn attributes(a: &AttributeValue, b: &AttributeValue) -> (Ordering, bool) {
+    use volna_trace::data::transactions::comparison::{Comparison, References, Step};
+    let a = a.resolved();
+    let b = b.resolved();
+    let missing = (
+        matches!(a, AttributeValue::Null),
+        matches!(b, AttributeValue::Null),
+    );
+    // Total ordering is reflexive even for NaNs, unlike ordinary float equality.
+    if std::ptr::eq(a, b) {
+        return nullable(missing, Ordering::Equal);
+    }
+    if !matches!(
+        (a, b),
+        (AttributeValue::List(_), AttributeValue::List(_))
+            | (AttributeValue::Map(_), AttributeValue::Map(_))
+    ) {
+        return nullable(missing, scalar_attributes(a, b));
+    }
+    let order = Comparison::new(a, b, References::Resolve)
+        .find_map(|step| {
+            let order = match step {
+                Step::Value(a, b) => scalar_attributes(a, b),
+                Step::Key(a, b) => a.cmp(b),
+                Step::Length(a, b) => a.cmp(&b),
+                Step::Progress => Ordering::Equal,
+            };
+            (order != Ordering::Equal).then_some(order)
+        })
+        .unwrap_or(Ordering::Equal);
+    nullable(missing, order)
+}
+
+fn scalar_attributes(a: &AttributeValue, b: &AttributeValue) -> Ordering {
     use AttributeValue::{
         Bool, Bytes, Enum, F64, Fixed, I64, List, Logic, Map, Null, Pointer, Text, Time, U64,
         UFixed,
     };
     let tag = |a: &AttributeValue| match a {
+        AttributeValue::Shared(_) => unreachable!("resolved value"),
         Null => 0,
         Bool(_) => 1,
         I64(_) => 2,
@@ -171,7 +205,7 @@ fn attributes(a: &AttributeValue, b: &AttributeValue) -> (Ordering, bool) {
         List(_) => 13,
         Map(_) => 14,
     };
-    let order = tag(a).cmp(&tag(b)).then_with(|| match (a, b) {
+    tag(a).cmp(&tag(b)).then_with(|| match (a, b) {
         (Bool(a), Bool(b)) => a.cmp(b),
         (I64(a), I64(b)) => a.cmp(b),
         (U64(a), U64(b)) | (Time(a), Time(b)) | (Pointer(a), Pointer(b)) => a.cmp(b),
@@ -207,13 +241,8 @@ fn attributes(a: &AttributeValue, b: &AttributeValue) -> (Ordering, bool) {
         (UFixed { raw: a, scale: sa }, UFixed { raw: b, scale: sb }) => {
             decimal(i128::from(*a), *sa, i128::from(*b), *sb)
         }
-        (List(a), List(b)) => sequence(a.iter(), b.iter(), |a, b| attributes(a, b).0),
-        (Map(a), Map(b)) => sequence(a.iter(), b.iter(), |a, b| {
-            a.0.cmp(&b.0).then_with(|| attributes(&a.1, &b.1).0)
-        }),
         _ => Ordering::Equal,
-    });
-    nullable((matches!(a, Null), matches!(b, Null)), order)
+    })
 }
 
 fn decimal(a: i128, scale_a: i64, b: i128, scale_b: i64) -> Ordering {

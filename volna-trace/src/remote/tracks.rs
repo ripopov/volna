@@ -1,8 +1,8 @@
 //! Cooperative decoding of complete transaction payloads.
 
+use super::attributes::{Values, attribute, attributes};
 use super::decode::{Decoder, Reader, Step};
 use super::memory::MemoryBudget;
-use super::metadata::{attribute, attributes};
 use super::objects::{GeneratorPayload, TrackPayload};
 use crate::data::loaded_tracks::LoadedTrack;
 use crate::data::loaded_tracks::{LoadedRelation, TransactionLocation};
@@ -34,7 +34,10 @@ impl TrackDecoder {
             budget,
             move |reader| {
                 Box::pin(async move {
-                    let payload = payload(&reader).await?;
+                    let before = reader.charged();
+                    let values = Values::read(&reader).await?;
+                    let shared = Arc::new(reader.take_since(before)?);
+                    let payload = payload(&reader, &values).await?;
                     let mut workspace = session
                         .tracks()
                         .len()
@@ -51,9 +54,15 @@ impl TrackDecoder {
                             .ok_or_else(|| anyhow::anyhow!("track workspace size overflow"))?;
                     }
                     reader.charge(workspace)?;
-                    payload
+                    let mut loaded = payload
                         .into_loaded(session.tracks(), || reader.checkpoint())
-                        .await
+                        .await?;
+                    for generator in &mut loaded.generators {
+                        Arc::get_mut(generator)
+                            .expect("unpublished generator")
+                            .shared_reservation = Some(Arc::clone(&shared));
+                    }
+                    Ok(loaded)
                 })
             },
         )?))
@@ -78,7 +87,7 @@ async fn optional_track(r: &Reader) -> anyhow::Result<Option<TrackRef>> {
     })
 }
 
-async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
+async fn payload(r: &Reader, values: &Values) -> anyhow::Result<TrackPayload> {
     Ok(TrackPayload {
         track: TrackRef(r.u32().await?),
         generators: r
@@ -87,7 +96,7 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
                 let mut generator = GeneratorPayload {
                     reservation: None,
                     generator: TrackRef(r.u32().await?),
-                    transactions: r.vector(55, || transaction(r)).await?,
+                    transactions: r.vector(55, || transaction(r, values)).await?,
                     parents: r
                         .vector(20, || async {
                             Ok((
@@ -114,7 +123,7 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
                                     kind: r.string().await?,
                                     from: TransactionRef(r.u64().await?),
                                     to: TransactionRef(r.u64().await?),
-                                    attributes: attributes(r, 0).await?,
+                                    attributes: attributes(r, values, 0).await?,
                                 },
                             })
                         })
@@ -159,7 +168,7 @@ async fn payload(r: &Reader) -> anyhow::Result<TrackPayload> {
     })
 }
 
-async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
+async fn transaction(r: &Reader, values: &Values) -> anyhow::Result<Transaction> {
     Ok(Transaction {
         id: TransactionRef(r.u64().await?),
         generator: TrackRef(r.u32().await?),
@@ -176,7 +185,7 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
             .vector(13, || async {
                 Ok(TransactionAttribute {
                     key: r.string().await?,
-                    value: attribute(r, 0).await?,
+                    value: attribute(r, values, 0).await?,
                 })
             })
             .await?,
@@ -189,7 +198,7 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
                     generator: optional_track(r).await?,
                     time: r.u64().await?,
                     name: r.string().await?,
-                    attributes: attributes(r, 0).await?,
+                    attributes: attributes(r, values, 0).await?,
                 })
             })
             .await?,
@@ -207,7 +216,7 @@ async fn transaction(r: &Reader) -> anyhow::Result<Transaction> {
                     } else {
                         None
                     },
-                    attributes: attributes(r, 0).await?,
+                    attributes: attributes(r, values, 0).await?,
                 })
             })
             .await?,
@@ -373,9 +382,9 @@ mod tests {
     fn invalid_status_truncation_and_oversized_collections_are_rejected() {
         let valid = bincode::serialize(&sample()).unwrap();
         let mut bad_status = valid.clone();
-        bad_status[52] = 255;
+        bad_status[60] = 255;
         let mut bad_count = valid.clone();
-        bad_count[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
+        bad_count[24..32].copy_from_slice(&u64::MAX.to_le_bytes());
         for bytes in [bad_status, bad_count, valid[..valid.len() - 1].to_vec()] {
             let budget = MemoryBudget::new(8 * 1024 * 1024);
             let mut decoder =

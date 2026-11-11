@@ -919,3 +919,123 @@ fn copy_selection_follows_row_identity_through_sorting_and_filtering() {
         "Time\tSeverity\tMessage\n20\tinfo (2)\tmessage: alpha\n30\terror (4)\tmessage: omega"
     );
 }
+
+#[test]
+fn shared_descriptions_sort_stably_and_filter_without_expanding_the_graph() {
+    use vtr::{Attribute, Recorder, SourceOptions, Status, Value, Writer};
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let mut writer = Writer::create(file.path()).unwrap();
+    let description = writer.intern("description").unwrap();
+    let prefix_key = writer.intern("prefix").unwrap();
+    let rank_key = writer.intern("rank").unwrap();
+    let mut prefix = writer
+        .intern_value(Value::Text("shared leaf".into()))
+        .unwrap();
+    for _ in 0..64 {
+        prefix = writer
+            .intern_value(Value::List(vec![Value::Ref(prefix); 2]))
+            .unwrap();
+    }
+    let ranks = [
+        f64::from_bits(0x7ff8_0000_0000_0002),
+        0.0,
+        f64::NEG_INFINITY,
+        -0.0,
+        f64::from_bits(0x7ff8_0000_0000_0001),
+        f64::INFINITY,
+        1.0,
+    ];
+    let descriptions: Vec<_> = ranks
+        .iter()
+        .map(|rank| {
+            writer
+                .intern_value(Value::Map(vec![
+                    Attribute {
+                        key: prefix_key,
+                        value: Value::Ref(prefix),
+                    },
+                    Attribute {
+                        key: rank_key,
+                        value: Value::F64(*rank),
+                    },
+                ]))
+                .unwrap()
+        })
+        .collect();
+    let source = writer
+        .transactions::<()>(SourceOptions::new("instructions", None), "INSTRUCTION")
+        .unwrap();
+    for time in 0..64 {
+        let tx = writer.begin_at(source, time, &(), None).unwrap();
+        writer
+            .attribute(
+                tx.owner(),
+                description,
+                Value::Ref(descriptions[time as usize % ranks.len()]),
+            )
+            .unwrap();
+        writer.end_at(tx, time + 1, Status::Ok).unwrap();
+    }
+    writer.close().unwrap();
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
+    app.handle(Command::OpenTable {
+        selected: a_all(vec![Member::Generator(0)]),
+        clicked: None,
+    });
+    let panel = app.panels.focused_id();
+    complete_pending(&mut app);
+    let attribute = TransactionColumn::Attribute("attributes.description".into());
+    app.handle(Command::Table(
+        panel,
+        TableCommand::ShowTransactionColumn(attribute.clone()),
+    ));
+    frame(&mut app, panel);
+    let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+    let column = table
+        .layout
+        .columns
+        .iter()
+        .find(|column| table.transaction_column(column.source_index) == Some(&attribute))
+        .unwrap()
+        .source_index;
+    // Input positions 2, 3, 1, 6, 5, 4, 0 correspond to the recorded total float order.
+    let order = [2, 3, 1, 6, 5, 4, 0];
+    for descending in [false, true] {
+        app.handle(Command::Table(panel, TableCommand::SortColumn(column)));
+        finish_query(&mut app, panel);
+        let table = app.panels.get(panel).unwrap().kind.table().unwrap();
+        let mut ordered = order.to_vec();
+        if descending {
+            ordered.reverse();
+        }
+        let expected: Vec<_> = ordered
+            .into_iter()
+            .flat_map(|rank| (0..64u64).filter(move |time| *time as usize % ranks.len() == rank))
+            .map(Some)
+            .collect();
+        assert_eq!(
+            (0..table.len())
+                .map(|row| table.row_time(row))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    for (query, expected) in [("absent leaf", 0), ("shared leaf", 64), ("rank", 64)] {
+        app.handle(Command::Table(
+            panel,
+            TableCommand::SetFilter {
+                source_index: column,
+                filter: Some(volna_core::table::filter::ColumnFilter {
+                    query: query.into(),
+                    ..Default::default()
+                }),
+            },
+        ));
+        finish_query(&mut app, panel);
+        assert_eq!(
+            app.panels.get(panel).unwrap().kind.table().unwrap().len(),
+            expected
+        );
+    }
+}

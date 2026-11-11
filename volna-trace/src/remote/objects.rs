@@ -117,9 +117,8 @@ impl Metadata {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct GeneratorPayload {
-    #[serde(skip)]
     pub(super) reservation: Option<super::memory::Reservation>,
     pub generator: TrackRef,
     pub transactions: Vec<Transaction>,
@@ -128,49 +127,73 @@ pub struct GeneratorPayload {
     pub relations: Vec<LoadedRelation>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct TrackPayload {
     pub track: TrackRef,
     pub generators: Vec<GeneratorPayload>,
 }
 
+impl Serialize for TrackPayload {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut table = super::attributes::Table::default();
+        for generator in &self.generators {
+            table.collect_transactions(&generator.transactions, &generator.relations);
+        }
+        (&table, self.track, table.wrap(self.generators.as_slice())).serialize(serializer)
+    }
+}
+
+pub(super) struct GeneratorView<'a> {
+    pub source: &'a LoadedGenerator,
+    pub parents: Vec<(TransactionRef, TransactionLocation)>,
+    pub labels: Vec<(TransactionRef, &'a str)>,
+}
+
+struct TrackView<'a> {
+    table: super::attributes::Table<'a>,
+    track: TrackRef,
+    generators: Vec<GeneratorView<'a>>,
+}
+
+impl Serialize for TrackView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (
+            &self.table,
+            self.track,
+            self.table.wrap(self.generators.as_slice()),
+        )
+            .serialize(serializer)
+    }
+}
+
 impl TrackPayload {
     #[must_use]
     pub fn from_loaded(track: &LoadedTrack) -> impl Serialize + '_ {
-        #[derive(Serialize)]
-        struct Generator<'a> {
-            generator: TrackRef,
-            transactions: &'a [Transaction],
-            parents: Vec<(TransactionRef, TransactionLocation)>,
-            parent_labels: Vec<(TransactionRef, &'a str)>,
-            relations: &'a [LoadedRelation],
-        }
-        #[derive(Serialize)]
-        struct Track<'a> {
-            track: TrackRef,
-            generators: Vec<Generator<'a>>,
-        }
-        Track {
-            track: track.track,
-            generators: track
-                .generators
-                .iter()
-                .map(|generator| Generator {
-                    generator: generator.generator(),
-                    transactions: generator.transactions(),
+        let mut table = super::attributes::Table::default();
+        let generators = track
+            .generators
+            .iter()
+            .map(|generator| {
+                table.collect_transactions(generator.transactions(), generator.relations());
+                GeneratorView {
+                    source: generator,
                     parents: generator
                         .transactions()
                         .iter()
-                        .filter_map(|tx| generator.parent(tx.id).map(|p| (tx.id, p)))
+                        .filter_map(|tx| generator.parent(tx.id).map(|parent| (tx.id, parent)))
                         .collect(),
-                    parent_labels: generator
+                    labels: generator
                         .parent_labels()
                         .iter()
                         .map(|(&id, label)| (id, label.as_str()))
                         .collect(),
-                    relations: generator.relations(),
-                })
-                .collect(),
+                }
+            })
+            .collect();
+        TrackView {
+            table,
+            track: track.track,
+            generators,
         }
     }
 

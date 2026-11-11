@@ -86,6 +86,27 @@ arrays and sequences remain lists. Logs also expose formatted `log.message`
 text, or bytes when the result is not UTF-8. Payload projection has a 64 MiB
 allocation limit, including collection storage for zero-size elements.
 
+Local loading projects each interned VTR value once. Attributes retain it through
+`AttributeValue::Shared`; `resolved()` exposes its underlying type. Loaded tracks
+retain shared values after the session closes, and retained-byte accounting
+counts each shared allocation once per loaded generator. Remote metadata and
+track objects carry their own shared-value tables, preserving the graph and typed
+content without expanding each occurrence. Transport IDs are local to an object
+and are independent of VTR value IDs.
+
+`Shared` contains a `SharedValue` owner; `AttributeValue::shared(value)` constructs
+one. Cloning retains the same immutable value, and `SharedValue::ptr_eq` checks
+that identity. The final owner releases nested lists, maps, and shared references
+iteratively, including when values outlive the reader or their final clones are
+dropped on different threads. This ownership wrapper does not change serialized
+value content or the remote protocol.
+
+Value equality compares shared graphs iteratively and remembers compared pairs.
+It preserves wrapper boundaries and ordinary float equality, including unequal
+NaNs and equal signed zeros. `transactions::comparison` exposes the traversal
+for callers with different scalar rules; sorting and remote validation resolve
+references and apply their existing total-order or bitwise float semantics.
+
 A text payload field or record attribute named `vtr.label` supplies the
 canonical `vtr.label` instance label used by the viewer, including labels set
 by VTR’s tracker. VTR rejects attributes that duplicate payload field names.
@@ -140,7 +161,7 @@ and generations identify completions without entering the wire protocol.
 `RemoteClient`, rather than their blocking local query methods.
 
 The [server guide](../volna-server/README.md) describes process hosting and
-protocol version 15. Local and remote objects have the same data contract;
+protocol version 17. Local and remote objects have the same data contract;
 transport carries runtime facts. Viewport state, search, value translation,
 transaction layout, VDB design semantics, and annotations belong to consumers.
 

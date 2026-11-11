@@ -597,7 +597,8 @@ fn kind_name(kind: SpanKind) -> Option<&'static str> {
 }
 
 fn value_kind(value: &AttributeValue) -> &'static str {
-    match value {
+    match value.resolved() {
+        AttributeValue::Shared(_) => unreachable!("resolved value"),
         AttributeValue::Null => "null",
         AttributeValue::Bool(_) => "bool",
         AttributeValue::I64(_) | AttributeValue::U64(_) => "int",

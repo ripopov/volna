@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub const PAGE_ENTRIES: usize = 65_536;
 const SCRATCH: u64 = (super::transport::DATA_BYTES + 8192) as u64;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Header {
     pub info: TraceInfo,
     pub capabilities: Capabilities,
@@ -28,8 +28,8 @@ pub struct Header {
     pub activity: Option<super::activity::Descriptor>,
     pub server: String,
 }
-#[derive(Serialize)]
 pub struct HeaderView<'a> {
+    table: super::attributes::Table<'a>,
     info: &'a TraceInfo,
     capabilities: Capabilities,
     tracks: &'a [Track],
@@ -40,9 +40,77 @@ pub struct HeaderView<'a> {
     activity: Option<super::activity::Descriptor>,
     server: String,
 }
+impl Serialize for Header {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        HeaderView {
+            table: attribute_table(&self.tracks, &self.generators),
+            info: &self.info,
+            capabilities: self.capabilities,
+            tracks: &self.tracks,
+            generators: &self.generators,
+            enum_tables: &self.enum_tables,
+            scopes: self.scopes,
+            vars: self.vars,
+            activity: self.activity.clone(),
+            server: self.server.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl Serialize for HeaderView<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let table = &self.table;
+        if table.is_empty() {
+            return (
+                &table,
+                self.info,
+                self.capabilities,
+                self.tracks,
+                self.generators,
+                self.enum_tables,
+                self.scopes,
+                self.vars,
+                &self.activity,
+                &self.server,
+            )
+                .serialize(serializer);
+        }
+        (
+            &table,
+            self.info,
+            self.capabilities,
+            table.wrap(self.tracks),
+            table.wrap(self.generators),
+            self.enum_tables,
+            self.scopes,
+            self.vars,
+            &self.activity,
+            &self.server,
+        )
+            .serialize(serializer)
+    }
+}
+
+fn attribute_table<'a>(
+    tracks: &'a [Track],
+    generators: &'a [Generator],
+) -> super::attributes::Table<'a> {
+    let mut table = super::attributes::Table::default();
+    for attrs in tracks
+        .iter()
+        .map(|track| &track.attributes)
+        .chain(generators.iter().map(|generator| &generator.attributes))
+    {
+        table.collect(attrs.iter().map(|(_, value)| value));
+    }
+    table
+}
+
 impl Header {
     pub fn borrowed(session: &dyn Session, server: String) -> anyhow::Result<HeaderView<'_>> {
         Ok(HeaderView {
+            table: attribute_table(session.tracks(), &session.hierarchy().generators),
             info: session.info(),
             capabilities: session.capabilities(),
             tracks: session.tracks(),

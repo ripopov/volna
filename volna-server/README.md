@@ -68,13 +68,13 @@ Files must remain unchanged throughout a session. Live recordings are unsupporte
 
 ## Framing and object limits
 
-Protocol **14** is independent of the VTR file-format version. Peers reject other
+Protocol **17** is independent of the VTR file-format version. Peers reject other
 protocol versions; there is no negotiation. Each packet has a 12-byte header:
 
 | Field | Encoding |
 | --- | --- |
 | Magic | Four bytes: `VLNA` |
-| Version | Little-endian `u32`, currently 14 |
+| Version | Little-endian `u32`, currently 17 |
 | Encoded body length | Little-endian `u32`, at most 1 MiB |
 
 The body is an independent checksummed LZ4 frame containing a fixed-width,
@@ -82,6 +82,14 @@ little-endian bincode `Packet`. Objects span `Begin`, bounded `Data` packets
 of at most 256 KiB, and `End`. The client specifies a per-object transfer limit
 at open. This bounds serialized objects, not the server's process memory.
 Track serialization borrows loaded records without keeping a second record cache.
+
+Metadata and track bodies begin with a shared attribute table: a fixed-width
+`u64` entry count followed by tagged values. Attribute tag 15 carries a `u32`
+table index. Entries may reference only earlier entries; ordinary attributes may
+reference any entry in their object's table. Lists and maps retain their inline
+nesting limit, while references do not expand that depth. Tables are rebuilt per
+object and do not expose recording-local VTR IDs. The client admits table storage
+once and retains its reservation until the last loaded generator releases it.
 
 The Rust definitions in `volna_trace::remote::transport` are the authoritative
 wire schema. The service has no viewport, presentation, search, or VDB endpoints.

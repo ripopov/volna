@@ -834,3 +834,143 @@ fn cpp_printf_fixtures_render_through_volna() {
         }
     }
 }
+
+#[test]
+fn repeated_instruction_references_load_as_typed_descriptions_and_keep_dynamic_masks() {
+    use vtr::{Attribute, Value};
+    for mode in [ExecutionMode::Inline, ExecutionMode::Threaded] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("interned.vtr");
+        let mut writer = Writer::create_with(
+            &path,
+            WriterOptions {
+                mode,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let instruction_key = writer.intern("instruction").unwrap();
+        let operation_key = writer.intern("operation").unwrap();
+        let width_key = writer.intern("width").unwrap();
+        let latency_key = writer.intern("latency").unwrap();
+        let mask_key = writer.intern("exec_mask").unwrap();
+        let label_key = writer.intern("vtr.label").unwrap();
+        let operation = writer.intern_value(Value::Text("FADD".into())).unwrap();
+        let description = writer
+            .intern_value(Value::Map(vec![
+                Attribute {
+                    key: operation_key,
+                    value: Value::Ref(operation),
+                },
+                Attribute {
+                    key: width_key,
+                    value: Value::U8(32),
+                },
+                Attribute {
+                    key: latency_key,
+                    value: Value::F32(0.5),
+                },
+            ]))
+            .unwrap();
+        let source = writer
+            .transactions::<()>(SourceOptions::new("instructions", None), "INSTRUCTION")
+            .unwrap();
+        for time in 0..3 {
+            let tx = writer.begin_at(source, time, &(), None).unwrap();
+            writer
+                .attribute(tx.owner(), instruction_key, Value::Ref(description))
+                .unwrap();
+            writer
+                .attribute(tx.owner(), label_key, Value::Ref(operation))
+                .unwrap();
+            writer
+                .attribute(tx.owner(), mask_key, Value::U64(1 << time))
+                .unwrap();
+            writer.end_at(tx, time + 1, Status::Ok).unwrap();
+        }
+        writer.close().unwrap();
+        let session = OpenSpec::Path(path).open().unwrap();
+        let loaded = session.load_track(TrackRef(source.id())).unwrap();
+        let rows = loaded.generators[0].transactions();
+        assert_eq!(rows.len(), 3);
+        for (index, row) in rows.iter().enumerate() {
+            let description = row
+                .attributes
+                .iter()
+                .find(|attr| attr.key == "attributes.instruction")
+                .unwrap();
+            assert_eq!(
+                description.value.resolved(),
+                &AttributeValue::Map(vec![
+                    (
+                        "operation".into(),
+                        AttributeValue::shared(AttributeValue::Text("FADD".into()))
+                    ),
+                    ("width".into(), AttributeValue::U64(32)),
+                    ("latency".into(), AttributeValue::F64(0.5)),
+                ])
+            );
+            let label = row
+                .attributes
+                .iter()
+                .find(|attr| attr.key == "vtr.label")
+                .unwrap();
+            assert_eq!(label.value.resolved(), &AttributeValue::Text("FADD".into()));
+            let mask = row
+                .attributes
+                .iter()
+                .find(|attr| attr.key == "attributes.exec_mask")
+                .unwrap();
+            assert_eq!(mask.value, AttributeValue::U64(1 << index));
+        }
+    }
+}
+
+#[test]
+fn loaded_tracks_retain_shared_bytes_after_close_and_charge_the_description_once() {
+    use vtr::Value;
+    let directory = tempfile::tempdir().unwrap();
+    let retained = |length: usize| {
+        let path = directory.path().join(format!("shared-{length}.vtr"));
+        let mut writer = Writer::create(&path).unwrap();
+        let key = writer.intern("description").unwrap();
+        let value = writer
+            .intern_value(Value::Bytes(vec![0x5a; length]))
+            .unwrap();
+        let source = writer
+            .transactions::<()>(SourceOptions::new("instructions", None), "INSTRUCTION")
+            .unwrap();
+        for time in 0..128 {
+            writer.advance_time(time).unwrap();
+            let tx = writer.begin(source, &(), None).unwrap();
+            writer
+                .attribute(tx.owner(), key, Value::Ref(value))
+                .unwrap();
+            writer.end_at(tx, time + 1, Status::Ok).unwrap();
+        }
+        writer.close().unwrap();
+        let loaded = {
+            let session = OpenSpec::Path(path).open().unwrap();
+            session.load_track(TrackRef(source.id())).unwrap()
+        };
+        let generator = &loaded.generators[0];
+        assert_eq!(generator.transactions().len(), 128);
+        for row in generator.transactions() {
+            let value = row
+                .attributes
+                .iter()
+                .find(|attr| attr.key == "attributes.description")
+                .unwrap();
+            let AttributeValue::Bytes(bytes) = value.value.resolved() else {
+                panic!("description type lost")
+            };
+            assert_eq!(bytes.len(), length);
+            assert!(bytes.iter().all(|byte| *byte == 0x5a));
+        }
+        generator.resident_bytes()
+    };
+    let small = retained(16);
+    let large = retained(64 * 1024);
+    assert!(large > small);
+    assert!(large - small <= 2 * 64 * 1024);
+}

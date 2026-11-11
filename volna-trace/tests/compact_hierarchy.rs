@@ -499,7 +499,7 @@ fn invalid_catalog_owners_and_capabilities_release_the_private_open() {
     let local = OpenSpec::Path(path).open().unwrap();
     for case in 0..3 {
         let mut all = objects(local.as_ref());
-        let mut header: Header = bincode::deserialize(&all[0].1).unwrap();
+        let mut header = Header::from_session(local.as_ref()).unwrap();
         match case {
             0 => header.generators[0].scope = usize::MAX,
             1 => header.generators[0].track.0 = u32::MAX,

@@ -1,13 +1,12 @@
 //! Cooperative decoding and validation of raw metadata.
 
+use super::attributes::{Values, attributes};
 use super::decode::{Decoder, Reader, Step};
 use super::memory::{MemoryBudget, Reservation};
 use crate::data::TraceInfo;
 use crate::data::source::Generator;
-use crate::data::transactions::{AttributeValue, Attributes, Track, TrackRef};
+use crate::data::transactions::{Track, TrackRef};
 use crate::session::Capabilities;
-use std::future::Future;
-use std::pin::Pin;
 
 pub struct MetadataDecoder(Decoder<super::hierarchy::Header>);
 
@@ -46,6 +45,7 @@ impl MetadataDecoder {
 }
 
 async fn metadata(r: &Reader) -> anyhow::Result<super::hierarchy::Header> {
+    let values = Values::read(r).await?;
     let info = TraceInfo {
         name: r.string().await?,
         design_id: if r.boolean().await? {
@@ -72,7 +72,7 @@ async fn metadata(r: &Reader) -> anyhow::Result<super::hierarchy::Header> {
         transactions: r.boolean().await?,
         relations: r.boolean().await?,
     };
-    let tracks = r.vector(24, || track(r)).await?;
+    let tracks = r.vector(24, || track(r, &values)).await?;
     let generators = r
         .vector(28, || async {
             Ok(Generator {
@@ -81,7 +81,7 @@ async fn metadata(r: &Reader) -> anyhow::Result<super::hierarchy::Header> {
                 root: r.boolean().await?,
                 kind: r.string().await?,
                 track: TrackRef(r.u32().await?),
-                attributes: attributes(r, 0).await?,
+                attributes: attributes(r, &values, 0).await?,
             })
         })
         .await?;
@@ -134,100 +134,19 @@ async fn metadata(r: &Reader) -> anyhow::Result<super::hierarchy::Header> {
     })
 }
 
-async fn track(r: &Reader) -> anyhow::Result<Track> {
+async fn track(r: &Reader, values: &Values) -> anyhow::Result<Track> {
     Ok(Track {
         id: TrackRef(r.u32().await?),
         path: r.vector(8, || r.string()).await?,
         kind: r.string().await?,
-        attributes: attributes(r, 0).await?,
-    })
-}
-
-pub(super) async fn attributes(r: &Reader, depth: usize) -> anyhow::Result<Attributes> {
-    r.vector(12, || async {
-        Ok((r.string().await?, attribute(r, depth).await?))
-    })
-    .await
-}
-
-pub(super) fn attribute(
-    r: &Reader,
-    depth: usize,
-) -> Pin<Box<dyn Future<Output = anyhow::Result<AttributeValue>> + Send + '_>> {
-    Box::pin(async move {
-        anyhow::ensure!(depth < 128, "attribute nesting exceeds client limit");
-        use AttributeValue::{
-            Bool, Bytes, Enum, F64, Fixed, I64, List, Logic, Map, Null, Pointer, Text, Time, U64,
-            UFixed,
-        };
-        Ok(match r.u32().await? {
-            0 => Null,
-            1 => Bool(r.boolean().await?),
-            2 => I64(r.u64().await? as i64),
-            3 => U64(r.u64().await?),
-            4 => F64(f64::from_bits(r.u64().await?)),
-            5 => Text(r.string().await?),
-            6 => Bytes(r.bytes().await?),
-            7 => {
-                let width = r.u64().await?;
-                let states = r.u8().await?;
-                let data = r.bytes().await?;
-                anyhow::ensure!(
-                    usize::try_from(width).is_ok(),
-                    "logic width exceeds this platform's address space"
-                );
-                let stride = match states {
-                    2 => 1u64,
-                    4 => 2,
-                    9 => 4,
-                    _ => anyhow::bail!("invalid logic alphabet"),
-                };
-                let per_byte = 8 / stride;
-                anyhow::ensure!(
-                    data.len() as u64 == width.div_ceil(per_byte),
-                    "logic length does not match width"
-                );
-                let padding = (width % per_byte) * stride;
-                anyhow::ensure!(
-                    padding == 0 || data.last().is_none_or(|byte| byte >> padding == 0),
-                    "nonzero logic padding"
-                );
-                anyhow::ensure!(
-                    states != 9
-                        || data.iter().enumerate().all(|(index, byte)| byte & 15 <= 8
-                            && (index as u64 * 2 + 1 >= width || byte >> 4 <= 8)),
-                    "invalid logic state"
-                );
-                Logic {
-                    width,
-                    states,
-                    data,
-                }
-            }
-            8 => Time(r.u64().await?),
-            9 => Enum {
-                value: r.i128().await?,
-                name: r.string().await?,
-            },
-            10 => Pointer(r.u64().await?),
-            11 => Fixed {
-                raw: r.u64().await? as i64,
-                scale: r.u64().await? as i64,
-            },
-            12 => UFixed {
-                raw: r.u64().await?,
-                scale: r.u64().await? as i64,
-            },
-            13 => List(r.vector(4, || attribute(r, depth + 1)).await?),
-            14 => Map(attributes(r, depth + 1).await?),
-            _ => anyhow::bail!("invalid attribute kind"),
-        })
+        attributes: attributes(r, values, 0).await?,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::transactions::AttributeValue;
     use crate::remote::hierarchy::Header;
     use crate::remote::objects::Metadata;
     use crate::remote::transport::DATA_BYTES;
@@ -270,6 +189,7 @@ mod tests {
             },
             List(vec![Bool(false)]),
             Map(vec![("key".into(), I64(4))]),
+            AttributeValue::shared(Map(vec![("mnemonic".into(), Text("FADD".into()))])),
         ];
         metadata.tracks = vec![Track {
             id: TrackRef(0),
@@ -449,7 +369,7 @@ mod tests {
         let mut trailing = valid.clone();
         trailing.push(0);
         let mut utf8 = valid.clone();
-        utf8[8] = 255;
+        utf8[16] = 255;
         for bytes in [valid[..valid.len() - 1].to_vec(), trailing, utf8] {
             let budget = MemoryBudget::new(4 * 1024 * 1024);
             let mut decoder =
@@ -460,6 +380,36 @@ mod tests {
                     Err(_) => break,
                     Ok(MetadataStep::Yield) => {}
                     _ => panic!("malformed header accepted"),
+                }
+            }
+            drop(decoder);
+            assert_eq!(budget.used(), 0);
+        }
+    }
+
+    #[test]
+    fn shared_table_rejects_forward_references_and_releases_private_storage() {
+        let header =
+            Header::from_session(crate::testing::ProceduralTrace::session(1).as_ref()).unwrap();
+        let valid = bincode::serialize(&header).unwrap();
+        assert_eq!(&valid[..8], &0u64.to_le_bytes());
+        for id in [0u32, 1, u32::MAX] {
+            let mut bytes = 1u64.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&15u32.to_le_bytes());
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.extend_from_slice(&valid[8..]);
+            let budget = MemoryBudget::new(1024 * 1024);
+            let mut decoder =
+                MetadataDecoder::new(bytes.len() as u64, 1024 * 1024, &budget).unwrap();
+            decoder.feed(bytes).unwrap();
+            loop {
+                match decoder.step() {
+                    Err(error) => {
+                        assert!(error.to_string().contains("shared attribute reference"));
+                        break;
+                    }
+                    Ok(MetadataStep::Yield) => (),
+                    Ok(_) => panic!("accepted a reference to an unpublished table entry"),
                 }
             }
             drop(decoder);

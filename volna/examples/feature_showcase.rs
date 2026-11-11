@@ -233,6 +233,12 @@ fn attributes(w: &mut Writer) -> vtr::Result<Vec<Attribute>> {
     ]
     .into_iter()
     .map(|(key, value)| {
+        let value = match value {
+            Value::Text(_) | Value::Bytes(_) | Value::List(_) | Value::Map(_) => {
+                Value::Ref(w.intern_value(value)?)
+            }
+            value => value,
+        };
         Ok(Attribute {
             key: w.intern(key)?,
             value,
@@ -1843,7 +1849,7 @@ fn verify(path: &Path, core_clock: u32, dma_clock: u32) -> vtr::Result<()> {
         .node(r.find("soc").unwrap())?
         .attributes
         .iter()
-        .map(|a| a.value.tag())
+        .map(|a| r.resolve_value(&a.value).unwrap().tag())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(tags, (0..=24).collect());
     let mut changes = 0;

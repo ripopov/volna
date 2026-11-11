@@ -25,6 +25,8 @@ pub struct LoadedRelation {
 
 #[derive(Debug)]
 pub struct LoadedGenerator {
+    // One wire table can outlive the track through independently cached generators.
+    pub(crate) shared_reservation: Option<Arc<crate::remote::memory::Reservation>>,
     pub(crate) reservation: Option<crate::remote::memory::Reservation>,
     generator: TrackRef,
     transactions: Vec<Transaction>,
@@ -49,6 +51,7 @@ impl LoadedGenerator {
     }
 
     pub fn resident_bytes(&self) -> u64 {
+        let mut memory = AttributeMemory::new(true);
         let catalogue = self.attribute_catalogue_bytes();
         let fixed = catalogue
             .saturating_add(
@@ -85,13 +88,13 @@ impl LoadedGenerator {
         let transactions =
             self.transactions.iter().fold(fixed, |bytes, tx| {
                 bytes
-                    .saturating_add(transaction_attributes_bytes(&tx.attributes))
+                    .saturating_add(transaction_attributes_bytes(&tx.attributes, &mut memory))
                     .saturating_add((tx.events.capacity() as u64).saturating_mul(
                         std::mem::size_of::<super::transactions::TransactionEvent>() as u64,
                     ))
                     .saturating_add(tx.events.iter().fold(0, |sum, event| {
                         sum.saturating_add(event.name.capacity() as u64)
-                            .saturating_add(attributes_bytes(&event.attributes))
+                            .saturating_add(attributes_bytes(&event.attributes, &mut memory))
                     }))
                     .saturating_add((tx.stages.capacity() as u64).saturating_mul(
                         std::mem::size_of::<super::transactions::TransactionStage>() as u64,
@@ -99,14 +102,14 @@ impl LoadedGenerator {
                     .saturating_add(tx.stages.iter().fold(0, |sum, stage| {
                         sum.saturating_add(stage.name.capacity() as u64)
                             .saturating_add(stage.lane.capacity() as u64)
-                            .saturating_add(attributes_bytes(&stage.attributes))
+                            .saturating_add(attributes_bytes(&stage.attributes, &mut memory))
                     }))
             });
         let transactions = transactions.saturating_add(self.parent_labels_bytes());
         self.relations.iter().fold(transactions, |bytes, edge| {
             bytes
                 .saturating_add(edge.relation.kind.capacity() as u64)
-                .saturating_add(attributes_bytes(&edge.relation.attributes))
+                .saturating_add(attributes_bytes(&edge.relation.attributes, &mut memory))
         })
     }
 
@@ -305,6 +308,7 @@ impl LoadedGenerator {
         attributes.sort_unstable_by(|a, b| a.key.cmp(&b.key));
         Ok(Self {
             reservation: None,
+            shared_reservation: None,
             attributes,
             generator,
             transactions,
@@ -488,17 +492,23 @@ fn index_bytes(entries: usize, key: usize, values: usize, value: usize) -> u64 {
         .saturating_add((values as u64).saturating_mul(value as u64))
 }
 
-fn transaction_attributes_bytes(attributes: &[super::transactions::TransactionAttribute]) -> u64 {
+fn transaction_attributes_bytes<'a>(
+    attributes: &'a [super::transactions::TransactionAttribute],
+    memory: &mut AttributeMemory<'a>,
+) -> u64 {
     let fixed = (attributes.len() as u64)
         .saturating_mul(std::mem::size_of::<super::transactions::TransactionAttribute>() as u64);
     attributes.iter().fold(fixed, |bytes, attribute| {
         bytes
             .saturating_add(attribute.key.capacity() as u64)
-            .saturating_add(attribute_value_bytes(&attribute.value))
+            .saturating_add(memory.value(&attribute.value))
     })
 }
 
-fn attributes_bytes(attributes: &super::transactions::Attributes) -> u64 {
+fn attributes_bytes<'a>(
+    attributes: &'a super::transactions::Attributes,
+    memory: &mut AttributeMemory<'a>,
+) -> u64 {
     let fixed = (attributes.capacity() as u64)
         .saturating_mul(
             std::mem::size_of::<(String, super::transactions::AttributeValue)>() as u64,
@@ -506,35 +516,93 @@ fn attributes_bytes(attributes: &super::transactions::Attributes) -> u64 {
     attributes.iter().fold(fixed, |bytes, (key, value)| {
         bytes
             .saturating_add(key.capacity() as u64)
-            .saturating_add(attribute_value_bytes(value))
+            .saturating_add(memory.value(value))
     })
 }
 
-fn attribute_value_bytes(value: &super::transactions::AttributeValue) -> u64 {
-    use super::transactions::AttributeValue;
-    match value {
-        AttributeValue::Text(value) => value.capacity() as u64,
-        AttributeValue::Bytes(value) => value.capacity() as u64,
-        AttributeValue::Logic { data, .. } => data.capacity() as u64,
-        AttributeValue::Enum { name, .. } => name.capacity() as u64,
-        AttributeValue::List(values) => {
-            let fixed = (values.capacity() as u64)
-                .saturating_mul(std::mem::size_of::<AttributeValue>() as u64);
-            values.iter().fold(fixed, |bytes, value| {
-                bytes.saturating_add(attribute_value_bytes(value))
-            })
+struct AttributeMemory<'a> {
+    include_shared: bool,
+    shared: std::collections::HashSet<*const super::transactions::AttributeValue>,
+    pending: Vec<&'a super::transactions::AttributeValue>,
+}
+
+impl<'a> AttributeMemory<'a> {
+    fn new(include_shared: bool) -> Self {
+        Self {
+            include_shared,
+            shared: std::collections::HashSet::new(),
+            pending: Vec::new(),
         }
-        AttributeValue::Map(values) => attributes_bytes(values),
-        AttributeValue::Null
-        | AttributeValue::Bool(_)
-        | AttributeValue::I64(_)
-        | AttributeValue::U64(_)
-        | AttributeValue::F64(_)
-        | AttributeValue::Time(_)
-        | AttributeValue::Pointer(_)
-        | AttributeValue::Fixed { .. }
-        | AttributeValue::UFixed { .. } => 0,
     }
+
+    #[inline]
+    fn value(&mut self, value: &'a super::transactions::AttributeValue) -> u64 {
+        use super::transactions::AttributeValue;
+        match value {
+            AttributeValue::Text(value) => value.capacity() as u64,
+            AttributeValue::Bytes(value) => value.capacity() as u64,
+            AttributeValue::Logic { data, .. } => data.capacity() as u64,
+            AttributeValue::Enum { name, .. } => name.capacity() as u64,
+            AttributeValue::List(_) | AttributeValue::Map(_) | AttributeValue::Shared(_) => {
+                self.composite(value)
+            }
+            AttributeValue::Null
+            | AttributeValue::Bool(_)
+            | AttributeValue::I64(_)
+            | AttributeValue::U64(_)
+            | AttributeValue::F64(_)
+            | AttributeValue::Time(_)
+            | AttributeValue::Pointer(_)
+            | AttributeValue::Fixed { .. }
+            | AttributeValue::UFixed { .. } => 0,
+        }
+    }
+
+    fn composite(&mut self, value: &'a super::transactions::AttributeValue) -> u64 {
+        use super::transactions::AttributeValue;
+        let mut bytes = 0u64;
+        self.pending.push(value);
+        while let Some(value) = self.pending.pop() {
+            match value {
+                AttributeValue::List(values) => {
+                    bytes = bytes.saturating_add(
+                        (values.capacity() as u64)
+                            .saturating_mul(std::mem::size_of::<AttributeValue>() as u64),
+                    );
+                    self.pending.extend(values);
+                }
+                AttributeValue::Map(values) => {
+                    bytes = bytes.saturating_add(
+                        (values.capacity() as u64).saturating_mul(std::mem::size_of::<(
+                            String,
+                            AttributeValue,
+                        )>()
+                            as u64),
+                    );
+                    for (key, value) in values {
+                        bytes = bytes.saturating_add(key.capacity() as u64);
+                        self.pending.push(value);
+                    }
+                }
+                AttributeValue::Shared(value)
+                    if self.include_shared && self.shared.insert(value.as_ptr()) =>
+                {
+                    bytes = bytes.saturating_add(
+                        (std::mem::size_of::<AttributeValue>() + 2 * std::mem::size_of::<usize>())
+                            as u64,
+                    );
+                    self.pending.push(value);
+                }
+                AttributeValue::Shared(_) => (),
+                value => bytes = bytes.saturating_add(self.value(value)),
+            }
+        }
+        bytes
+    }
+}
+
+pub(super) fn attribute_value_bytes(value: &super::transactions::AttributeValue) -> u64 {
+    AttributeMemory::new(false).value(value)
 }
 
 #[derive(Clone, Debug)]

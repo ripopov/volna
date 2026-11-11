@@ -70,7 +70,7 @@ impl Radix {
 #[must_use]
 pub fn is_integer(value: &AttributeValue) -> bool {
     matches!(
-        value,
+        value.resolved(),
         AttributeValue::I64(_)
             | AttributeValue::U64(_)
             | AttributeValue::Time(_)
@@ -85,7 +85,8 @@ pub fn format_attribute(value: &AttributeValue, limit: usize) -> String {
 
 #[must_use]
 pub fn format_attribute_radix(value: &AttributeValue, radix: Radix, limit: usize) -> String {
-    let text = match value {
+    let text = match value.resolved() {
+        AttributeValue::Shared(_) => unreachable!("resolved value"),
         AttributeValue::Null => "null".into(),
         AttributeValue::Bool(v) => v.to_string(),
         AttributeValue::I64(v) => radix.format_i64(*v),
@@ -113,7 +114,8 @@ pub fn format_attribute_radix(value: &AttributeValue, radix: Radix, limit: usize
 
 #[must_use]
 pub fn attribute_value_min_bytes(value: &AttributeValue) -> usize {
-    match value {
+    match value.resolved() {
+        AttributeValue::Shared(_) => unreachable!("resolved value"),
         AttributeValue::Text(value) => value.len(),
         AttributeValue::Enum { name, value } => {
             name.len().saturating_add(value.to_string().len() + 3)

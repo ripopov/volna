@@ -8,12 +8,13 @@ use vtr::{NodeData, Reader, SignalKind, SignalValue, trace::SignalData};
 
 use super::history::SignalHistory;
 use super::source::{Generator, Hierarchy, SignalRef, TraceInfo};
-use super::transactions::TrackRef;
+use super::transactions::{SharedValue, TrackRef};
 use super::value::{Bit, SignalShape, WaveValue};
 use crate::session::Session;
 
 pub(super) struct LocalReader {
     reader: Reader,
+    pub(super) values: Vec<SharedValue>,
     // Shared hierarchy handles retain this owner; close the mapping before removing its files.
     _owner: Option<Box<dyn Send + Sync>>,
 }
@@ -88,7 +89,18 @@ impl LocalSession {
         source_bytes: u64,
         owner: Option<Box<dyn Send + Sync>>,
     ) -> anyhow::Result<Self> {
+        let mut values = Vec::<SharedValue>::new();
+        for value in reader.declarations().values() {
+            let value = match value {
+                vtr::Value::Ref(id) => values[id.0 as usize].clone(),
+                value => SharedValue::new(super::vtr_transactions::project_value(
+                    &reader, &values, value,
+                )),
+            };
+            values.push(value);
+        }
         let reader = Arc::new(LocalReader {
+            values,
             reader,
             _owner: owner,
         });
@@ -99,7 +111,7 @@ impl LocalSession {
                 if reader.string(key).expect("metadata key") != name {
                     return None;
                 }
-                match value {
+                match reader.resolve_value(value).expect("metadata value") {
                     vtr::Value::Str(value) => {
                         Some(reader.string(*value).expect("metadata text").to_owned())
                     }
@@ -129,7 +141,7 @@ impl LocalSession {
     }
 }
 
-fn declaration_bytes(reader: &Reader) -> u64 {
+fn declaration_bytes(reader: &LocalReader) -> u64 {
     fn attributes(values: &vtr::Attributes) -> usize {
         values.capacity() * std::mem::size_of::<vtr::Attribute>()
             + values
@@ -201,8 +213,24 @@ fn declaration_bytes(reader: &Reader) -> u64 {
                 }
         })
         .sum::<usize>();
-    (nodes + strings + types + declarations.signals.capacity() * std::mem::size_of::<SignalKind>())
-        as u64
+    let mut seen_values = std::collections::HashSet::new();
+    let values = declarations.value_table_bytes()
+        + reader.values.capacity() * std::mem::size_of::<SharedValue>()
+        + reader
+            .values
+            .iter()
+            .filter(|value| seen_values.insert(value.as_ptr()))
+            .map(|value| {
+                std::mem::size_of::<super::transactions::AttributeValue>()
+                    + 2 * std::mem::size_of::<usize>()
+                    + super::loaded_tracks::attribute_value_bytes(value) as usize
+            })
+            .sum::<usize>();
+    (nodes
+        + strings
+        + types
+        + values
+        + declarations.signals.capacity() * std::mem::size_of::<SignalKind>()) as u64
 }
 
 fn shape_of(kind: SignalKind, var_type: vtr::VarType) -> SignalShape {
@@ -240,7 +268,7 @@ impl ReaderHierarchy {
         node.attributes
             .iter()
             .find(|attr| self.reader.string(attr.key).ok() == Some("vtr.description"))
-            .and_then(|attr| match &attr.value {
+            .and_then(|attr| match self.reader.resolve_value(&attr.value).ok()? {
                 vtr::Value::Text(text) => Some(text.as_str()),
                 vtr::Value::Str(id) => self.reader.string(*id).ok(),
                 _ => None,

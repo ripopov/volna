@@ -229,7 +229,7 @@ impl Reader {
         }
     }
 
-    async fn length(&self, minimum: usize) -> anyhow::Result<usize> {
+    pub(super) async fn length(&self, minimum: usize) -> anyhow::Result<usize> {
         let count = self.usize().await?;
         let input = self.input();
         anyhow::ensure!(

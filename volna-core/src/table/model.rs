@@ -2891,8 +2891,10 @@ mod tests {
                 )
             })
             .collect();
-        records[19].attributes[1].value = AttributeValue::U64(9_007_199_254_740_993);
-        records[21].attributes[1].value = AttributeValue::U64(9_007_199_254_740_992);
+        records[19].attributes[1].value =
+            AttributeValue::shared(AttributeValue::U64(9_007_199_254_740_993));
+        records[21].attributes[1].value =
+            AttributeValue::shared(AttributeValue::U64(9_007_199_254_740_992));
         let mut model = generator_model(records);
         model.edit_columns(|c| c.toggle_transaction(TransactionColumn::Attribute("addr".into())));
         model.cycle_sort(1);

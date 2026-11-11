@@ -54,7 +54,7 @@ vocabulary! {
     grid: "gpu.grid", kernel: "gpu.kernel",
     dimensions: "gpu.grid_dimensions", block: "gpu.block_coordinates",
     threads: "gpu.block_dimensions", warp: "gpu.logical_warp", epoch: "gpu.slot_epoch",
-    pc: "gpu.pc", sequence: "gpu.sequence", opcode: "gpu.opcode", class: "gpu.class",
+    instruction: "gpu.instruction", pc: "gpu.pc", sequence: "gpu.sequence", opcode: "gpu.opcode", class: "gpu.class",
     mask: "gpu.active_mask", exec_mask: "exec_mask", space: "gpu.address_space", operation: "gpu.operation",
     address: "gpu.address", bytes: "gpu.bytes", outcome: "gpu.cache_outcome",
     shape: "gpu.tensor_shape", direction: "gpu.direction", source: "gpu.source_resource",
@@ -306,6 +306,7 @@ struct Emit {
     w: Writer,
     n: Names,
     open_stages: BTreeMap<(u64, u32), u64>,
+    instructions: BTreeMap<(u64, u32), vtr::ValueId>,
 }
 impl Emit {
     fn begin(
@@ -913,6 +914,27 @@ fn issue(
     op: Op,
 ) -> vtr::Result<(Transaction<InstanceLabel>, u64)> {
     let (opcode, class) = op.names(&e.n);
+    let pc = 0x1000 + (sequence % 100) * 4;
+    let description = if let Some(id) = e.instructions.get(&(pc, opcode)) {
+        *id
+    } else {
+        let id = e.w.intern_value(Value::Map(vec![
+            vtr::Attribute {
+                key: e.n.pc,
+                value: Value::Pointer(pc),
+            },
+            vtr::Attribute {
+                key: e.n.opcode,
+                value: Value::Str(opcode),
+            },
+            vtr::Attribute {
+                key: e.n.class,
+                value: Value::Str(class),
+            },
+        ]))?;
+        e.instructions.insert((pc, opcode), id);
+        id
+    };
     let tx = e.begin(
         h.sms[sm].slots[slot].instruction,
         Some(warp.tx),
@@ -920,10 +942,8 @@ fn issue(
         &format!("{} #{sequence}", e.n.text(opcode)),
     )?;
     for (key, value) in [
-        (e.n.pc, Value::U64(0x1000 + (sequence % 100) * 4)),
+        (e.n.instruction, Value::Ref(description)),
         (e.n.sequence, Value::U64(sequence)),
-        (e.n.opcode, Value::Str(opcode)),
-        (e.n.class, Value::Str(class)),
         (e.n.exec_mask, Value::U64(u64::from(op.exec_mask(sequence)))),
         (
             e.n.mask,
@@ -1193,6 +1213,7 @@ fn generate(path: &Path) -> vtr::Result<()> {
         w,
         n,
         open_stages: BTreeMap::new(),
+        instructions: BTreeMap::new(),
     };
     let mut r = Resources::default();
     let command = e.begin(h.queue[0], None, 0, "tiled compute submission")?;

@@ -299,13 +299,54 @@ impl Predicate {
         }
     }
     fn attribute(&self, value: &AttributeValue, scratch: &mut String) -> bool {
-        if matches!(value, AttributeValue::Null) {
+        if matches!(value.resolved(), AttributeValue::Null) {
             return self.missing();
         }
         self.missing != Missing::Only && self.present_attribute(value, scratch)
     }
     fn present_attribute(&self, value: &AttributeValue, scratch: &mut String) -> bool {
+        let value = value.resolved();
+        if !matches!(value, AttributeValue::List(_) | AttributeValue::Map(_)) {
+            return self.scalar_attribute(value, scratch);
+        }
+        let mut pending = vec![(None, value)];
+        let mut seen = std::collections::HashSet::new();
+        while let Some((key, value)) = pending.pop() {
+            if key.is_some_and(|key| self.text(key)) {
+                return true;
+            }
+            let shared = matches!(value, AttributeValue::Shared(_));
+            let value = value.resolved();
+            if shared && !seen.insert(std::ptr::from_ref(value)) {
+                continue;
+            }
+            match value {
+                AttributeValue::List(values) => {
+                    pending.extend(values.iter().rev().map(|value| (None, value)));
+                }
+                AttributeValue::Map(values) => {
+                    pending.extend(
+                        values
+                            .iter()
+                            .rev()
+                            .map(|(key, value)| (Some(key.as_str()), value)),
+                    );
+                }
+                value => {
+                    if self.scalar_attribute(value, scratch) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn scalar_attribute(&self, value: &AttributeValue, scratch: &mut String) -> bool {
         match value {
+            AttributeValue::Shared(_) | AttributeValue::List(_) | AttributeValue::Map(_) => {
+                unreachable!("scalar attribute")
+            }
             AttributeValue::Null => false,
             AttributeValue::Text(v) => self.text(v),
             AttributeValue::Enum { value, name } => {
@@ -336,12 +377,6 @@ impl Predicate {
                 )),
                 scratch,
             ),
-            AttributeValue::List(values) => {
-                values.iter().any(|v| self.present_attribute(v, scratch))
-            }
-            AttributeValue::Map(values) => values
-                .iter()
-                .any(|(k, v)| self.text(k) || self.present_attribute(v, scratch)),
             AttributeValue::Bytes(bytes) => {
                 scratch.clear();
                 for byte in bytes {
