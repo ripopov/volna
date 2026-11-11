@@ -492,8 +492,10 @@ mod tests {
                 .all(|slot| slot.session().unwrap().format() == Some("VTR"))
         );
         assert_eq!(
-            reopened.doc.traces().iter().nth(1).unwrap().source,
-            other.canonicalize().unwrap().to_string_lossy()
+            Path::new(&reopened.doc.traces().iter().nth(1).unwrap().source)
+                .canonicalize()
+                .unwrap(),
+            other.canonicalize().unwrap()
         );
         // Kanata uses cycles, so exercise it in its own workspace rather than mixing time units.
         let mut app = volna_core::App::new();
