@@ -4891,6 +4891,7 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
         .unwrap();
     let copy_path =
         |vcx: &mut VisualTestContext, trace: char, path: &std::path::Path, dropdown: bool| {
+            let path = path.canonicalize().unwrap();
             let selector = match (trace, dropdown) {
                 ('A', true) => "trace-menu-A",
                 ('A', false) => "trace-chip-A",

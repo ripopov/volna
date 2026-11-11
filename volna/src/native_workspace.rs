@@ -274,6 +274,15 @@ pub(crate) fn file_uri(path: &Path) -> Result<String> {
     } else {
         std::env::current_dir()?.join(path)
     };
+    // New workspace files need the same directory identity as existing traces.
+    let absolute = absolute
+        .canonicalize()
+        .or_else(|_| {
+            let parent = absolute.parent().context("file path has no parent")?;
+            let name = absolute.file_name().context("file path has no filename")?;
+            Ok::<_, anyhow::Error>(parent.canonicalize()?.join(name))
+        })
+        .unwrap_or(absolute);
     url::Url::from_file_path(absolute)
         .map(Into::into)
         .map_err(|()| anyhow::anyhow!("invalid file path"))

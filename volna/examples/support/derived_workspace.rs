@@ -463,7 +463,8 @@ pub fn write(path: &Path) -> Result<()> {
         panel["title"] = json!(title);
         panel["rows"] = json!(rows);
         panel["selected"] = json!([]);
-        panel["link"] = json!({"viewport": false, "cursor": false});
+        panel["link"]["viewport"] = json!(false);
+        panel["link"]["cursor"] = json!(false);
         panel["viewport"] = json!({"start": start, "end": end});
         panel["cursor"] = json!(match index {
             0 => super::CLOCK_PS * 25 + super::CLOCK_PS / 2,

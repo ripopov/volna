@@ -104,7 +104,11 @@ try {
   await page.unroute(sampleRoute);
   const selectedTransaction = () => page.evaluate(() => window.volnaCurrentState
     .split('\n').find(line => line.startsWith('panel=37 transaction ')));
-  const islandTransaction = await selectedTransaction();
+  const islandTransaction = await (await page.waitForFunction(() => {
+    const state = window.volnaCurrentState.split('\n')
+      .find(line => line.startsWith('panel=37 transaction '));
+    return /ready record=Some/.test(state) && state;
+  })).jsonValue();
   assert.match(islandTransaction, /ready record=Some/);
   for (const [theme, width, zoom] of [
     ['light', 1440, 1], ['light', 1440, 1.25], ['light', 360, 1], ['dark', 1440, 1],
@@ -126,12 +130,11 @@ try {
   const pipelineState = () => page.evaluate(() => window.volnaCurrentState
     .split('\n').find(line => line.startsWith('panel=38 pipeline ')));
   const navigatorRect = state => state.match(/navigator_rect=\(([^)]+)\)/)[1].split(',').map(Number);
-  const waitForNavigator = visible => page.waitForFunction(async ({ base, visible }) => {
-    (await import(`${base}viewer/pkg/volna.js`)).debug_state();
+  const waitForNavigator = async visible => (await page.waitForFunction(visible => {
     const state = window.volnaCurrentState.split('\n').find(line => line.startsWith('panel=38 pipeline '));
     const width = Number(state?.match(/navigator_rect=\([^,]+,[^,]+,([^,]+),/)?.[1]);
-    return state?.includes(`navigator=(${visible},104)`) && width === (visible ? 104 : 0);
-  }, { base, visible });
+    return state?.includes(`navigator=(${visible},104)`) && width === (visible ? 104 : 0) && state;
+  }, visible)).jsonValue();
   const rowTop = state => Number(state.match(/ top=([^ ]+)/)[1]);
   const pipelineView = state => state.match(/viewport=\(([^)]+)\)/)[1].split(',').map(Number);
   let pipelineBefore = await pipelineState();
@@ -157,22 +160,18 @@ try {
   await page.mouse.down();
   await page.mouse.move(navX - 40, navY + navH / 2, { steps: 5 });
   await page.mouse.up();
-  await waitForNavigator(true);
-  [navX, navY, navW, navH] = navigatorRect(await pipelineState());
+  [navX, navY, navW, navH] = navigatorRect(await waitForNavigator(true));
   await page.screenshot({ path: `${results}/pipeline-navigator-dark.png` });
   await page.mouse.click(navX, navY + navH / 2);
-  await waitForNavigator(false);
-  [navX, navY, , navH] = navigatorRect(await pipelineState());
+  [navX, navY, , navH] = navigatorRect(await waitForNavigator(false));
   await page.mouse.click(navX - 2, navY + navH / 2);
-  await waitForNavigator(true);
-  [navX, navY, navW, navH] = navigatorRect(await pipelineState());
+  [navX, navY, navW, navH] = navigatorRect(await waitForNavigator(true));
   await page.mouse.move(navX, navY + navH / 2);
   await page.mouse.down();
   await page.mouse.move(navX + navW - 32, navY + navH / 2, { steps: 5 });
   await page.mouse.move(navX + navW + 10, navY + navH / 2, { steps: 5 });
   await page.mouse.up();
-  await waitForNavigator(false);
-  [navX, navY, , navH] = navigatorRect(await pipelineState());
+  [navX, navY, , navH] = navigatorRect(await waitForNavigator(false));
   await page.mouse.click(navX - 2, navY + navH / 2);
   await waitForNavigator(true);
   report.behavior.push('pipeline navigator picking, stream-following wheel, resizing, collapse and restore preserve selection and zoom');

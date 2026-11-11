@@ -628,7 +628,7 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
             "ctrl-a"
         });
         vcx.simulate_input(&value);
-        vcx.simulate_keystrokes("ctrl-enter");
+        vcx.simulate_keystrokes("enter");
         vcx.run_until_parked();
     };
     let left = bounds.0 + (bounds.1 - bounds.0) / 4;
@@ -1104,7 +1104,11 @@ fn sampling_picker_and_presets_keep_the_selected_capture(cx: &mut TestAppContext
         assert!(expression.starts_with("interval_mean("), "{expression}");
         assert!(!expression.contains('@'), "{expression}");
     });
-    vcx.simulate_keystrokes("ctrl-end");
+    vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-down"
+    } else {
+        "ctrl-end"
+    });
     vcx.simulate_input(" + 1");
     vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();

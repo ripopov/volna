@@ -493,7 +493,7 @@ mod tests {
         );
         assert_eq!(
             reopened.doc.traces().iter().nth(1).unwrap().source,
-            other.to_string_lossy()
+            other.canonicalize().unwrap().to_string_lossy()
         );
         // Kanata uses cycles, so exercise it in its own workspace rather than mixing time units.
         let mut app = volna_core::App::new();
