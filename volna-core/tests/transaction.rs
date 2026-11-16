@@ -227,7 +227,7 @@ fn located_and_embedded_activity_share_the_instruction_view_and_relation_navigat
             .events
             .rows
             .iter()
-            .all(|event| event.attributes.is_empty() && event.attributes_total == 0)
+            .all(|event| event.attributes.rows.is_empty() && event.attributes.total == 0)
     );
     assert_eq!(projection.lifeline.len(), 1);
     assert!(projection.lifeline[0].primary);
@@ -750,7 +750,6 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
     assert_eq!(v.identity.kind, Some("consumer"));
     assert_eq!(v.identity.status_text, "ok");
     assert_eq!(v.attributes.total, 26);
-    assert!(v.filterable());
     let kinds: Vec<_> = v.attributes.rows.iter().map(|a| a.kind).collect();
     for kind in [
         "null", "bool", "int", "real", "text", "logic", "time", "enum", "pointer", "fixed", "list",
@@ -808,8 +807,8 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
         .unwrap()
         .set_detail_items(5);
     let v = view(&app, panel);
-    assert_eq!((v.attributes.rows.len(), v.attributes.total), (5, 26));
-    assert!(v.attributes.cut());
+    assert_eq!(v.attributes.total, 26);
+    assert!(!v.attributes.cut());
     app.handle(Command::Transaction(
         panel,
         TransactionCommand::Filter("sign".into()),
@@ -823,10 +822,13 @@ fn every_value_tag_an_open_record_and_a_cross_stream_parent_read_as_recorded() {
             "attributes.signed_i16",
             "attributes.signed_i32",
             "attributes.unsigned_u8",
-            "attributes.unsigned_u16"
+            "attributes.unsigned_u16",
+            "attributes.unsigned_u32",
+            "attributes.signed",
+            "attributes.unsigned"
         ]
     );
-    assert_eq!((v.attributes.matched, v.attributes.total), (8, 26));
+    assert_eq!((v.attributes.rows.len(), v.attributes.total), (8, 26));
     app.handle(Command::Transaction(
         panel,
         TransactionCommand::Collapse(SectionKey::Attributes, true),
@@ -1338,4 +1340,810 @@ fn opening_a_pipeline_reveals_a_reusable_inspector_without_stealing_focus() {
     );
     assert_eq!(app.panels.first_free_transaction(), Some(following));
     app.panels.validate().unwrap();
+}
+
+struct AttributePacket {
+    flops: [u64; 4],
+    samples: Vec<u64>,
+}
+vtr::impl_payload!(AttributePacket { flops, samples });
+
+fn nested_attribute_record(
+    samples: usize,
+    long_values: usize,
+) -> (App, PanelId, tempfile::TempDir) {
+    use vtr::{Attribute, Recorder, SourceOptions, Value};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("attributes.vtr");
+    let mut writer = vtr::Writer::create(&path).unwrap();
+    let source = writer
+        .transactions::<AttributePacket>(SourceOptions::new("instructions", None), "INSTRUCTION")
+        .unwrap();
+    let instruction = writer.intern("instruction").unwrap();
+    let mnemonic = writer.intern("mnemonic").unwrap();
+    let pc = writer.intern("pc").unwrap();
+    let empty = writer.intern("empty").unwrap();
+    let bytes = writer.intern("bytes").unwrap();
+    let bits = writer.intern("bits").unwrap();
+    let note = writer.intern("note").unwrap();
+    let value = writer
+        .intern_value(Value::Map(vec![
+            Attribute {
+                key: mnemonic,
+                value: Value::Text("ds_read_b32".into()),
+            },
+            Attribute {
+                key: pc,
+                value: Value::U64(u64::MAX),
+            },
+            Attribute {
+                key: empty,
+                value: Value::List(vec![]),
+            },
+            Attribute {
+                key: bytes,
+                value: Value::Bytes(vec![0, 0xab, 0xff]),
+            },
+            Attribute {
+                key: bits,
+                value: Value::Bits {
+                    width: 4,
+                    data: vec![0b1010],
+                },
+            },
+            Attribute {
+                key: note,
+                value: Value::Text(format!("{}café needle", "x".repeat(300))),
+            },
+        ]))
+        .unwrap();
+    let owner = writer
+        .begin_at(
+            source,
+            10,
+            &AttributePacket {
+                flops: [0, 1, 2, 3],
+                samples: (0..samples as u64).collect(),
+            },
+            None,
+        )
+        .unwrap();
+    writer
+        .attribute(owner.owner(), instruction, Value::Ref(value))
+        .unwrap();
+    if long_values > 0 {
+        let notes = writer.intern("notes").unwrap();
+        writer
+            .attribute(
+                owner.owner(),
+                notes,
+                Value::List(
+                    (0..long_values)
+                        .map(|i| Value::Text(format!("entry-{i:03} {}", "λ".repeat(2000))))
+                        .collect(),
+                ),
+            )
+            .unwrap();
+    }
+    let attrs = vec![Attribute {
+        key: instruction,
+        value: Value::Ref(value),
+    }];
+    writer
+        .embedded_stage(owner.owner(), 11, mnemonic, 0, Some(12), attrs.clone())
+        .unwrap();
+    writer
+        .embedded_event(owner.owner(), 12, mnemonic, attrs)
+        .unwrap();
+    writer.end_at(owner, 15, Status::Ok).unwrap();
+    writer.close().unwrap();
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(path).open().unwrap());
+    let track = TrackRef(source.id());
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let pipeline = app.panels.focused_id();
+    complete_pending(&mut app);
+    let panel = show(&mut app, pipeline, track, owner.id());
+    (app, panel, directory)
+}
+
+#[test]
+fn nested_record_stage_and_event_values_are_expanded_searchable_and_copyable() {
+    let (mut app, panel, _directory) = nested_attribute_record(0, 0);
+    let projection = view(&app, panel);
+    for (path, value) in [
+        ("attributes.instruction.mnemonic", "ds_read_b32"),
+        ("attributes.instruction.pc", "18446744073709551615"),
+        ("attributes.instruction.empty", "0 items"),
+        ("attributes.instruction.bytes", "00 ab ff"),
+        ("attributes.instruction.bits", "1010"),
+        ("payload.flops[3]", "3"),
+    ] {
+        assert!(
+            projection
+                .attributes
+                .rows
+                .iter()
+                .any(|row| row.path == path && row.value == value),
+            "{path}"
+        );
+    }
+    let branch = projection
+        .attributes
+        .rows
+        .iter()
+        .find(|row| row.key == "attributes.instruction")
+        .unwrap();
+    let branch_id = branch.id.clone();
+    assert!(branch.expanded);
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::ToggleAttribute(branch_id.clone()),
+    ));
+    assert!(
+        !view(&app, panel)
+            .attributes
+            .rows
+            .iter()
+            .any(|row| row.key == "mnemonic")
+    );
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::Filter("CAFÉ NEEDLE".into()),
+    ));
+    let projection = view(&app, panel);
+    assert_eq!(projection.attributes.rows.len(), 2);
+    assert_eq!(projection.attributes.rows[0].key, "attributes.instruction");
+    assert!(projection.attributes.rows[1].value.ends_with("café needle"));
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::Filter(String::new()),
+    ));
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::ExpandAttributes(true),
+    ));
+    let projection = view(&app, panel);
+    let pc = projection
+        .attributes
+        .rows
+        .iter()
+        .find(|row| row.key == "pc")
+        .unwrap();
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributeRadix(pc.id.clone()),
+    ));
+    assert_eq!(
+        view(&app, panel)
+            .attributes
+            .rows
+            .iter()
+            .find(|row| row.key == "pc")
+            .unwrap()
+            .value,
+        "0xffffffffffffffff"
+    );
+    let copied = app
+        .panels
+        .transaction(panel)
+        .unwrap()
+        .copy_attribute(&app.doc, &branch_id)
+        .unwrap();
+    assert!(copied.contains("\"mnemonic\": \"ds_read_b32\""));
+    assert!(copied.contains("18446744073709551615"));
+    assert!(copied.contains("\"empty\": []"));
+    let stage = projection.stages.rows[0].id;
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::SelectStage(stage),
+    ));
+    let projection = view(&app, panel);
+    assert!(
+        projection
+            .stage_details
+            .unwrap()
+            .attributes
+            .rows
+            .iter()
+            .any(|row| row.key == "mnemonic" && row.value == "ds_read_b32")
+    );
+    assert!(
+        projection.events.rows[0]
+            .attributes
+            .rows
+            .iter()
+            .any(|row| row.key == "pc" && row.value == u64::MAX.to_string())
+    );
+    let tsv = app
+        .panels
+        .transaction(panel)
+        .unwrap()
+        .copy_tsv(&app.doc)
+        .unwrap();
+    assert!(tsv.contains("payload.flops\t[0, 1, 2, 3]"));
+    assert_eq!(tsv.matches("\"mnemonic\": \"ds_read_b32\"").count(), 3);
+}
+
+#[test]
+fn every_large_list_element_is_reachable_and_search_reveals_collapsed_matches() {
+    let (mut app, panel, _directory) = nested_attribute_record(150, 0);
+    app.panels
+        .transaction_mut(panel)
+        .unwrap()
+        .set_detail_items(1);
+    let mut values = Vec::new();
+    let mut page = 0;
+    loop {
+        let projection = view(&app, panel);
+        for row in &projection.attributes.rows {
+            if row.path.starts_with("payload.samples[") {
+                values.push(row.value.parse::<u64>().unwrap());
+            }
+        }
+        if !projection.attributes.has_next() {
+            break;
+        }
+        page += 1;
+        app.handle(Command::Transaction(
+            panel,
+            TransactionCommand::AttributePage(projection.attributes.owner, page),
+        ));
+    }
+    assert_eq!(values, (0..150).collect::<Vec<_>>());
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::ExpandAttributes(false),
+    ));
+    let projection = view(&app, panel);
+    assert_eq!(projection.attributes.page, 0);
+    assert!(projection.attributes.rows.iter().all(|row| row.depth == 0));
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::Filter("149".into()),
+    ));
+    let projection = view(&app, panel);
+    assert_eq!(
+        projection
+            .attributes
+            .rows
+            .iter()
+            .map(|row| row.key.as_str())
+            .collect::<Vec<_>>(),
+        ["payload.samples", "[149]"]
+    );
+    assert_eq!(projection.attributes.rows[1].value, "149");
+    assert!(projection.attributes.rows[0].expanded);
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::Filter("absent".into()),
+    ));
+    assert!(view(&app, panel).attributes.rows.is_empty());
+}
+
+#[test]
+fn paging_long_values_never_skips_an_attribute_and_individual_copies_remain_complete() {
+    let (mut app, panel, _directory) = nested_attribute_record(0, 70);
+    let mut entries = Vec::new();
+    let mut page = 0;
+    loop {
+        let projection = view(&app, panel);
+        for row in &projection.attributes.rows {
+            if row.path.starts_with("attributes.notes[") {
+                let index = entries.len();
+                assert!(
+                    row.value.starts_with(&format!("entry-{index:03}")),
+                    "{}: {}",
+                    row.path,
+                    row.value
+                );
+                let copy = app
+                    .panels
+                    .transaction(panel)
+                    .unwrap()
+                    .copy_attribute(&app.doc, &row.id)
+                    .unwrap();
+                assert_eq!(copy, format!("entry-{index:03} {}", "λ".repeat(2000)));
+                entries.push(row.id.clone());
+            }
+        }
+        if !projection.attributes.has_next() {
+            break;
+        }
+        page += 1;
+        app.handle(Command::Transaction(
+            panel,
+            TransactionCommand::AttributePage(projection.attributes.owner, page),
+        ));
+    }
+    assert_eq!(entries.len(), 70);
+}
+
+fn attribute_record(
+    value: impl FnOnce(&mut vtr::Writer) -> vtr::Value,
+    name: &str,
+) -> (App, PanelId, tempfile::TempDir) {
+    use vtr::{Recorder, SourceOptions};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("attributes.vtr");
+    let mut writer = vtr::Writer::create(&path).unwrap();
+    let source = writer
+        .transactions::<()>(SourceOptions::new("instructions", None), "INSTRUCTION")
+        .unwrap();
+    let key = writer.intern(name).unwrap();
+    let value = value(&mut writer);
+    let owner = writer.begin_at(source, 10, &(), None).unwrap();
+    writer.attribute(owner.owner(), key, value).unwrap();
+    writer.end_at(owner, 15, Status::Ok).unwrap();
+    writer.close().unwrap();
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(path).open().unwrap());
+    let track = TrackRef(source.id());
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let pipeline = app.panels.focused_id();
+    complete_pending(&mut app);
+    let panel = show(&mut app, pipeline, track, owner.id());
+    (app, panel, directory)
+}
+
+#[test]
+fn shared_value_graphs_open_page_and_search_without_expanding_all_occurrences() {
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use vtr::Value;
+        let (mut app, panel, _directory) = attribute_record(
+            |writer| {
+                let mut value = writer.intern_value(Value::U64(255)).unwrap();
+                for _ in 0..40 {
+                    value = writer
+                        .intern_value(Value::List(vec![Value::Ref(value); 2]))
+                        .unwrap();
+                }
+                Value::Ref(value)
+            },
+            "shared",
+        );
+        let first = view(&app, panel);
+        assert!(first.attributes.has_next());
+        assert!(first.attributes.rows.iter().any(|row| row.value == "255"));
+        app.handle(Command::Transaction(
+            panel,
+            TransactionCommand::AttributePage(first.attributes.owner, 1),
+        ));
+        let second = view(&app, panel);
+        assert_eq!(second.attributes.page, 1);
+        assert!(second.attributes.has_previous());
+        let leaf = second
+            .attributes
+            .rows
+            .iter()
+            .find(|row| row.value == "255")
+            .unwrap();
+        assert_eq!(
+            app.panels
+                .transaction(panel)
+                .unwrap()
+                .copy_attribute(&app.doc, &leaf.id)
+                .unwrap(),
+            "255"
+        );
+        app.handle(Command::Transaction(
+            panel,
+            TransactionCommand::AttributePage(first.attributes.owner, 0),
+        ));
+        assert_eq!(view(&app, panel).attributes.rows, first.attributes.rows);
+        app.handle(Command::Transaction(
+            panel,
+            TransactionCommand::Filter("absent".into()),
+        ));
+        let searched = view(&app, panel);
+        assert!(searched.attributes.rows.is_empty());
+        assert!(!searched.attributes.has_next());
+        done.send(()).unwrap();
+    });
+    result
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("A compact shared graph must remain interactive.");
+}
+
+#[test]
+fn sparse_search_continues_from_its_work_window_and_keeps_the_matching_ancestor() {
+    let (mut app, panel, _directory) = nested_attribute_record(12_000, 0);
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::Filter("11999".into()),
+    ));
+    let first = view(&app, panel);
+    assert!(first.attributes.rows.is_empty());
+    assert!(first.attributes.has_next());
+    let mut page = 0;
+    loop {
+        let projection = view(&app, panel);
+        assert!(!projection.attributes.limited);
+        if projection
+            .attributes
+            .rows
+            .iter()
+            .any(|row| row.key == "[11999]")
+        {
+            assert!(
+                projection
+                    .attributes
+                    .rows
+                    .iter()
+                    .any(|row| row.key == "payload.samples")
+            );
+            assert_eq!(
+                projection
+                    .attributes
+                    .rows
+                    .iter()
+                    .find(|row| row.key == "[11999]")
+                    .unwrap()
+                    .value,
+                "11999"
+            );
+            break;
+        }
+        assert!(
+            projection.attributes.has_next(),
+            "search must reach the last sample"
+        );
+        page += 1;
+        app.handle(Command::Transaction(
+            panel,
+            TransactionCommand::AttributePage(projection.attributes.owner, page),
+        ));
+    }
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributePage(first.attributes.owner, 0),
+    ));
+    assert_eq!(view(&app, panel).attributes.page, 0);
+}
+
+#[test]
+fn shortened_labels_preserve_full_paths_radix_actions_and_table_column_keys() {
+    let name = format!("{}tail", "field_".repeat(80));
+    let (mut app, panel, _directory) = attribute_record(|_| vtr::Value::U64(255), &name);
+    let projection = view(&app, panel);
+    let row = projection
+        .attributes
+        .rows
+        .iter()
+        .find(|row| row.key.starts_with("attributes.field_"))
+        .unwrap();
+    assert!(row.key.len() < name.len());
+    let id = row.id.clone();
+    let full_key = format!("attributes.{name}");
+    let model = app.panels.transaction(panel).unwrap();
+    assert_eq!(model.copy_attribute_path(&app.doc, &id).unwrap(), full_key);
+    assert_eq!(model.attribute_column(&app.doc, &id).unwrap(), full_key);
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributeRadix(id.clone()),
+    ));
+    let projection = view(&app, panel);
+    assert_eq!(
+        projection
+            .attributes
+            .rows
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap()
+            .value,
+        "0xff"
+    );
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::Filter("tail".into()),
+    ));
+    assert!(
+        view(&app, panel)
+            .attributes
+            .rows
+            .iter()
+            .any(|row| row.id == id)
+    );
+    let key = app
+        .panels
+        .transaction(panel)
+        .unwrap()
+        .attribute_column(&app.doc, &id)
+        .unwrap();
+    app.handle(Command::ShowAttributeColumn { from: panel, key });
+    let table = app.panels.focused_id();
+    complete_pending(&mut app);
+    frame(&mut app, table);
+    let model = app.panels.get(table).unwrap().kind.table().unwrap();
+    assert!((0..model.columns.get().len()).any(|column| model.column_title(column) == full_key));
+    let copied = model.copy_tsv().unwrap();
+    let mut lines = copied.lines();
+    let column = lines
+        .next()
+        .unwrap()
+        .split('\t')
+        .position(|title| title == full_key)
+        .unwrap();
+    assert_eq!(lines.next().unwrap().split('\t').nth(column), Some("0xff"));
+}
+
+#[test]
+fn deep_attribute_ids_keep_copy_and_radix_actions_after_the_path_preview_is_shortened() {
+    let (mut app, panel, _directory) = attribute_record(
+        |writer| {
+            let mut value = writer.intern_value(vtr::Value::U64(255)).unwrap();
+            for _ in 0..150 {
+                value = writer
+                    .intern_value(vtr::Value::List(vec![vtr::Value::Ref(value)]))
+                    .unwrap();
+            }
+            vtr::Value::Ref(value)
+        },
+        "deep",
+    );
+    let first = view(&app, panel);
+    let root = &first.attributes.rows[0].id;
+    assert_eq!(
+        app.panels
+            .transaction(panel)
+            .unwrap()
+            .copy_attribute(&app.doc, root)
+            .unwrap(),
+        format!("{}255{}", "[".repeat(150), "]".repeat(150))
+    );
+    let mut page = 0;
+    let leaf = loop {
+        let projection = view(&app, panel);
+        if let Some(leaf) = projection
+            .attributes
+            .rows
+            .iter()
+            .find(|row| row.value == "255")
+        {
+            break leaf.id.clone();
+        }
+        assert!(projection.attributes.has_next());
+        page += 1;
+        app.handle(Command::Transaction(
+            panel,
+            TransactionCommand::AttributePage(projection.attributes.owner, page),
+        ));
+    };
+    assert_eq!(
+        app.panels
+            .transaction(panel)
+            .unwrap()
+            .copy_attribute_path(&app.doc, &leaf)
+            .unwrap(),
+        format!("attributes.deep{}", "[0]".repeat(150))
+    );
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributeRadix(leaf.clone()),
+    ));
+    let projection = view(&app, panel);
+    assert_eq!(
+        projection
+            .attributes
+            .rows
+            .iter()
+            .find(|row| row.id == leaf)
+            .unwrap()
+            .value,
+        "0xff"
+    );
+    assert_eq!(
+        app.panels
+            .transaction(panel)
+            .unwrap()
+            .copy_attribute(&app.doc, &leaf)
+            .unwrap(),
+        "255"
+    );
+}
+
+fn overlapping_attribute_record(pc: u64) -> (App, PanelId, tempfile::TempDir) {
+    attribute_record(
+        |writer| {
+            let pc_key = writer.intern("pc").unwrap();
+            let samples = writer.intern("samples").unwrap();
+            vtr::Value::Map(vec![
+                vtr::Attribute {
+                    key: pc_key,
+                    value: vtr::Value::U64(pc),
+                },
+                vtr::Attribute {
+                    key: samples,
+                    value: vtr::Value::List((0..150).map(vtr::Value::U64).collect()),
+                },
+            ])
+        },
+        "instruction",
+    )
+}
+
+fn show_added_attribute_record(
+    app: &mut App,
+    directory: &std::path::Path,
+) -> (volna_core::trace::TraceId, PanelId) {
+    let session = OpenSpec::Path(directory.join("attributes.vtr"))
+        .open()
+        .unwrap();
+    let track = session.tracks()[0].id;
+    let owner = session.load_track(track).unwrap().generators[0].transactions()[0].id;
+    let trace = app.add_session(session).unwrap();
+    let track = volna_core::trace::Traced::new(trace, track);
+    app.handle(Command::OpenPipeline { track });
+    let pipeline = app.panels.focused_id();
+    complete_pending(app);
+    app.handle(Command::SelectTransaction {
+        panel: pipeline,
+        track,
+        id: owner,
+        cursor: None,
+    });
+    app.handle(Command::ShowTransaction { from: pipeline });
+    complete_pending(app);
+    (trace, app.panels.focused_id())
+}
+
+#[test]
+fn attribute_actions_stay_with_their_recording_when_the_inspector_switches_traces() {
+    let (mut app, panel, _first_directory) = overlapping_attribute_record(255);
+    let first = view(&app, panel);
+    let first_branch = first
+        .attributes
+        .rows
+        .iter()
+        .find(|row| row.key == "attributes.instruction")
+        .unwrap()
+        .id
+        .clone();
+    let first_pc = first
+        .attributes
+        .rows
+        .iter()
+        .find(|row| row.key == "pc")
+        .unwrap()
+        .id
+        .clone();
+    let (_second, _, second_directory) = overlapping_attribute_record(100);
+    let (_, current_panel) = show_added_attribute_record(&mut app, second_directory.path());
+    assert_eq!(current_panel, panel);
+    let second = view(&app, panel);
+    assert_eq!(first.identity.id, second.identity.id);
+    let second_pc = second
+        .attributes
+        .rows
+        .iter()
+        .find(|row| row.key == "pc")
+        .unwrap()
+        .id
+        .clone();
+    let model = app.panels.transaction(panel).unwrap();
+    assert!(model.copy_attribute(&app.doc, &first_pc).is_err());
+    assert!(model.copy_attribute_path(&app.doc, &first_pc).is_err());
+    assert!(model.attribute_column(&app.doc, &first_branch).is_none());
+    assert_eq!(model.copy_attribute(&app.doc, &second_pc).unwrap(), "100");
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributePage(second.attributes.owner, 1),
+    ));
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributeRadix(first_pc.clone()),
+    ));
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::ToggleAttribute(first_branch),
+    ));
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributePage(first.attributes.owner, 0),
+    ));
+    assert_eq!(view(&app, panel).attributes.page, 1);
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributePage(second.attributes.owner, 0),
+    ));
+    let projection = view(&app, panel);
+    assert!(
+        projection
+            .attributes
+            .rows
+            .iter()
+            .find(|row| row.key == "attributes.instruction")
+            .unwrap()
+            .expanded
+    );
+    assert_eq!(
+        projection
+            .attributes
+            .rows
+            .iter()
+            .find(|row| row.key == "pc")
+            .unwrap()
+            .value,
+        "100"
+    );
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::AttributeRadix(second_pc.clone()),
+    ));
+    assert_eq!(
+        view(&app, panel)
+            .attributes
+            .rows
+            .iter()
+            .find(|row| row.id == second_pc)
+            .unwrap()
+            .value,
+        "0x64"
+    );
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::Jump {
+            track: first.identity.track,
+            id: first.identity.id,
+        },
+    ));
+    complete_pending(&mut app);
+    assert_eq!(
+        app.panels
+            .transaction(panel)
+            .unwrap()
+            .copy_attribute(&app.doc, &first_pc)
+            .unwrap(),
+        "255"
+    );
+}
+
+#[test]
+fn attribute_actions_reject_a_removed_recording_when_its_trace_letter_is_reused() {
+    let (mut app, panel, _first_directory) = overlapping_attribute_record(1);
+    let (_second, _, second_directory) = overlapping_attribute_record(2);
+    let (trace, _) = show_added_attribute_record(&mut app, second_directory.path());
+    let previous = view(&app, panel);
+    let old_id = previous
+        .attributes
+        .rows
+        .iter()
+        .find(|row| row.key == "pc")
+        .unwrap()
+        .id
+        .clone();
+    app.handle(Command::RemoveTrace(trace));
+    let (_replacement, _, replacement_directory) = overlapping_attribute_record(9);
+    let (replacement, current_panel) =
+        show_added_attribute_record(&mut app, replacement_directory.path());
+    assert_eq!(trace, replacement);
+    let model = app.panels.transaction(current_panel).unwrap();
+    assert!(model.copy_attribute(&app.doc, &old_id).is_err());
+    assert!(model.copy_attribute_path(&app.doc, &old_id).is_err());
+    app.handle(Command::Transaction(
+        current_panel,
+        TransactionCommand::AttributeRadix(old_id),
+    ));
+    app.handle(Command::Transaction(
+        current_panel,
+        TransactionCommand::AttributePage(previous.attributes.owner, 1),
+    ));
+    let current = view(&app, current_panel);
+    assert_eq!(current.attributes.page, 0);
+    let pc = current
+        .attributes
+        .rows
+        .iter()
+        .find(|row| row.key == "pc")
+        .unwrap();
+    assert_eq!(pc.value, "9");
+    assert_eq!(
+        app.panels
+            .transaction(current_panel)
+            .unwrap()
+            .copy_attribute(&app.doc, &pc.id)
+            .unwrap(),
+        "9"
+    );
 }

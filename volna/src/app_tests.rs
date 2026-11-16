@@ -6064,15 +6064,16 @@ fn numbered_markers_work_from_workspace_table_and_transaction_details(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn record_details_long_attributes_stay_in_separate_single_line_columns(cx: &mut TestAppContext) {
+fn record_details_wrap_complete_values_in_separate_columns(cx: &mut TestAppContext) {
     use gpui_kit::base::dock::DockPlacement;
+    use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{VisualTestContext, size};
     use volna_core::testing::a;
     use vtr::Recorder;
     init(cx);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("long-details.vtr");
-    let key = "attributes.parent_unavailability_reason with whitespace and a_long_name";
+    let key = format!("{}reason", "parent_unavailability_".repeat(30));
     let value = "pm4_queue_not_traced · 未追跡 ".repeat(12);
     let mut writer = vtr::Writer::create(&path).unwrap();
     let generator = writer
@@ -6082,7 +6083,7 @@ fn record_details_long_attributes_stay_in_separate_single_line_columns(cx: &mut 
         )
         .unwrap();
     let record = writer.begin_at(generator, 14_415_788, &(), None).unwrap();
-    let attr_key = writer.intern(key).unwrap();
+    let attr_key = writer.intern(&key).unwrap();
     let attr_value = writer.intern(&value).unwrap();
     writer
         .attribute(record.owner(), attr_key, vtr::Value::Str(attr_value))
@@ -6131,9 +6132,8 @@ fn record_details_long_attributes_stay_in_separate_single_line_columns(cx: &mut 
             view.attributes
                 .rows
                 .iter()
-                .find(|row| row.key.ends_with(key))
+                .position(|row| row.value == value)
                 .unwrap()
-                .attribute
         })
         .unwrap();
     let key_selector = &*Box::leak(format!("tx-attr-key-{attribute}").into_boxed_str());
@@ -6163,12 +6163,47 @@ fn record_details_long_attributes_stay_in_separate_single_line_columns(cx: &mut 
                 assert!(name.left() >= body.left() && value.right() <= body.right());
                 assert!(name.size.width > px(40. * zoom) && value.size.width > px(40. * zoom));
                 assert!(
-                    name.size.height <= px(24. * zoom) && value.size.height <= px(24. * zoom),
-                    "long text must remain on a single line"
+                    name.size.height <= px(24. * zoom) && value.size.height > px(24. * zoom),
+                    "field names stay compact while complete values wrap"
                 );
             }
         }
     }
+    fn menu_action(vcx: &mut VisualTestContext, selector: &'static str, label: &str) {
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let at = vcx.debug_bounds(selector).unwrap().center();
+        vcx.simulate_mouse_down(at, gpui_kit::MouseButton::Right, Default::default());
+        vcx.simulate_mouse_up(at, gpui_kit::MouseButton::Right, Default::default());
+        vcx.run_until_parked();
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let mut menu = window.within("popup-menu");
+            let item = (0..8usize)
+                .find(|&i| {
+                    menu.try_find(i)
+                        .is_some_and(|item| item.label() == Some(label))
+                })
+                .unwrap();
+            menu.click(item, cx);
+        });
+        vcx.run_until_parked();
+    }
+    menu_action(&mut vcx, key_selector, "Copy field path");
+    assert_eq!(
+        vcx.read(|cx| cx.read_from_clipboard().unwrap().text().unwrap()),
+        format!("attributes.{key}")
+    );
+    menu_action(&mut vcx, key_selector, "Show as table column");
+    window
+        .update(&mut vcx, |ws, _, _| {
+            let table = ws.app.panels.focused().kind.table().unwrap();
+            assert!(
+                (0..table.columns.get().len())
+                    .any(|i| table.column_title(i) == format!("attributes.{key}"))
+            );
+            assert!(table.copy_tsv().unwrap().contains(&value));
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]

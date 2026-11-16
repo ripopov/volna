@@ -534,7 +534,7 @@ pub static REGISTRY: &[Spec] = &[
         page: Page::Workspace,
         group: "Transaction",
         title: "Detail items per list",
-        description: "Maximum attributes, stages, events, or related records listed in each section of the Transaction panel. The admitted byte budget may truncate earlier.",
+        description: "Maximum stages, events, or related records listed in each section of Record details. Attribute trees have separate pages. The admitted byte budget may truncate earlier.",
         keywords: &[
             "record",
             "attributes",

@@ -20,6 +20,21 @@ directly below the list. The selected row is highlighted, and the time cursor
 moves to its start. Focus a stage row and press **Enter** or **Space** to select
 it with the keyboard. Switching records clears the stage selection.
 
+Record, stage, and event attributes are trees, expanded by default. Nested fields
+and indexed list elements appear under their containers; empty containers remain
+visible. Search record fields or values to reveal matching branches with their
+ancestors.
+Use **Expand all** or **Collapse all** to change the tree, or focus a row and press
+**Enter/Space** to toggle it, **←/→** to collapse or expand it, and **↑/↓** to move
+between rows. Integer rows
+cycle decimal, hexadecimal, and binary display with **Enter/Space** or a click.
+The row menu copies a field path or its complete value, including nested contents;
+**Ctrl+C** or **⌘C** copies the focused value. Large trees use **Previous/Next**
+pages independently of the detail item setting. **First** returns to the beginning;
+**Continue search** checks further fields when a search has more work to do.
+Long values have marked previews;
+copying reads the original value within the clipboard size limit.
+
 The **At cursor** list reserves a stable height above the record details, including
 when no transactions are active. Both panes scroll independently. Drag the divider
 to resize; double-click resets it. Tab to the divider and use **↑/↓** to resize,

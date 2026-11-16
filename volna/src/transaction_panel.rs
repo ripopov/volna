@@ -1,5 +1,6 @@
 //! The Transaction panel: everything recorded about one selected record.
 
+mod attributes;
 mod cursor;
 mod split;
 
@@ -24,10 +25,10 @@ use gpui_kit::{
 use volna_core::Command;
 use volna_core::data::points::PointKind;
 use volna_core::panels::{PanelId, PanelsCommand};
-use volna_core::transaction::view::FILTER_THRESHOLD;
+use volna_core::transaction::attributes::AttributeId;
 use volna_core::transaction::{
-    AttrRow, Chip, EventRow, ParentTraceState, RefRole, RefRow, Section, StageDetails, StageRow,
-    TransactionCommand, TxPanelState, TxView,
+    EventRow, ParentTraceState, RefRole, RefRow, Section, StageRow, TransactionCommand,
+    TxPanelState, TxView,
 };
 use volna_trace::data::transactions::TransactionRef;
 
@@ -65,6 +66,7 @@ pub(crate) struct TransactionPanelView {
     cursor_list: cursor::CursorList,
     cursor_split: Entity<split::RecordSplit>,
     stage_focus: HashMap<TransactionRef, FocusHandle>,
+    attribute_focus: HashMap<AttributeId, FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -81,7 +83,7 @@ impl TransactionPanelView {
             view.panels(PanelsCommand::Focus(view.id), window, cx);
         })
         .detach();
-        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter attributes"));
+        let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Find a field or value…"));
         let subscription = cx.subscribe_in(&filter, window, |view, input, event, window, cx| {
             if let InputEvent::Change = event {
                 let text = input.read(cx).value().to_string();
@@ -112,6 +114,7 @@ impl TransactionPanelView {
             cursor_list: cursor::CursorList::default(),
             cursor_split: cx.new(split::RecordSplit::new),
             stage_focus: HashMap::new(),
+            attribute_focus: HashMap::new(),
             _subscriptions: vec![subscription, group_subscription],
         }
     }
@@ -410,6 +413,24 @@ impl TransactionPanelView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let visible: HashSet<_> = view
+            .attributes
+            .rows
+            .iter()
+            .chain(
+                view.stage_details
+                    .iter()
+                    .flat_map(|stage| stage.attributes.rows.iter()),
+            )
+            .chain(
+                view.events
+                    .rows
+                    .iter()
+                    .flat_map(|event| event.attributes.rows.iter()),
+            )
+            .map(|row| &row.id)
+            .collect();
+        self.attribute_focus.retain(|id, _| visible.contains(id));
         let t = *theme(cx);
         let muted = t.panel.text_muted;
         let identity = &view.identity;
@@ -664,9 +685,9 @@ impl TransactionPanelView {
         if view.point_kind.is_none() {
             body = body.child(self.stages(&t, &view.stages, cx));
             if let Some(stage) = &view.stage_details {
-                body = body.child(Self::stage_attributes(&t, stage, cx));
+                body = body.child(self.stage_attributes(&t, stage, cx));
             }
-            body = body.child(Self::section(&t, &view.events, cx, event_row));
+            body = body.child(self.events(&t, &view.events, cx));
         }
         body = body.child(Self::related(&t, &view.related, cx));
         body = body.child(self.parents(&t, cx));
@@ -677,7 +698,9 @@ impl TransactionPanelView {
                     .pb_3()
                     .text_size(px(t.ui_size_small))
                     .text_color(t.panel.text_muted)
-                    .child("Values were cut at the admitted byte limit."),
+                    .child(
+                        "Some values are shown as previews. Use Copy value for the complete value.",
+                    ),
             );
         }
         if let Some(group) = self.record_group(view.point_kind, cx) {
@@ -1334,203 +1357,6 @@ impl TransactionPanelView {
         })
     }
 
-    fn attributes(
-        &self,
-        t: &crate::theme::Theme,
-        view: &TxView,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let section = &view.attributes;
-        let mut element = div()
-            .flex()
-            .flex_col()
-            .border_t_1()
-            .border_color(t.border_variant)
-            .child(Self::named_heading(
-                t,
-                section,
-                if view.point_kind.is_some() {
-                    "Arguments"
-                } else {
-                    "Attributes"
-                },
-                cx,
-            ));
-        if section.collapsed {
-            return element.into_any_element();
-        }
-        if section.total > FILTER_THRESHOLD {
-            element = element.child(div().px_3().pb_1().child(Input::new(&self.filter).small()));
-        }
-        for row in &section.rows {
-            element = element.child(Self::attribute_row(t, row, view.identity.id, cx));
-        }
-        if let Some(note) = Self::cut_note(t, section) {
-            element = element.child(note);
-        }
-        element.into_any_element()
-    }
-
-    fn stage_attributes(
-        t: &crate::theme::Theme,
-        stage: &StageDetails,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let section = &stage.attributes;
-        let mut element = div()
-            .debug_selector(|| "tx-stage-attributes".into())
-            .flex()
-            .flex_col()
-            .min_w_0()
-            .border_t_1()
-            .border_color(t.border_variant)
-            .child(Self::heading(t, section, cx));
-        if section.collapsed {
-            return element.into_any_element();
-        }
-        element = element.child(
-            detail_text(cx, "tx-stage-attributes-name", stage.name.clone())
-                .px_3()
-                .py_1()
-                .font_family(t.mono_font),
-        );
-        for (index, attribute) in section.rows.iter().enumerate() {
-            element = element.child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap_2()
-                    .px_3()
-                    .py_0p5()
-                    .child(
-                        detail_text(
-                            cx,
-                            format!("tx-stage-attr-key-{index}"),
-                            attribute.key.clone(),
-                        )
-                        .debug_selector(move || format!("tx-stage-attr-key-{index}"))
-                        .w(relative(0.46))
-                        .flex_none()
-                        .text_ellipsis_start()
-                        .text_color(t.panel.text_muted),
-                    )
-                    .child(
-                        detail_text(
-                            cx,
-                            format!("tx-stage-attr-{index}"),
-                            attribute.value.clone(),
-                        )
-                        .debug_selector(move || format!("tx-stage-attr-{index}"))
-                        .flex_1()
-                        .font_family(t.mono_font),
-                    ),
-            );
-        }
-        if section.total == 0 {
-            element = element.child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .text_color(t.panel.text_muted)
-                    .child("No attributes."),
-            );
-        }
-        if let Some(note) = Self::cut_note(t, section) {
-            element = element.child(note);
-        }
-        element.into_any_element()
-    }
-
-    fn attribute_row(
-        t: &crate::theme::Theme,
-        row: &AttrRow,
-        record: volna_trace::data::transactions::TransactionRef,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let attribute = row.attribute;
-        let hint = match row.radix {
-            Some(radix) => format!("{}\n{} · click to cycle the radix", row.value, radix.name()),
-            None => row.value.clone(),
-        };
-        let value = div()
-            .id(SharedString::from(format!("tx-attr-{attribute}")))
-            .debug_selector(move || format!("tx-attr-{attribute}"))
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_ellipsis()
-            .font_family(t.mono_font)
-            .tooltip_show_delay(crate::ui::tooltip::delay(cx))
-            .tooltip(move |w, cx| Tooltip::new(hint.clone()).build(w, cx))
-            .child(SharedString::from(row.value.clone()));
-        let value = match row.radix {
-            Some(_) => value
-                .cursor_pointer()
-                .hover(|style| style.bg(t.hover.bg))
-                .on_click(cx.listener(move |view, _, window, cx| {
-                    let key = view.ws.upgrade().and_then(|owner| {
-                        let ws = owner.read(cx);
-                        ws.app.panels.transaction(view.id)?.attribute_key(
-                            &ws.app.doc,
-                            record,
-                            attribute,
-                        )
-                    });
-                    if let Some(key) = key {
-                        view.dispatch(TransactionCommand::Radix(key), window, cx);
-                    }
-                }))
-                .into_any_element(),
-            None => value.into_any_element(),
-        };
-        let owner = cx.entity().downgrade();
-        let key = row.key.clone();
-        div()
-            .flex()
-            .items_start()
-            .gap_2()
-            .px_3()
-            .py_0p5()
-            .child(
-                div()
-                    .w(relative(0.46))
-                    .min_w_0()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_color(t.panel.text_muted)
-                    .child(
-                        detail_text(cx, format!("tx-attr-key-{attribute}"), row.key.clone())
-                            .text_ellipsis_start()
-                            .debug_selector(move || format!("tx-attr-key-{attribute}"))
-                            .flex_1(),
-                    )
-                    .when_some(row.phase, |element, phase| element.child(tag(t, phase))),
-            )
-            .child(value)
-            .context_menu(move |menu, _, _| {
-                let owner = owner.clone();
-                let key = key.clone();
-                menu.item(PopupMenuItem::new("Show as table column").on_click(
-                    move |_, window, cx| {
-                        drop(owner.update(cx, |view, cx| {
-                            view.send(
-                                Command::ShowAttributeColumn {
-                                    from: view.id,
-                                    key: key.clone(),
-                                },
-                                window,
-                                cx,
-                            );
-                        }));
-                    },
-                ))
-            })
-            .into_any_element()
-    }
-
     fn related(
         t: &crate::theme::Theme,
         section: &Section<RefRow>,
@@ -1739,36 +1565,6 @@ fn status_badge(
         .into_any_element()
 }
 
-fn chips(cx: &App, t: &crate::theme::Theme, items: &[Chip], total: usize) -> AnyElement {
-    let mut element = div().flex().flex_wrap().gap_1();
-    for chip in items {
-        element = element.child(
-            div()
-                .px_1()
-                .rounded_sm()
-                .bg(t.badge.bg)
-                .font_family(t.mono_font)
-                .text_size(px(t.ui_size_small))
-                .text_color(t.badge.text)
-                .max_w_full()
-                .child(detail_text(
-                    cx,
-                    format!("tx-chip-{}", chip.key),
-                    format!("{} {}", chip.key, chip.value),
-                )),
-        );
-    }
-    if items.len() < total {
-        element = element.child(
-            div()
-                .text_size(px(t.ui_size_small))
-                .text_color(t.panel.text_muted)
-                .child(SharedString::from(format!("+{}", total - items.len()))),
-        );
-    }
-    element.into_any_element()
-}
-
 fn stage_row(
     t: &crate::theme::Theme,
     index: usize,
@@ -1883,57 +1679,6 @@ fn stage_row(
                         .text_ellipsis()
                         .child(SharedString::from(row.duration_text.clone())),
                 ),
-        )
-        .into_any_element()
-}
-
-fn event_row(
-    t: &crate::theme::Theme,
-    index: usize,
-    row: &EventRow,
-    cx: &mut Context<TransactionPanelView>,
-) -> AnyElement {
-    let time = row.time;
-    div()
-        .id(("tx-event", index))
-        .flex()
-        .items_start()
-        .gap_2()
-        .px_3()
-        .py_1()
-        .cursor_pointer()
-        .hover(|style| style.bg(t.hover.bg))
-        .on_click(cx.listener(move |view, _, window, cx| {
-            view.dispatch(TransactionCommand::Cursor(time), window, cx);
-        }))
-        .child(
-            div()
-                .w(relative(0.38))
-                .min_w_0()
-                .flex_none()
-                .font_family(t.mono_font)
-                .child(detail_text(
-                    cx,
-                    format!("tx-event-name-{index}"),
-                    row.name.clone(),
-                )),
-        )
-        .child(
-            div()
-                .w(relative(0.3))
-                .min_w_0()
-                .text_ellipsis()
-                .flex_none()
-                .font_family(t.mono_font)
-                .text_size(px(t.ui_size_small))
-                .text_color(t.panel.text_muted)
-                .child(SharedString::from(row.time_text.clone())),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(chips(cx, t, &row.attributes, row.attributes_total)),
         )
         .into_any_element()
 }

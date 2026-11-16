@@ -6,6 +6,7 @@ use std::sync::{Arc, Weak};
 
 use web_time::Instant;
 
+use super::attributes::{AttributeId, AttributeOwner, NAVIGATION_BYTES};
 use super::group::{GROUP_BYTES, GroupQuery, GroupView};
 use super::parents::{ParentTrace, ParentTraceState};
 use super::view::{SectionKey, TxView, VIEW_BYTES, ViewPrefs};
@@ -19,7 +20,7 @@ use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::{TrackRef, TransactionRef};
 use volna_trace::remote::memory::{MemoryBudget, Reservation};
 
-pub const PANEL_BYTES: u64 = (VIEW_BYTES + GROUP_BYTES) as u64;
+pub const PANEL_BYTES: u64 = (VIEW_BYTES + GROUP_BYTES + NAVIGATION_BYTES) as u64;
 pub const MAX_HISTORY: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +77,10 @@ pub enum TransactionCommand {
     Radix(String),
     Collapse(SectionKey, bool),
     Filter(String),
+    ToggleAttribute(AttributeId),
+    AttributeRadix(AttributeId),
+    ExpandAttributes(bool),
+    AttributePage(AttributeOwner, usize),
     TraceParents,
     ClearParents,
     GroupSearch(String),
@@ -106,6 +111,7 @@ pub struct TransactionModel {
 impl Retime for TransactionModel {
     fn retime(&mut self, by: crate::trace::Rescale) {
         self.history.retime(by);
+        self.prefs.attributes.clear_pages();
         *self.group_cache.get_mut() = None;
     }
 }
@@ -161,20 +167,57 @@ impl TransactionModel {
         self.parents.refresh(doc, &self.budget);
     }
 
-    #[must_use]
-    pub fn attribute_key(
+    fn with_attribute<T>(
         &self,
         doc: &Document,
-        id: TransactionRef,
-        index: usize,
-    ) -> Option<String> {
-        let shown = self.shown()?;
-        if shown.id != id {
+        id: &AttributeId,
+        read: impl FnOnce(
+            &volna_trace::data::transactions::Transaction,
+            super::attributes::Target<'_>,
+        ) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        let shown = self
+            .shown()
+            .ok_or_else(|| anyhow::anyhow!("No record is shown."))?;
+        let track = shown
+            .track
+            .track()
+            .ok_or_else(|| anyhow::anyhow!("Record is not loaded."))?;
+        let slot = doc
+            .traces()
+            .get(track.trace)
+            .ok_or_else(|| anyhow::anyhow!("Record is not loaded."))?;
+        anyhow::ensure!(
+            id.belongs_to(AttributeOwner::new(track, slot.generation(), shown.id)),
+            "Attribute is no longer available."
+        );
+        let generator = doc
+            .resident_generator(track)
+            .ok_or_else(|| anyhow::anyhow!("Record is not loaded."))?;
+        let tx = generator
+            .transaction(shown.id)
+            .ok_or_else(|| anyhow::anyhow!("Record is not loaded."))?;
+        let target = super::attributes::resolve(tx, id)
+            .ok_or_else(|| anyhow::anyhow!("Attribute is no longer available."))?;
+        read(tx, target)
+    }
+    pub fn copy_attribute(&self, doc: &Document, id: &AttributeId) -> anyhow::Result<String> {
+        self.with_attribute(doc, id, |_, target| {
+            super::attributes::copy_value(target.value, COPY_BYTES)
+        })
+    }
+    pub fn copy_attribute_path(&self, doc: &Document, id: &AttributeId) -> anyhow::Result<String> {
+        self.with_attribute(doc, id, |tx, _| {
+            super::attributes::source_path(tx, id, COPY_BYTES)
+        })
+    }
+    #[must_use]
+    pub fn attribute_column(&self, doc: &Document, id: &AttributeId) -> Option<String> {
+        if id.parent().is_some() {
             return None;
         }
-        let generator = doc.resident_generator(shown.track.track()?)?;
-        let tx = generator.transaction(shown.id)?;
-        Some(tx.attributes.get(index)?.key.clone())
+        self.with_attribute(doc, id, |_, target| Ok(target.root.to_owned()))
+            .ok()
     }
 
     pub(crate) fn forget_trace(&mut self, doc: &mut Document, trace: crate::trace::TraceId) {
@@ -350,6 +393,7 @@ impl TransactionModel {
 
     pub(crate) fn park(&mut self, doc: &mut Document) {
         self.detach(doc);
+        self.prefs.attributes.clear_pages();
         *self.group_cache.get_mut() = None;
         self.reservation = None;
     }
@@ -375,6 +419,7 @@ impl TransactionModel {
         }
         self.parents.clear(doc);
         self.selected_stage = None;
+        self.prefs.attributes = super::attributes::AttributePrefs::default();
         self.group_query = GroupQuery::default();
         *self.group_cache.get_mut() = None;
         self.history.truncate(self.cursor + 1);
@@ -397,6 +442,7 @@ impl TransactionModel {
         self.parents.clear(doc);
         self.cursor = cursor;
         self.selected_stage = None;
+        self.prefs.attributes = super::attributes::AttributePrefs::default();
         self.group_query = GroupQuery::default();
         *self.group_cache.get_mut() = None;
         if let Some(selection) = self.shown().and_then(|shown| shown.selection(panel)) {
@@ -745,9 +791,46 @@ impl TransactionModel {
                     self.prefs.collapsed.remove(&section)
                 }
             }
+            TransactionCommand::ToggleAttribute(id) => {
+                if self.with_attribute(doc, &id, |_, _| Ok(())).is_err() {
+                    return false;
+                }
+                if !self.prefs.attributes.toggled.remove(&id) {
+                    self.prefs.attributes.toggled.insert(id);
+                }
+                self.prefs.attributes.clear_pages();
+                true
+            }
+            TransactionCommand::ExpandAttributes(expanded) => {
+                self.prefs.attributes = super::attributes::AttributePrefs::default();
+                self.prefs.attributes.expanded = expanded;
+                true
+            }
+            TransactionCommand::AttributePage(owner, page) => {
+                let TxPanelState::Ready(view) = self.state(doc) else {
+                    return false;
+                };
+                let tree = std::iter::once(&view.attributes)
+                    .chain(view.stage_details.iter().map(|stage| &stage.attributes))
+                    .chain(view.events.rows.iter().map(|event| &event.attributes))
+                    .find(|tree| tree.owner == owner);
+                tree.is_some_and(|tree| self.prefs.attributes.navigate(owner, page, tree))
+            }
+            TransactionCommand::AttributeRadix(id) => {
+                let Ok(key) = self.with_attribute(doc, &id, |_, target| {
+                    Ok(super::attributes::radix_key(&target, &id).into_owned())
+                }) else {
+                    return false;
+                };
+                self.command(doc, panel, TransactionCommand::Radix(key), now)
+            }
             TransactionCommand::Filter(text) => {
+                let text = super::group::bounded_search(&text);
                 let changed = self.prefs.filter != text;
-                self.prefs.filter = text;
+                if changed {
+                    self.prefs.attributes.clear_pages();
+                    self.prefs.filter = text;
+                }
                 changed
             }
         }

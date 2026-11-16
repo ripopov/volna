@@ -7,7 +7,7 @@ use crate::clock::{Clock, ClockView, format_position};
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::data::text::{
     PREVIEW_BYTES, Radix, attribute_value_min_bytes, format_attribute, format_attribute_radix,
-    is_integer, join_path_limited, truncate_ref,
+    join_path_limited, truncate_ref,
 };
 use crate::document::Document;
 use crate::pipeline::model::LABEL_ATTRIBUTE;
@@ -16,11 +16,10 @@ use crate::trace::Traced;
 use crate::wave::timeline::format_time;
 use volna_trace::data::loaded_tracks::TransactionLocation;
 use volna_trace::data::transactions::{
-    AttributeValue, Attributes, SpanKind, Status, TrackRef, Transaction, TransactionRef,
+    AttributeValue, SpanKind, Status, TrackRef, Transaction, TransactionRef,
 };
 
 pub const VIEW_BYTES: usize = 128 * 1024;
-pub const FILTER_THRESHOLD: usize = 8;
 pub const DEFAULT_CURSOR_HEIGHT: f32 = 198.0;
 pub const MIN_CURSOR_HEIGHT: f32 = 96.0;
 pub const MAX_CURSOR_HEIGHT: f32 = 1200.0;
@@ -87,8 +86,6 @@ mod clock_readout_tests {
     }
 }
 
-const PHASES: [&str; 2] = ["record", "end"];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SectionKey {
     Attributes,
@@ -142,6 +139,7 @@ pub struct ViewPrefs {
     pub radix: BTreeMap<String, Radix>,
     pub collapsed: BTreeSet<SectionKey>,
     pub filter: String,
+    pub attributes: super::attributes::AttributePrefs,
 }
 
 impl Default for ViewPrefs {
@@ -152,6 +150,7 @@ impl Default for ViewPrefs {
             radix: BTreeMap::new(),
             collapsed: BTreeSet::new(),
             filter: String::new(),
+            attributes: super::attributes::AttributePrefs::default(),
         }
     }
 }
@@ -229,23 +228,6 @@ pub struct EventTick {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct AttrRow {
-    pub key: String,
-    pub attribute: usize,
-    pub phase: Option<&'static str>,
-    pub value: String,
-    pub radix: Option<Radix>,
-    pub kind: &'static str,
-    pub truncated: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Chip {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct StageRow {
     pub id: TransactionRef,
     pub selected: bool,
@@ -265,7 +247,7 @@ pub struct StageRow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StageDetails {
     pub name: String,
-    pub attributes: Section<Chip>,
+    pub attributes: super::attributes::AttributeTree,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -273,8 +255,7 @@ pub struct EventRow {
     pub name: String,
     pub time: u64,
     pub time_text: String,
-    pub attributes: Vec<Chip>,
-    pub attributes_total: usize,
+    pub attributes: super::attributes::AttributeTree,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,19 +296,12 @@ pub struct TxView {
     pub lifeline: Vec<LaneRow>,
     pub event_ticks: Vec<EventTick>,
     pub cursor: Option<f32>,
-    pub attributes: Section<AttrRow>,
+    pub attributes: super::attributes::AttributeTree,
     pub stages: Section<StageRow>,
     pub stage_details: Option<StageDetails>,
     pub events: Section<EventRow>,
     pub related: Section<RefRow>,
     pub truncated_bytes: bool,
-}
-
-impl TxView {
-    #[must_use]
-    pub fn filterable(&self) -> bool {
-        self.attributes.total > FILTER_THRESHOLD
-    }
 }
 
 #[must_use]
@@ -340,10 +314,15 @@ pub fn view(
 ) -> Option<TxView> {
     let generator = doc.resident_generator(track)?;
     let tx = generator.transaction(id)?;
+    let owner = super::attributes::AttributeOwner::new(
+        track,
+        doc.traces().get(track.trace)?.generation(),
+        id,
+    );
     let session = doc.session(track.trace)?;
     let catalog = session.tracks();
     let declaration = catalog.iter().find(|t| t.id == track.item)?;
-    let mut budget = Budget::new(VIEW_BYTES - 4096);
+    let mut budget = Budget::new(VIEW_BYTES - super::attributes::SCAN_SCRATCH_BYTES);
     let scope = budget.path(&declaration.path[..declaration.path.len().saturating_sub(1)]);
     let base = doc.time_base();
     let clock = doc
@@ -439,7 +418,7 @@ pub fn view(
     } else {
         Vec::new()
     };
-    let attributes = attributes(tx, prefs, limit, point_kind, &mut budget);
+    let attributes = attributes(tx, owner, prefs, point_kind, &mut budget);
     let mut stages = stages(
         tx,
         palette,
@@ -456,15 +435,20 @@ pub fn view(
         .and_then(|id| tx.stages.iter().find(|stage| stage.id == id))
         .map(|stage| StageDetails {
             name: budget.text(&stage.name),
-            attributes: Section {
-                key: SectionKey::StageAttributes,
-                total: stage.attributes.len(),
-                matched: stage.attributes.len(),
-                collapsed: prefs.collapsed.contains(&SectionKey::StageAttributes),
-                rows: chips(&stage.attributes, limit, &mut budget),
-            },
+            attributes: super::attributes::tree(
+                owner.with_record(stage.id),
+                SectionKey::StageAttributes,
+                stage
+                    .attributes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (k, v))| (i, k.as_str(), v)),
+                prefs,
+                "",
+                &mut budget,
+            ),
         });
-    let mut events = events(tx, limit, &time, &mut budget);
+    let mut events = events(tx, owner, prefs, limit, &time, &mut budget);
     let mut related = related(doc, &generator, tx, track, limit, &mut budget);
     stages.collapsed = prefs.collapsed.contains(&SectionKey::Stages);
     events.collapsed = prefs.collapsed.contains(&SectionKey::Events);
@@ -488,20 +472,28 @@ pub fn view(
     })
 }
 
-struct Budget {
-    remaining: usize,
-    truncated: bool,
+pub(super) struct Budget {
+    pub(super) remaining: usize,
+    pub(super) truncated: bool,
 }
 
 impl Budget {
-    fn new(bytes: usize) -> Self {
+    pub(super) fn new(bytes: usize) -> Self {
         Self {
             remaining: bytes,
             truncated: false,
         }
     }
 
-    fn text(&mut self, value: &str) -> String {
+    pub(super) fn admit(&mut self, bytes: usize) -> bool {
+        if bytes > self.remaining {
+            self.truncated = true;
+            return false;
+        }
+        self.remaining -= bytes;
+        true
+    }
+    pub(super) fn text(&mut self, value: &str) -> String {
         let room = self.remaining.min(PREVIEW_BYTES);
         let out = truncate_ref(value, room);
         self.truncated |= out.len() < value.len();
@@ -519,7 +511,7 @@ impl Budget {
         (out, cut)
     }
 
-    fn slot<T>(&mut self, rows: &mut Vec<T>) -> bool {
+    pub(super) fn slot<T>(&mut self, rows: &mut Vec<T>) -> bool {
         if rows.len() < rows.capacity() {
             return true;
         }
@@ -590,19 +582,6 @@ impl<K: Ord, V> Ord for Ranked<K, V> {
     }
 }
 
-fn contains_folded(text: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    text.char_indices().any(|(i, _)| {
-        let mut hay = text[i..].chars().flat_map(char::to_lowercase);
-        needle
-            .chars()
-            .flat_map(char::to_lowercase)
-            .all(|c| hay.next() == Some(c))
-    })
-}
-
 fn status_text(status: Status) -> &'static str {
     match status {
         Status::Unset => "ended",
@@ -622,37 +601,6 @@ fn kind_name(kind: SpanKind) -> Option<&'static str> {
         SpanKind::Producer => Some("producer"),
         SpanKind::Consumer => Some("consumer"),
     }
-}
-
-fn value_kind(value: &AttributeValue) -> &'static str {
-    match value.resolved() {
-        AttributeValue::Shared(_) => unreachable!("resolved value"),
-        AttributeValue::Null => "null",
-        AttributeValue::Bool(_) => "bool",
-        AttributeValue::I64(_) | AttributeValue::U64(_) => "int",
-        AttributeValue::F64(_) => "real",
-        AttributeValue::Text(_) => "text",
-        AttributeValue::Bytes(_) => "bytes",
-        AttributeValue::Logic { .. } => "logic",
-        AttributeValue::Time(_) => "time",
-        AttributeValue::Enum { .. } => "enum",
-        AttributeValue::Pointer(_) => "pointer",
-        AttributeValue::Fixed { .. } | AttributeValue::UFixed { .. } => "fixed",
-        AttributeValue::List(_) => "list",
-        AttributeValue::Map(_) => "map",
-    }
-}
-
-fn split_phase(key: &str) -> (&str, Option<&'static str>) {
-    for phase in PHASES {
-        if let Some(base) = key.strip_suffix(phase)
-            && let Some(base) = base.strip_suffix('.')
-            && !base.is_empty()
-        {
-            return (base, Some(phase));
-        }
-    }
-    (key, None)
 }
 
 fn lifeline(
@@ -739,62 +687,29 @@ fn lifeline(
 
 fn attributes(
     tx: &Transaction,
+    owner: super::attributes::AttributeOwner,
     prefs: &ViewPrefs,
-    limit: usize,
     point_kind: Option<crate::data::points::PointKind>,
     budget: &mut Budget,
-) -> Section<AttrRow> {
-    let filter = prefs.filter.trim();
-    let listed = tx.attributes.iter().enumerate().filter(|(_, a)| {
-        (a.key != LABEL_ATTRIBUTE || point_kind == Some(crate::data::points::PointKind::Log))
-            && (point_kind.is_none()
-                || (a.key != "record.kind" && a.key != "kind" && !a.key.starts_with("log.")))
-    });
-    let total = listed.clone().count();
-    let matching = listed.filter(|(_, a)| {
-        filter.is_empty()
-            || contains_folded(&a.key, filter)
-            || contains_folded(&format_attribute(&a.value, PREVIEW_BYTES), filter)
-    });
-    let matched = matching.clone().count();
-    let mut rows = Vec::new();
-    for (index, attribute) in matching.take(limit) {
-        if !budget.slot(&mut rows) {
-            break;
-        }
-        let radix = is_integer(&attribute.value).then(|| prefs.radix_of(&attribute.key));
-        let (value, truncated) = budget.value(&attribute.value, radix.unwrap_or_default());
-        let (key, phase) = split_phase(&attribute.key);
-        rows.push(AttrRow {
-            key: budget.text(key),
-            attribute: index,
-            phase,
-            value,
-            radix,
-            kind: value_kind(&attribute.value),
-            truncated,
-        });
-    }
-    Section {
-        key: SectionKey::Attributes,
-        total,
-        matched,
-        collapsed: prefs.collapsed.contains(&SectionKey::Attributes),
-        rows,
-    }
-}
-
-fn chips(attributes: &Attributes, limit: usize, budget: &mut Budget) -> Vec<Chip> {
-    let mut chips = Vec::new();
-    for (key, value) in attributes.iter().take(limit) {
-        if !budget.slot(&mut chips) {
-            break;
-        }
-        let key = budget.text(key);
-        let (value, _) = budget.value(value, Radix::Dec);
-        chips.push(Chip { key, value });
-    }
-    chips
+) -> super::attributes::AttributeTree {
+    let roots = tx
+        .attributes
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            (a.key != LABEL_ATTRIBUTE || point_kind == Some(crate::data::points::PointKind::Log))
+                && (point_kind.is_none()
+                    || (a.key != "record.kind" && a.key != "kind" && !a.key.starts_with("log.")))
+        })
+        .map(|(i, a)| (i, a.key.as_str(), &a.value));
+    super::attributes::tree(
+        owner,
+        SectionKey::Attributes,
+        roots,
+        prefs,
+        prefs.filter.trim(),
+        budget,
+    )
 }
 
 fn stages(
@@ -854,6 +769,8 @@ fn stages(
 
 fn events(
     tx: &Transaction,
+    owner: super::attributes::AttributeOwner,
+    prefs: &ViewPrefs,
     limit: usize,
     time: &impl Fn(u64) -> String,
     budget: &mut Budget,
@@ -873,8 +790,18 @@ fn events(
             name: budget.text(&event.name),
             time: event.time,
             time_text: budget.text(&time(event.time)),
-            attributes_total: event.attributes.len(),
-            attributes: chips(&event.attributes, limit, budget),
+            attributes: super::attributes::tree(
+                owner.with_record(event.id),
+                SectionKey::Attributes,
+                event
+                    .attributes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (k, v))| (i, k.as_str(), v)),
+                prefs,
+                "",
+                budget,
+            ),
         });
     }
     Section {
@@ -1071,14 +998,14 @@ pub fn copy_tsv(
     if !tx.attributes.is_empty() {
         row(&mut text, &["Attribute", "Value"])?;
         for attribute in &tx.attributes {
-            let value = format_attribute(&attribute.value, limit);
+            let value = super::attributes::copy_value(&attribute.value, limit)?;
             row(&mut text, &[&attribute.key, &value])?;
         }
     }
     if !tx.stages.is_empty() {
         row(&mut text, &["Stage", "Lane", "Begin", "End", "Attributes"])?;
         for stage in &tx.stages {
-            let (attributes, _) = crate::data::text::format_attributes(&stage.attributes, limit);
+            let attributes = super::attributes::copy_attributes(&stage.attributes, limit)?;
             row(
                 &mut text,
                 &[
@@ -1096,7 +1023,7 @@ pub fn copy_tsv(
     if !tx.events.is_empty() {
         row(&mut text, &["Event", "Time", "Attributes"])?;
         for event in &tx.events {
-            let (attributes, _) = crate::data::text::format_attributes(&event.attributes, limit);
+            let attributes = super::attributes::copy_attributes(&event.attributes, limit)?;
             row(
                 &mut text,
                 &[&event.name, &event.time.to_string(), &attributes],

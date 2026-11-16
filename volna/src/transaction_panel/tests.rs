@@ -593,3 +593,193 @@ fn check_cursor_split(
         "double-click resets the split"
     );
 }
+
+#[gpui_kit::test]
+fn attribute_tree_opens_expanded_and_supports_keyboard_copy_in_both_themes(
+    cx: &mut TestAppContext,
+) {
+    use volna_core::transaction::{TransactionCommand, TxPanelState};
+    use volna_trace::data::transactions::TransactionRef;
+    use vtr::{Attribute, Value};
+
+    init(cx);
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let track = writer
+        .transactions::<[u64; 4]>(vtr::SourceOptions::new("instructions", None), "INSTRUCTION")
+        .unwrap();
+    let instruction = writer.intern("instruction").unwrap();
+    let mnemonic = writer.intern("mnemonic").unwrap();
+    let pc = writer.intern("pc").unwrap();
+    let owner = writer.begin_at(track, 10, &[0, 1, 2, 3], None).unwrap();
+    writer
+        .attribute(
+            owner.owner(),
+            instruction,
+            Value::Map(vec![
+                Attribute {
+                    key: mnemonic,
+                    value: Value::Text("ds_read_b32".into()),
+                },
+                Attribute {
+                    key: pc,
+                    value: Value::U64(u64::MAX),
+                },
+            ]),
+        )
+        .unwrap();
+    writer.end_at(owner, 15, vtr::Status::Ok).unwrap();
+    writer.close().unwrap();
+    let session = OpenSpec::Path(file.path().into()).open().unwrap();
+    let track = a(session.tracks()[0].id);
+    let host = cx.add_window(Workspace::new);
+    let mut vcx = VisualTestContext::from_window(host.into(), cx);
+    vcx.simulate_resize(size(px(1200.0), px(1100.0)));
+    let details = host
+        .update(&mut vcx, |ws, window, cx| {
+            ws.set_session(session, cx);
+            ws.app.sidebar_visible = false;
+            ws.dispatch(
+                Command::AddToWaves(a_all(vec![Member::Generator(0)])),
+                Some(window),
+                cx,
+            );
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    let details = host
+        .update(&mut vcx, |ws, window, cx| {
+            ws.dispatch(
+                Command::SelectTransaction {
+                    panel: details,
+                    track,
+                    id: TransactionRef(owner.id()),
+                    cursor: None,
+                },
+                Some(window),
+                cx,
+            );
+            ws.dispatch(Command::ShowTransaction { from: details }, Some(window), cx);
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    for dark in [true, false] {
+        for width in [1200.0, 360.0] {
+            host.update(&mut vcx, |ws, window, cx| {
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                ws.dispatch(
+                    Command::Transaction(details, TransactionCommand::ExpandAttributes(true)),
+                    Some(window),
+                    cx,
+                );
+            })
+            .unwrap();
+            vcx.simulate_resize(size(px(width), px(1100.0)));
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let (branch, leaf_index) = host
+                .update(&mut vcx, |ws, _, _| {
+                    let TxPanelState::Ready(view) = ws
+                        .app
+                        .panels
+                        .transaction(details)
+                        .unwrap()
+                        .state(&ws.app.doc)
+                    else {
+                        panic!("details ready")
+                    };
+                    let branch = view
+                        .attributes
+                        .rows
+                        .iter()
+                        .find(|row| row.key == "attributes.instruction")
+                        .unwrap();
+                    assert!(branch.expanded);
+                    assert!(
+                        view.attributes
+                            .rows
+                            .iter()
+                            .any(|row| row.key == "[3]" && row.value == "3")
+                    );
+                    let leaf = view
+                        .attributes
+                        .rows
+                        .iter()
+                        .position(|row| row.key == "mnemonic" && row.value == "ds_read_b32")
+                        .unwrap();
+                    (branch.id.clone(), leaf)
+                })
+                .unwrap();
+            let key_selector: &'static str =
+                Box::leak(format!("tx-attr-key-{leaf_index}").into_boxed_str());
+            let value_selector: &'static str =
+                Box::leak(format!("tx-attr-{leaf_index}").into_boxed_str());
+            let key = vcx.debug_bounds(key_selector).unwrap();
+            let value = vcx.debug_bounds(value_selector).unwrap();
+            assert!(key.right() <= value.left());
+            assert!(value.right() <= px(width));
+            let selector: &'static str =
+                Box::leak(format!("tx-attr-node-{branch}").into_boxed_str());
+            let bounds = vcx.debug_bounds(selector).unwrap();
+            vcx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
+            vcx.run_until_parked();
+            host.update(&mut vcx, |ws, _, _| {
+                let TxPanelState::Ready(view) = ws
+                    .app
+                    .panels
+                    .transaction(details)
+                    .unwrap()
+                    .state(&ws.app.doc)
+                else {
+                    panic!("details ready")
+                };
+                assert!(!view.attributes.rows.iter().any(|row| row.key == "mnemonic"));
+            })
+            .unwrap();
+            vcx.simulate_keystrokes("right");
+            vcx.run_until_parked();
+            host.update(&mut vcx, |ws, _, _| {
+                let TxPanelState::Ready(view) = ws
+                    .app
+                    .panels
+                    .transaction(details)
+                    .unwrap()
+                    .state(&ws.app.doc)
+                else {
+                    panic!("details ready")
+                };
+                assert!(view.attributes.rows.iter().any(|row| row.key == "mnemonic"));
+            })
+            .unwrap();
+            vcx.simulate_keystrokes("right");
+            vcx.simulate_keystrokes("ctrl-c");
+            assert_eq!(
+                vcx.read(|cx| cx.read_from_clipboard().unwrap().text().unwrap()),
+                "ds_read_b32"
+            );
+            vcx.simulate_keystrokes("up");
+            vcx.simulate_keystrokes("ctrl-c");
+            assert!(
+                vcx.read(|cx| cx.read_from_clipboard().unwrap().text().unwrap())
+                    .contains("\"mnemonic\": \"ds_read_b32\"")
+            );
+            vcx.simulate_keystrokes("space");
+            vcx.run_until_parked();
+            host.update(&mut vcx, |ws, _, _| {
+                let TxPanelState::Ready(view) = ws
+                    .app
+                    .panels
+                    .transaction(details)
+                    .unwrap()
+                    .state(&ws.app.doc)
+                else {
+                    panic!("details ready")
+                };
+                assert!(!view.attributes.rows.iter().any(|row| row.key == "mnemonic"));
+            })
+            .unwrap();
+        }
+    }
+}
