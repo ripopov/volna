@@ -17,27 +17,15 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
         track.0
     );
     let mut records = Vec::new();
-    let mut failure = None;
     let mut stage_owners = HashSet::new();
     let mut accept = |record: vtr::Record| {
-        if failure.is_some() {
-            return false;
-        }
         if record.kind() == vtr::RecordKind::Stage
             && let Some(parent) = record.parent()
         {
             stage_owners.insert(TransactionRef(parent));
         }
-        match transaction(&session.reader, &record) {
-            Ok(record) => {
-                records.push(record);
-                true
-            }
-            Err(error) => {
-                failure = Some(error);
-                false
-            }
-        }
+        records.push(record);
+        true
     };
     session.reader.transactions(
         vtr::TransactionQuery {
@@ -53,9 +41,22 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
         },
         &mut accept,
     )?;
-    if let Some(error) = failure {
-        return Err(error);
-    }
+    let owners: Vec<_> = records
+        .iter()
+        .filter(|record| !record.child_blocks().is_empty())
+        .cloned()
+        .collect();
+    let mut expansions: HashMap<_, _> = session
+        .reader
+        .expand_many(&owners)?
+        .into_iter()
+        .map(|expansion| (expansion.owner.id(), expansion))
+        .collect();
+    drop(owners);
+    let records: Vec<_> = records
+        .into_iter()
+        .map(|record| transaction(&session.reader, &record, expansions.remove(&record.id())))
+        .collect::<anyhow::Result<_>>()?;
     let mut owners: HashMap<_, _> = records
         .iter()
         .flat_map(|record| {
@@ -100,28 +101,42 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
         }
         true
     })?;
+    let external: Vec<_> = external.into_iter().collect();
+    let mut embedded = HashMap::<_, Vec<_>>::new();
+    reference_summaries(
+        &session.reader,
+        &external.iter().map(|id| id.0).collect::<Vec<_>>(),
+        |index, record| {
+            let id = external[index];
+            if let Some(generator) = record.generator() {
+                owners.insert(id, Some(TrackRef(generator)));
+                if stage_owners.contains(&id)
+                    && let Some(label) =
+                        record_label(&session.reader, record.attributes(), record.payload())?
+                {
+                    parent_labels.insert(id, label);
+                }
+            } else if let Some(parent) = record.parent() {
+                embedded.entry(parent).or_default().push(id);
+            }
+            Ok(())
+        },
+    )?;
+    let parents: Vec<_> = embedded.keys().copied().collect();
+    reference_summaries(&session.reader, &parents, |index, record| {
+        for &id in &embedded[&parents[index]] {
+            owners.insert(id, record.generator().map(TrackRef));
+            if stage_owners.contains(&id)
+                && let Some(label) =
+                    record_label(&session.reader, record.attributes(), record.payload())?
+            {
+                parent_labels.insert(id, label);
+            }
+        }
+        Ok(())
+    })?;
     for id in external {
-        let mut record = session.reader.lookup(id.0)?;
-        // Embedded endpoints belong to their runtime owner's track.
-        if record
-            .as_ref()
-            .is_some_and(|record| record.generator().is_none())
-        {
-            record = match record.unwrap().parent() {
-                Some(parent) => session.reader.lookup(parent)?,
-                None => None,
-            };
-        }
-        if stage_owners.contains(&id)
-            && let Some(record) = &record
-            && let Some(label) = record_label(&session.reader, record)?
-        {
-            parent_labels.insert(id, label);
-        }
-        owners.insert(
-            id,
-            record.and_then(|record| record.generator()).map(TrackRef),
-        );
+        owners.entry(id).or_insert(None);
     }
     let edges = incident
         .into_iter()
@@ -151,6 +166,19 @@ pub(super) fn load_track(session: &LocalSession, track: TrackRef) -> anyhow::Res
         track,
         generators: vec![Arc::new(generator)],
     })
+}
+
+fn reference_summaries(
+    reader: &Reader,
+    ids: &[u64],
+    mut visit: impl FnMut(usize, vtr::RecordSummary) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let mut result = Ok(());
+    reader.summaries(ids, |index, record| {
+        result = visit(index, record);
+        result.is_ok()
+    })?;
+    result
 }
 
 pub(super) fn value(reader: &LocalReader, value: &Value) -> AttributeValue {
@@ -345,8 +373,12 @@ fn payload_value(
 
 use anyhow::Context as _;
 
-fn record_label(reader: &LocalReader, record: &vtr::Record) -> anyhow::Result<Option<String>> {
-    for attr in record.attributes() {
+fn record_label(
+    reader: &LocalReader,
+    attrs: &[vtr::Attribute],
+    payload: vtr::PayloadView,
+) -> anyhow::Result<Option<String>> {
+    for attr in attrs {
         if reader.string(attr.key)? == "vtr.label" {
             match reader.resolve_value(&attr.value)? {
                 Value::Text(label) => return Ok(Some(label.clone())),
@@ -355,7 +387,6 @@ fn record_label(reader: &LocalReader, record: &vtr::Record) -> anyhow::Result<Op
             }
         }
     }
-    let payload = record.payload();
     let TypeKind::Struct(fields) = &payload.schema().get(payload.datatype())?.kind else {
         return Ok(None);
     };
@@ -458,7 +489,11 @@ fn record_attributes(
     Ok(attrs)
 }
 
-fn transaction(reader: &LocalReader, record: &vtr::Record) -> anyhow::Result<Transaction> {
+fn transaction(
+    reader: &LocalReader,
+    record: &vtr::Record,
+    activity: Option<vtr::trace::Expansion>,
+) -> anyhow::Result<Transaction> {
     let attrs = record_attributes(reader, record)?;
     let mut transaction = Transaction {
         id: TransactionRef(record.id()),
@@ -498,8 +533,7 @@ fn transaction(reader: &LocalReader, record: &vtr::Record) -> anyhow::Result<Tra
             })
             .collect(),
     };
-    if !record.child_blocks().is_empty() {
-        let activity = reader.expand(record.id())?;
+    if let Some(activity) = activity {
         if !activity.missing_blocks.is_empty() {
             transaction.attributes.push(TransactionAttribute {
                 key: "record.missing_child_blocks".into(),
@@ -513,7 +547,7 @@ fn transaction(reader: &LocalReader, record: &vtr::Record) -> anyhow::Result<Tra
             });
         }
         for located in activity.located {
-            let child = self::transaction(reader, &located)?;
+            let child = self::transaction(reader, &located, None)?;
             let node = reader.node(vtr::NodeId(child.generator.0))?;
             let name = reader.string(node.name)?.to_owned();
             let attributes = child
