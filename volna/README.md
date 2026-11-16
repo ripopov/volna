@@ -15,6 +15,11 @@ The fixed Record details header provides **Back** and **Forward** navigation thr
 visited records. Use **Alt+←/→** on Windows and Linux or **⌘[/]** on macOS;
 shortcuts apply to the focused detail panel.
 
+Select a row in **Stages** to inspect its attributes in **Stage attributes**
+directly below the list. The selected row is highlighted, and the time cursor
+moves to its start. Focus a stage row and press **Enter** or **Space** to select
+it with the keyboard. Switching records clears the stage selection.
+
 The **At cursor** list reserves a stable height above the record details, including
 when no transactions are active. Both panes scroll independently. Drag the divider
 to resize; double-click resets it. Tab to the divider and use **↑/↓** to resize,

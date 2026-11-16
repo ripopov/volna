@@ -93,14 +93,16 @@ const PHASES: [&str; 2] = ["record", "end"];
 pub enum SectionKey {
     Attributes,
     Stages,
+    StageAttributes,
     Events,
     Related,
 }
 
 impl SectionKey {
-    pub const ALL: [SectionKey; 4] = [
+    pub const ALL: [SectionKey; 5] = [
         SectionKey::Attributes,
         SectionKey::Stages,
+        SectionKey::StageAttributes,
         SectionKey::Events,
         SectionKey::Related,
     ];
@@ -110,6 +112,7 @@ impl SectionKey {
         match self {
             SectionKey::Attributes => "attributes",
             SectionKey::Stages => "stages",
+            SectionKey::StageAttributes => "stage-attributes",
             SectionKey::Events => "events",
             SectionKey::Related => "related",
         }
@@ -120,6 +123,7 @@ impl SectionKey {
         match self {
             SectionKey::Attributes => "Attributes",
             SectionKey::Stages => "Stages",
+            SectionKey::StageAttributes => "Stage attributes",
             SectionKey::Events => "Events",
             SectionKey::Related => "Related",
         }
@@ -243,6 +247,8 @@ pub struct Chip {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StageRow {
+    pub id: TransactionRef,
+    pub selected: bool,
     pub name: String,
     pub lane: String,
     pub primary: bool,
@@ -254,8 +260,12 @@ pub struct StageRow {
     pub begin_text: String,
     pub end_text: String,
     pub duration_text: String,
-    pub attributes: Vec<Chip>,
-    pub attributes_total: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StageDetails {
+    pub name: String,
+    pub attributes: Section<Chip>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -307,6 +317,7 @@ pub struct TxView {
     pub cursor: Option<f32>,
     pub attributes: Section<AttrRow>,
     pub stages: Section<StageRow>,
+    pub stage_details: Option<StageDetails>,
     pub events: Section<EventRow>,
     pub related: Section<RefRow>,
     pub truncated_bytes: bool,
@@ -324,6 +335,7 @@ pub fn view(
     doc: &Document,
     track: Traced<TrackRef>,
     id: TransactionRef,
+    selected_stage: Option<TransactionRef>,
     prefs: &ViewPrefs,
 ) -> Option<TxView> {
     let generator = doc.resident_generator(track)?;
@@ -437,6 +449,21 @@ pub fn view(
         (&time, &elapsed),
         &mut budget,
     );
+    for row in &mut stages.rows {
+        row.selected = Some(row.id) == selected_stage;
+    }
+    let stage_details = selected_stage
+        .and_then(|id| tx.stages.iter().find(|stage| stage.id == id))
+        .map(|stage| StageDetails {
+            name: budget.text(&stage.name),
+            attributes: Section {
+                key: SectionKey::StageAttributes,
+                total: stage.attributes.len(),
+                matched: stage.attributes.len(),
+                collapsed: prefs.collapsed.contains(&SectionKey::StageAttributes),
+                rows: chips(&stage.attributes, limit, &mut budget),
+            },
+        });
     let mut events = events(tx, limit, &time, &mut budget);
     let mut related = related(doc, &generator, tx, track, limit, &mut budget);
     stages.collapsed = prefs.collapsed.contains(&SectionKey::Stages);
@@ -454,6 +481,7 @@ pub fn view(
         cursor,
         attributes,
         stages,
+        stage_details,
         events,
         related,
         truncated_bytes: budget.truncated,
@@ -788,8 +816,9 @@ fn stages(
         let stage = &tx.stages[index];
         let end = crate::pipeline::PipelineModel::stage_end(tx, stage);
         let duration = end.saturating_sub(stage.begin);
-        let attributes_total = stage.attributes.len();
         rows.push(StageRow {
+            id: stage.id,
+            selected: false,
             name: budget.text(&stage.name),
             lane: budget.text(&stage.lane),
             primary: stage.lane == primary,
@@ -812,8 +841,6 @@ fn stages(
                 None => "open".into(),
             }),
             duration_text: budget.text(&elapsed(stage.begin, end)),
-            attributes: chips(&stage.attributes, limit, budget),
-            attributes_total,
         });
     }
     Section {

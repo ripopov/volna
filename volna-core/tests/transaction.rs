@@ -196,11 +196,32 @@ fn located_and_embedded_activity_share_the_instruction_view_and_relation_navigat
             .collect::<Vec<_>>(),
         ["decode", "retired"]
     );
-    assert!(projection.stages.rows[0].attributes.is_empty());
-    assert_eq!(projection.stages.rows[0].attributes_total, 0);
-    assert_eq!(projection.stages.rows[2].attributes_total, 1);
-    assert_eq!(projection.stages.rows[2].attributes[0].key, "payload");
-    assert_eq!(projection.stages.rows[2].attributes[0].value, "42");
+    assert!(projection.stage_details.is_none());
+    assert!(projection.stages.rows.iter().all(|row| !row.selected));
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::SelectStage(TransactionRef(visit.id())),
+    ));
+    let selected = view(&app, panel);
+    assert_eq!(app.doc.shared.cursor, Some(12));
+    assert!(selected.stages.rows[2].selected);
+    let details = selected.stage_details.unwrap();
+    assert_eq!(details.name, "execute");
+    assert_eq!(details.attributes.total, 1);
+    assert_eq!(details.attributes.rows[0].key, "payload");
+    assert_eq!(details.attributes.rows[0].value, "42");
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::SelectStage(TransactionRef(fetched.id())),
+    ));
+    let selected = view(&app, panel);
+    assert_eq!(app.doc.shared.cursor, Some(10));
+    assert!(selected.stages.rows[0].selected);
+    assert!(!selected.stages.rows[2].selected);
+    let details = selected.stage_details.unwrap();
+    assert_eq!(details.name, "fetch");
+    assert_eq!(details.attributes.total, 0);
+    assert!(details.attributes.rows.is_empty());
     assert!(
         projection
             .events
@@ -245,6 +266,7 @@ fn located_and_embedded_activity_share_the_instruction_view_and_relation_navigat
 
     let child_panel = show(&mut app, pipeline, track, child.id());
     let child_view = view(&app, child_panel);
+    assert!(child_view.stage_details.is_none());
     let incoming = child_view
         .related
         .rows
@@ -253,6 +275,11 @@ fn located_and_embedded_activity_share_the_instruction_view_and_relation_navigat
         .unwrap();
     assert_eq!(incoming.target.transaction, TransactionRef(visit.id()));
     assert_eq!(incoming.target.generator, Some(TrackRef(stages.id())));
+    app.handle(Command::Transaction(child_panel, TransactionCommand::Back));
+    let previous = view(&app, child_panel);
+    assert_eq!(previous.identity.id, TransactionRef(owner.id()));
+    assert!(previous.stage_details.is_none());
+    assert!(previous.stages.rows.iter().all(|row| !row.selected));
 }
 
 #[test]
@@ -525,8 +552,16 @@ fn the_view_reads_identity_timing_lifeline_stages_and_relations() {
         .iter()
         .find(|s| s.name == "memory_register")
         .unwrap();
+    app.handle(Command::Transaction(
+        panel,
+        TransactionCommand::SelectStage(m.id),
+    ));
     assert!(
-        m.attributes
+        view(&app, panel)
+            .stage_details
+            .unwrap()
+            .attributes
+            .rows
             .iter()
             .any(|c| c.key == "payload.miss" && c.value == "true")
     );

@@ -3,6 +3,8 @@
 mod cursor;
 mod split;
 
+use std::collections::{HashMap, HashSet};
+
 use gpui_kit::base::dock as base;
 use gpui_kit::component::{
     Disableable, Selectable, Sizable,
@@ -24,9 +26,10 @@ use volna_core::data::points::PointKind;
 use volna_core::panels::{PanelId, PanelsCommand};
 use volna_core::transaction::view::FILTER_THRESHOLD;
 use volna_core::transaction::{
-    AttrRow, Chip, EventRow, ParentTraceState, RefRole, RefRow, Section, StageRow,
+    AttrRow, Chip, EventRow, ParentTraceState, RefRole, RefRow, Section, StageDetails, StageRow,
     TransactionCommand, TxPanelState, TxView,
 };
+use volna_trace::data::transactions::TransactionRef;
 
 use crate::app::Workspace;
 use crate::theme::{ThemePx, hsla, theme};
@@ -61,6 +64,7 @@ pub(crate) struct TransactionPanelView {
     synced_group_filter: String,
     cursor_list: cursor::CursorList,
     cursor_split: Entity<split::RecordSplit>,
+    stage_focus: HashMap<TransactionRef, FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -107,6 +111,7 @@ impl TransactionPanelView {
             synced_group_filter: String::new(),
             cursor_list: cursor::CursorList::default(),
             cursor_split: cx.new(split::RecordSplit::new),
+            stage_focus: HashMap::new(),
             _subscriptions: vec![subscription, group_subscription],
         }
     }
@@ -399,7 +404,7 @@ impl Render for TransactionPanelView {
 
 impl TransactionPanelView {
     fn render_view(
-        &self,
+        &mut self,
         view: TxView,
         revealable: Option<bool>,
         _window: &mut Window,
@@ -657,7 +662,10 @@ impl TransactionPanelView {
             body = body.child(source);
         }
         if view.point_kind.is_none() {
-            body = body.child(Self::section(&t, &view.stages, cx, stage_row));
+            body = body.child(self.stages(&t, &view.stages, cx));
+            if let Some(stage) = &view.stage_details {
+                body = body.child(Self::stage_attributes(&t, stage, cx));
+            }
             body = body.child(Self::section(&t, &view.events, cx, event_row));
         }
         body = body.child(Self::related(&t, &view.related, cx));
@@ -1308,6 +1316,24 @@ impl TransactionPanelView {
         element.into_any_element()
     }
 
+    fn stages(
+        &mut self,
+        t: &crate::theme::Theme,
+        section: &Section<StageRow>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let visible_ids: HashSet<_> = section.rows.iter().map(|row| row.id).collect();
+        self.stage_focus.retain(|id, _| visible_ids.contains(id));
+        for row in &section.rows {
+            self.stage_focus
+                .entry(row.id)
+                .or_insert_with(|| cx.focus_handle().tab_stop(true));
+        }
+        Self::section(t, section, cx, |t, index, row, cx| {
+            stage_row(t, index, row, &self.stage_focus[&row.id], cx)
+        })
+    }
+
     fn attributes(
         &self,
         t: &crate::theme::Theme,
@@ -1338,6 +1364,76 @@ impl TransactionPanelView {
         }
         for row in &section.rows {
             element = element.child(Self::attribute_row(t, row, view.identity.id, cx));
+        }
+        if let Some(note) = Self::cut_note(t, section) {
+            element = element.child(note);
+        }
+        element.into_any_element()
+    }
+
+    fn stage_attributes(
+        t: &crate::theme::Theme,
+        stage: &StageDetails,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let section = &stage.attributes;
+        let mut element = div()
+            .debug_selector(|| "tx-stage-attributes".into())
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .border_t_1()
+            .border_color(t.border_variant)
+            .child(Self::heading(t, section, cx));
+        if section.collapsed {
+            return element.into_any_element();
+        }
+        element = element.child(
+            detail_text(cx, "tx-stage-attributes-name", stage.name.clone())
+                .px_3()
+                .py_1()
+                .font_family(t.mono_font),
+        );
+        for (index, attribute) in section.rows.iter().enumerate() {
+            element = element.child(
+                div()
+                    .flex()
+                    .items_start()
+                    .gap_2()
+                    .px_3()
+                    .py_0p5()
+                    .child(
+                        detail_text(
+                            cx,
+                            format!("tx-stage-attr-key-{index}"),
+                            attribute.key.clone(),
+                        )
+                        .debug_selector(move || format!("tx-stage-attr-key-{index}"))
+                        .w(relative(0.46))
+                        .flex_none()
+                        .text_ellipsis_start()
+                        .text_color(t.panel.text_muted),
+                    )
+                    .child(
+                        detail_text(
+                            cx,
+                            format!("tx-stage-attr-{index}"),
+                            attribute.value.clone(),
+                        )
+                        .debug_selector(move || format!("tx-stage-attr-{index}"))
+                        .flex_1()
+                        .font_family(t.mono_font),
+                    ),
+            );
+        }
+        if section.total == 0 {
+            element = element.child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_color(t.panel.text_muted)
+                    .child("No attributes."),
+            );
         }
         if let Some(note) = Self::cut_note(t, section) {
             element = element.child(note);
@@ -1677,53 +1773,95 @@ fn stage_row(
     t: &crate::theme::Theme,
     index: usize,
     row: &StageRow,
+    focus: &FocusHandle,
     cx: &mut Context<TransactionPanelView>,
 ) -> AnyElement {
-    let begin = row.begin;
+    let id = row.id;
+    let click_focus = focus.clone();
+    let key_focus = focus.clone();
     let style = crate::theme::core_theme(cx).swatch(row.swatch);
     div()
         .id(("tx-stage", index))
-        .flex()
-        .items_start()
-        .gap_2()
+        .track_focus(focus)
+        .tab_stop(true)
+        .debug_selector(move || format!("tx-stage-{}", id.0))
+        .role(gpui_kit::accesskit::Role::Button)
+        .aria_label(format!(
+            "Stage {}{} · {}",
+            row.name,
+            if row.selected { ", selected" } else { "" },
+            row.duration_text,
+        ))
+        .w_full()
+        .h(t.px(28.0))
+        .flex_none()
         .px_3()
         .py_1()
+        .border_1()
+        .border_color(gpui_kit::transparent_black())
         .cursor_pointer()
-        .hover(|style| style.bg(t.hover.bg))
+        .when(row.selected, |element| element.bg(t.selection.bg))
+        .when(!row.selected, |element| {
+            element.hover(|style| style.bg(t.hover.bg))
+        })
+        .focus_visible(|style| style.border_color(t.border_focused))
+        .tooltip_show_delay(crate::ui::tooltip::delay(cx))
+        .tooltip(|window, cx| Tooltip::new("Select stage to inspect attributes").build(window, cx))
+        .on_key_down(
+            cx.listener(move |view, event: &gpui_kit::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "tab" {
+                    if event.keystroke.modifiers.shift {
+                        window.focus_prev(cx);
+                    } else {
+                        window.focus_next(cx);
+                    }
+                    cx.stop_propagation();
+                } else if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    view.dispatch(TransactionCommand::SelectStage(id), window, cx);
+                    window.focus(&key_focus, cx);
+                    cx.stop_propagation();
+                }
+            }),
+        )
         .on_click(cx.listener(move |view, _, window, cx| {
-            view.dispatch(TransactionCommand::Cursor(begin), window, cx);
+            view.dispatch(TransactionCommand::SelectStage(id), window, cx);
+            window.focus(&click_focus, cx);
+            cx.stop_propagation();
         }))
         .child(
             div()
-                .mt(t.px(4.0))
-                .w(t.px(10.0))
-                .h(t.px(10.0))
-                .flex_none()
-                .rounded_sm()
-                .bg(hsla(style.fill)),
-        )
-        .child(
-            div()
-                .w(relative(0.38))
+                .w_full()
                 .min_w_0()
-                .flex_none()
                 .flex()
                 .items_center()
-                .gap_1()
-                .font_family(t.mono_font)
-                .child(detail_text(cx, format!("tx-stage-name-{index}"), row.name.clone()).flex_1())
-                .when(!row.primary, |element| element.child(tag(t, &row.lane))),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_0p5()
+                .gap_2()
                 .child(
                     div()
-                        .w_full()
+                        .w(t.px(10.0))
+                        .h(t.px(10.0))
+                        .flex_none()
+                        .rounded_sm()
+                        .bg(hsla(style.fill)),
+                )
+                .child(
+                    div()
+                        .w(relative(0.38))
+                        .min_w_0()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .font_family(t.mono_font)
+                        .child(
+                            detail_text(cx, format!("tx-stage-name-{index}"), row.name.clone())
+                                .flex_1(),
+                        )
+                        .when(!row.primary, |element| element.child(tag(t, &row.lane))),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
                         .h(t.px(4.0))
                         .rounded_sm()
                         .bg(t.panel.bg)
@@ -1735,17 +1873,16 @@ fn stage_row(
                                 .bg(hsla(style.fill)),
                         ),
                 )
-                .child(chips(cx, t, &row.attributes, row.attributes_total)),
-        )
-        .child(
-            div()
-                .w(t.px(72.0))
-                .flex_none()
-                .font_family(t.mono_font)
-                .text_size(px(t.ui_size_small))
-                .text_color(t.panel.text_muted)
-                .text_ellipsis()
-                .child(SharedString::from(row.duration_text.clone())),
+                .child(
+                    div()
+                        .w(t.px(72.0))
+                        .flex_none()
+                        .font_family(t.mono_font)
+                        .text_size(px(t.ui_size_small))
+                        .text_color(t.panel.text_muted)
+                        .text_ellipsis()
+                        .child(SharedString::from(row.duration_text.clone())),
+                ),
         )
         .into_any_element()
 }

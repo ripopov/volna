@@ -71,6 +71,7 @@ pub enum TransactionCommand {
     Forward,
     Pin(bool),
     Cursor(u64),
+    SelectStage(TransactionRef),
     FitLifetime,
     Radix(String),
     Collapse(SectionKey, bool),
@@ -89,6 +90,7 @@ pub struct TransactionModel {
     cursor: usize,
     pinned: bool,
     prefs: ViewPrefs,
+    selected_stage: Option<TransactionRef>,
     pin_before: Before<(bool, Option<ShownRecord>)>,
     radix_before: Before<BTreeMap<String, Radix>>,
     retained: Option<Traced<TrackRef>>,
@@ -115,6 +117,7 @@ impl TransactionModel {
             history: Vec::new(),
             cursor: 0,
             pinned: false,
+            selected_stage: None,
             pin_before: Before::default(),
             radix_before: Before::default(),
             prefs: ViewPrefs {
@@ -136,6 +139,7 @@ impl TransactionModel {
     pub fn clone_view(&self) -> Self {
         let mut clone = Self::new(self.budget.clone(), self.prefs.detail_items);
         clone.prefs = self.prefs.clone();
+        clone.selected_stage = self.selected_stage;
         clone.pinned = self.pinned;
         if let Some(shown) = self.shown() {
             clone.history = vec![shown.clone()];
@@ -183,8 +187,12 @@ impl TransactionModel {
         let shown = self.shown().cloned();
         self.history.retain(|r| r.track.trace() != trace);
         self.cursor = shown
-            .and_then(|s| self.history.iter().position(|r| *r == s))
+            .as_ref()
+            .and_then(|s| self.history.iter().position(|r| r == s))
             .unwrap_or(self.history.len().saturating_sub(1));
+        if self.shown() != shown.as_ref() {
+            self.selected_stage = None;
+        }
         let track = self.shown().and_then(|r| r.track.track());
         if !self.hold(doc, track)
             && let Some(track) = self.retained.take()
@@ -281,6 +289,7 @@ impl TransactionModel {
         self.cursor = 0;
         self.pinned = pinned;
         self.restore_prefs(prefs);
+        self.selected_stage = None;
     }
 
     fn restore_prefs(&mut self, prefs: ViewPrefs) {
@@ -365,6 +374,7 @@ impl TransactionModel {
             return false;
         }
         self.parents.clear(doc);
+        self.selected_stage = None;
         self.group_query = GroupQuery::default();
         *self.group_cache.get_mut() = None;
         self.history.truncate(self.cursor + 1);
@@ -386,6 +396,7 @@ impl TransactionModel {
         }
         self.parents.clear(doc);
         self.cursor = cursor;
+        self.selected_stage = None;
         self.group_query = GroupQuery::default();
         *self.group_cache.get_mut() = None;
         if let Some(selection) = self.shown().and_then(|shown| shown.selection(panel)) {
@@ -445,7 +456,7 @@ impl TransactionModel {
             Some(TrackLoadState::Failed(error)) => return TxPanelState::Failed(error.clone()),
             _ => {}
         }
-        match super::view::view(doc, track, shown.id, &self.prefs) {
+        match super::view::view(doc, track, shown.id, self.selected_stage, &self.prefs) {
             Some(view) => TxPanelState::Ready(Box::new(view)),
             None if doc.track(track).is_none() => TxPanelState::Loading,
             None => TxPanelState::Missing,
@@ -684,6 +695,22 @@ impl TransactionModel {
             TransactionCommand::Cursor(time) => {
                 let changed = doc.shared.cursor != Some(time);
                 doc.shared.cursor = Some(time);
+                changed
+            }
+            TransactionCommand::SelectStage(id) => {
+                let Some(begin) = self.shown().and_then(|shown| {
+                    doc.resident_generator(shown.track.track()?)?
+                        .transaction(shown.id)?
+                        .stages
+                        .iter()
+                        .find(|stage| stage.id == id)
+                        .map(|stage| stage.begin)
+                }) else {
+                    return false;
+                };
+                let changed = self.selected_stage != Some(id) || doc.shared.cursor != Some(begin);
+                self.selected_stage = Some(id);
+                doc.shared.cursor = Some(begin);
                 changed
             }
             TransactionCommand::FitLifetime => {

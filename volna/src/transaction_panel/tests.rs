@@ -13,6 +13,163 @@ use volna_trace::{data::Member, session::OpenSpec};
 use vtr::Recorder;
 
 #[gpui_kit::test]
+fn stage_selection_moves_attributes_below_the_list_and_supports_keyboard_selection(
+    cx: &mut TestAppContext,
+) {
+    use volna_core::transaction::{TransactionCommand, TxPanelState};
+    use volna_trace::data::transactions::TransactionRef;
+
+    init(cx);
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let track = writer
+        .transactions::<()>(vtr::SourceOptions::new("instructions", None), "PIPELINE")
+        .unwrap();
+    let name = writer.intern("execute").unwrap();
+    let completed = writer.intern("completed").unwrap();
+    let owner = writer.begin_at(track, 10, &(), None).unwrap();
+    let first = writer
+        .embedded_stage(
+            owner.owner(),
+            10,
+            name,
+            0,
+            Some(12),
+            vec![vtr::Attribute {
+                key: completed,
+                value: vtr::Value::Bool(false),
+            }],
+        )
+        .unwrap();
+    let second = writer
+        .embedded_stage(
+            owner.owner(),
+            12,
+            name,
+            0,
+            Some(14),
+            vec![vtr::Attribute {
+                key: completed,
+                value: vtr::Value::Bool(true),
+            }],
+        )
+        .unwrap();
+    writer.end_at(owner, 15, vtr::Status::Ok).unwrap();
+    writer.close().unwrap();
+    let session = OpenSpec::Path(file.path().into()).open().unwrap();
+    let track = a(session.tracks()[0].id);
+    let host = cx.add_window(Workspace::new);
+    let mut vcx = VisualTestContext::from_window(host.into(), cx);
+    vcx.simulate_resize(size(px(1200.0), px(1100.0)));
+    let waves = host
+        .update(&mut vcx, |ws, window, cx| {
+            ws.set_session(session, cx);
+            ws.app.sidebar_visible = false;
+            ws.dispatch(
+                Command::AddToWaves(a_all(vec![Member::Generator(0)])),
+                Some(window),
+                cx,
+            );
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    let details = host
+        .update(&mut vcx, |ws, window, cx| {
+            ws.dispatch(
+                Command::SelectTransaction {
+                    panel: waves,
+                    track,
+                    id: TransactionRef(owner.id()),
+                    cursor: None,
+                },
+                Some(window),
+                cx,
+            );
+            ws.dispatch(Command::ShowTransaction { from: waves }, Some(window), cx);
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("tx-stage-attributes").is_none());
+    let first_selector: &'static str = Box::leak(format!("tx-stage-{first}").into_boxed_str());
+    let second_selector: &'static str = Box::leak(format!("tx-stage-{second}").into_boxed_str());
+    for dark in [true, false] {
+        for width in [1200.0, 360.0] {
+            vcx.simulate_resize(size(px(width), px(1100.0)));
+            host.update(&mut vcx, |ws, window, cx| {
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+                ws.dispatch(
+                    Command::Transaction(
+                        details,
+                        TransactionCommand::SelectStage(TransactionRef(second)),
+                    ),
+                    Some(window),
+                    cx,
+                );
+                cx.notify();
+            })
+            .unwrap();
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let first_bounds = vcx.debug_bounds(first_selector).unwrap();
+            vcx.simulate_click(first_bounds.center(), gpui_kit::Modifiers::default());
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let section = vcx.debug_bounds("tx-stage-attributes").unwrap();
+            let last_stage = vcx.debug_bounds(second_selector).unwrap();
+            assert!(section.top() >= last_stage.bottom());
+            assert!(section.right() <= px(width));
+            let key = vcx.debug_bounds("tx-stage-attr-key-0").unwrap();
+            let value = vcx.debug_bounds("tx-stage-attr-0").unwrap();
+            assert!(key.right() <= value.left());
+            assert!(value.right() <= section.right());
+            host.update(&mut vcx, |ws, _, _| {
+                let TxPanelState::Ready(view) = ws
+                    .app
+                    .panels
+                    .transaction(details)
+                    .unwrap()
+                    .state(&ws.app.doc)
+                else {
+                    panic!("record details ready");
+                };
+                assert!(view.stages.rows[0].selected);
+                assert!(!view.stages.rows[1].selected);
+                assert_eq!(
+                    view.stage_details.unwrap().attributes.rows[0].value,
+                    "false"
+                );
+                assert_eq!(ws.app.doc.shared.cursor, Some(10));
+            })
+            .unwrap();
+            vcx.simulate_keystrokes("tab");
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            vcx.simulate_keystrokes(if dark { "enter" } else { "space" });
+            vcx.run_until_parked();
+            host.update(&mut vcx, |ws, _, _| {
+                let TxPanelState::Ready(view) = ws
+                    .app
+                    .panels
+                    .transaction(details)
+                    .unwrap()
+                    .state(&ws.app.doc)
+                else {
+                    panic!("record details ready");
+                };
+                assert!(!view.stages.rows[0].selected);
+                assert!(view.stages.rows[1].selected);
+                assert_eq!(view.stage_details.unwrap().attributes.rows[0].value, "true");
+                assert_eq!(ws.app.doc.shared.cursor, Some(12));
+            })
+            .unwrap();
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn cursor_list_reveals_deep_selection_and_keeps_details_after_cursor_moves(
     cx: &mut TestAppContext,
 ) {

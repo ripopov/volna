@@ -151,7 +151,7 @@ fn project_relations(
         ..ViewPrefs::default()
     };
     LIVE.with(|v| v.set(Some((0, 0))));
-    let view = view::view(&doc, a(TrackRef(1)), TransactionRef(1), &prefs).unwrap();
+    let view = view::view(&doc, a(TrackRef(1)), TransactionRef(1), None, &prefs).unwrap();
     let peak = LIVE.with(|v| v.replace(None).unwrap().1);
     (view, peak)
 }
