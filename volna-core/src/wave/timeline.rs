@@ -142,12 +142,8 @@ pub fn ticks<'a>(
         None => choose_unit(step, timescale),
     };
     let step_in_unit = step * 10f64.powi(i32::from(timescale) - exp);
-    let decimals = if step_in_unit >= 1.0 {
-        0
-    } else {
-        (-step_in_unit.log10().floor()) as usize
-    }
-    .min(6);
+    // Preserve the fractional digit in 2.5 steps, including after unit conversion.
+    let decimals = (1.0 - step_in_unit.log10().floor()).clamp(0.0, 6.0) as usize;
     let (first, last) = (
         (viewport.start / step).ceil(),
         (viewport.end / step).floor(),
@@ -232,6 +228,50 @@ mod tests {
         let (t, unit) = ticks(&v, 1000.0, TimeBase::si(-12), 100.0);
         assert_eq!(unit, "ps");
         assert_eq!(t[1].label, "250");
+    }
+
+    #[test]
+    fn fractional_tick_labels_follow_zoom() {
+        for (end, expected) in [
+            (25.0, ["0", "2.5", "5", "7.5", "10"]),
+            (2.5, ["0", "0.25", "0.5", "0.75", "1"]),
+            (0.25, ["0", "0.025", "0.05", "0.075", "0.1"]),
+        ] {
+            let viewport = Viewport { start: 0.0, end };
+            let (ticks, unit) = ticks(&viewport, 1000.0, TimeBase::si(-9), 100.0);
+            assert_eq!(unit, "ns");
+            let labels: Vec<_> = ticks
+                .iter()
+                .take(5)
+                .map(|tick| tick.label.as_str())
+                .collect();
+            assert_eq!(labels, expected, "viewport ending at {end}");
+        }
+    }
+
+    #[test]
+    fn fractional_tick_labels_respect_time_base() {
+        for (end, base, expected_unit) in [
+            (25_000.0, TimeBase::si(-12), "ns"),
+            (
+                25.0,
+                TimeBase {
+                    timescale: 0,
+                    unit: Some("cycle"),
+                },
+                "cycle",
+            ),
+        ] {
+            let viewport = Viewport { start: 0.0, end };
+            let (ticks, unit) = ticks(&viewport, 1000.0, base, 100.0);
+            assert_eq!(unit, expected_unit);
+            let labels: Vec<_> = ticks
+                .iter()
+                .take(5)
+                .map(|tick| tick.label.as_str())
+                .collect();
+            assert_eq!(labels, ["0", "2.5", "5", "7.5", "10"]);
+        }
     }
 
     #[test]
