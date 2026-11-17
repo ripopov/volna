@@ -314,7 +314,7 @@ pub static REGISTRY: &[Spec] = &[
         page: Page::Appearance,
         group: "Theme",
         title: "Theme",
-        description: "The default `volna-dark` pins the dark theme; `volna-light` pins the light theme and `volna` follows the system's light or dark setting. `volna-islands-dark` uses rounded dark islands on lighter chrome; `volna-islands-light` uses white islands on soft blue and sea-glass chrome; `volna-mixed` is a light window with dark waves and pipeline, whatever the system. Also One Dark, Dracula, Catppuccin, GitHub or VS Code, or any palette JSON dropped into the `themes` directory beside `settings.json`. Palettes reload when the file changes.",
+        description: "Choose a viewer theme. Volna follows the system appearance. Islands Dark and Islands Light group panels on a tinted workspace. Volna Mixed pairs a light window with dark timelines. Custom palette JSON files in the themes directory beside settings.json reload when edited.",
         keywords: &[
             "dark",
             "light",

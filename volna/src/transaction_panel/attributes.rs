@@ -38,32 +38,46 @@ impl TransactionPanelView {
                                 .child(Input::new(&self.filter).small()),
                         )
                         .child(
-                            Button::new("tx-expand-all")
-                                .label("Expand all")
-                                .ghost()
-                                .small()
-                                .disabled(tree.filtering)
-                                .on_click(cx.listener(|view, _, window, cx| {
+                            action_button(
+                                "tx-expand-all",
+                                gpui_kit::component::Icon::empty()
+                                    .path(IconName::ChevronsRight.path()),
+                                cx,
+                            )
+                            .accessibility_label("Expand all attributes")
+                            .tooltip("Expand all attributes")
+                            .ghost()
+                            .disabled(tree.filtering)
+                            .on_click(cx.listener(
+                                |view, _, window, cx| {
                                     view.dispatch(
                                         TransactionCommand::ExpandAttributes(true),
                                         window,
                                         cx,
                                     );
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            Button::new("tx-collapse-all")
-                                .label("Collapse all")
-                                .ghost()
-                                .small()
-                                .disabled(tree.filtering)
-                                .on_click(cx.listener(|view, _, window, cx| {
+                            action_button(
+                                "tx-collapse-all",
+                                gpui_kit::component::Icon::empty()
+                                    .path(IconName::ChevronsLeft.path()),
+                                cx,
+                            )
+                            .accessibility_label("Collapse all attributes")
+                            .tooltip("Collapse all attributes")
+                            .ghost()
+                            .disabled(tree.filtering)
+                            .on_click(cx.listener(
+                                |view, _, window, cx| {
                                     view.dispatch(
                                         TransactionCommand::ExpandAttributes(false),
                                         window,
                                         cx,
                                     );
-                                })),
+                                },
+                            )),
                         ),
                 )
                 .child(self.attribute_tree(t, tree, "tx-attr", cx));

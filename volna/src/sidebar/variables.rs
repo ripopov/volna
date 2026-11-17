@@ -1,7 +1,7 @@
 //! The variable list panel: GPUI rows over `MemberListModel`, with the filter text box.
 
-use gpui_kit::component::Disableable;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
+use gpui_kit::component::{Disableable, Selectable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Context, CursorStyle, Focusable, IntoElement, KeyDownEvent, SharedString, Window, div, px,
@@ -109,10 +109,11 @@ impl Workspace {
         let t = *theme(cx);
         let colors = t.panel;
         let focused = self.variables_focus.is_focused(window);
+        let selection = t.islands.map_or(t.selection.bg, |i| i.active_tab);
         let selection_bg = if focused {
-            t.selection.bg
+            selection
         } else {
-            t.selection.bg.opacity(0.5)
+            selection.opacity(0.72)
         };
         let vars = &self.app.variables;
         let count = vars.rows.len();
@@ -201,11 +202,12 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .h(px(t.row_height))
+                            .when(t.islands.is_some(), |row| row.rounded(t.px(4.)))
                             .px_2()
                             .gap_2()
                             .cursor(CursorStyle::PointingHand)
-                            .font_family(t.mono_font)
-                            .text_size(px(t.mono_size))
+                            .font_family(t.ui_font)
+                            .text_size(px(t.ui_size))
                             .text_color(colors.text)
                             .on_click(cx.listener(
                                 move |this, ev: &gpui_kit::ClickEvent, window, cx| {
@@ -441,30 +443,30 @@ impl Workspace {
                     .gap_1()
                     .child(div().flex_1().min_w_0().child(self.filter.clone()))
                     .child(
-                        icon_button(
-                            "search-everywhere",
-                            IconName::Search,
-                            if everywhere { t.selection } else { t.panel },
-                            t.hover,
-                            cx,
-                        )
-                        .tooltip("Search everywhere: variables and generators")
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
+                        icon_button("search-everywhere", IconName::Search, t.panel, t.hover, cx)
+                            .selected(everywhere)
+                            .accessibility_label("Search everywhere")
+                            .tooltip("Search everywhere: variables and generators")
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 this.dispatch(
                                     Command::SetSearchEverywhere(!everywhere),
                                     Some(window),
                                     cx,
                                 );
-                            },
-                        )),
+                            })),
                     ),
             )
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
-                    .when(focused, |el| el.border_1().border_color(t.border_focused))
+                    .border_1()
+                    .border_color(if focused {
+                        t.border_focused
+                    } else {
+                        gpui_kit::transparent_black()
+                    })
+                    .when(t.islands.is_some(), |el| el.px(t.px(4.)))
                     .child(match placeholder {
                         Some(text) => div()
                             .size_full()

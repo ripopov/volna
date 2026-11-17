@@ -2,7 +2,7 @@
 //! pages, Volna's own search bar and ranked results view, modified markers and per-item
 //! actions, and the JSON view.
 
-use gpui_kit::base::dock as base;
+use gpui_kit::base::{ElementExt as _, dock as base};
 use gpui_kit::component::{
     Disableable, Selectable, Sizable,
     button::{Button, ButtonVariants},
@@ -43,6 +43,7 @@ pub(crate) struct SettingsPanelView {
     focus: FocusHandle,
     search: Entity<InputState>,
     synced_query: String,
+    compact: bool,
     pub(crate) json: Option<crate::settings_json::JsonView>,
     _subscriptions: Vec<Subscription>,
 }
@@ -54,10 +55,7 @@ impl SettingsPanelView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Search settings (@modified, @page:waves, @id:waves.snap)")
-        });
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings"));
         let subscription = cx.subscribe_in(&search, window, |this, input, event, window, cx| {
             if let InputEvent::Change = event {
                 let text = input.read(cx).value().to_string();
@@ -71,6 +69,7 @@ impl SettingsPanelView {
             focus: cx.focus_handle(),
             search,
             synced_query: String::new(),
+            compact: false,
             json: None,
             _subscriptions: vec![subscription],
         }
@@ -128,6 +127,47 @@ impl SettingsPanelView {
         }
     }
 
+    fn category_menu(&self, host: Host, selected: Option<String>, query: &str) -> impl IntoElement {
+        let owner = self.ws.clone();
+        let terms = query
+            .split_whitespace()
+            .filter(|word| !word.to_ascii_lowercase().starts_with("@page:"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let label = Page::ALL
+            .iter()
+            .find(|p| Some(p.id()) == selected.as_deref())
+            .map_or("All categories", |p| p.title());
+        Button::new("settings-category")
+            .label(label)
+            .small()
+            .ghost()
+            .dropdown_caret(true)
+            .accessibility_label("Settings category")
+            .dropdown_menu(move |mut menu, _, _| {
+                let pages = Page::ALL.iter().copied().filter(|page| {
+                    REGISTRY
+                        .iter()
+                        .any(|spec| spec.page == *page && spec.available(host))
+                });
+                for page in std::iter::once(None).chain(pages.map(Some)) {
+                    let owner = owner.clone();
+                    let text = page.map_or_else(
+                        || terms.clone(),
+                        |p| format!("@page:{} {terms}", p.id()).trim_end().to_owned(),
+                    );
+                    menu = menu.item(
+                        PopupMenuItem::new(page.map_or("All categories", Page::title))
+                            .checked(page.map(Page::id) == selected.as_deref())
+                            .on_click(move |_, w, cx| {
+                                dispatch(&owner, SettingsCommand::Query(text.clone()), w, cx);
+                            }),
+                    );
+                }
+                menu
+            })
+    }
+
     fn render_bar(&self, ws: &Entity<Workspace>, cx: &mut Context<Self>) -> AnyElement {
         let t = *theme(cx);
         let app = &ws.read(cx).app;
@@ -139,42 +179,37 @@ impl SettingsPanelView {
         } else {
             Some(hits(app).len())
         };
-        let query_has_modified = view
-            .query
-            .split_whitespace()
-            .any(|t| t.eq_ignore_ascii_case("@modified"));
+        let query = settings::search::Query::parse(&view.query);
+        let query_has_modified = query.modified;
         let available = REGISTRY.iter().filter(|s| s.available(host)).count();
         let count: SharedString = match hits {
             Some(n) => format!("{n} of {available}").into(),
             None => format!("{available} settings").into(),
         };
-        div()
+        let search = div().flex_1().min_w_0().child(
+            Input::new(&self.search)
+                .prefix(Icon::new(IconName::Search).size(t.px(14.0)))
+                .small(),
+        );
+        let tools = div()
             .flex()
-            .flex_none()
             .items_center()
-            .gap_2()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(t.border)
-            .bg(t.panel.bg)
-            .child(
-                div().flex_1().min_w_0().child(
-                    Input::new(&self.search)
-                        .prefix(Icon::new(IconName::Search).size(t.px(14.0)))
-                        .small(),
-                ),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .text_size(px(t.ui_size_small))
-                    .text_color(t.panel.text_muted)
-                    .child(count),
-            )
+            .gap_1()
+            .when(self.compact && !view.json, |el| {
+                el.child(self.category_menu(host, query.page, &view.query))
+            })
+            .when(!self.compact, |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(t.ui_size_small))
+                        .text_color(t.panel.text_muted)
+                        .child(count),
+                )
+            })
             .child(
                 Button::new("settings-modified")
-                    .label(format!("@modified ({modified})"))
+                    .label(format!("Modified ({modified})"))
                     .ghost()
                     .xsmall()
                     .selected(query_has_modified)
@@ -200,17 +235,39 @@ impl SettingsPanelView {
                     gpui_kit::component::Icon::empty().path(IconName::Braces.path()),
                     cx,
                 )
-                .label(if view.json {
+                .when(!self.compact, |button| {
+                    button.label(if view.json {
+                        "Back to settings"
+                    } else {
+                        "Open settings.json"
+                    })
+                })
+                .accessibility_label(if view.json {
                     "Back to settings"
                 } else {
                     "Open settings.json"
                 })
                 .outline()
-                .tooltip("Toggle the JSON view (⌘⇧,)")
+                .tooltip(crate::ui::platform_hint(
+                    "Toggle JSON view (⇧⌘,)",
+                    "Toggle JSON view (Ctrl+Shift+,)",
+                ))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.dispatch(SettingsCommand::ToggleJson, window, cx);
                 })),
-            )
+            );
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(t.border_variant)
+            .when(self.compact, |bar| bar.flex_col().items_stretch())
+            .child(search)
+            .child(tools)
             .into_any_element()
     }
 
@@ -245,7 +302,7 @@ impl SettingsPanelView {
                     let dirty_ws = weak.clone();
                     group = group.item(
                         SettingItem::render(move |_, window, cx| {
-                            render_row(&ws, spec, None, window, cx)
+                            render_row(&ws, spec, None, false, window, cx)
                         })
                         .keywords(spec.keywords.iter().copied())
                         .on_reset(
@@ -310,7 +367,14 @@ impl SettingsPanelView {
                     .py_3()
                     .border_b_1()
                     .border_color(t.border)
-                    .child(render_row(&weak, hit.spec, Some(hit), window, cx))
+                    .child(render_row(
+                        &weak,
+                        hit.spec,
+                        Some(hit),
+                        self.compact,
+                        window,
+                        cx,
+                    ))
                     .into_any_element()
             })
             .collect();
@@ -335,6 +399,7 @@ fn render_row(
     ws: &WeakEntity<Workspace>,
     spec: &'static Spec,
     hit: Option<&Hit>,
+    compact: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -388,6 +453,15 @@ fn render_row(
         window,
         cx,
     );
+    let description = div()
+        .text_size(px(t.ui_size_small))
+        .text_color(t.panel.text_muted)
+        .child(SharedString::from(strip_markdown(spec.description)));
+    let (inline_description, below_control) = if compact {
+        (None, Some(description))
+    } else {
+        (Some(description), None)
+    };
     div()
         .flex()
         .w_full()
@@ -405,6 +479,7 @@ fn render_row(
                 .justify_between()
                 .items_start()
                 .gap_4()
+                .when(compact, |row| row.flex_col().items_stretch().gap_2())
                 .child(
                     div()
                         .flex()
@@ -429,12 +504,7 @@ fn render_row(
                                 .when_some(spec.apply.badge(), |el, badge| el.child(chip(badge)))
                                 .when(overridden, |el| el.child(chip("set by the host"))),
                         )
-                        .child(
-                            div()
-                                .text_size(px(t.ui_size_small))
-                                .text_color(t.panel.text_muted)
-                                .child(SharedString::from(strip_markdown(spec.description))),
-                        )
+                        .children(inline_description)
                         .when_some(why, |el, why| {
                             el.child(
                                 div()
@@ -453,7 +523,8 @@ fn render_row(
                         .gap_1()
                         .child(control)
                         .child(render_actions(ws, spec, value, modified, editable, cx)),
-                ),
+                )
+                .children(below_control),
         )
         .into_any_element()
 }
@@ -742,6 +813,7 @@ fn render_control(
                 .small()
                 .disabled(!enabled)
                 .w(theme(cx).px(220.0))
+                .max_w_full()
                 .into_any_element()
         }
         Kind::Enum(_) | Kind::Theme => {
@@ -886,14 +958,25 @@ impl Render for SettingsPanelView {
                 crate::settings_json::JsonView::new(self.ws.clone(), window, cx)
             });
             json.render(&ws, window, cx)
-        } else if query_active {
+        } else if query_active || self.compact {
             self.render_results(&ws, window, cx)
         } else {
             self.render_pages(&ws, cx)
         };
-        let bar = self.render_bar(&ws, cx).into_any_element();
+        let bar = self.render_bar(&ws, cx);
+        let owner = cx.weak_entity();
+        let compact = self.compact;
         div()
             .id(("settings-panel", self.id.0))
+            .on_prepaint(move |bounds, _, cx| {
+                let next = bounds.size.width < t.px(680.);
+                if compact != next {
+                    drop(owner.update(cx, |this, cx| {
+                        this.compact = next;
+                        cx.notify();
+                    }));
+                }
+            })
             .key_context("Settings")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::escape))

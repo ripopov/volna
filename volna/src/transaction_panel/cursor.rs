@@ -304,8 +304,8 @@ impl TransactionPanelView {
                             .text_size(px(t.ui_size_small))
                             .text_color(t.panel.text_muted)
                             .flex_none()
-                            .w(t.px(100.0))
-                            .text_ellipsis()
+                            .w(t.px(66.0))
+                            .truncate()
                             .child(SharedString::from(format!("#{}", id.0))),
                     )
                     .child(

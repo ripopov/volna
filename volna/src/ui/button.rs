@@ -34,6 +34,6 @@ pub fn icon_button(
             .color(gpui_kit::transparent_black())
             .foreground(normal.icon)
             .hover(hover.bg)
-            .active(hover.bg),
+            .active(theme(cx).selection.bg),
     )
 }

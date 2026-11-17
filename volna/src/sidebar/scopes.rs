@@ -313,6 +313,7 @@ impl Workspace {
             .flex()
             .items_center()
             .h(px(t.row_height))
+            .when(t.islands.is_some(), |row| row.rounded(t.px(4.)))
             .pl(t.px(8.0))
             .pr_2()
             .gap_1()
@@ -403,10 +404,11 @@ impl Workspace {
         let t = *theme(cx);
         let colors = t.panel;
         let focused = self.scopes_focus.is_focused(window);
+        let selection = t.islands.map_or(t.selection.bg, |i| i.active_tab);
         let selection_bg = if focused {
-            t.selection.bg
+            selection
         } else {
-            t.selection.bg.opacity(0.5)
+            selection.opacity(0.72)
         };
         let count = self.app.scopes.visible.len();
         let header = panel_header("Scopes", cx).child(
@@ -456,12 +458,13 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .h(px(t.row_height))
+                            .when(t.islands.is_some(), |row| row.rounded(t.px(4.)))
                             .pl(t.px(8.0 + 12.0 * depth as f32))
                             .pr_2()
                             .gap_1()
                             .cursor(CursorStyle::PointingHand)
-                            .font_family(t.mono_font)
-                            .text_size(px(t.mono_size))
+                            .font_family(t.ui_font)
+                            .text_size(px(t.ui_size))
                             .text_color(colors.text)
                             .on_click(cx.listener(
                                 move |this, ev: &gpui_kit::ClickEvent, window, cx| {
@@ -646,7 +649,13 @@ impl Workspace {
                     .flex_1()
                     .min_h_0()
                     .py_1()
-                    .when(focused, |el| el.border_1().border_color(t.border_focused))
+                    .border_1()
+                    .border_color(if focused {
+                        t.border_focused
+                    } else {
+                        gpui_kit::transparent_black()
+                    })
+                    .when(t.islands.is_some(), |el| el.px(t.px(4.)))
                     .child(if count == 0 {
                         div()
                             .size_full()

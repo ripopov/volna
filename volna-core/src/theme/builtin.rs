@@ -112,7 +112,10 @@ mod tests {
                     let t = islands.chrome.zoomed(zoom);
                     let style = t.islands.unwrap();
                     assert!(contrast(t.panel.bg, style.background) >= 1.2, "{id}");
-                    assert_eq!(style.background.l > t.panel.bg.l, dark);
+                    assert!(contrast(t.panel.text, style.heading) >= 4.5, "{id}");
+                    for fill in [style.tab, style.active_tab] {
+                        assert!(contrast(t.panel.text, fill) >= 4.5, "{id}");
+                    }
                     for pair in style.ocean.windows(2) {
                         for step in 0..=10 {
                             let horizontal = over(pair[1].with_alpha(step as f32 / 10.), pair[0]);

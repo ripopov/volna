@@ -11,8 +11,8 @@ struct ToolbarLayout {
 impl ToolbarLayout {
     fn new(embedded: bool, width: f32) -> Self {
         Self {
-            wide: !embedded || width >= 340.0,
-            navigation: !embedded || width >= 240.0,
+            wide: width >= if embedded { 340.0 } else { 820.0 },
+            navigation: width >= if embedded { 240.0 } else { 580.0 },
         }
     }
 
@@ -117,6 +117,7 @@ impl Workspace {
     }
 
     fn run_toolbar_action(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+        self.compact_hierarchy = false;
         self.dispatch(Command::Action(action), Some(window), cx);
         if let Some(focus) = self.panel_focus(self.app.panels.focused_id(), cx) {
             window.focus(&focus, cx);
@@ -143,7 +144,7 @@ impl Workspace {
                 .tooltip(if self.embedded {
                     "Toggle sidebar"
                 } else {
-                    "Toggle sidebar (⌘B)"
+                    crate::ui::platform_hint("Toggle sidebar (⌘B)", "Toggle sidebar (Ctrl+B)")
                 })
                 .on_click(cx.listener(|this, _, w, cx| {
                     this.dispatch(Command::ToggleSidebar, Some(w), cx);
@@ -179,7 +180,7 @@ impl Workspace {
             .w(px(1.0))
             .h(t.px(18.0))
             .mx(t.px(4.0))
-            .bg(crate::theme::chrome_border(cx))
+            .bg(t.islands.map_or(t.border, |_| t.bar.text.opacity(0.15)))
     }
 
     pub(super) fn render_wave_toolbar(
@@ -188,14 +189,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let t = *theme(cx);
-        let panel = self.app.panels.focused_id();
         let waves = self.app.panels.focused().kind.waves();
-        let enabled = self.app.doc.is_loaded()
-            && waves.is_some()
-            && (self.embedded
-                || self
-                    .panel_focus(panel, cx)
-                    .is_some_and(|focus| focus.contains_focused(window, cx)));
+        let enabled = self.app.doc.is_loaded() && waves.is_some();
         let transitions = waves.is_some_and(|waves| !waves.selected.is_empty());
         let layout = ToolbarLayout::new(
             self.embedded,
@@ -235,8 +230,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let t = *theme(cx);
-        let layout = ToolbarLayout::new(true, f32::from(window.viewport_size().width) / t.zoom);
-        let overflow = !layout.navigation || hidden_tools(layout).next().is_some();
         div()
             .id("viewer-toolbar")
             .debug_selector(|| "viewer-toolbar".into())
@@ -252,34 +245,45 @@ impl Workspace {
             .border_b_1()
             .border_color(t.border)
             .child(self.render_wave_toolbar(window, cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(t.px(4.0))
-                    .when(layout.navigation, |el| {
-                        el.child(self.render_sidebar_toggles(cx))
-                    })
-                    .when(overflow, |el| {
-                        el.child(
-                            icon_button(
-                                "wave-toolbar-more",
-                                IconName::ChevronDown,
-                                t.bar,
-                                t.bar_hover,
-                                cx,
-                            )
-                            .debug_selector(|| "wave-toolbar-more".into())
-                            .tooltip("More waveform actions")
-                            .on_click(cx.listener(
-                                move |this, event: &gpui_kit::ClickEvent, window, cx| {
-                                    this.open_toolbar_menu(event.position(), layout, window, cx);
-                                },
-                            )),
-                        )
-                    }),
-            )
+            .child(self.render_toolbar_navigation(window, cx))
+    }
+
+    pub(super) fn render_toolbar_navigation(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let t = *theme(cx);
+        let layout = ToolbarLayout::new(
+            self.embedded,
+            f32::from(window.viewport_size().width) / t.zoom,
+        );
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(t.px(4.0))
+            .when(layout.navigation, |el| {
+                el.child(self.render_sidebar_toggles(cx))
+            })
+            .when(!layout.wide, |el| {
+                el.child(
+                    icon_button(
+                        "wave-toolbar-more",
+                        IconName::ChevronDown,
+                        t.bar,
+                        t.bar_hover,
+                        cx,
+                    )
+                    .debug_selector(|| "wave-toolbar-more".into())
+                    .tooltip("More waveform actions")
+                    .on_click(cx.listener(
+                        move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                            this.open_toolbar_menu(event.position(), layout, window, cx);
+                        },
+                    )),
+                )
+            })
     }
 
     fn open_toolbar_menu(
@@ -309,9 +313,9 @@ impl Workspace {
                         {
                             return;
                         }
-                        this.dispatch_if_current(generation, command.clone(), Some(window), cx);
-                        if let Some(focus) = this.panel_focus(panel, cx) {
-                            window.focus(&focus, cx);
+                        match &command {
+                            Command::Action(action) => this.run_toolbar_action(*action, window, cx),
+                            command => this.dispatch(command.clone(), Some(window), cx),
                         }
                     })
                     .ok();

@@ -10,6 +10,9 @@ mod window_actions;
 #[path = "main_menu.rs"]
 mod main_menu;
 
+#[path = "compact_workspace.rs"]
+mod compact_workspace;
+
 #[path = "workspace_toolbar.rs"]
 mod workspace_toolbar;
 
@@ -296,6 +299,7 @@ pub struct Workspace {
     pub(crate) dock: Option<Entity<crate::dock::DockHost>>,
     pub(crate) derived_width: f32,
     pub(crate) panel_focus_pending: bool,
+    compact_hierarchy: bool,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) waves_focus: FocusHandle,
     pub(crate) scopes_focus: FocusHandle,
@@ -730,6 +734,7 @@ impl Workspace {
             dock: None,
             derived_width: 440.0,
             panel_focus_pending: false,
+            compact_hierarchy: false,
             system_dark: crate::theme::is_dark(window.appearance()),
             focus_handle: cx.focus_handle(),
             waves_focus,
@@ -795,8 +800,22 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let before = self.app.panels.focused_id();
+        let show_panel = matches!(
+            command,
+            Command::ActivateMembers(_)
+                | Command::AddToWaves(_)
+                | Command::AddSelectedOrAllVars
+                | Command::AddAllVars
+                | Command::VariablesKey(volna_core::sidebar::Key::Enter, _)
+                | Command::Panels(volna_core::panels::PanelsCommand::Focus(_))
+                | Command::Settings(SettingsCommand::Open)
+        );
         if !self.app.handle_if_current(generation, command) {
             return;
+        }
+        if self.compact_hierarchy && (show_panel || before != self.app.panels.focused_id()) {
+            self.compact_hierarchy = false;
+            self.panel_focus_pending = true;
         }
         self.panel_focus_pending |= before != self.app.panels.focused_id();
         self.after(window, cx);
@@ -905,14 +924,23 @@ impl Workspace {
                     }
                     Event::OpenFileDialog => Self::open_file_dialog(cx),
                     Event::AddTraceDialog => self.add_trace_dialog(cx),
-                    Event::RevealScopeRow(ix) => self
-                        .scopes_scroll
-                        .scroll_to_item(ix, gpui_kit::ScrollStrategy::Nearest),
+                    Event::RevealScopeRow(ix) => {
+                        self.scopes_scroll
+                            .scroll_to_item(ix, gpui_kit::ScrollStrategy::Nearest);
+                        if self.app.sidebar_visible
+                            && let Some(window) = window.as_deref_mut()
+                            && crate::islands::compact(window, cx)
+                        {
+                            self.focus_compact_hierarchy(window, cx);
+                        }
+                    }
                     Event::RevealVarRow(ix) => self
                         .variables_scroll
                         .scroll_to_item(ix, gpui_kit::ScrollStrategy::Nearest),
                     Event::FocusFilter => {
                         if let Some(window) = window.as_deref_mut() {
+                            self.compact_hierarchy =
+                                self.app.sidebar_visible && crate::islands::compact(window, cx);
                             let handle = self.filter.read(cx).focus_handle(cx);
                             window.focus(&handle, cx);
                         }
@@ -1508,7 +1536,10 @@ impl Workspace {
                         }
                         ChromeDrag::ScopesSplit => {
                             let t = theme(cx);
-                            let top = this.workspace_header_height(cx);
+                            let mut top = this.workspace_header_height(cx);
+                            if crate::islands::compact(window, cx) {
+                                top += t.scale(compact_workspace::REGION_BAR_HEIGHT);
+                            }
                             let total = (f32::from(window.viewport_size().height)
                                 - top
                                 - t.statusbar_height)
@@ -1579,6 +1610,8 @@ impl Workspace {
             .child(
                 div()
                     .id("titlebar-drag")
+                    .min_w_0()
+                    .overflow_hidden()
                     .flex()
                     .flex_1()
                     .h_full()
@@ -1605,9 +1638,19 @@ impl Workspace {
                     })
                     .child(
                         div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(t.px(6.))
+                            .when(t.islands.is_some(), |el| {
+                                el.child(crate::ui::branding::mark(t.px(18.), colors.icon_accent))
+                            })
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .text_color(colors.text)
-                            .child("Volna"),
+                            .when(
+                                !crate::islands::compact(window, cx) || chips.is_none(),
+                                |el| el.child("Volna"),
+                            ),
                     )
                     .when_some(file, |el, name| {
                         el.child(div().text_color(colors.text_placeholder).child("—"))
@@ -1615,13 +1658,18 @@ impl Workspace {
                     })
                     .when_some(chips, gpui_kit::ParentElement::child),
             )
-            .child(self.render_wave_toolbar(window, cx))
-            .child(Self::titlebar_divider(cx))
-            .child(self.render_sidebar_toggles(cx))
-            .child(Self::titlebar_divider(cx))
+            .when(self.app.doc.is_loaded(), |el| {
+                el.child(self.render_wave_toolbar(window, cx))
+                    .child(Self::titlebar_divider(cx))
+                    .child(self.render_toolbar_navigation(window, cx))
+                    .child(Self::titlebar_divider(cx))
+            })
             .child(
                 icon_button("open-file", IconName::FolderOpen, t.bar, t.bar_hover, cx)
-                    .tooltip("Open trace (⌘O)")
+                    .tooltip(crate::ui::platform_hint(
+                        "Open trace (⌘O)",
+                        "Open trace (Ctrl+O)",
+                    ))
                     .on_click(cx.listener(|this, _, w, cx| {
                         this.dispatch(Command::RequestOpenDialog, Some(w), cx);
                     })),
@@ -1629,7 +1677,10 @@ impl Workspace {
             .when(self.app.doc.is_loaded(), |el| {
                 el.child(
                     icon_button("add-trace", IconName::Plus, t.bar, t.bar_hover, cx)
-                        .tooltip("Add trace beside the open ones (⇧⌘O)")
+                        .tooltip(crate::ui::platform_hint(
+                            "Add trace (⇧⌘O)",
+                            "Add trace (Ctrl+Shift+O)",
+                        ))
                         .on_click(cx.listener(|this, _, w, cx| {
                             this.dispatch(Command::RequestAddTraceDialog, Some(w), cx);
                         })),
@@ -1638,7 +1689,10 @@ impl Workspace {
             .child(
                 icon_button("open-settings", IconName::Settings, t.bar, t.bar_hover, cx)
                     .selected(self.app.panels.settings_id().is_some())
-                    .tooltip("Settings (⌘,)")
+                    .tooltip(crate::ui::platform_hint(
+                        "Settings (⌘,)",
+                        "Settings (Ctrl+,)",
+                    ))
                     .on_click(
                         cx.listener(|this, _, w, cx| this.open_settings(&OpenSettings, w, cx)),
                     ),
@@ -1856,16 +1910,6 @@ impl Workspace {
                 .text_color(t.badge_hover.text)
                 .child(keys)
         };
-        let hint = |keys: &'static str, label: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_4()
-                .w(t.px(260.0))
-                .child(div().text_color(colors.text_muted).child(label))
-                .child(badge(keys))
-        };
         let shown = self.app.recent_shown();
         let rows = self.app.recent_rows(unix_now(), home_dir().as_deref());
         let total = rows.len();
@@ -2024,17 +2068,14 @@ impl Workspace {
             .bg(t.editor.bg)
             .font_family(t.ui_font)
             .text_size(px(t.ui_size))
-            .child(crate::ui::branding::mark(
-                t.px(96.0),
-                colors.text_placeholder,
-            ))
+            .child(crate::ui::branding::mark(t.px(58.0), colors.icon_accent))
             .child(
                 div()
                     .mt_2()
-                    .text_size(t.px(16.0))
+                    .text_size(t.px(22.0))
                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
-                    .child("No trace open"),
+                    .child("Open a trace"),
             )
             .child(
                 div()
@@ -2042,9 +2083,11 @@ impl Workspace {
                     .max_w_full()
                     .whitespace_normal()
                     .text_center()
-                    .child(
-                        "Open a VTR, FST, or Kanata trace to browse its signals and transactions",
-                    ),
+                    .child(if cfg!(target_family = "wasm") {
+                        "Choose a VTR, FST, or Kanata recording."
+                    } else {
+                        "Drop a VTR, FST, or Kanata recording here, or choose a file."
+                    }),
             )
             .when_some(error, |el, e| {
                 let summary = e.lines().next().unwrap_or_default().to_owned();
@@ -2092,7 +2135,7 @@ impl Workspace {
             .child(
                 div().mt_3().flex().gap_2().child(
                     Button::new("open")
-                        .label("Open File…")
+                        .label("Choose file…")
                         .icon(gpui_kit::component::Icon::empty().path(IconName::FolderOpen.path()))
                         .primary()
                         .on_click(cx.listener(|this, _, w, cx| {
@@ -2158,29 +2201,13 @@ impl Workspace {
                         .child("open by number ·")
                         .child(badge("Del"))
                         .child("remove ·")
-                        .child(badge("⌘O"))
+                        .child(badge(crate::ui::platform_hint("⌘O", "Ctrl+O")))
                         .child("browse"),
-                )
-            })
-            .when(!has_recent, |el| {
-                el.child(
-                    div()
-                        .mt_6()
-                        .flex()
-                        .flex_col()
-                        .gap_1p5()
-                        .text_size(px(t.ui_size_small))
-                        .child(hint("⌘O", "Open a trace"))
-                        .child(hint("⏎", "Add selected variables"))
-                        .child(hint("= / -", "Zoom in / out"))
-                        .child(hint("F", "Zoom to fit"))
-                        .child(hint("M", "Add marker at cursor"))
-                        .child(hint("T", "Cycle value format")),
                 )
             })
     }
 
-    fn render_statusbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_statusbar(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let t = *theme(cx);
         let colors = t.bar;
         let status = self.app.status();
@@ -2200,13 +2227,13 @@ impl Workspace {
         if let Some(panel) = status.panel {
             context = context.child(mono(panel, colors.text));
         }
-        if let Some(range) = status.time_range {
+        if let Some(range) = status.time_range.filter(|_| !compact) {
             context = context.child(mono(range, colors.text_muted));
         }
-        if let Some(s) = status.signals {
+        if let Some(s) = status.signals.filter(|_| !compact) {
             context = context.child(mono(s, colors.text_placeholder));
         }
-        if let Some(s) = status.changes {
+        if let Some(s) = status.changes.filter(|_| !compact) {
             context = context.child(mono(s, colors.text_placeholder));
         }
         let mut position = group();
@@ -2232,7 +2259,7 @@ impl Workspace {
         if let Some(d) = status.measure {
             position = position.child(mono(d, colors.text));
         }
-        if let Some(m) = status.markers {
+        if let Some(m) = status.markers.filter(|_| !compact) {
             position = position.child(mono(m, colors.text_placeholder));
         }
         let mut left = div()
@@ -2268,7 +2295,7 @@ impl Workspace {
             .overflow_hidden()
             .items_center()
             .gap_3();
-        if has_message {
+        if has_message && !compact {
             message = message.child(sep());
         }
         if let Some(notice) = status.workspace_notice {
@@ -2317,7 +2344,7 @@ impl Workspace {
             message = message.child(notice_details("announcement", announcement));
         }
 
-        let has_nav = status.px_per.is_some();
+        let has_nav = !compact && status.px_per.is_some();
         let has_meters = status.memory.is_some() || status.frames.is_some();
         let mut nav = group();
         if let Some(s) = status.px_per {
@@ -2337,8 +2364,8 @@ impl Workspace {
             meters = meters.child(
                 div()
                     .flex_none()
-                    .min_w(mono_w(22.0))
-                    .child(self.render_frame_status(frames, cx)),
+                    .when(!compact, |el| el.min_w(mono_w(22.0)))
+                    .child(self.render_frame_status(frames, compact, cx)),
             );
         }
         let right = div()
@@ -2369,7 +2396,7 @@ impl Workspace {
                     .py(t.px(4.0))
                     .line_height(t.px(16.0))
             })
-            .child(left)
+            .when(!compact || !has_message, |el| el.child(left))
             .child(message)
             .child(right)
     }
@@ -2434,7 +2461,8 @@ impl Render for Workspace {
         let drag = self.app.drag;
         let narrow_formula =
             self.app.derived_editor.is_some() && window.viewport_size().width < t.px(500.0);
-        let sidebar_visible = self.app.sidebar_visible && !narrow_formula;
+        let sidebar_visible =
+            self.app.sidebar_visible && !narrow_formula && self.app.doc.is_loaded();
         let mut root = div()
             .id("workspace")
             .key_context(if self.embedded {
@@ -2465,13 +2493,31 @@ impl Render for Workspace {
         let island_insets = t
             .islands
             .map(|i| crate::islands::insets(t.scale(i.gap), window.scale_factor()));
+        let compact = self.app.doc.is_loaded() && crate::islands::compact(window, cx);
+        if !compact || !sidebar_visible {
+            self.compact_hierarchy = false;
+        }
         let sidebar = sidebar_visible.then(|| {
             let sidebar = self.render_sidebar(window, cx).into_any_element();
             if let Some(insets) = island_insets {
+                let width = window.viewport_size().width;
+                let inspector = self
+                    .app
+                    .panels
+                    .layout()
+                    .right
+                    .as_ref()
+                    .filter(|dock| dock.open)
+                    .map_or(px(0.), |dock| t.px(dock.width.min(320.)));
+                let reserved = (t.px(420.) + inspector).min(width * 0.72);
                 div()
                     .flex_none()
                     .h_full()
-                    .w(t.px(self.app.sidebar_width))
+                    .w(if compact {
+                        width
+                    } else {
+                        t.px(self.app.sidebar_width).min(width - reserved)
+                    })
                     .paddings(insets)
                     .child(crate::islands::rounded(sidebar, cx))
                     .into_any_element()
@@ -2495,7 +2541,9 @@ impl Render for Workspace {
         if self.embedded {
             crate::web::canvas_focus(self.waves_focus.is_focused(window));
         }
-        root.child(
+        let body = if compact {
+            self.compact_workspace(sidebar, center, window, cx)
+        } else {
             div()
                 .flex()
                 .flex_1()
@@ -2533,12 +2581,14 @@ impl Render for Workspace {
                         .h_full()
                         .overflow_hidden()
                         .child(center),
-                ),
-        )
-        .child(self.render_statusbar(cx))
-        .children(self.render_frame_details(cx))
-        .children(self.window_overlays(window, cx))
-        .children(drag.map(|d| Self::render_drag_surface(d, cx)))
+                )
+                .into_any_element()
+        };
+        root.child(body)
+            .child(self.render_statusbar(compact, cx))
+            .children(self.render_frame_details(cx))
+            .children(self.window_overlays(window, cx))
+            .children(drag.map(|d| Self::render_drag_surface(d, cx)))
     }
 }
 

@@ -108,26 +108,6 @@ impl Render for StartPanelView {
                 .text_color(colors.text_muted)
                 .child(text)
         };
-        let key = |keys: &'static str, label: &'static str| {
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_4()
-                .w(t.px(260.0))
-                .child(div().text_color(colors.text_muted).child(label))
-                .child(
-                    div()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded_sm()
-                        .bg(t.badge_hover.bg)
-                        .font_family(t.mono_font)
-                        .text_size(px(t.ui_size_small))
-                        .text_color(t.badge_hover.text)
-                        .child(keys),
-                )
-        };
         let mut body = div()
             .id(("start-panel", self.id.0))
             .key_context("Start")
@@ -136,12 +116,18 @@ impl Render for StartPanelView {
             .flex()
             .flex_col()
             .items_center()
-            .justify_center()
+            .overflow_y_scroll()
+            .px_4()
+            .py_4()
             .gap_2()
             .bg(colors.bg)
             .font_family(t.ui_font)
             .text_size(px(t.ui_size))
-            .child(branding::mark(t.px(96.0), colors.text_placeholder));
+            .child(
+                div()
+                    .mt_auto()
+                    .child(branding::mark(t.px(48.), colors.icon_accent)),
+            );
         let Some(summary) = summary else {
             return body.child(div().text_color(colors.text_muted).child("No trace open"));
         };
@@ -155,7 +141,7 @@ impl Render for StartPanelView {
             .child(
                 div()
                     .mt_2()
-                    .text_size(t.px(16.0))
+                    .text_size(t.px(20.0))
                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .text_color(colors.text)
                     .child(SharedString::from(summary.name.clone())),
@@ -165,15 +151,22 @@ impl Render for StartPanelView {
                     .text_color(colors.text_muted)
                     .child(SharedString::from(facts)),
             );
-        let mut hints = div().mt_4().flex().flex_col().items_center().gap_1();
+        let mut hints = div()
+            .mt_2()
+            .max_w_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .text_center()
+            .gap_1();
         if summary.variables > 0 {
             hints = hints.child(hint(
-                "Double-click a variable in the sidebar, or select variables and press ⏎, to open a waveform panel",
+                "Double-click a variable to view its waveform. Press Enter to add a selection.",
             ));
         }
         if summary.tracks > 0 {
             hints = hints.child(hint(
-                "Double-click a generator in the sidebar to open a pipeline panel",
+                "Right-click a generator and choose Open in Pipeline to inspect its transactions.",
             ));
         }
         if summary.variables == 0 && summary.tracks == 0 {
@@ -204,11 +197,11 @@ impl Render for StartPanelView {
             body = body.child(list);
         }
         body = body.child(
-            div().mt_3().flex().gap_2().child(
+            div().mt_3().mb_auto().flex().gap_2().child(
                 Button::new("start-new-waves")
                     .label("New waveform panel")
                     .icon(gpui_kit::component::Icon::empty().path(IconName::AudioWaveform.path()))
-                    .outline()
+                    .primary()
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.dispatch(
                             Command::Panels(PanelsCommand::NewTab { group_of: view.id }),
@@ -218,16 +211,6 @@ impl Render for StartPanelView {
                     })),
             ),
         );
-        body.child(
-            div()
-                .mt_6()
-                .flex()
-                .flex_col()
-                .gap_1p5()
-                .text_size(px(t.ui_size_small))
-                .child(key("⏎", "Add selected variables"))
-                .child(key("⌘N", "New waveform panel"))
-                .child(key("⌘W", "Close the trace")),
-        )
+        body
     }
 }

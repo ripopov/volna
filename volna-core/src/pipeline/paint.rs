@@ -565,7 +565,7 @@ pub fn paint(
             scene.text(
                 point(labels.left() + z(36.0), header.top()),
                 header.height(),
-                "LABEL",
+                "Label",
                 FontRole::UiSemibold,
                 t.ui_size_small,
                 t.panel.text_muted,

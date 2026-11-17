@@ -32,6 +32,7 @@ use volna_core::{App as CoreApp, Command};
 use crate::app::Workspace;
 use crate::settings_panel::SettingsPanelView;
 use crate::start_panel::StartPanelView;
+use crate::theme::{ThemePx, theme};
 use crate::transaction_panel::TransactionPanelView;
 use crate::ui::action_button;
 
@@ -97,18 +98,45 @@ pub(crate) fn tab_title(
         .kind
         .trace()
         .filter(|_| app.doc.traces().is_combined());
+    let t = *theme(cx);
+    let panel_title = gpui_kit::SharedString::from(panel.title());
     let title = div()
         .flex()
         .items_center()
         .gap_1()
+        .when(t.islands.is_some(), |el| {
+            use crate::ui::{Icon, IconName};
+            use volna_core::panels::PanelKind;
+            let (icon, color) = match &panel.kind {
+                PanelKind::Waves(_) => (IconName::AudioWaveform, t.wave_signal),
+                PanelKind::Pipeline(_) => (IconName::ChartNoAxesGantt, t.markers[0].stroke),
+                PanelKind::Table(_) => (IconName::TableColumns, t.panel.icon_accent),
+                PanelKind::Transaction(_) => (IconName::TableDetails, t.tx_relation_out),
+                PanelKind::Settings => (IconName::Settings, t.panel.icon_muted),
+                PanelKind::Start | PanelKind::Unsupported(_) => {
+                    (IconName::Layers, t.panel.icon_muted)
+                }
+            };
+            el.gap(t.px(6.))
+                .min_w_0()
+                .child(Icon::new(icon).size(t.px(14.)).color(color))
+        })
         .when_some(letter, |el, trace| {
             el.child(crate::traces::letter_badge(trace, cx))
         })
         .when(in_titlebar, |el| el.min_w_0().overflow_hidden())
         .child(
             div()
-                .when(in_titlebar, gpui_kit::Styled::truncate)
-                .child(gpui_kit::SharedString::from(panel.title())),
+                .when(
+                    in_titlebar || t.islands.is_some(),
+                    gpui_kit::Styled::truncate,
+                )
+                .when(t.islands.is_some(), |el| el.max_w(t.px(188.)))
+                .child(if t.islands.is_some() {
+                    panel.tab_title().into()
+                } else {
+                    panel_title.clone()
+                }),
         );
     let can_close = panels.can_close(id) && !in_titlebar;
     let close = {
@@ -132,7 +160,9 @@ pub(crate) fn tab_title(
         .test_support()
         .flex()
         .items_center()
-        .when(in_titlebar, gpui_kit::Styled::min_w_0)
+        .when(in_titlebar || t.islands.is_some(), |el| {
+            el.min_w_0().max_w_full()
+        })
         .gap_1()
         .debug_selector(|| format!("tab-{}", id.0))
         .when(can_close, |el| {
@@ -140,6 +170,12 @@ pub(crate) fn tab_title(
                 cx.stop_propagation();
                 middle(window, cx);
             })
+        })
+        .when(t.islands.is_some(), |tab| {
+            tab.tooltip_show_delay(crate::ui::tooltip::delay(cx))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(panel_title.clone()).build(w, cx)
+                })
         })
         .child(title)
         .when(can_close, |el| {
@@ -199,6 +235,7 @@ impl DockHost {
             skin_handle = Some(skin.clone());
             base::DockArea::new("volna-dock", None, window, cx).with_renderer(Rc::new(
                 DockRenderer {
+                    main_window: window_id.is_none(),
                     skin,
                     hide_tab_bar: hide_tab_bar.clone(),
                     area: cx.weak_entity(),
@@ -209,6 +246,19 @@ impl DockHost {
         skin_handle
             .unwrap()
             .set_panel_style(gpui_kit::component::dock::PanelStyle::TabBar, cx);
+        if window_id.is_none() {
+            let mut zoomed = false;
+            cx.observe(&area, move |host, area, cx| {
+                let next = area.read(cx).is_zoomed();
+                if next != zoomed {
+                    zoomed = next;
+                    if let Some(owner) = host.render_owner {
+                        App::notify(cx, owner);
+                    }
+                }
+            })
+            .detach();
+        }
         cx.subscribe(&area, |host, area, event, cx| {
             if !matches!(event, base::DockEvent::LayoutChanged) {
                 return;
@@ -378,8 +428,11 @@ impl DockHost {
         let bounds = self.area.read(cx).bounds();
         let available = f32::from(bounds.size.width);
         let right_width = layout.right.as_ref().map(|dock| {
+            if self.window.is_none() && crate::islands::compact(window, cx) {
+                return f32::from(window.viewport_size().width);
+            }
             let center_min = if layout.center.is_some() {
-                (available * 0.5).min(160.0 * zoom)
+                (available * 0.5).min(320.0 * zoom)
             } else {
                 0.0
             };
@@ -1111,35 +1164,42 @@ impl Panel for CanvasPanelView {
                     );
                 }))
         };
-        let mut buttons = vec![
-            link_button(
-                "link-view",
-                IconName::Scan.into(),
-                link.viewport,
-                LinkDim::Viewport,
-                "Follow shared viewport (L)",
-            ),
-            link_button(
-                "link-cursor",
-                IconName::Crosshair.into(),
-                link.cursor,
-                LinkDim::Cursor,
-                "Follow shared cursor (Shift+L)",
-            ),
-            link_button(
-                "link-transaction",
-                Icon::empty().path(volna_core::icons::IconName::TransactionSelect.path()),
-                link.transaction,
-                LinkDim::Transaction,
-                "Follow shared transaction",
-            ),
+        let islands = theme(cx).islands.is_some();
+        let mut buttons = if islands {
+            Vec::new()
+        } else {
+            vec![
+                link_button(
+                    "link-view",
+                    IconName::Scan.into(),
+                    link.viewport,
+                    LinkDim::Viewport,
+                    "Follow shared viewport (L)",
+                ),
+                link_button(
+                    "link-cursor",
+                    IconName::Crosshair.into(),
+                    link.cursor,
+                    LinkDim::Cursor,
+                    "Follow shared cursor (Shift+L)",
+                ),
+                link_button(
+                    "link-transaction",
+                    Icon::empty().path(volna_core::icons::IconName::TransactionSelect.path()),
+                    link.transaction,
+                    LinkDim::Transaction,
+                    "Follow shared transaction",
+                ),
+            ]
+        };
+        buttons.push(
             action_button("new-tab", IconName::Plus, cx)
                 .ghost()
                 .tooltip("New waveform tab")
                 .on_click(cx.listener(|view, _, window, cx| {
                     view.dispatch(PanelsCommand::NewTab { group_of: view.id }, window, cx);
                 })),
-        ];
+        );
         if self
             .ws
             .upgrade()
@@ -1157,7 +1217,7 @@ impl Panel for CanvasPanelView {
                 Button::new("derive-signal")
                     .label("Derive")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .disabled(!enabled)
                     .tooltip("Create or edit a derived signal from the selected waveform")
                     .debug_selector(|| "derive-signal".into())
@@ -1186,55 +1246,61 @@ impl Panel for CanvasPanelView {
             })
         {
             use volna_core::pipeline::{ActivityCommand, FollowActivity};
-            let owner = self.ws.clone();
             let generation = self.generation;
             let panel = self.id;
-            buttons.insert(
-                0,
-                Button::new("instruction-navigator")
-                    .label("Navigator")
-                    .ghost()
-                    .xsmall()
-                    .selected(navigator_visible)
-                    .tooltip(if navigator_visible {
-                        "Hide instruction navigator; drag its left edge to resize; panel menu offers width controls"
-                    } else {
-                        "Show instruction navigator"
-                    })
-                    .on_click(move |_, window, cx| {
-                        drop(owner.update(cx, |ws, cx| {
-                            ws.dispatch_if_current(
-                                generation,
-                                Command::PipelineNavigator(panel, volna_core::pipeline::NavigatorCommand::Toggle),
-                                Some(window),
-                                cx,
-                            );
-                        }));
-                    }),
-            );
-            let owner = self.ws.clone();
-            buttons.insert(
-                1,
-                Button::new("pipeline-occupancy")
-                    .label("Occupancy")
-                    .ghost()
-                    .xsmall()
-                    .selected(occupancy_visible)
-                    .tooltip("Show or hide occupancy; drag its top edge to resize")
-                    .on_click(move |_, window, cx| {
-                        drop(owner.update(cx, |ws, cx| {
-                            ws.dispatch_if_current(
-                                generation,
-                                Command::PipelineOccupancy(
-                                    panel,
-                                    volna_core::pipeline::OccupancyCommand::Toggle,
-                                ),
-                                Some(window),
-                                cx,
-                            );
-                        }));
-                    }),
-            );
+            if !islands {
+                let owner = self.ws.clone();
+                let navigator_hint = if navigator_visible {
+                    "Hide instruction navigator. Drag its left edge to resize."
+                } else {
+                    "Show instruction navigator"
+                };
+                buttons.insert(
+                    0,
+                    Button::new("instruction-navigator")
+                        .label("Navigator")
+                        .ghost()
+                        .small()
+                        .selected(navigator_visible)
+                        .tooltip(navigator_hint)
+                        .on_click(move |_, window, cx| {
+                            drop(owner.update(cx, |ws, cx| {
+                                ws.dispatch_if_current(
+                                    generation,
+                                    Command::PipelineNavigator(
+                                        panel,
+                                        volna_core::pipeline::NavigatorCommand::Toggle,
+                                    ),
+                                    Some(window),
+                                    cx,
+                                );
+                            }));
+                        }),
+                );
+                let owner = self.ws.clone();
+                buttons.insert(
+                    1,
+                    Button::new("pipeline-occupancy")
+                        .label("Occupancy")
+                        .ghost()
+                        .small()
+                        .selected(occupancy_visible)
+                        .tooltip("Show or hide occupancy; drag its top edge to resize")
+                        .on_click(move |_, window, cx| {
+                            drop(owner.update(cx, |ws, cx| {
+                                ws.dispatch_if_current(
+                                    generation,
+                                    Command::PipelineOccupancy(
+                                        panel,
+                                        volna_core::pipeline::OccupancyCommand::Toggle,
+                                    ),
+                                    Some(window),
+                                    cx,
+                                );
+                            }));
+                        }),
+                );
+            }
             let mut controls = vec![(
                 "follow-activity",
                 match follow {
@@ -1268,11 +1334,7 @@ impl Panel for CanvasPanelView {
                     Button::new(name)
                         .label(label)
                         .ghost()
-                        .when(
-                            name == "follow-activity" && follow == FollowActivity::Suspended,
-                            gpui_kit::component::button::ButtonVariants::warning,
-                        )
-                        .xsmall()
+                        .small()
                         .selected(name == "follow-activity" && follow == FollowActivity::Following)
                         .tooltip(if name == "follow-activity" {
                             "Follow activity; manual vertical navigation suspends following"
@@ -1308,7 +1370,7 @@ impl Panel for CanvasPanelView {
                 Button::new("markers")
                     .label("Markers…")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .tooltip("Find a marker by name or number (')")
                     .on_click(move |_, window, cx| {
                         drop(owner.update(cx, |ws, cx| {
@@ -1346,7 +1408,7 @@ impl Panel for CanvasPanelView {
                 Button::new("show-transaction")
                     .label("Details")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .tooltip("Show the selected record in Record details (⏎)")
                     .on_click(move |_, window, cx| {
                         drop(owner.update(cx, |ws, cx| {
@@ -1393,7 +1455,7 @@ impl Panel for CanvasPanelView {
                 Button::new("open-table")
                     .label("Table")
                     .ghost()
-                    .xsmall()
+                    .small()
                     .tooltip("Open this generator in a table")
                     .on_click(move |_, window, cx| {
                         drop(owner.update(cx, |ws, cx| {
@@ -1487,6 +1549,7 @@ impl Render for CanvasPanelView {
 }
 
 struct DockRenderer {
+    main_window: bool,
     skin: Rc<DockSkin>,
     hide_tab_bar: Rc<Cell<bool>>,
     area: WeakEntity<base::DockArea>,
@@ -1546,6 +1609,9 @@ impl base::DockAreaRenderer for DockRenderer {
                 .paddings(crate::islands::insets(t.scale(i.gap), w.scale_factor()))
                 .child(crate::islands::rounded(content, cx))
                 .into_any_element();
+            if self.main_window && crate::islands::compact(w, cx) {
+                return content;
+            }
             self.resize.render(dock, content, self.area.clone(), cx)
         } else {
             self.resize.render(dock, content, self.area.clone(), cx)

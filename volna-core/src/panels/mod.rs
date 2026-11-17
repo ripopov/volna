@@ -257,20 +257,36 @@ impl Panel {
 
     #[must_use]
     pub fn title(&self) -> String {
+        self.display_title(false)
+    }
+
+    #[must_use]
+    pub fn tab_title(&self) -> String {
+        self.display_title(true)
+    }
+
+    fn display_title(&self, compact: bool) -> String {
+        let track_name = |path: &[String]| {
+            if compact {
+                path.last().cloned().unwrap_or_default()
+            } else {
+                path.join(".")
+            }
+        };
         self.title
             .get()
             .clone()
             .unwrap_or_else(|| match &self.kind {
                 PanelKind::Waves(_) => format!("Waves {}", self.id.0),
                 PanelKind::Pipeline(p) => {
-                    format!("Pipeline {} · {}", self.id.0, p.track.path().join("."))
+                    format!("Pipeline {} · {}", self.id.0, track_name(p.track.path()))
                 }
                 PanelKind::Table(t) => match &t.source {
                     crate::table::TableSource::Statistics(data) => {
                         format!("Table {} · {}", self.id.0, data.name)
                     }
                     crate::table::TableSource::Generator(source) => {
-                        format!("Table {} · {}", self.id.0, source.path().join("."))
+                        format!("Table {} · {}", self.id.0, track_name(source.path()))
                     }
                     crate::table::TableSource::Signals(signals) => {
                         format!("Table {} · {} signals", self.id.0, signals.len())

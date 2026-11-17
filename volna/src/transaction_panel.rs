@@ -295,35 +295,23 @@ impl Render for TransactionPanelView {
             TxPanelState::Refused(error) => notice(&t, "Not admitted", &error),
         };
         let body = self.render_cursor_split(body, cx);
-        let follows = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_3()
-            .h(t.px(28.0))
-            .flex_none()
-            .text_size(px(t.ui_size_small))
-            .text_color(t.panel.text_muted)
-            .when_some(follows, |element, text| {
-                element.child(
-                    div()
-                        .debug_selector(|| "tx-follows".into())
-                        .min_w_0()
-                        .text_ellipsis()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded_sm()
-                        .bg(t.badge.bg)
-                        .text_color(t.badge.text)
-                        .child(SharedString::from(text)),
-                )
-            });
+        let follows = follows.map(|text| {
+            div()
+                .debug_selector(|| "tx-follows".into())
+                .min_w_0()
+                .truncate()
+                .px_3()
+                .py_1()
+                .text_size(px(t.ui_size_small))
+                .text_color(t.panel.text_muted)
+                .child(SharedString::from(text))
+        });
         let navigation = div()
             .flex()
             .items_center()
             .gap_1()
             .px_3()
-            .pb_1()
+            .py_1()
             .child(
                 action_button("tx-back", gpui_kit::assets::IconName::ChevronLeft, cx)
                     .debug_selector(|| "tx-back".into())
@@ -355,7 +343,7 @@ impl Render for TransactionPanelView {
             .flex_none()
             .border_b_1()
             .border_color(t.border_variant)
-            .child(follows)
+            .children(follows)
             .child(navigation);
         div()
             .id(("transaction-panel", self.id.0))
@@ -572,7 +560,7 @@ impl TransactionPanelView {
                 actions
                     .child(
                         Button::new("tx-reveal-selected")
-                            .label("Reveal selected")
+                            .label("Reveal in Waves")
                             .ghost()
                             .small()
                             .disabled(!in_waves)
@@ -1134,8 +1122,8 @@ impl TransactionPanelView {
             .gap_0p5()
             .px_2()
             .py_1()
-            .rounded_sm()
-            .bg(t.panel.bg)
+            .rounded(t.px(4.))
+            .bg(t.islands.map_or(t.panel.bg, |i| i.heading))
             .border_1()
             .border_color(t.border_variant)
             .child(
@@ -1278,12 +1266,17 @@ impl TransactionPanelView {
             .items_center()
             .gap_1()
             .px_3()
-            .py_1()
+            .min_h(t.px(30.))
+            .tab_stop(true)
+            .role(gpui_kit::accesskit::Role::Button)
+            .aria_label(format!("{title}, {} items", section.total))
+            .aria_expanded(!collapsed)
             .cursor_pointer()
             .hover(|style| style.bg(t.hover.bg))
-            .text_size(px(t.ui_size_small))
+            .focus_visible(|style| style.bg(t.selection.bg))
+            .text_size(px(t.ui_size))
             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-            .text_color(t.panel.text_muted)
+            .text_color(t.panel.text)
             .child(
                 Icon::new(if collapsed {
                     IconName::ChevronRight
@@ -1293,7 +1286,21 @@ impl TransactionPanelView {
                 .size(t.px(12.0))
                 .color(t.panel.icon_muted),
             )
-            .child(SharedString::from(format!("{} · {}", title, section.total)))
+            .child(SharedString::from(title.to_owned()))
+            .child(
+                div()
+                    .text_color(t.panel.text_muted)
+                    .text_size(px(t.ui_size_small))
+                    .child(section.total.to_string()),
+            )
+            .on_key_down(
+                cx.listener(move |view, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        view.dispatch(TransactionCommand::Collapse(key, !collapsed), window, cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
             .on_click(cx.listener(move |view, _, window, cx| {
                 view.dispatch(TransactionCommand::Collapse(key, !collapsed), window, cx);
             }))
@@ -1555,7 +1562,8 @@ fn status_badge(
         .py_0p5()
         .rounded_sm()
         .border_1()
-        .border_color(color)
+        .border_color(t.panel.bg.blend(color.opacity(0.32)))
+        .bg(t.panel.bg.blend(color.opacity(0.08)))
         .text_size(px(t.ui_size_small))
         .text_color(color)
         .when(status == Status::Open, gpui_kit::Styled::border_dashed)

@@ -18,3 +18,11 @@ pub use menu::popup_at;
 pub use splitter::{Splitter, SplitterAxis};
 pub use text_input::TextInput;
 pub use window_controls::{Side, app_draws_controls, render_window_controls};
+
+pub(crate) fn platform_hint(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        mac
+    } else {
+        other
+    }
+}

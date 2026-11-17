@@ -98,6 +98,7 @@ impl Workspace {
                 .min_w_0()
                 .child(
                     div()
+                        .min_w_0()
                         .max_w(t.px(180.0))
                         .overflow_hidden()
                         .whitespace_nowrap()
@@ -120,7 +121,7 @@ impl Workspace {
             .id(("trace-chip", trace.index()))
             .debug_selector(move || format!("trace-chip-{trace}"))
             .flex()
-            .flex_none()
+            .min_w_0()
             .items_center()
             .gap_1()
             .h(t.px(28.0))

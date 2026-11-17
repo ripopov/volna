@@ -785,7 +785,7 @@ pub(crate) fn paint(
             scene.text(
                 point(layout.names.left() + z(12.0), header.top()),
                 header.height(),
-                "NAME",
+                "Name",
                 FontRole::UiSemibold,
                 t.ui_size_small,
                 panel_theme.text_muted,
@@ -821,47 +821,55 @@ pub(crate) fn paint(
             z(1.4),
         );
     });
-    let scope_title_w = p.width("SCOPE", FontRole::UiSemibold, t.ui_size_small);
-    p.scene.clipped(
-        Rect::from_xywh(
-            layout.scopes.left() + z(super::ScopeColumn::RAIL_WIDTH),
-            header.top(),
-            (layout.scopes.width() - z(super::ScopeColumn::RAIL_WIDTH)).max(0.0),
+    let scope_title_w = p.width("Scope", FontRole::UiSemibold, t.ui_size_small);
+    if layout.scopes.width() >= z(super::ScopeColumn::RAIL_WIDTH + 8.0) + scope_title_w {
+        p.scene.text(
+            point(layout.scopes.right() - z(8.0) - scope_title_w, header.top()),
             header.height(),
-        ),
-        |scene| {
-            scene.text(
-                point(layout.scopes.right() - z(8.0) - scope_title_w, header.top()),
-                header.height(),
-                "SCOPE",
-                FontRole::UiSemibold,
-                t.ui_size_small,
-                panel_theme.text_muted,
-            );
-        },
-    );
+            "Scope",
+            FontRole::UiSemibold,
+            t.ui_size_small,
+            panel_theme.text_muted,
+        );
+    }
     let (value_title, vfont, vsize, vcolor) = match cursor {
         Some(c) => (
             format_time(c as f64, base),
             FontRole::Mono,
             t.mono_size,
-            panel_theme.text,
+            t.wave_cursor,
         ),
         None => (
-            "VALUE".to_string(),
+            "Value".to_string(),
             FontRole::UiSemibold,
             t.ui_size_small,
             panel_theme.text_muted,
         ),
     };
+    let show_cursor_icon =
+        cursor.is_some() && p.width(&value_title, vfont, vsize) + z(32.0) <= layout.values.width();
     p.scene.clipped(
         Rect::new(
             point(layout.values.left(), header.top()),
             size(layout.values.width(), header.height()),
         ),
         |scene| {
+            let mut x = layout.values.left() + z(8.0);
+            if show_cursor_icon {
+                scene.icon(
+                    IconName::Locate,
+                    Rect::from_xywh(
+                        x,
+                        header.top() + (header.height() - z(12.0)) / 2.,
+                        z(12.0),
+                        z(12.0),
+                    ),
+                    t.wave_cursor,
+                );
+                x += z(16.0);
+            }
             scene.text(
-                point(layout.values.left() + z(8.0), header.top()),
+                point(x, header.top()),
                 header.height(),
                 value_title,
                 vfont,

@@ -237,7 +237,11 @@ impl Render for TextInput {
         } else {
             t.input_border
         };
-        let hover_border = t.border_focused;
+        let hover_border = if focused {
+            t.border_focused
+        } else {
+            colors.icon_muted
+        };
         div()
             .id("text-input")
             .key_context(CONTEXT)
@@ -248,7 +252,7 @@ impl Render for TextInput {
             .items_center()
             .gap_2()
             .when(self.plain, gpui_kit::Styled::size_full)
-            .when(!self.plain, |el| el.h(t.px(24.0)))
+            .when(!self.plain, |el| el.h(t.px(28.0)))
             .px_2()
             .bg(t.input.bg)
             .map(|el| match self.accent {
@@ -309,7 +313,11 @@ impl Render for TextInput {
                         .rounded_sm()
                         .cursor(CursorStyle::PointingHand)
                         .hover(move |s| s.bg(colors.bg).border_1().border_color(hover_border))
-                        .on_click(cx.listener(|this, _, _, cx| this.clear(cx)))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.clear(cx);
+                            window.focus(&this.focus_handle, cx);
+                        }))
                         .child(Icon::new(IconName::X).size(t.px(12.0)).color(colors.icon)),
                 )
             })

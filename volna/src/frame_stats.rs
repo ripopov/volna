@@ -106,18 +106,14 @@ impl Workspace {
     pub(crate) fn render_frame_status(
         &self,
         status: FrameStatus,
+        compact: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let t = *theme(cx);
-        let color = match status.level {
-            Level::Ok => t.bar.text_placeholder,
-            Level::Warn => t.bar.warning,
-            Level::Bad => t.bar.error,
-        };
-        let color = if status.idle {
-            color.alpha(0.55)
-        } else {
-            color
+        let color = match (status.idle, status.level) {
+            (true, _) | (_, Level::Ok) => t.bar.text_placeholder,
+            (_, Level::Warn) => t.bar.warning,
+            (_, Level::Bad) => t.bar.error,
         };
         let trigger = self.frame_view.trigger.clone();
         div()
@@ -138,7 +134,11 @@ impl Workspace {
                 let open = !this.app.frames.details;
                 this.set_frame_details(open, window, cx);
             }))
-            .child(SharedString::from(status.text))
+            .child(if compact {
+                SharedString::from("Frames")
+            } else {
+                SharedString::from(status.text)
+            })
             .child(
                 canvas(move |bounds, _, _| trigger.set(bounds), |_, (), _, _| {})
                     .absolute()
@@ -160,6 +160,7 @@ impl Workspace {
             .debug_selector(|| "frame-details".into())
             .track_focus(&focus)
             .w(t.px(460.0))
+            .max_w_full()
             .p(t.px(12.0))
             .flex()
             .flex_col()

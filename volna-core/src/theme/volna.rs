@@ -96,12 +96,21 @@ impl Theme<Color> {
                 s.color("chrome-ocean-teal"),
                 background,
             ],
-            radius: 10.0,
-            gap: 4.0,
+            heading: s.color("island-heading"),
+            tab: s.color("island-tab"),
+            active_tab: s.color("island-active-tab"),
+            radius: 8.0,
+            gap: 6.0,
         });
         t.panel.bg = t.editor.bg;
         t.bar.bg = t.editor.bg;
-        t.statusbar_height = 32.0;
+        t.bar.icon = t.panel.text_muted;
+        if !dark {
+            t.bar.text_placeholder = t.panel.text_muted;
+        }
+        t.ui_size_small = 12.0;
+        t.header_height = 36.0;
+        t.statusbar_height = 26.0;
         t
     }
 

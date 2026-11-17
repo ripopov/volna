@@ -211,7 +211,7 @@ impl JsonView {
                             .primary()
                             .xsmall()
                             .disabled(!dirty || !editable)
-                            .tooltip("Write settings.json (⌘S)")
+                            .tooltip(crate::ui::platform_hint("Write settings.json (⌘S)", "Write settings.json (Ctrl+S)"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.apply_json(&crate::settings_panel::ApplySettingsJson, window, cx);
                             })),

@@ -71,10 +71,16 @@ and radii follow the shared 3/4/6/8/10px scale.
 
 The sample viewer's title bar and panel toolbars are specimens of native action
 buttons: a 24px control contains a 16px icon at 100% interface zoom, with a 1.5-unit
-SVG stroke. Both scale with interface zoom. Enabled icons use the primary
-foreground (`--viewer-text`), which is near white in dark themes and dark in light
-themes. Muted foregrounds remain available for secondary information and disabled
-controls.
+SVG stroke. Both scale with interface zoom. Islands uses muted title-bar icons and a
+distinct glyph for each panel type. The blue tab identifies the focused panel.
+Panel actions move below the tabs when space is tight. Maximize and the panel
+menu stay beside the tabs. The menu includes shared viewport, cursor, and
+transaction linking. Narrow windows give the hierarchy, workspace, and right dock
+the full width in turn. Widening the window restores the side-by-side arrangement.
+
+In a narrow Settings panel, the category menu replaces the category sidebar.
+Search and category filters work together, and each setting shows its control
+directly below its name.
 
 The standalone viewer's main menu is the specimen for window navigation. Its
 32px hamburger button sits to the left of the main window title, outside the

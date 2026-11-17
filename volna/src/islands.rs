@@ -19,6 +19,11 @@ use gpui_kit::{
 use crate::theme::{ThemePx, theme};
 use crate::ui::action_button;
 
+pub(crate) fn compact(window: &Window, cx: &App) -> bool {
+    let t = theme(cx);
+    t.islands.is_some() && window.viewport_size().width < t.px(560.)
+}
+
 fn backdrop(bounds: gpui_kit::Bounds<Pixels>, cx: &App) -> [gpui_kit::Background; 2] {
     use gpui_kit::{linear_color_stop, linear_gradient};
     let t = theme(cx);
@@ -322,43 +327,12 @@ pub(crate) fn corners(top: bool, cx: &App) -> AnyElement {
     .into_any_element()
 }
 
-fn tab_shoulders(radius: Pixels, color: gpui_kit::Hsla, leading: bool) -> AnyElement {
-    canvas(
-        |_, _, _| (),
-        move |bounds, (), window, _| {
-            use gpui_kit::{PathBuilder, point};
-            for (x, dx) in [(bounds.left(), -1.), (bounds.right(), 1.)] {
-                if dx < 0. && !leading {
-                    continue;
-                }
-                let bottom = bounds.bottom();
-                let mut path = PathBuilder::fill();
-                path.move_to(point(x, bottom - radius));
-                path.arc_to(
-                    point(radius, radius),
-                    px(0.),
-                    false,
-                    dx < 0.,
-                    point(x + radius * dx, bottom),
-                );
-                path.line_to(point(x, bottom));
-                path.close();
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, color);
-                }
-            }
-        },
-    )
-    .absolute()
-    .inset_0()
-    .into_any_element()
-}
-
 #[derive(Default)]
 pub(crate) struct Tabs {
     scroll: ScrollHandle,
     active: Cell<Option<usize>>,
-    narrow: Rc<Cell<bool>>,
+    header_width: Rc<Cell<Pixels>>,
+    toolbar_width: Rc<Cell<Pixels>>,
 }
 
 impl Tabs {
@@ -370,8 +344,6 @@ impl Tabs {
     ) -> AnyElement {
         let t = *theme(cx);
         let islands = t.islands.expect("island tabs");
-        let radius = t.px(islands.radius);
-        let chrome = islands.background;
         let focused = window.is_window_active()
             && group
                 .active_panel()
@@ -401,9 +373,10 @@ impl Tabs {
                 };
                 Tab::new(ix)
                     .set_position(position + 1, tab_count)
-                    .h(t.px(32.0))
-                    .px(t.px(12.0))
+                    .h(t.px(26.0))
+                    .px(t.px(8.0))
                     .flex_none()
+                    .max_w_full()
                     .whitespace_nowrap()
                     .tab_stop(true)
                     .focus_visible(move |s| {
@@ -413,7 +386,9 @@ impl Tabs {
                                 .inset(),
                         ])
                     })
-                    .hover(move |s| s.bg(t.panel.bg).text_color(t.panel.text))
+                    .when(!active, |tab| {
+                        tab.hover(move |s| s.bg(t.hover.bg).text_color(t.panel.text))
+                    })
                     .on_key_down({
                         let group = group.clone();
                         let indices = visible_indices.clone();
@@ -434,21 +409,17 @@ impl Tabs {
                     })
                     .relative()
                     .child(title)
-                    .when(active, |tab| {
-                        tab.child(tab_shoulders(radius, t.panel.bg, position > 0))
-                    })
                     .selected(active)
-                    .rounded_t(radius)
-                    // The region mask supplies the outer curve; lower rows meet a straight edge.
-                    .when(position == 0, gpui_kit::Styled::rounded_tl_none)
+                    .rounded(t.px(4.0))
                     .border_0()
-                    // Later tabs must not cover the selected tab's curved shoulders.
-                    .bg(if active {
-                        t.panel.bg
+                    .bg(if active && focused {
+                        islands.active_tab
+                    } else if active {
+                        islands.tab
                     } else {
                         gpui_kit::transparent_black()
                     })
-                    .text_color(if active && focused {
+                    .text_color(if active {
                         t.panel.text
                     } else {
                         t.panel.text_muted
@@ -497,16 +468,33 @@ impl Tabs {
         let buttons = handle
             .and_then(|h| h.toolbar_buttons(window, cx))
             .unwrap_or_default();
-        let dense_toolbar = buttons.len() > 3;
-        let stacked = dense_toolbar && self.narrow.get();
+        // Keep a readable title beside the actions, including after zoom or a panel switch.
+        let suffix = handle.and_then(|h| h.title_suffix(window, cx));
+        let has_tools = suffix.is_some() || !buttons.is_empty();
+        let stacked = has_tools && self.header_width.get() < self.toolbar_width.get() + t.px(224.);
+
         let toolbar = div()
+            .id("island-tools")
+            .on_prepaint({
+                let width = self.toolbar_width.clone();
+                move |bounds, window, _| {
+                    if width.replace(bounds.size.width) != bounds.size.width {
+                        window.refresh();
+                    }
+                }
+            })
             .flex_none()
             .flex()
             .items_center()
             .gap_1()
             .px_1()
-            .children(handle.and_then(|h| h.title_suffix(window, cx)))
-            .children(buttons.into_iter().map(ButtonVariants::ghost))
+            .children(suffix)
+            .children(buttons);
+        let panel_controls = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(t.px(2.))
             .when(zoomable || group.is_zoomed(), |el| {
                 el.child(
                     action_button(
@@ -519,7 +507,11 @@ impl Tabs {
                         cx,
                     )
                     .ghost()
-                    .tooltip("Zoom panel")
+                    .tooltip(if group.is_zoomed() {
+                        "Restore panel size"
+                    } else {
+                        "Maximize panel"
+                    })
                     .on_click({
                         let group = group.clone();
                         move |_, w, cx| group.toggle_zoom(w, cx)
@@ -569,7 +561,8 @@ impl Tabs {
                     .flex()
                     .flex_1()
                     .min_w_0()
-                    .gap_0()
+                    .items_center()
+                    .gap(t.px(2.))
                     .overflow_x_scroll()
                     .track_scroll(&self.scroll)
                     .children(tabs)
@@ -613,28 +606,35 @@ impl Tabs {
             .test_support()
             .relative()
             .flex_none()
-            .bg(chrome)
+            .flex()
+            .flex_col()
+            .justify_center()
+            .min_h(px(t.header_height))
+            .bg(islands.heading)
+            .px(t.px(4.))
+            .py(t.px(4.))
+            .border_b_1()
+            .border_color(t.border_variant)
             .on_prepaint({
-                let narrow = self.narrow.clone();
+                let width = self.header_width.clone();
                 move |bounds, window, _| {
-                    let next = bounds.size.width < t.px(640.);
-                    if narrow.replace(next) != next && dense_toolbar {
+                    if width.replace(bounds.size.width) != bounds.size.width {
                         window.refresh();
                     }
                 }
             });
         let header = if stacked {
-            header.child(row).child(
+            header.child(row.child(panel_controls)).child(
                 div()
                     .id("island-toolbar")
-                    .bg(t.panel.bg)
-                    .pt(t.px(3.))
+                    .flex()
                     .w_full()
+                    .pt(t.px(3.))
                     .overflow_x_scroll()
                     .child(toolbar),
             )
         } else {
-            header.child(row.child(toolbar))
+            header.child(row.child(toolbar).child(panel_controls))
         };
         header.into_any_element()
     }

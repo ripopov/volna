@@ -492,13 +492,21 @@ async function verifySampleIslandContour(page, screenshot) {
     const context = canvas.getContext('2d');
     context.drawImage(bitmap, 0, 0);
     bitmap.close();
-    const points = { untabbed: [4, 58], headerLeft: [sidebarWidth + 4, 58], contentLeft: [sidebarWidth + 4, 78], headerTop: [sidebarWidth + 20, 44] };
+    const left = 6;
+    const top = 46;
+    const points = {
+      sidebarHeader: [left, top + 12], tabHeader: [sidebarWidth + left, top + 12],
+      headerTop: [sidebarWidth + left + 18, top], sidebarTop: [left + 18, top],
+      sidebarBody: [left, top + 40], tabBody: [sidebarWidth + left, top + 40],
+      gutter: [sidebarWidth + left - 2, top + 12],
+    };
     return Object.fromEntries(Object.entries(points).map(([name, [x, y]]) =>
       [name, [...context.getImageData(x, y, 1, 1).data]]));
-  }, { bytes: [...screenshot], sidebarWidth: 423 });
-  for (const edge of ['headerLeft', 'contentLeft', 'headerTop']) {
-    assert.deepEqual(colors[edge], colors.untabbed, `${edge}: tabbed and untabbed island contours must match`);
-  }
+  }, { bytes: [...screenshot], sidebarWidth: Math.round(sampleWorkspace.sidebar.width) });
+  assert.deepEqual(colors.tabHeader, colors.sidebarHeader, 'tab and sidebar headers reach the same outer edge');
+  assert.deepEqual(colors.headerTop, colors.sidebarTop, 'headers meet the rounded top edge');
+  assert.deepEqual(colors.tabBody, colors.sidebarBody, 'panel bodies meet the same edge below the headers');
+  assert.notDeepEqual(colors.gutter, colors.tabHeader, 'the gutter separates the islands');
 }
 
 async function verifyDiagrams(page) {

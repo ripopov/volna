@@ -86,6 +86,61 @@ fn open_pipeline_table(
 }
 
 #[gpui_kit::test]
+fn compact_trace_reveal_and_wave_tools_focus_the_visible_region(cx: &mut TestAppContext) {
+    use gpui_kit::{VisualTestContext, size, test::TestWindowExt as _};
+    init(cx);
+    let root = RootWindow::new(cx);
+    let mut view = VisualTestContext::from_window(root.root.into(), cx);
+    view.simulate_resize(size(px(360.), px(720.)));
+    let panel = root
+        .update(&mut view, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            crate::theme::set(crate::theme::CoreTheme::islands_dark(), cx);
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    for overflow in [false, true] {
+        view.run_until_parked();
+        view.update(gpui_kit::test::TestWindowExt::render_frame);
+        let chip = view.debug_bounds("trace-chip-A").unwrap();
+        view.simulate_click(
+            point(chip.left() + px(9.), chip.center().y),
+            Default::default(),
+        );
+        view.run_until_parked();
+        view.update(gpui_kit::test::TestWindowExt::render_frame);
+        let tree = view.debug_bounds("scope-tree").unwrap();
+        assert!(tree.left() >= px(0.) && tree.right() <= px(360.));
+        root.update(&mut view, |ws, window, cx| {
+            assert!(ws.scopes_focus.contains_focused(window, cx));
+        })
+        .unwrap();
+        if overflow {
+            view.update(|window, cx| window.click("wave-toolbar-more", cx));
+            view.run_until_parked();
+            view.simulate_keystrokes("down enter");
+        } else {
+            view.update(|window, cx| window.click("wave-zoom-fit", cx));
+        }
+        view.run_until_parked();
+        view.update(|window, cx| {
+            window.render_frame(cx);
+            let tab = window.find(("panel-tab", panel.0)).bounds();
+            assert!(tab.left() >= px(0.) && tab.right() <= px(360.));
+        });
+        root.update(&mut view, |ws, window, cx| {
+            assert!(
+                ws.panel_focus(panel, cx)
+                    .unwrap()
+                    .contains_focused(window, cx)
+            );
+        })
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
 fn embedded_toolbar_routes_navigation_and_overflow_without_losing_panel_focus(
     cx: &mut TestAppContext,
 ) {
@@ -2039,6 +2094,51 @@ fn settings_tab_results_json_view_and_palette_render(cx: &mut TestAppContext) {
             assert_eq!(ws.app.panels.len(), 1);
         })
         .unwrap();
+}
+
+#[gpui_kit::test]
+fn narrow_settings_keeps_search_when_choosing_a_category_and_theme(cx: &mut TestAppContext) {
+    use gpui_kit::{VisualTestContext, size, test::TestWindowExt as _};
+    init(cx);
+    let window = RootWindow::new(cx);
+    let mut view = VisualTestContext::from_window(window.root.into(), cx);
+    view.simulate_resize(size(px(360.), px(720.)));
+    window
+        .update(&mut view, |ws, window, cx| {
+            ws.dispatch(Command::Settings(SettingsCommand::Open), Some(window), cx);
+        })
+        .unwrap();
+    view.run_until_parked();
+    view.simulate_input("theme");
+    view.run_until_parked();
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("settings-category", cx);
+    });
+    view.run_until_parked();
+    choose_menu_action(&mut view, &["Appearance"]);
+    window
+        .update(&mut view, |ws, _, _| {
+            assert_eq!(ws.app.settings_view.query, "@page:appearance theme");
+        })
+        .unwrap();
+    for label in ["Volna Islands Light", "Volna Islands Dark"] {
+        view.update(|window, cx| {
+            window.render_frame(cx);
+            let control = window.find("setting-enum-appearance.theme").bounds();
+            assert!(control.left() >= px(0.) && control.right() <= window.viewport_size().width);
+            window.click("setting-enum-appearance.theme", cx);
+        });
+        view.run_until_parked();
+        choose_menu_action(&mut view, &[label]);
+        view.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find("setting-enum-appearance.theme").label(),
+                Some(label)
+            );
+        });
+    }
 }
 
 #[gpui_kit::test]
@@ -6404,6 +6504,76 @@ fn islands_light_docking_and_live_switching_preserve_panel_identity(cx: &mut Tes
     check_dock_interactions(cx, Some("volna-islands-light"));
 }
 
+fn check_compact_region_navigation(
+    window: gpui_kit::WindowHandle<Workspace>,
+    vcx: &mut gpui_kit::VisualTestContext,
+    origin: volna_core::panels::PanelId,
+    detail: volna_core::panels::PanelId,
+) {
+    use gpui_kit::{size, test::TestWindowExt as _};
+    use volna_core::panels::PanelsCommand;
+    use volna_trace::data::transactions::TransactionRef;
+    let original = window
+        .update(vcx, |ws, window, cx| {
+            ws.dispatch(Command::ToggleSidebar, Some(window), cx);
+            ws.app.panels.layout().clone()
+        })
+        .unwrap();
+    vcx.simulate_resize(size(px(360.), px(720.)));
+    vcx.run_until_parked();
+    for (button, content) in [
+        ("compact-hierarchy", Some("scope-tree")),
+        ("compact-center", None),
+        ("compact-right", Some("tx-body")),
+    ] {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            window.click(button, cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(gpui_kit::test::TestWindowExt::render_frame);
+        if let Some(content) = content {
+            let bounds = vcx.debug_bounds(content).expect(content);
+            assert!(
+                bounds.left() >= px(0.) && bounds.right() <= px(360.),
+                "{content} {bounds:?}"
+            );
+            assert!(bounds.size.width > px(320.), "{content} {bounds:?}");
+        } else {
+            let tab = vcx.update(|window, _| window.find(("panel-tab", origin.0)).bounds());
+            assert!(tab.left() >= px(0.) && tab.right() <= px(360.), "{tab:?}");
+        }
+    }
+    choose_tab_action(vcx, detail, "Toggle panel zoom", false);
+    let maximized = vcx.debug_bounds("tx-body").expect("maximized record");
+    assert!(
+        maximized.left() >= px(0.) && maximized.right() <= px(360.),
+        "{maximized:?}"
+    );
+    assert!(maximized.size.width > px(320.));
+    choose_tab_action(vcx, detail, "Toggle panel zoom", false);
+    vcx.simulate_resize(size(px(1200.), px(800.)));
+    vcx.run_until_parked();
+    window
+        .update(vcx, |ws, window, cx| {
+            let record = ws.app.panels.transaction(detail).unwrap().shown().unwrap();
+            assert_eq!(record.id, TransactionRef(33));
+            assert_eq!(
+                ws.app.panels.layout().placement(detail),
+                Some(volna_core::panels::Placement::Right)
+            );
+            assert_eq!(ws.app.panels.layout(), &original);
+            ws.dispatch(Command::ToggleSidebar, Some(window), cx);
+            ws.dispatch(
+                Command::Panels(PanelsCommand::Focus(origin)),
+                Some(window),
+                cx,
+            );
+        })
+        .unwrap();
+    vcx.run_until_parked();
+}
+
 fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'static str>) {
     let islands = island_theme.is_some();
     use gpui_kit::base::dock::{DockPlacement, InsertTarget};
@@ -6502,6 +6672,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
     if islands {
         use gpui_kit::test::TestWindowExt as _;
         use gpui_kit::{Modifiers, MouseButton, point};
+        check_compact_region_navigation(window, &mut vcx, origin, detail);
         for zoom in [0.75, 1., 1.25, 1.5, 2.] {
             vcx.update(|_, cx| crate::theme::set_zoom(zoom, cx));
             vcx.run_until_parked();

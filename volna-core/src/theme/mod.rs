@@ -79,6 +79,9 @@ impl<C: Copy> MarkerColors<C> {
 pub struct Islands<C = Color> {
     pub background: C,
     pub ocean: [C; 3],
+    pub heading: C,
+    pub tab: C,
+    pub active_tab: C,
     pub radius: f32,
     pub gap: f32,
 }
@@ -222,6 +225,9 @@ impl<C: Copy> Theme<C> {
             islands: self.islands.map(|i| Islands {
                 background: f(i.background),
                 ocean: i.ocean.map(f),
+                heading: f(i.heading),
+                tab: f(i.tab),
+                active_tab: f(i.active_tab),
                 radius: i.radius,
                 gap: i.gap,
             }),
