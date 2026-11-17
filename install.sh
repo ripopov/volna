@@ -64,6 +64,7 @@ fi
 if command -v update-desktop-database >/dev/null 2>&1; then
 	update-desktop-database "$data/applications" || true
 fi
-if [[ -f "$themes/index.theme" ]] && command -v gtk-update-icon-cache >/dev/null 2>&1; then
-	gtk-update-icon-cache --force --quiet "$themes" || true
+if [[ -d "$themes" ]] && command -v gtk-update-icon-cache >/dev/null 2>&1; then
+	# The per-user hicolor directory can use the system theme's index.theme.
+	gtk-update-icon-cache --ignore-theme-index --force --quiet "$themes" || true
 fi

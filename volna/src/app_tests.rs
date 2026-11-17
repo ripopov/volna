@@ -964,7 +964,13 @@ fn desktop_window_matches_shell_identity(cx: &mut TestAppContext) {
         {
             let icon = options.icon.expect("X11 window icon");
             assert_eq!(icon.dimensions(), (256, 256));
-            assert!(icon.pixels().any(|pixel| pixel.0[0] > 240));
+            assert_eq!(icon.get_pixel(0, 0).0[3], 0);
+            let center = icon.get_pixel(128, 128);
+            assert_eq!(center.0[3], 255);
+            assert!(
+                icon.pixels()
+                    .any(|pixel| pixel.0[3] == 255 && pixel != center)
+            );
         }
     });
 }

@@ -2024,7 +2024,7 @@ impl Workspace {
             .bg(t.editor.bg)
             .font_family(t.ui_font)
             .text_size(px(t.ui_size))
-            .child(crate::ui::branding::seal(
+            .child(crate::ui::branding::mark(
                 t.px(96.0),
                 colors.text_placeholder,
             ))
