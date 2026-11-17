@@ -1,1 +1,3 @@
-Volna is a GPUI-based viewer for VTR recordings, with synchronized waveform, pipeline, table, and record-detail panels, derived signals, markers, and saved workspaces. The native app also imports FST and Kanata recordings. From the repository root, run `cargo run --locked -p volna -- volna/examples/picorv32.vtr` using the pinned Rust toolchain. See the [`volna-core` guide](../volna-core/README.md) for the viewer architecture and the [VS Code extension](../volna-vscode/README.md) for editor integration.
+Volna is a GPUI-based viewer for VTR recordings, with synchronized waveform, pipeline, table, and record-detail panels,
+derived signals, markers, and saved workspaces. The native app also imports FST and Kanata recordings.
+Run `cargo run --locked -p volna -- volna/examples/picorv32.vtr` from the repository root with the pinned toolchain.
