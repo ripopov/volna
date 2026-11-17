@@ -13,6 +13,9 @@ pub const MIN_COLUMN: f32 = 72.0;
 const SPLITTER_TOLERANCE: f32 = 4.0;
 pub const SCROLLBAR_W: f32 = 10.0;
 const BADGE_W: f32 = 44.0;
+// Room for a 32-bit hex value, including its prefix and cell padding.
+const COMPACT_VALUE_WIDTH: f32 = 80.0;
+const COMPACT_NAME_WIDTH: f32 = 112.0;
 pub const NAME_PAD: f32 = 12.0;
 pub const INDENT: f32 = 14.0;
 pub const CHEVRON_W: f32 = 16.0;
@@ -63,6 +66,7 @@ pub struct LayoutInput<'a> {
     pub names_width: f32,
     pub scope: super::ScopeColumn,
     pub values_width: f32,
+    pub manual_columns: bool,
     pub trace_gutter: bool,
     pub row_tops: Arc<[f64]>,
     pub visible: Arc<[u32]>,
@@ -106,7 +110,11 @@ impl WaveLayout {
         let z = |v: f32| v * zoom;
         let min_column = z(MIN_COLUMN);
         let total_w = bounds.width();
-        let available = (total_w - z(160.0)).max((2.0 * min_column).min(total_w));
+        let available = if input.manual_columns {
+            (total_w - z(160.0)).max((2.0 * min_column).min(total_w))
+        } else {
+            input.margins.auto_metadata_limit(input.bounds)
+        };
         let metadata_w = input
             .margins
             .metadata_width
@@ -115,9 +123,21 @@ impl WaveLayout {
         let rail = z(super::ScopeColumn::RAIL_WIDTH).min(budget);
         let min = min_column.min((budget - rail) / 2.0);
         let scope_min = z(input.scope.width().min(MIN_COLUMN)).min((budget - 2.0 * min).max(0.0));
-        let names_w = z(input.names_width).clamp(min, (budget - scope_min - min).max(min));
-        let scopes_w =
-            z(input.scope.width()).clamp(scope_min, (budget - names_w - min).max(scope_min));
+        let reserved_values = if input.manual_columns {
+            min
+        } else {
+            let spare = budget - scope_min - z(input.names_width.min(COMPACT_NAME_WIDTH));
+            spare
+                .max(z(COMPACT_VALUE_WIDTH))
+                .min(z(input.values_width))
+                .clamp(min, (budget - scope_min - min).max(min))
+        };
+        let names_w =
+            z(input.names_width).clamp(min, (budget - scope_min - reserved_values).max(min));
+        let scopes_w = z(input.scope.width()).clamp(
+            scope_min,
+            (budget - names_w - reserved_values).max(scope_min),
+        );
         let values_w = if let Some(metadata_w) = metadata_w {
             (metadata_w - names_w - scopes_w).max(0.0)
         } else {
@@ -177,14 +197,16 @@ impl WaveLayout {
         let rows = first.min(last)..last;
 
         let mut badges = Vec::new();
-        for ix in rows.clone() {
-            let y = rows_top + (tops[ix] - f64::from(scroll_y)) as f32;
-            let b = Rect::new(
-                point(values.right() - z(BADGE_W + 6.0), y + z(4.0)),
-                size(z(BADGE_W), row_h - z(8.0)),
-            );
-            if let Some(&entry) = input.visible.get(ix) {
-                badges.push((entry as usize, b));
+        if input.manual_columns || values.width() >= z(MIN_COLUMN + BADGE_W) {
+            for ix in rows.clone() {
+                let y = rows_top + (tops[ix] - f64::from(scroll_y)) as f32;
+                let b = Rect::new(
+                    point(values.right() - z(BADGE_W + 6.0), y + z(4.0)),
+                    size(z(BADGE_W), row_h - z(8.0)),
+                );
+                if let Some(&entry) = input.visible.get(ix) {
+                    badges.push((entry as usize, b));
+                }
             }
         }
 
@@ -377,6 +399,7 @@ mod tests {
             names_width: 220.0,
             scope: super::super::ScopeColumn::default(),
             values_width: 120.0,
+            manual_columns: false,
             trace_gutter: false,
             row_tops: row_tops(std::iter::repeat_n(f64::from(24.0 * zoom), items)),
             visible: (0..items as u32).collect(),
@@ -471,6 +494,7 @@ mod tests {
                 names_width: 220.0,
                 scope: super::super::ScopeColumn::default(),
                 values_width: 120.0,
+                manual_columns: false,
                 trace_gutter: false,
                 row_tops: tops,
                 visible: (0..COUNT as u32).collect(),
@@ -511,6 +535,7 @@ mod tests {
             names_width: 220.0,
             scope: super::super::ScopeColumn::default(),
             values_width: 120.0,
+            manual_columns: false,
             trace_gutter: false,
             row_tops: row_tops(heights.map(|h| f64::from(h.multiple()) * 24.0)),
             visible: (0..5).collect(),

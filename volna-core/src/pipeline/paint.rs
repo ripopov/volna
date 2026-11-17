@@ -609,7 +609,7 @@ pub fn paint(
     overlay::cursor(&mut p, &column, cursor, base, focused, z(4.0));
 
     let near_split = model.hover == Some(Hit::LabelSplit);
-    let split_border = if near_split || model.drag == Some(Drag::LabelSplit) {
+    let split_border = if near_split || matches!(model.drag, Some(Drag::LabelSplit { .. })) {
         t.border_focused
     } else {
         t.border
@@ -745,7 +745,7 @@ pub fn paint(
         .push((splitter, CursorIcon::ResizeLeftRight));
     p.scene.cursors.push((target, CursorIcon::ResizeLeftRight));
     match model.drag {
-        Some(Drag::NavigatorSplit { .. } | Drag::LabelSplit) => {
+        Some(Drag::NavigatorSplit { .. } | Drag::LabelSplit { .. }) => {
             p.scene.window_cursor = Some(CursorIcon::ResizeLeftRight);
         }
         Some(Drag::Navigator | Drag::Pan { moved: true, .. }) => {

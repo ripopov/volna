@@ -2175,11 +2175,8 @@ fn interface_zoom_scales_settings_tab_and_wave_rows_and_keeps_viewer_state(
                 assert_eq!(layout.zoom, zoom, "wave panel rendered at zoom {zoom}");
                 assert_eq!(layout.row_h, design_row * zoom);
                 assert_eq!(layout.names_split.width(), 8.0 * zoom);
-                if zoom <= 1.0 {
-                    assert_eq!(layout.names.width(), 260.0 * zoom);
-                } else {
-                    assert!(layout.names.width() >= 72.0 * zoom);
-                }
+                assert!(layout.waves.width() >= layout.bounds.width() * 0.5);
+                assert!(layout.names.width() > 0.0 && layout.names.width() <= 260.0 * zoom);
                 assert!(layout.bounds.width() > 0.0 && w.frames_painted > 0);
                 assert!(
                     matches!(ws.app.trace_state(), TraceState::Loaded(s) if Arc::ptr_eq(&s, &source))

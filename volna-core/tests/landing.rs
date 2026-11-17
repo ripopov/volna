@@ -77,6 +77,25 @@ fn landing_waveforms_render_at_full_range_and_saved_zoom() {
 }
 
 #[test]
+fn compact_landing_workspace_keeps_handshake_names_and_cursor_values_readable() {
+    let mut app = landing("landing-page.volna.json");
+    let theme = Theme::volna(true);
+    let panel = PanelId(39);
+    app.layout_panel(
+        panel,
+        Rect::from_xywh(0.0, 0.0, 648.0, 400.0),
+        &theme,
+        1.0,
+        &mut MonoMeasure,
+    )
+    .unwrap();
+    let scene = app.render_panel(panel, &theme, &mut MonoMeasure);
+    for text in ["req_valid", "resp_valid", "0.3125"] {
+        assert!(scene.texts().any(|label| label == text), "{text}");
+    }
+}
+
+#[test]
 fn point_demo_restores_both_tracks_and_the_simultaneous_log_group() {
     let mut app = landing("landing-points.volna.json");
     let waves = PanelId(39);

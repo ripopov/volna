@@ -145,6 +145,7 @@ struct Columns {
     names: f32,
     scope: super::ScopeColumn,
     values: f32,
+    manual: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -372,7 +373,7 @@ struct SavedAnalog {
     range: AnalogRange,
 }
 
-pub(crate) const VERSION: u32 = 22;
+pub(crate) const VERSION: u32 = 23;
 
 #[derive(Serialize, Deserialize)]
 struct WavePanel {
@@ -462,6 +463,7 @@ pub(crate) fn save(
             names: w.names_width,
             scope: w.scope,
             values: w.values_width,
+            manual: w.manual_columns,
         },
         rows,
         selected: w.selected.clone(),
@@ -510,6 +512,7 @@ pub(crate) fn restore(raw: &RawValue, ctx: &mut RestoreContext<'_>) -> Result<Pa
     w.names_width = saved.columns.names;
     w.scope = saved.columns.scope;
     w.values_width = saved.columns.values;
+    w.manual_columns = saved.columns.manual;
     let mut items = Vec::with_capacity(flat.len());
     for (depth, row) in flat {
         let (

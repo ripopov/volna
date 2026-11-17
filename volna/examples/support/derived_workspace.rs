@@ -471,7 +471,7 @@ pub fn write(path: &Path) -> Result<()> {
             1 => super::CLOCK_PS * 2000,
             _ => super::CLOCK_PS * super::SAMPLE_CLOCKS * 25,
         });
-        panel["columns"] = json!({"names": 285.0, "scope": {"collapsed": true, "expanded_width": 100.0}, "values": 130.0});
+        panel["columns"] = json!({"names": 285.0, "scope": {"collapsed": true, "expanded_width": 100.0}, "values": 130.0, "manual": true});
         workspace
             .panels
             .push(serde_json::value::to_raw_value(&panel)?);

@@ -41,7 +41,7 @@ fn frame(app: &mut App, theme: &Theme, width: f32) {
 fn duplicate_names_stay_aligned_with_distinct_scope_cells() {
     for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
         let mut app = app();
-        frame(&mut app, &theme, 1200.0);
+        frame(&mut app, &theme, 1200.0 * theme.zoom);
         let id = app.panels.focused_id();
         let layout = app.panels.waves(id).unwrap().last_layout().clone();
         let scene = app.render_panel(id, &theme, &mut MonoMeasure);
@@ -219,7 +219,7 @@ fn scope_header_and_keyboard_restore_width_after_workspace_reload() {
         let mut app = app();
         app.panels.focused_waves_mut().unwrap().scope.resize(235.0);
         let selected = app.panels.focused_waves().unwrap().selected.clone();
-        frame(&mut app, &theme, 1200.0);
+        frame(&mut app, &theme, 1200.0 * theme.zoom);
         let layout = app.panels.focused_waves().unwrap().last_layout().clone();
         press(
             &mut app,
@@ -229,7 +229,7 @@ fn scope_header_and_keyboard_restore_width_after_workspace_reload() {
             ),
         );
         app.handle(Command::Pointer(app.panels.focused_id(), PointerEvent::Up));
-        frame(&mut app, &theme, 1200.0);
+        frame(&mut app, &theme, 1200.0 * theme.zoom);
         let compact = app.panels.focused_waves().unwrap().last_layout().clone();
         assert_eq!(compact.scopes.width(), 20.0 * theme.zoom);
         assert_eq!(compact.names.width(), layout.names.width());

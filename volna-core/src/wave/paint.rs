@@ -940,7 +940,7 @@ pub(crate) fn paint(
     } else {
         t.border
     };
-    let values_border = if near_values || drag == Some(Drag::ValuesSplit) {
+    let values_border = if near_values || matches!(drag, Some(Drag::ValuesSplit { .. })) {
         t.border_focused
     } else {
         t.border
@@ -1018,7 +1018,7 @@ pub(crate) fn paint(
         p.scene.window_cursor = Some(CursorIcon::ResizeUpDown);
     } else if matches!(
         drag,
-        Some(Drag::NamesSplit | Drag::ScopesSplit | Drag::ValuesSplit)
+        Some(Drag::NamesSplit | Drag::ScopesSplit | Drag::ValuesSplit { .. })
     ) {
         p.scene.window_cursor = Some(CursorIcon::ResizeLeftRight);
     } else if matches!(

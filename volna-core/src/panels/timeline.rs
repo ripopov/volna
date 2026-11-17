@@ -17,6 +17,10 @@ pub struct TimelineMargins {
 }
 
 impl TimelineMargins {
+    pub(crate) fn auto_metadata_limit(self, bounds: Rect) -> f32 {
+        (bounds.width() * 0.5 - self.trailing_width).max(0.0)
+    }
+
     pub(crate) fn content(self, bounds: Rect) -> Rect {
         Rect::from_xywh(
             bounds.left(),
@@ -42,6 +46,7 @@ impl TimelineMargins {
 pub struct TimelineDivider {
     pub panels: Vec<PanelId>,
     pub width: f32,
+    pub(crate) manual: bool,
     // Rendering clamps the derived width; this anchor preserves reversible scope toggles.
     pub(crate) scope_offset: f64,
 }
@@ -99,12 +104,15 @@ impl Panels {
                     return Some(old.clone());
                 }
                 let mut width: f32 = 0.0;
+                let mut manual = false;
                 for id in &panels {
                     if let Some(old) = self.timeline.iter().find(|old| old.panels.contains(id)) {
+                        manual |= old.manual;
                         width = width.max(self.requested_timeline_width(old));
                     } else {
                         width = width.max(match &self.get(*id)?.kind {
                             PanelKind::Waves(w) => {
+                                manual |= w.manual_columns;
                                 w.names_width.max(MIN_COLUMN)
                                     + w.scope.width()
                                     + w.values_width.max(MIN_COLUMN)
@@ -121,6 +129,7 @@ impl Panels {
                 Some(TimelineDivider {
                     panels,
                     width: width.max(1.0),
+                    manual,
                     scope_offset,
                 })
             })
@@ -150,17 +159,20 @@ impl Panels {
             },
         );
         let trailing_width = (width * zoom).min(bounds.width() * 0.25);
-        let content = TimelineMargins {
+        let mut margins = TimelineMargins {
             trailing_width,
             metadata_width: None,
-        }
-        .content(bounds);
-        TimelineMargins {
-            trailing_width,
-            metadata_width: divider.map(|d| {
-                self.clamp_timeline_width(d, self.requested_timeline_width(d), content, zoom) * zoom
-            }),
-        }
+        };
+        margins.metadata_width = divider.map(|d| {
+            let width = self.requested_timeline_width(d);
+            if d.manual {
+                self.clamp_timeline_width(d, width, margins.content(bounds), zoom) * zoom
+            } else {
+                (width.max(self.timeline_minimum(d)) * zoom)
+                    .min(margins.auto_metadata_limit(bounds))
+            }
+        });
+        margins
     }
 
     fn clamp_timeline_width(
@@ -170,9 +182,12 @@ impl Panels {
         bounds: Rect,
         zoom: f32,
     ) -> f32 {
-        let min = self.timeline_minimum(divider);
-        let max = (bounds.width() / zoom - MIN_TIMELINE_WIDTH).max(0.0);
-        width.clamp(min.min(max), max)
+        let available = bounds.width() / zoom;
+        // Leave room to drag in either direction from the automatic split, even with a navigator.
+        let compact_min = available * 0.25;
+        let min = self.timeline_minimum(divider).min(compact_min);
+        let max = available - MIN_TIMELINE_WIDTH.min(compact_min);
+        width.clamp(min, max)
     }
 
     fn scope_offset(&self, panels: &[PanelId]) -> f64 {
@@ -207,23 +222,25 @@ impl Panels {
         let Some(panel) = self.get(id) else {
             return false;
         };
-        let (bounds, zoom) = match &panel.kind {
-            PanelKind::Waves(w) if w.drag == Some(WaveDrag::ValuesSplit) => {
-                (w.last_layout().bounds, w.last_layout().zoom)
+        let (bounds, zoom, grab) = match &panel.kind {
+            PanelKind::Waves(w) if let Some(WaveDrag::ValuesSplit { grab }) = w.drag => {
+                (w.last_layout().bounds, w.last_layout().zoom, grab)
             }
-            PanelKind::Pipeline(p) if p.drag == Some(PipelineDrag::LabelSplit) => {
-                (p.last_layout().bounds, p.last_layout().zoom)
+            PanelKind::Pipeline(p) if let Some(PipelineDrag::LabelSplit { grab }) = p.drag => {
+                (p.last_layout().bounds, p.last_layout().zoom, grab)
             }
             _ => return false,
         };
         let bounds = self.timeline_margins(id, bounds, zoom).content(bounds);
-        let width = (position.x - bounds.left()) / zoom;
+        if bounds.width() <= 0.0 {
+            return true;
+        }
+        let width = (position.x - grab - bounds.left()) / zoom;
         let scope_offset = self.scope_offset(&self.timeline[index].panels);
-        let min = self.timeline_minimum(&self.timeline[index]);
+        self.timeline[index].manual = true;
         self.timeline[index].scope_offset = scope_offset;
-        self.timeline[index].width = self
-            .clamp_timeline_width(&self.timeline[index], width, bounds, zoom)
-            .max(min);
+        self.timeline[index].width =
+            self.clamp_timeline_width(&self.timeline[index], width, bounds, zoom);
         match &mut self.get_mut(id).unwrap().kind {
             PanelKind::Waves(w) => w.pointer = Some(position),
             PanelKind::Pipeline(p) => p.pointer = Some(position),

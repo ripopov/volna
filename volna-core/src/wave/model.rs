@@ -837,7 +837,9 @@ pub enum Drag {
     },
     NamesSplit,
     ScopesSplit,
-    ValuesSplit,
+    ValuesSplit {
+        grab: f32,
+    },
     Scroll {
         grab: f32,
     },
@@ -1079,6 +1081,7 @@ pub struct WaveModel {
     pub names_width: f32,
     pub scope: super::ScopeColumn,
     pub values_width: f32,
+    pub(crate) manual_columns: bool,
     pub hover_row: Option<usize>,
     pub edge_hover: Option<usize>,
     pub split_hover: bool,
@@ -1138,6 +1141,7 @@ impl WaveModel {
             names_width: self.names_width,
             scope: self.scope,
             values_width: self.values_width,
+            manual_columns: self.manual_columns,
             ..Self::new()
         }
     }
@@ -1161,6 +1165,7 @@ impl WaveModel {
             names_width: 220.0,
             scope: super::ScopeColumn::default(),
             values_width: 120.0,
+            manual_columns: false,
             hover_row: None,
             edge_hover: None,
             split_hover: false,
@@ -3304,6 +3309,7 @@ impl WaveModel {
             names_width: self.names_width,
             scope: self.scope,
             values_width: self.values_width,
+            manual_columns: self.manual_columns,
             trace_gutter: doc.traces().is_combined(),
             row_tops: super::layout::row_tops(visible.iter().map(|&i| {
                 self.display_entry(i as usize)
@@ -3939,7 +3945,9 @@ impl WaveModel {
                 return;
             }
             if layout.values_split.contains(p) {
-                self.drag = Some(Drag::ValuesSplit);
+                self.drag = Some(Drag::ValuesSplit {
+                    grab: p.x - layout.waves.left(),
+                });
                 return;
             }
             if let Some((track, thumb)) = layout.scrollbar {
@@ -4213,6 +4221,21 @@ impl WaveModel {
         self.pointer = Some(p);
         let layout = &self.layout;
         let wave_wf = layout.wave_width_f64();
+        if !self.manual_columns
+            && matches!(
+                self.drag,
+                Some(Drag::ScopesSplit | Drag::NamesSplit | Drag::ValuesSplit { .. })
+            )
+        {
+            // Start a manual resize at the displayed widths, including any automatic compression.
+            self.names_width = (layout.names.width() / layout.zoom).max(MIN_COLUMN);
+            self.values_width = (layout.values.width() / layout.zoom).max(MIN_COLUMN);
+            if !self.scope.is_collapsed() {
+                self.scope
+                    .resize((layout.scopes.width() / layout.zoom).max(MIN_COLUMN));
+            }
+            self.manual_columns = true;
+        }
         match self.drag {
             Some(Drag::ZoomRange { start, .. }) => {
                 self.drag = Some(Drag::ZoomRange { start, current: p });
@@ -4298,8 +4321,9 @@ impl WaveModel {
                 self.scope.resize(width);
                 true
             }
-            Some(Drag::ValuesSplit) => {
-                self.values_width = ((p.x - layout.names.right()) / layout.zoom).max(MIN_COLUMN);
+            Some(Drag::ValuesSplit { grab }) => {
+                self.values_width =
+                    ((p.x - grab - layout.names.right()) / layout.zoom).max(MIN_COLUMN);
                 true
             }
             Some(Drag::Rows { gap, started, .. }) => {

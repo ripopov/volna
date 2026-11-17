@@ -393,7 +393,11 @@ try {
     await staticPage.goto(`${origin}${base}${route}`);
     assert.equal(await staticPage.locator('h1').count(), 1, `${route}: static page title`);
     assert.ok((await staticPage.locator('.sl-markdown-content').textContent()).trim().length > 20, `${route}: static content must not be empty`);
-    assert.ok(await staticPage.locator('.sl-markdown-content h2').count() > 0, `${route}: sections must render without JavaScript`);
+    if (route === 'volna-trace/') {
+      assert.equal(await staticPage.getByText('cargo test --locked -p volna-trace --all-targets', { exact: true }).isVisible(), true);
+    } else {
+      assert.ok(await staticPage.locator('.sl-markdown-content h2').count() > 0, `${route}: sections must render without JavaScript`);
+    }
   }
   await noJs.close();
   report.behavior.push('readable docs and diagrams without JavaScript');

@@ -377,7 +377,7 @@ fn ruler_labels_use_separate_scope_and_name_cells() {
     let panel = app.panels.focused_id();
     for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
         for (width, scopes_width) in [
-            (1200.0, 400.0),
+            (1600.0 * theme.zoom, 400.0),
             (1200.0, 100.0),
             (1200.0, 20.0),
             (360.0, 100.0),

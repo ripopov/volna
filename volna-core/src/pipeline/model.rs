@@ -110,7 +110,9 @@ pub enum Drag {
         saved_width: f32,
         moved: bool,
     },
-    LabelSplit,
+    LabelSplit {
+        grab: f32,
+    },
     Marker(crate::marker::MarkerDrag),
 }
 
@@ -1446,7 +1448,9 @@ impl PipelineModel {
         }
         if button == MouseButton::Left {
             if layout.label_split.contains(p) {
-                self.drag = Some(Drag::LabelSplit);
+                self.drag = Some(Drag::LabelSplit {
+                    grab: p.x - layout.cells.left(),
+                });
                 return;
             }
             if layout.retry.is_some_and(|r| r.contains(p)) {
@@ -1619,8 +1623,8 @@ impl PipelineModel {
                 }
                 true
             }
-            Some(Drag::LabelSplit) => {
-                self.label_width = ((p.x - self.layout.bounds.left()) / self.layout.zoom)
+            Some(Drag::LabelSplit { grab }) => {
+                self.label_width = ((p.x - grab - self.layout.bounds.left()) / self.layout.zoom)
                     .clamp(LABEL_W_MIN, LABEL_W_MAX);
                 true
             }
