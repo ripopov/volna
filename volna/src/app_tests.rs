@@ -2663,6 +2663,19 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
     });
     vcx.run_until_parked();
     assert_eq!(heights(&mut vcx), [1, 1, 1]);
+
+    for (keys, expected) in [
+        ("down down down down down enter", 16),
+        ("down down down down down down enter", 32),
+    ] {
+        vcx.simulate_keystrokes("shift-f10");
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("down down down right");
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes(keys);
+        vcx.run_until_parked();
+        assert_eq!(heights(&mut vcx), [expected; 3]);
+    }
 }
 
 #[gpui_kit::test]

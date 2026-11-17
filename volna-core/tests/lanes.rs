@@ -215,7 +215,7 @@ fn click(app: &mut App, waves: PanelId, p: Point) {
 }
 
 #[test]
-fn mixed_tx_and_signal_heights_step_in_the_correct_direction_between_presets() {
+fn mixed_tx_and_signal_heights_step_between_presets_and_up_to_32() {
     let (mut app, _, waves, _) = with_lanes(&[CPU0]);
     app.handle(Command::AddVars(a_all(vec![0])));
     complete_pending(&mut app);
@@ -250,6 +250,39 @@ fn mixed_tx_and_signal_heights_step_in_the_correct_direction_between_presets() {
         ));
         app.handle(Command::Action(Action::DecreaseRowHeight));
         assert_eq!(heights(&app), [multiple - 1, 4]);
+    }
+
+    app.handle(Command::OpenSignalMenu(waves));
+    let height = app
+        .panels
+        .waves(waves)
+        .unwrap()
+        .menu
+        .as_ref()
+        .unwrap()
+        .items()
+        .find(|item| item.label == "16×")
+        .unwrap()
+        .action
+        .clone();
+    app.handle(Command::MenuSelect(waves, height));
+    for (action, expected) in [
+        (Action::DecreaseRowHeight, 8),
+        (Action::IncreaseRowHeight, 16),
+        (Action::IncreaseRowHeight, 32),
+        (Action::IncreaseRowHeight, 32),
+        (Action::DecreaseRowHeight, 16),
+        (Action::DecreaseRowHeight, 8),
+    ] {
+        app.handle(Command::Action(action));
+        frame(&mut app, waves);
+        let model = app.panels.waves(waves).unwrap();
+        assert_eq!(model.items()[0].height().multiple(), expected);
+        assert_eq!(model.items()[1].height().multiple(), expected);
+        assert_eq!(
+            model.last_layout().row_height(1),
+            f32::from(expected) * model.last_layout().row_h
+        );
     }
 }
 

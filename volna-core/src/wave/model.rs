@@ -149,14 +149,16 @@ impl RowSource {
 pub struct RowHeight(u8);
 
 impl RowHeight {
-    pub const PRESETS: [RowHeight; 5] = [
+    pub const PRESETS: [RowHeight; 7] = [
         RowHeight(1),
         RowHeight(2),
         RowHeight(3),
         RowHeight(4),
         RowHeight(8),
+        RowHeight(16),
+        RowHeight(32),
     ];
-    pub const ALL: [RowHeight; 8] = [
+    pub const ALL: [RowHeight; 10] = [
         Self(1),
         Self(2),
         Self(3),
@@ -165,6 +167,8 @@ impl RowHeight {
         Self(6),
         Self(7),
         Self(8),
+        Self(16),
+        Self(32),
     ];
     pub const DEFAULT: RowHeight = RowHeight(1);
     pub const ANALOG: RowHeight = RowHeight(3);
@@ -181,16 +185,20 @@ impl RowHeight {
 
     #[must_use]
     pub fn step(self, delta: isize) -> Self {
+        self.step_through(delta, &Self::PRESETS)
+    }
+
+    fn step_through(self, delta: isize, heights: &[Self]) -> Self {
         if delta == 0 {
             return self;
         }
-        let index = match Self::PRESETS.binary_search_by_key(&self.0, |h| h.0) {
+        let index = match heights.binary_search_by_key(&self.0, |h| h.0) {
             Ok(index) => index as isize,
             Err(next) => next as isize - isize::from(delta > 0),
         };
-        Self::PRESETS[index
+        heights[index
             .saturating_add(delta)
-            .clamp(0, Self::PRESETS.len() as isize - 1) as usize]
+            .clamp(0, heights.len() as isize - 1) as usize]
     }
 }
 
@@ -2954,8 +2962,7 @@ impl WaveModel {
         } else {
             self.resize_rows(doc, &rows, anchor, |h, tx| {
                 if tx {
-                    RowHeight::try_from((isize::from(h.multiple()) + delta).clamp(1, 8) as u8)
-                        .unwrap()
+                    h.step_through(delta, &RowHeight::ALL)
                 } else {
                     h.step(delta)
                 }

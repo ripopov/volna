@@ -828,6 +828,15 @@ fn dragging_a_row_edge_resizes_to_presets_without_selecting() {
         },
     ));
     assert_eq!(heights(&app, id)[BUS], 8);
+    for multiple in [16, 32, 8] {
+        app.handle(Command::Pointer(
+            id,
+            PointerEvent::Move {
+                position: at(l.row_y(BUS) + f32::from(multiple) * l.row_h),
+            },
+        ));
+        assert_eq!(heights(&app, id)[BUS], multiple);
+    }
     app.handle(Command::Pointer(id, PointerEvent::Up));
     assert!(app.panels.waves(id).unwrap().drag.is_none());
     select(&mut app, id, &[BUS, BIT]);

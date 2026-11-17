@@ -944,21 +944,22 @@ fn row_heights_round_trip_and_restore_tall_row_geometry() {
     let w = app.panels.focused_waves_mut().unwrap();
     w.selected = [1].into();
     w.anchor = Some(1);
-    app.handle(Command::Action(Action::IncreaseRowHeight));
-    app.handle(Command::Action(Action::IncreaseRowHeight));
+    for _ in 0..5 {
+        app.handle(Command::Action(Action::IncreaseRowHeight));
+    }
     let w = app.panels.focused_waves_mut().unwrap();
     w.selected = [2].into();
     w.anchor = Some(2);
-    for _ in 0..4 {
+    for _ in 0..6 {
         app.handle(Command::Action(Action::IncreaseRowHeight));
     }
-    assert_eq!(row_heights(&app), [1, 3, 8]);
+    assert_eq!(row_heights(&app), [1, 16, 32]);
     let saved = value(&app);
     let rows = &saved["panels"][0]["rows"];
     assert!(rows[0].get("height").is_none());
     assert_eq!(
         (&rows[1]["height"], &rows[2]["height"]),
-        (&json!(3), &json!(8))
+        (&json!(16), &json!(32))
     );
 
     let mut restored = App::new();
@@ -967,7 +968,7 @@ fn row_heights_round_trip_and_restore_tall_row_geometry() {
         .unwrap()
         .commit(&mut restored)
         .unwrap();
-    assert_eq!(row_heights(&restored), [1, 3, 8]);
+    assert_eq!(row_heights(&restored), [1, 16, 32]);
     assert_eq!(value(&restored), saved);
     let id = restored.panels.focused_id();
     restored.layout_panel(
@@ -983,15 +984,16 @@ fn row_heights_round_trip_and_restore_tall_row_geometry() {
         (0..3)
             .map(|row| (layout.row_y(row) - top) / layout.row_h)
             .collect::<Vec<_>>(),
-        [0.0, 1.0, 4.0]
+        [0.0, 1.0, 17.0]
     );
-    assert_eq!(layout.row_height(2), 8.0 * layout.row_h);
+    assert_eq!(layout.row_height(1), 16.0 * layout.row_h);
+    assert_eq!(layout.row_height(2), 32.0 * layout.row_h);
 }
 
 #[test]
 fn unsupported_row_heights_reject_the_whole_restore() {
     let app = app();
-    for height in [json!(0), json!(9), json!("2"), json!(2.5)] {
+    for height in [json!(0), json!(9), json!(33), json!("2"), json!(2.5)] {
         let mut saved = value(&app);
         saved["panels"][0]["rows"][0]["height"] = height.clone();
         assert!(prepare(&saved, &app).is_err(), "{height}");
