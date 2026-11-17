@@ -76,6 +76,18 @@ git config core.hooksPath .githooks
 
 The hook checks the current working tree with the same Clippy command as CI.
 
+Install the viewer and matching `vtr` converter with `./install.sh`. On Linux,
+this also installs the desktop launcher and icons. For a custom prefix, use the
+same `--root` when installing and uninstalling:
+
+```sh
+./install.sh --root "$HOME/.local"
+./install.sh --uninstall --root "$HOME/.local"
+```
+
+The default prefix is `CARGO_INSTALL_ROOT`, then `CARGO_HOME`, then `~/.cargo`.
+Cargo options such as `--debug` are forwarded to both packages.
+
 ## Documentation website
 
 Engineering documentation builds to a static Astro/Starlight website in
