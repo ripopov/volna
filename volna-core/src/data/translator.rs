@@ -133,16 +133,16 @@ impl NumericKind {
             _ => None,
         };
         if width > 64 {
-            let mut acc = 0.0f64;
-            for i in 0..width {
-                acc = acc * 2.0 + bit(i)? as f64;
-            }
-            let v = match self {
-                Self::Signed if read(0) == b'1' => acc - 2f64.powi(width as i32),
-                Self::Unsigned | Self::Signed => acc,
+            // Decode the sign first so sign extension cannot cause cancellation or overflow.
+            let mut acc = match (self, bit(0)?) {
+                (Self::Signed, 1) => -1.0,
+                (Self::Unsigned | Self::Signed, first) => first as f64,
                 _ => return None,
             };
-            return v.is_finite().then_some(v);
+            for i in 1..width {
+                acc = acc * 2.0 + bit(i)? as f64;
+            }
+            return acc.is_finite().then_some(acc);
         }
         let raw = (0..width).try_fold(0_u64, |raw, i| Some((raw << 1) | bit(i)?))?;
         self.read_raw(raw, width)
@@ -150,9 +150,11 @@ impl NumericKind {
 
     fn read_raw(self, raw: u64, w: usize) -> Option<f64> {
         let v = match self {
-            Self::Signed if w == 64 => raw as i64 as f64,
-            Self::Signed if (raw >> (w - 1)) & 1 == 1 => raw as f64 - 2f64.powi(w as i32),
-            Self::Unsigned | Self::Signed => raw as f64,
+            Self::Signed => {
+                let shift = 64 - w;
+                ((raw as i64) << shift >> shift) as f64
+            }
+            Self::Unsigned => raw as f64,
             Self::Float => match w {
                 16 => half_to_f64(raw as u16),
                 32 => f64::from(f32::from_bits(raw as u32)),
@@ -765,11 +767,16 @@ mod tests {
     }
 
     #[test]
-    fn vectors_past_f64_range_read_as_nothing() {
+    fn wide_numeric_values_respect_f64_range() {
         let ones = WaveValue::Bits("1".repeat(1100));
         let view = ValueView::borrowed(&ones);
         assert_eq!(NumericKind::Unsigned.read(&view), None);
-        assert_eq!(NumericKind::Signed.read(&view), None);
+        assert_eq!(NumericKind::Signed.read(&view), Some(-1.0));
+        let minimum = WaveValue::Bits(format!("1{}", "0".repeat(1099)));
+        assert_eq!(
+            NumericKind::Signed.read(&ValueView::borrowed(&minimum)),
+            None
+        );
         let wide = SignalShape::Vector { width: 1100 };
         assert_eq!(NumericKind::Unsigned.limits(wide), None);
         let ok = WaveValue::Bits(format!("1{}", "0".repeat(99)));

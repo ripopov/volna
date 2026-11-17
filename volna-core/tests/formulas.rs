@@ -458,6 +458,107 @@ fn numeric_interpretations_slices_and_ieee_inputs_are_captured() {
     assert_eq!(number(preview(&app), 0), Some(128.0));
 }
 
+// A user plots a signed recording and uses whole or sliced inputs in a formula;
+// sign extension must preserve amplitudes and unknowns must remain gaps.
+#[test]
+fn signed_vectors_preserve_values_in_analog_and_formula_inputs() {
+    use volna_core::wave::analog::{Sample, sample};
+
+    for width in [8usize, 54, 63, 64, 65, 128, 1100] {
+        let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+        let mut writer = vtr::Writer::create(file.path()).unwrap();
+        let signal = writer
+            .signal(
+                vtr::SourceOptions::new(format!("wide[{}:0]", width - 1), None),
+                vtr::SignalKind::Bits {
+                    width: width as u32,
+                    states: 4,
+                },
+                vtr::VarType::Wire,
+                vtr::Direction::Output,
+            )
+            .unwrap();
+        for (time, bits) in [
+            "1".repeat(width),
+            format!("{}0", "1".repeat(width - 1)),
+            format!("{}1", "0".repeat(width - 1)),
+            format!("1{}", "0".repeat(width - 1)),
+            format!("{}x", "1".repeat(width - 1)),
+            format!("{}z", "1".repeat(width - 1)),
+        ]
+        .iter()
+        .enumerate()
+        {
+            writer.advance_time(time as u64).unwrap();
+            let mut packed = vec![0; width.div_ceil(4)];
+            for (i, bit) in bits.bytes().rev().enumerate() {
+                vtr::signal::set_code(&mut packed, 4, i, vtr::signal::code_from_ascii(bit));
+            }
+            writer.emit_packed(signal, 4, &packed).unwrap();
+        }
+        writer.close().unwrap();
+
+        let mut app = App::new();
+        app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
+        app.handle(Command::AddVars(a_all([0])));
+        pump(&mut app);
+        let minimum = -2f64.powi(width as i32 - 1);
+        let expected = [
+            Some(-1.0),
+            Some(-2.0),
+            Some(1.0),
+            minimum.is_finite().then_some(minimum),
+            None,
+            None,
+        ];
+        let history = app
+            .panels
+            .focused_waves()
+            .unwrap()
+            .signal(0)
+            .unwrap()
+            .history
+            .as_ref()
+            .unwrap();
+        for (time, value) in expected.iter().copied().enumerate() {
+            assert_eq!(
+                sample(
+                    history.as_ref(),
+                    NumericKind::Signed,
+                    history.index_at(time as u64)
+                ),
+                value.map_or(Sample::Undefined, Sample::Value),
+                "{width}-bit analog sample at {time}",
+            );
+        }
+
+        command(&mut app, Derive::Open(Some(0)));
+        for slice in [String::new(), format!("{}:0", width - 2)] {
+            command(
+                &mut app,
+                Derive::SetInput {
+                    index: 0,
+                    alias: "wide".into(),
+                    kind: NumericKind::Signed,
+                    slice: slice.clone(),
+                },
+            );
+            formula(&mut app, "wide + 0");
+            let mut expected = expected;
+            if !slice.is_empty() {
+                expected[3] = Some(0.0);
+            }
+            for (time, value) in expected.into_iter().enumerate() {
+                assert_eq!(
+                    number(preview(&app), time as u64),
+                    value,
+                    "{width}-bit formula input with slice {slice:?} at {time}",
+                );
+            }
+        }
+    }
+}
+
 // A user enters an oversized or ill-typed expression; errors must be bounded, recoverable, and keep Apply disabled.
 #[test]
 fn invalid_and_oversized_formulas_recover_without_applying_old_results() {
