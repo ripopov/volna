@@ -11,6 +11,7 @@ pub(crate) enum Prop {
     Clocks {
         rulers: Option<Vec<crate::clock::ClockKey>>,
         origin: Option<u64>,
+        grid: Option<crate::clock::ClockKey>,
     },
     Table(crate::table::model::Prop),
     Transaction(crate::transaction::model::Prop),
@@ -29,7 +30,12 @@ impl Prop {
     pub(crate) fn bytes(&self) -> usize {
         match self {
             Self::Title(t) => t.as_ref().map_or(0, String::len),
-            Self::Clocks { rulers, .. } => rulers.iter().flatten().map(|k| k.item.len() + 24).sum(),
+            Self::Clocks { rulers, grid, .. } => rulers
+                .iter()
+                .flatten()
+                .chain(grid.iter())
+                .map(|k| k.item.len() + 24)
+                .sum(),
             Self::Table(prop) => prop.bytes(),
             Self::Transaction(prop) => prop.bytes(),
         }
@@ -108,8 +114,14 @@ impl Panel {
     pub(crate) fn matches_prop(&self, prop: &Prop) -> bool {
         match prop {
             Prop::Title(title) => self.title.get() == title,
-            Prop::Clocks { rulers, origin } => self.kind.nav().is_some_and(|nav| {
-                nav.clocks().rulers == *rulers && nav.clocks().origin == *origin
+            Prop::Clocks {
+                rulers,
+                origin,
+                grid,
+            } => self.kind.nav().is_some_and(|nav| {
+                nav.clocks().rulers == *rulers
+                    && nav.clocks().origin == *origin
+                    && nav.clocks().grid == *grid
             }),
             Prop::Table(prop) => self.kind.table().is_some_and(|t| t.matches_prop(prop)),
             Prop::Transaction(prop) => self
@@ -122,10 +134,18 @@ impl Panel {
     pub(crate) fn swap_prop(&mut self, doc: &mut Document, prop: Prop) -> Result<Prop> {
         Ok(match prop {
             Prop::Title(title) => Prop::Title(self.title.swap(title)),
-            Prop::Clocks { rulers, origin } => {
+            Prop::Clocks {
+                rulers,
+                origin,
+                grid,
+            } => {
                 let nav = self.kind.nav_mut().context("not a timed panel")?;
-                let (rulers, origin) = nav.swap_clocks((rulers, origin));
-                Prop::Clocks { rulers, origin }
+                let (rulers, origin, grid) = nav.swap_clocks((rulers, origin, grid));
+                Prop::Clocks {
+                    rulers,
+                    origin,
+                    grid,
+                }
             }
             Prop::Table(prop) => Prop::Table(
                 self.kind

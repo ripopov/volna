@@ -106,7 +106,9 @@ pub fn paint(
     p.scene.fill(header, t.panel.bg);
     let (tick_list, unit) = column.ticks(base, t.zoom);
     overlay::grid(&mut p, &column, &tick_list);
-    overlay::cycle_grid(&mut p, &column, clocks, &doc.clocks);
+    if let Some(clock) = clocks.rulers(&doc.clocks).first() {
+        overlay::cycle_grid(&mut p, &column, clock);
+    }
 
     let rows = model.rows(doc);
     if let Rows::Ready(set) = &rows

@@ -833,8 +833,8 @@ pub fn grid(p: &mut TextPainter<'_>, column: &TimeColumn, tick_list: &[Tick]) {
 const CYCLE_GRID_PX: f64 = 8.0;
 const CYCLE_GRID_MAX: usize = 2000;
 
-pub fn cycle_grid(p: &mut TextPainter<'_>, column: &TimeColumn, view: &ClockView, clocks: &Clocks) {
-    let Some(timeline) = view.rulers(clocks).first().and_then(|c| c.timeline()) else {
+pub fn cycle_grid(p: &mut TextPainter<'_>, column: &TimeColumn, clock: &Clock) {
+    let Some(timeline) = clock.timeline() else {
         return;
     };
     let area = column.area;

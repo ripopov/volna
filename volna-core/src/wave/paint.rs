@@ -203,8 +203,16 @@ pub(crate) fn paint(
     p.scene.fill(layout.header, t.panel.bg);
 
     let (tick_list, unit) = column.ticks(base, t.zoom);
-    overlay::grid(&mut p, &column, &tick_list);
-    overlay::cycle_grid(&mut p, &column, clocks, &doc.clocks);
+    if let Some(clock) = clocks
+        .grid
+        .as_ref()
+        .filter(|key| clocks.ruler_keys(&doc.clocks).contains(key))
+        .and_then(|key| doc.clocks.find(key))
+    {
+        overlay::cycle_grid(&mut p, &column, clock);
+    } else {
+        overlay::grid(&mut p, &column, &tick_list);
+    }
     if doc.is_loaded() {
         overlay::outside_time(&mut p, &column, doc.limits());
     }

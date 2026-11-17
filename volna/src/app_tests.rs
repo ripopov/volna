@@ -3297,6 +3297,93 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn clock_ruler_grid_menu_can_be_toggled_with_the_keyboard(cx: &mut TestAppContext) {
+    use gpui_kit::{VisualTestContext, size};
+    use volna_core::app::ClockCommand;
+    use volna_core::geometry::MouseButton;
+    use volna_core::wave::PointerEvent;
+
+    init(cx);
+    for dark in [true, false] {
+        let window = RootWindow::new(cx);
+        let mut vcx = VisualTestContext::from_window(window.root.into(), cx);
+        vcx.simulate_resize(size(px(360.0), px(700.0)));
+        window
+            .update(&mut vcx, |ws, window, cx| {
+                ws.set_session(
+                    OpenSpec::Path(
+                        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/feature_showcase.vtr")
+                            .into(),
+                    )
+                    .open()
+                    .unwrap(),
+                    cx,
+                );
+                ws.app.sidebar_visible = false;
+                ws.dispatch(Command::AddVars(a_all(vec![0])), Some(window), cx);
+                let key = ws.app.doc.clocks.iter().next().unwrap().key();
+                ws.dispatch(
+                    Command::Clocks(ClockCommand::ToggleRuler(key)),
+                    Some(window),
+                    cx,
+                );
+                crate::theme::set(crate::theme::CoreTheme::volna(dark), cx);
+            })
+            .unwrap();
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        for checked in [false, true, false] {
+            window
+                .update(&mut vcx, |ws, window, cx| {
+                    let panel = ws.app.panels.focused_id();
+                    let layout = ws.app.panels.focused_waves().unwrap().last_layout();
+                    let position = volna_core::geometry::point(
+                        layout.names.left() + 20.0,
+                        layout.rulers.top() + 8.0,
+                    );
+                    ws.dispatch(
+                        Command::Pointer(
+                            panel,
+                            PointerEvent::Down {
+                                position,
+                                button: MouseButton::Right,
+                                modifiers: Default::default(),
+                            },
+                        ),
+                        Some(window),
+                        cx,
+                    );
+                    let menu = ws
+                        .app
+                        .panels
+                        .focused_waves()
+                        .unwrap()
+                        .menu
+                        .as_ref()
+                        .unwrap();
+                    let item = menu
+                        .items()
+                        .find(|item| item.label == "Use as grid")
+                        .unwrap();
+                    assert_eq!(item.is_checked(), checked);
+                    assert!(ws.wave_menu.is_some());
+                })
+                .unwrap();
+            vcx.run_until_parked();
+            vcx.update(|window, cx| window.draw(cx).clear(cx));
+            vcx.simulate_keystrokes("down enter");
+            vcx.run_until_parked();
+            window
+                .update(&mut vcx, |ws, _, _| {
+                    assert!(ws.wave_menu.is_none());
+                    assert!(ws.app.panels.focused_waves().unwrap().menu.is_none());
+                })
+                .unwrap();
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn signal_format_menu_fits_narrow_windows_in_both_themes(cx: &mut TestAppContext) {
     use gpui_kit::{Modifiers, VisualTestContext, size};
     use volna_core::wave::analog::AnalogDraw;

@@ -880,6 +880,7 @@ pub enum MenuAction {
     Draw(Option<AnalogDraw>),
     Range(AnalogRange),
     HideRuler(ClockKey),
+    GridClock(Option<ClockKey>),
     Group,
     Ungroup,
     Rename,
@@ -2782,14 +2783,20 @@ impl WaveModel {
         else {
             return;
         };
+        let is_grid = self.nav.clocks().grid.as_ref() == Some(&path);
         self.menu = Some(WaveMenu {
             kind: WaveMenuKind::Ruler,
             row: ruler,
             position,
-            entries: vec![MenuEntry::Item(MenuItem::plain(
-                MenuAction::HideRuler(path),
-                "Hide Ruler",
-            ))],
+            entries: vec![
+                MenuEntry::Item(MenuItem::toggle(
+                    MenuAction::GridClock((!is_grid).then(|| path.clone())),
+                    "Use as grid",
+                    is_grid,
+                )),
+                MenuEntry::Separator,
+                MenuEntry::Item(MenuItem::plain(MenuAction::HideRuler(path), "Hide Ruler")),
+            ],
         });
     }
 
@@ -2800,6 +2807,20 @@ impl WaveModel {
     ) -> Option<Traced<SignalRef>> {
         let menu = self.menu.take()?;
         match action {
+            MenuAction::GridClock(key) => {
+                if menu.kind == WaveMenuKind::Ruler
+                    && menu
+                        .items()
+                        .any(|item| &item.action == action && !item.disabled)
+                    && key.as_ref().is_none_or(|key| {
+                        self.nav.clocks().ruler_keys(&doc.clocks).contains(key)
+                            && doc.clocks.find(key).is_some()
+                    })
+                {
+                    self.nav.set_grid_clock(key.clone());
+                }
+                return None;
+            }
             MenuAction::HideRuler(path) => {
                 self.nav.hide_ruler(&doc.clocks, path);
                 return None;

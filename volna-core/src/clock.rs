@@ -209,6 +209,9 @@ pub struct ClockView {
     pub rulers: Option<Vec<ClockKey>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<ClockKey>,
+    /// Waveform grid source; `None` uses time ticks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<ClockKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<u64>,
 }
@@ -262,6 +265,9 @@ impl ClockView {
                 if self.selected.as_ref() == Some(key) {
                     self.selected = None;
                 }
+                if self.grid.as_ref() == Some(key) {
+                    self.grid = None;
+                }
             }
             None => rulers.push(key.clone()),
         }
@@ -269,15 +275,19 @@ impl ClockView {
     }
 
     pub(crate) fn forget_trace(&mut self, trace: TraceId) -> bool {
+        let grid_removed = self.grid.as_ref().is_some_and(|k| k.trace == trace);
+        if grid_removed {
+            self.grid = None;
+        }
         if self.selected.as_ref().is_some_and(|k| k.trace == trace) {
             self.selected = None;
         }
         let Some(rulers) = &mut self.rulers else {
-            return false;
+            return grid_removed;
         };
         let before = rulers.len();
         rulers.retain(|k| k.trace != trace);
-        rulers.len() != before
+        rulers.len() != before || grid_removed
     }
 
     #[must_use]

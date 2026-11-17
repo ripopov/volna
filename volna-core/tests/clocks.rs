@@ -1233,7 +1233,7 @@ fn a_clock_generator_adds_as_a_ruler_or_as_a_waveform() {
 
 #[test]
 fn a_ruler_context_menu_hides_it() {
-    use volna_core::wave::model::{MenuAction, MenuEntry, WaveMenuKind};
+    use volna_core::wave::model::{MenuAction, WaveMenuKind};
     let (mut app, _, panel) = waves();
     let theme = Theme::one_dark();
     app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(
@@ -1258,7 +1258,8 @@ fn a_ruler_context_menu_hides_it() {
     assert_eq!((menu.kind, menu.row), (WaveMenuKind::Ruler, 1));
     let hide = MenuAction::HideRuler(a("top.bus_clk".into()));
     assert!(
-        matches!(&menu.entries[..], [MenuEntry::Item(i)] if i.label == "Hide Ruler" && i.action == hide)
+        menu.items()
+            .any(|i| i.label == "Hide Ruler" && i.action == hide)
     );
     app.handle(Command::MenuSelect(panel, hide));
     frame(&mut app, panel, &theme);
@@ -1269,6 +1270,178 @@ fn a_ruler_context_menu_hides_it() {
     );
     assert_eq!(w.last_layout().rulers.height(), 16.0 * theme.zoom);
     assert!(w.menu.is_none());
+}
+
+fn ruler_grid_item(
+    app: &mut App,
+    panel: PanelId,
+    theme: &Theme,
+    ruler: usize,
+) -> volna_core::wave::model::MenuItem {
+    frame(app, panel, theme);
+    let layout = app.panels.waves(panel).unwrap().last_layout();
+    let at = point(
+        layout.waves.left() + 40.0,
+        layout.rulers.top() + (ruler as f32 + 0.5) * 16.0 * theme.zoom,
+    );
+    app.handle(Command::Pointer(
+        panel,
+        PointerEvent::Down {
+            position: at,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    app.panels
+        .waves(panel)
+        .unwrap()
+        .menu
+        .as_ref()
+        .unwrap()
+        .items()
+        .find(|item| item.label == "Use as grid")
+        .unwrap()
+        .clone()
+}
+
+fn grid_lines(app: &mut App, panel: PanelId, theme: &Theme) -> Vec<f32> {
+    use volna_core::scene::Prim;
+    frame(app, panel, theme);
+    let area = app.panels.waves(panel).unwrap().last_layout().waves;
+    app.scene()
+        .prims
+        .iter()
+        .filter_map(|prim| match prim {
+            Prim::Quad { rect, fill, .. }
+                if rect.top() == area.top()
+                    && rect.height() == area.height()
+                    && rect.width() == 1.0
+                    && (*fill == theme.wave_tick
+                        || *fill == theme.wave_tick.with_alpha(theme.wave_tick.a * 0.5)) =>
+            {
+                Some(rect.left())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn ruler_grid_menu_switches_one_grid_and_restores_time_grid() {
+    use volna_core::wave::model::MenuAction;
+    for theme in [Theme::one_dark(), Theme::volna(false).zoomed(1.5)] {
+        let (mut app, _, panel) = waves();
+        for name in ["top.core_clk", "top.bus_clk"] {
+            app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(name.into()))));
+        }
+        app.doc.shared.viewport.set(Viewport {
+            start: 0.0,
+            end: 10_000.0,
+        });
+        app.doc.shared.cursor = Some(4500);
+        let time_grid = grid_lines(&mut app, panel, &theme);
+        assert!(!time_grid.is_empty());
+        let before = app.panels.waves(panel).unwrap().nav.spot(&app.doc);
+        let selected = app
+            .panels
+            .waves(panel)
+            .unwrap()
+            .nav
+            .clocks()
+            .selected
+            .clone();
+        let bus = ruler_grid_item(&mut app, panel, &theme, 1);
+        assert!(!bus.is_checked());
+        app.handle(Command::MenuSelect(panel, bus.action));
+        assert!(app.panels.waves(panel).unwrap().menu.is_none());
+        let expected_bus: Vec<_> = [1000, 3000, 5000, 7000, 9000]
+            .into_iter()
+            .map(|time| waves_x(&app, panel, f64::from(time)).round())
+            .collect();
+        assert_eq!(grid_lines(&mut app, panel, &theme), expected_bus);
+        assert_eq!(app.panels.waves(panel).unwrap().nav.spot(&app.doc), before);
+        assert_eq!(
+            app.panels.waves(panel).unwrap().nav.clocks().selected,
+            selected
+        );
+        assert!(ruler_grid_item(&mut app, panel, &theme, 1).is_checked());
+
+        let core = ruler_grid_item(&mut app, panel, &theme, 0);
+        assert!(!core.is_checked());
+        app.handle(Command::MenuSelect(panel, core.action));
+        let expected_core: Vec<_> = core_edges()
+            .into_iter()
+            .take_while(|&t| t <= 10_000)
+            .map(|time| waves_x(&app, panel, time as f64).round())
+            .collect();
+        assert_eq!(grid_lines(&mut app, panel, &theme), expected_core);
+        assert!(!ruler_grid_item(&mut app, panel, &theme, 1).is_checked());
+        let core = ruler_grid_item(&mut app, panel, &theme, 0);
+        assert!(core.is_checked());
+        app.handle(Command::MenuSelect(panel, core.action));
+        assert_eq!(grid_lines(&mut app, panel, &theme), time_grid);
+        app.handle(Command::Undo);
+        assert_eq!(grid_lines(&mut app, panel, &theme), expected_core);
+        app.handle(Command::Redo);
+        assert_eq!(grid_lines(&mut app, panel, &theme), time_grid);
+
+        let bus = ruler_grid_item(&mut app, panel, &theme, 1);
+        app.handle(Command::MenuSelect(panel, bus.action));
+        ruler_grid_item(&mut app, panel, &theme, 1);
+        app.handle(Command::MenuSelect(
+            panel,
+            MenuAction::HideRuler(a("top.bus_clk".into())),
+        ));
+        assert_eq!(grid_lines(&mut app, panel, &theme), time_grid);
+        app.handle(Command::Undo);
+        assert_eq!(grid_lines(&mut app, panel, &theme), expected_bus);
+        assert!(ruler_grid_item(&mut app, panel, &theme, 1).is_checked());
+    }
+}
+
+#[test]
+fn ruler_grid_choice_is_local_to_a_panel_and_survives_a_workspace() {
+    use volna_core::panels::{Axis, PanelsCommand};
+    let (mut app, session, panel) = waves();
+    let theme = Theme::one_dark();
+    for name in ["top.core_clk", "top.bus_clk"] {
+        app.handle(Command::Clocks(ClockCommand::ToggleRuler(a(name.into()))));
+    }
+    app.doc.shared.viewport.set(Viewport {
+        start: 0.0,
+        end: 10_000.0,
+    });
+    app.handle(Command::Panels(PanelsCommand::Split {
+        panel,
+        axis: Axis::Horizontal,
+    }));
+    let other = app.panels.focused_id();
+    assert_ne!(other, panel);
+    let other_grid = grid_lines(&mut app, other, &theme);
+    let bus = ruler_grid_item(&mut app, panel, &theme, 1);
+    app.handle(Command::MenuSelect(panel, bus.action));
+    let chosen_grid = grid_lines(&mut app, panel, &theme);
+    assert_eq!(grid_lines(&mut app, other, &theme), other_grid);
+    assert!(!ruler_grid_item(&mut app, other, &theme, 1).is_checked());
+
+    let saved = Workspace::capture(&app, volna_core::testing::paths("trace.vtr"), None).unwrap();
+    let mut restored = App::new();
+    restored.set_session(session);
+    complete_pending(&mut restored);
+    Workspace::parse(&saved.to_bytes().unwrap())
+        .unwrap()
+        .prepare(
+            &restored,
+            "file:///tmp/trace.vtr",
+            "file:///tmp/trace.vtr.volna.json",
+        )
+        .unwrap()
+        .commit(&mut restored)
+        .unwrap();
+    complete_pending(&mut restored);
+    assert_eq!(grid_lines(&mut restored, panel, &theme), chosen_grid);
+    assert!(ruler_grid_item(&mut restored, panel, &theme, 1).is_checked());
+    assert_eq!(grid_lines(&mut restored, other, &theme), other_grid);
 }
 
 #[test]

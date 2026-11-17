@@ -58,7 +58,7 @@ pub struct Spot {
 
 const REVEAL_EDGE: f64 = 0.05;
 
-pub(crate) type ClockChoice = (Option<Vec<ClockKey>>, Option<u64>);
+pub(crate) type ClockChoice = (Option<Vec<ClockKey>>, Option<u64>, Option<ClockKey>);
 
 impl Retime for NavState {
     fn retime(&mut self, by: Rescale) {
@@ -429,6 +429,11 @@ impl NavState {
         self.clocks.show_ruler(clocks, key);
     }
 
+    pub fn set_grid_clock(&mut self, key: Option<ClockKey>) {
+        self.note_clocks();
+        self.clocks.grid = key;
+    }
+
     pub fn hide_ruler(&mut self, clocks: &crate::clock::Clocks, key: &ClockKey) {
         self.note_clocks();
         self.clocks.hide_ruler(clocks, key);
@@ -473,7 +478,7 @@ impl NavState {
     fn note_clocks(&mut self) {
         let clocks = &self.clocks;
         self.clocks_before
-            .note(|| (clocks.rulers.clone(), clocks.origin));
+            .note(|| (clocks.rulers.clone(), clocks.origin, clocks.grid.clone()));
     }
 
     pub(crate) fn restore_clocks(&mut self, view: crate::clock::ClockView) {
@@ -482,11 +487,12 @@ impl NavState {
         self.clocks_before.take();
     }
 
-    pub(crate) fn swap_clocks(&mut self, (rulers, origin): ClockChoice) -> ClockChoice {
+    pub(crate) fn swap_clocks(&mut self, (rulers, origin, grid): ClockChoice) -> ClockChoice {
         debug_assert!(!self.clocks_before.is_held(), "edits were not collected");
         let old = (
             std::mem::replace(&mut self.clocks.rulers, rulers),
             std::mem::replace(&mut self.clocks.origin, origin),
+            std::mem::replace(&mut self.clocks.grid, grid),
         );
         if let Some(selected) = &self.clocks.selected
             && self
@@ -514,17 +520,29 @@ impl NavState {
         clocks: &crate::clock::Clocks,
         history: &mut crate::history::History,
     ) {
-        let Some((rulers, origin)) = self.clocks_before.take() else {
+        let Some((rulers, origin, grid)) = self.clocks_before.take() else {
             return;
         };
-        if (&rulers, &origin) == (&self.clocks.rulers, &self.clocks.origin) {
+        if (&rulers, &origin, &grid)
+            == (&self.clocks.rulers, &self.clocks.origin, &self.clocks.grid)
+        {
             return;
         }
-        let label = clocks_label(clocks, rulers.as_deref(), origin, &self.clocks);
+        let label = clocks_label(
+            clocks,
+            rulers.as_deref(),
+            origin,
+            grid.as_ref(),
+            &self.clocks,
+        );
         history.record(
             crate::history::Edit::Prop {
                 panel,
-                prop: crate::panels::content::Prop::Clocks { rulers, origin },
+                prop: crate::panels::content::Prop::Clocks {
+                    rulers,
+                    origin,
+                    grid,
+                },
             },
             Some(label),
         );
@@ -594,6 +612,7 @@ fn clocks_label(
     clocks: &crate::clock::Clocks,
     rulers: Option<&[ClockKey]>,
     origin: Option<u64>,
+    grid: Option<&ClockKey>,
     now: &crate::clock::ClockView,
 ) -> String {
     let before = rulers.unwrap_or(&clocks.defaults);
@@ -604,6 +623,12 @@ fn clocks_label(
     }
     if let Some(hidden) = before.iter().find(|p| !after.contains(p)) {
         return format!("Hide ruler {}", name(hidden));
+    }
+    if grid != now.grid.as_ref() {
+        return now.grid.as_ref().map_or_else(
+            || "Use time grid".into(),
+            |key| format!("Use {} as grid", name(key)),
+        );
     }
     match (origin, now.origin) {
         (_, Some(_)) if origin != now.origin => "Set cycle origin".into(),
