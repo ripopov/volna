@@ -85,10 +85,24 @@ impl Theme<Color> {
         Self::islands(false)
     }
 
-    fn islands(dark: bool) -> Self {
-        let mut t = Self::volna(dark);
+    #[must_use]
+    pub fn volna(dark: bool) -> Self {
         let s = Sheet::new(dark);
+        let mut t = Self::from_viewer_sheet(dark, &s, "flat-selection");
+        t.compact_chrome = true;
+        t.ui_size_small = 12.;
+        t.header_height = 34.;
+        t.bar.icon = t.bar.text_muted;
+        t.input.text_placeholder = t.input.text_muted;
+        t.input_border = s.color("flat-input-border");
+        t
+    }
+
+    fn islands(dark: bool) -> Self {
+        let s = Sheet::new(dark);
+        let mut t = Self::from_viewer_sheet(dark, &s, "selection");
         let background = s.color("chrome-background");
+        t.compact_chrome = true;
         t.islands = Some(super::Islands {
             background,
             ocean: [
@@ -115,8 +129,11 @@ impl Theme<Color> {
     }
 
     #[must_use]
-    pub fn volna(dark: bool) -> Self {
-        let s = Sheet::new(dark);
+    pub(super) fn volna_palette(dark: bool) -> Self {
+        Self::from_viewer_sheet(dark, &Sheet::new(dark), "selection")
+    }
+
+    fn from_viewer_sheet(dark: bool, s: &Sheet, selection: &str) -> Self {
         let col = |name: &str| s.color(name);
         let (text, muted, faint) = (col("text"), col("text-muted"), col("text-faint"));
         let accent = col("accent");
@@ -150,7 +167,7 @@ impl Theme<Color> {
         t.elevated = surface(col("elevated"));
         t.tooltip = surface(col("elevated"));
         t.input = surface(canvas);
-        t.selection = surface(col("selection"));
+        t.selection = surface(col(selection));
         t.hover = surface(hover);
         t.menu_hover = surface(hover);
         t.button = Surface {

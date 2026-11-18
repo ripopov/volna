@@ -1,4 +1,4 @@
-//! Narrow Islands windows show one workspace region at a time.
+//! Narrow Volna windows show one workspace region at a time.
 
 use super::Workspace;
 use crate::theme::{ThemePx, theme};

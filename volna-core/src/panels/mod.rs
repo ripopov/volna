@@ -257,15 +257,20 @@ impl Panel {
 
     #[must_use]
     pub fn title(&self) -> String {
-        self.display_title(false)
+        self.display_title(false, true)
     }
 
     #[must_use]
-    pub fn tab_title(&self) -> String {
-        self.display_title(true)
+    pub fn tab_title(&self, numbered: bool) -> String {
+        self.display_title(true, numbered)
     }
 
-    fn display_title(&self, compact: bool) -> String {
+    fn display_title(&self, compact: bool, numbered: bool) -> String {
+        let number = if numbered {
+            format!(" {}", self.id.0)
+        } else {
+            String::new()
+        };
         let track_name = |path: &[String]| {
             if compact {
                 path.last().cloned().unwrap_or_default()
@@ -277,24 +282,24 @@ impl Panel {
             .get()
             .clone()
             .unwrap_or_else(|| match &self.kind {
-                PanelKind::Waves(_) => format!("Waves {}", self.id.0),
+                PanelKind::Waves(_) => format!("Waves{number}"),
                 PanelKind::Pipeline(p) => {
-                    format!("Pipeline {} · {}", self.id.0, track_name(p.track.path()))
+                    format!("Pipeline{number} · {}", track_name(p.track.path()))
                 }
                 PanelKind::Table(t) => match &t.source {
                     crate::table::TableSource::Statistics(data) => {
-                        format!("Table {} · {}", self.id.0, data.name)
+                        format!("Table{number} · {}", data.name)
                     }
                     crate::table::TableSource::Generator(source) => {
-                        format!("Table {} · {}", self.id.0, track_name(source.path()))
+                        format!("Table{number} · {}", track_name(source.path()))
                     }
                     crate::table::TableSource::Signals(signals) => {
-                        format!("Table {} · {} signals", self.id.0, signals.len())
+                        format!("Table{number} · {} signals", signals.len())
                     }
                 },
                 PanelKind::Transaction(model) => match model.shown() {
-                    Some(shown) => format!("Record details {} · #{}", self.id.0, shown.id.0),
-                    None => format!("Record details {}", self.id.0),
+                    Some(shown) => format!("Record details{number} · #{}", shown.id.0),
+                    None => format!("Record details{number}"),
                 },
                 PanelKind::Start => "Start".into(),
                 PanelKind::Settings => "Settings".into(),

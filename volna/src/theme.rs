@@ -70,7 +70,7 @@ fn set_zoomed(base: &Themes, zoom: f32, cx: &mut App) {
     kit.mono_font_family = t.mono_font.into();
     kit.mono_font_size = px(t.ui_size);
     kit.radius = px(4.0);
-    kit.focus_ring = t.islands.is_some();
+    kit.focus_ring = t.compact_chrome;
     kit.background = t.panel.bg;
     kit.foreground = t.panel.text;
     kit.muted = t.hover.bg;
@@ -186,6 +186,11 @@ pub fn set_zoom(zoom: f32, cx: &mut App) {
 
 pub fn theme(cx: &App) -> &Theme {
     &cx.global::<ThemeGlobal>().gpui
+}
+
+pub fn compact_workspace(window: &gpui_kit::Window, cx: &App) -> bool {
+    let t = theme(cx);
+    t.compact_chrome && window.viewport_size().width < t.px(560.)
 }
 
 pub fn chrome_background(cx: &App) -> Hsla {

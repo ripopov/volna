@@ -61,13 +61,13 @@ pub fn is_builtin(id: &str) -> bool {
 
 #[must_use]
 pub fn resolve(id: &str, system_dark: bool) -> Option<Themes> {
-    let volna = Theme::volna;
+    let volna = Theme::volna_palette;
     Some(match id {
         VOLNA => Themes::uniform(volna(system_dark)),
         VOLNA_ISLANDS_DARK => Themes::uniform(Theme::islands_dark()),
         VOLNA_ISLANDS_LIGHT => Themes::uniform(Theme::islands_light()),
-        VOLNA_DARK => Themes::uniform(volna(true)),
-        VOLNA_LIGHT => Themes::uniform(volna(false)),
+        VOLNA_DARK => Themes::uniform(Theme::volna(true)),
+        VOLNA_LIGHT => Themes::uniform(Theme::volna(false)),
         VOLNA_MIXED => Themes {
             chrome: volna(false),
             canvas: volna(true),

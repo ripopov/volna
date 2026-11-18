@@ -104,7 +104,7 @@ pub(crate) fn tab_title(
         .flex()
         .items_center()
         .gap_1()
-        .when(t.islands.is_some(), |el| {
+        .when(t.compact_chrome, |el| {
             use crate::ui::{Icon, IconName};
             use volna_core::panels::PanelKind;
             let (icon, color) = match &panel.kind {
@@ -119,7 +119,15 @@ pub(crate) fn tab_title(
             };
             el.gap(t.px(6.))
                 .min_w_0()
-                .child(Icon::new(icon).size(t.px(14.)).color(color))
+                .child(
+                    Icon::new(icon)
+                        .size(t.px(14.))
+                        .color(if t.islands.is_some() {
+                            color
+                        } else {
+                            t.panel.text_muted
+                        }),
+                )
         })
         .when_some(letter, |el, trace| {
             el.child(crate::traces::letter_badge(trace, cx))
@@ -127,13 +135,16 @@ pub(crate) fn tab_title(
         .when(in_titlebar, |el| el.min_w_0().overflow_hidden())
         .child(
             div()
-                .when(
-                    in_titlebar || t.islands.is_some(),
-                    gpui_kit::Styled::truncate,
-                )
-                .when(t.islands.is_some(), |el| el.max_w(t.px(188.)))
-                .child(if t.islands.is_some() {
-                    panel.tab_title().into()
+                .when(in_titlebar || t.compact_chrome, gpui_kit::Styled::truncate)
+                .when(t.compact_chrome, |el| el.max_w(t.px(188.)))
+                .child(if t.compact_chrome {
+                    let numbered = t.islands.is_some()
+                        || panels.iter().any(|other| {
+                            other.id != id
+                                && std::mem::discriminant(&other.kind)
+                                    == std::mem::discriminant(&panel.kind)
+                        });
+                    panel.tab_title(numbered).into()
                 } else {
                     panel_title.clone()
                 }),
@@ -160,7 +171,7 @@ pub(crate) fn tab_title(
         .test_support()
         .flex()
         .items_center()
-        .when(in_titlebar || t.islands.is_some(), |el| {
+        .when(in_titlebar || t.compact_chrome, |el| {
             el.min_w_0().max_w_full()
         })
         .gap_1()
@@ -171,13 +182,27 @@ pub(crate) fn tab_title(
                 middle(window, cx);
             })
         })
-        .when(t.islands.is_some(), |tab| {
+        .when(t.compact_chrome, |tab| {
             tab.tooltip_show_delay(crate::ui::tooltip::delay(cx))
                 .tooltip(move |w, cx| {
                     gpui_kit::component::tooltip::Tooltip::new(panel_title.clone()).build(w, cx)
                 })
         })
-        .child(title)
+        .child(title.when(t.compact_chrome && !in_titlebar, |title| {
+            let ws = ws.clone();
+            let generation = generation.unwrap_or(app.doc.generation());
+            title.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                drop(ws.update(cx, |ws, cx| {
+                    if generation != ws.app.doc.generation() {
+                        return;
+                    }
+                    ws.dispatch(Command::Panels(PanelsCommand::Focus(id)), Some(window), cx);
+                    if let Some(focus) = ws.panel_focus(id, cx) {
+                        window.focus(&focus, cx);
+                    }
+                }));
+            })
+        }))
         .when(can_close, |el| {
             el.child(
                 action_button(("close-tab", id.0 as usize), IconName::X, cx)
@@ -428,7 +453,7 @@ impl DockHost {
         let bounds = self.area.read(cx).bounds();
         let available = f32::from(bounds.size.width);
         let right_width = layout.right.as_ref().map(|dock| {
-            if self.window.is_none() && crate::islands::compact(window, cx) {
+            if self.window.is_none() && crate::theme::compact_workspace(window, cx) {
                 return f32::from(window.viewport_size().width);
             }
             let center_min = if layout.center.is_some() {
@@ -1164,8 +1189,8 @@ impl Panel for CanvasPanelView {
                     );
                 }))
         };
-        let islands = theme(cx).islands.is_some();
-        let mut buttons = if islands {
+        let compact_chrome = theme(cx).compact_chrome;
+        let mut buttons = if compact_chrome {
             Vec::new()
         } else {
             vec![
@@ -1248,7 +1273,7 @@ impl Panel for CanvasPanelView {
             use volna_core::pipeline::{ActivityCommand, FollowActivity};
             let generation = self.generation;
             let panel = self.id;
-            if !islands {
+            if !compact_chrome {
                 let owner = self.ws.clone();
                 let navigator_hint = if navigator_visible {
                     "Hide instruction navigator. Drag its left edge to resize."
@@ -1603,19 +1628,19 @@ impl base::DockAreaRenderer for DockRenderer {
         cx: &mut App,
     ) -> AnyElement {
         let t = *crate::theme::theme(cx);
-        if let Some(i) = t.islands {
-            let content = div()
+        let content = if let Some(i) = t.islands {
+            div()
                 .size_full()
                 .paddings(crate::islands::insets(t.scale(i.gap), w.scale_factor()))
                 .child(crate::islands::rounded(content, cx))
-                .into_any_element();
-            if self.main_window && crate::islands::compact(w, cx) {
-                return content;
-            }
-            self.resize.render(dock, content, self.area.clone(), cx)
+                .into_any_element()
         } else {
-            self.resize.render(dock, content, self.area.clone(), cx)
+            content
+        };
+        if self.main_window && crate::theme::compact_workspace(w, cx) {
+            return content;
         }
+        self.resize.render(dock, content, self.area.clone(), cx)
     }
 
     fn build_placeholder(
@@ -1630,12 +1655,12 @@ impl base::DockAreaRenderer for DockRenderer {
         Rc::new(TabRenderer {
             skin: self.skin.tab_group_renderer(),
             hide_tab_bar: self.hide_tab_bar.clone(),
-            islands: crate::islands::Tabs::default(),
+            tabs: crate::dock_tabs::Tabs::default(),
         })
     }
 }
 struct TabRenderer {
-    islands: crate::islands::Tabs,
+    tabs: crate::dock_tabs::Tabs,
     skin: Rc<dyn base::TabGroupRenderer>,
     hide_tab_bar: Rc<Cell<bool>>,
 }
@@ -1673,8 +1698,8 @@ impl base::TabGroupRenderer for TabRenderer {
     ) -> AnyElement {
         if self.hide_tab_bar.get() {
             Empty.into_any_element()
-        } else if crate::theme::theme(cx).islands.is_some() {
-            self.islands.render(group, w, cx)
+        } else if crate::theme::theme(cx).compact_chrome {
+            self.tabs.render(group, w, cx)
         } else {
             self.skin.render_tab_bar(group, w, cx)
         }

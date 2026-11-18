@@ -71,8 +71,9 @@ and radii follow the shared 3/4/6/8/10px scale.
 
 The sample viewer's title bar and panel toolbars are specimens of native action
 buttons: a 24px control contains a 16px icon at 100% interface zoom, with a 1.5-unit
-SVG stroke. Both scale with interface zoom. Islands uses muted title-bar icons and a
-distinct glyph for each panel type. The blue tab identifies the focused panel.
+SVG stroke. Both scale with interface zoom. In Volna Dark and Volna Light, panel titles sit flush with the header. A glyph
+identifies the panel type and a blue underline marks the focused panel. The
+Details dock has a continuous divider that highlights on hover and drag.
 Panel actions move below the tabs when space is tight. Maximize and the panel
 menu stay beside the tabs. The menu includes shared viewport, cursor, and
 transaction linking. Narrow windows give the hierarchy, workspace, and right dock

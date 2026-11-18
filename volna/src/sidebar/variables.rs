@@ -477,7 +477,7 @@ impl Workspace {
                             .text_align(gpui_kit::TextAlign::Center)
                             .text_size(px(t.ui_size_small))
                             .text_color(colors.text_placeholder)
-                            .child(text)
+                            .child(div().w_full().min_w_0().whitespace_normal().child(text))
                             .into_any_element(),
                         None => list.into_any_element(),
                     }),

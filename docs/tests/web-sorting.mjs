@@ -212,9 +212,9 @@ try {
     };
     requestAnimationFrame(frame);
   });
-  await page.mouse.click(485, 80); // Filter follows Columns.
+  await page.mouse.click(485, 91); // Filter follows Columns.
   await page.waitForTimeout(100);
-  await page.mouse.click(535, 150); // Begin's filter input, below its header.
+  await page.mouse.click(535, 163); // Begin's filter input, below its header.
   await page.waitForTimeout(60);
   await withPausedWorkers(async () => {
     await page.keyboard.type('> 500000');
@@ -225,14 +225,14 @@ try {
   assert.match(await state(), /first_time=Some\(500001\)/);
   assert.ok(await page.evaluate(() => window.filterFrames) >= 1, 'frames must continue during the worker scan');
   await page.screenshot({ path: `${results}/filtered-dark.png` });
-  await page.mouse.click(485, 80); // Collapsing preserves the result.
+  await page.mouse.click(485, 91); // Collapsing preserves the result.
   await page.waitForTimeout(60);
   assert.match(await state(), /rows=499999/);
-  await page.mouse.click(485, 80);
+  await page.mouse.click(485, 91);
   await page.waitForTimeout(60);
   await page.mouse.click(500, 108); // Sort matches by Begin.
   await page.waitForFunction(() => /column: 1, descending: false.*status=499999 of 1000000 rows$/.test(window.volnaCurrentState));
-  await page.mouse.click(535, 150);
+  await page.mouse.click(535, 163);
   await page.waitForTimeout(60);
   // The web viewer's text-editing keymap uses Control on every host.
   await page.keyboard.press('Control+A');
@@ -240,7 +240,7 @@ try {
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.volnaCurrentState?.includes('status=10 of 1000000 rows'));
   assert.match(await state(), /first_time=Some\(999990\)/);
-  await page.mouse.click(565, 80); // Clear filters preserves sorting.
+  await page.mouse.click(565, 91); // Clear filters preserves sorting.
   await settled();
   assert.match(await state(), /column: 1, descending: false.*first_time=Some\(0\)/);
   console.log('1M rows: background filtering, responsive frames, collapsed state, exact ranges, sorting matches, and clearing passed');

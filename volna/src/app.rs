@@ -929,7 +929,7 @@ impl Workspace {
                             .scroll_to_item(ix, gpui_kit::ScrollStrategy::Nearest);
                         if self.app.sidebar_visible
                             && let Some(window) = window.as_deref_mut()
-                            && crate::islands::compact(window, cx)
+                            && crate::theme::compact_workspace(window, cx)
                         {
                             self.focus_compact_hierarchy(window, cx);
                         }
@@ -939,8 +939,8 @@ impl Workspace {
                         .scroll_to_item(ix, gpui_kit::ScrollStrategy::Nearest),
                     Event::FocusFilter => {
                         if let Some(window) = window.as_deref_mut() {
-                            self.compact_hierarchy =
-                                self.app.sidebar_visible && crate::islands::compact(window, cx);
+                            self.compact_hierarchy = self.app.sidebar_visible
+                                && crate::theme::compact_workspace(window, cx);
                             let handle = self.filter.read(cx).focus_handle(cx);
                             window.focus(&handle, cx);
                         }
@@ -1537,7 +1537,7 @@ impl Workspace {
                         ChromeDrag::ScopesSplit => {
                             let t = theme(cx);
                             let mut top = this.workspace_header_height(cx);
-                            if crate::islands::compact(window, cx) {
+                            if crate::theme::compact_workspace(window, cx) {
                                 top += t.scale(compact_workspace::REGION_BAR_HEIGHT);
                             }
                             let total = (f32::from(window.viewport_size().height)
@@ -1648,7 +1648,7 @@ impl Workspace {
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .text_color(colors.text)
                             .when(
-                                !crate::islands::compact(window, cx) || chips.is_none(),
+                                !crate::theme::compact_workspace(window, cx) || chips.is_none(),
                                 |el| el.child("Volna"),
                             ),
                     )
@@ -1714,6 +1714,8 @@ impl Workspace {
             .map(|el| {
                 if t.islands.is_some() {
                     el.w_full()
+                } else if crate::theme::compact_workspace(window, cx) {
+                    el.w(window.viewport_size().width)
                 } else {
                     el.w(t.px(self.app.sidebar_width))
                 }
@@ -2237,7 +2239,8 @@ impl Workspace {
             context = context.child(mono(s, colors.text_placeholder));
         }
         let mut position = group();
-        let has_position = status.cursor.is_some() || status.markers.is_some();
+        let compact_flat = compact && t.islands.is_none();
+        let has_position = status.cursor.is_some() || (!compact_flat && status.markers.is_some());
         if let Some(c) = status.cursor {
             position = position.child(
                 div()
@@ -2262,6 +2265,7 @@ impl Workspace {
         if let Some(m) = status.markers.filter(|_| !compact) {
             position = position.child(mono(m, colors.text_placeholder));
         }
+        let show_context = !compact_flat || !has_position;
         let mut left = div()
             .debug_selector(|| "status-left".into())
             .flex()
@@ -2269,9 +2273,11 @@ impl Workspace {
             .gap_3()
             .min_w_0()
             .overflow_hidden()
-            .child(context);
+            .when(show_context, |el| el.child(context));
         if has_position {
-            left = left.child(sep()).child(position);
+            left = left
+                .when(show_context, |el| el.child(sep()))
+                .child(position);
         }
 
         let crop = |text: String, color: gpui_kit::Hsla, mono_text: bool| {
@@ -2493,7 +2499,7 @@ impl Render for Workspace {
         let island_insets = t
             .islands
             .map(|i| crate::islands::insets(t.scale(i.gap), window.scale_factor()));
-        let compact = self.app.doc.is_loaded() && crate::islands::compact(window, cx);
+        let compact = self.app.doc.is_loaded() && crate::theme::compact_workspace(window, cx);
         if !compact || !sidebar_visible {
             self.compact_hierarchy = false;
         }

@@ -89,6 +89,7 @@ pub struct Islands<C = Color> {
 #[derive(Clone, Copy, Debug)]
 pub struct Theme<C = Color> {
     pub appearance: Appearance,
+    pub compact_chrome: bool,
     pub islands: Option<Islands<C>>,
     pub editor: Surface<C>,
     pub panel: Surface<C>,
@@ -222,6 +223,7 @@ impl<C: Copy> Theme<C> {
         let f = &f;
         Theme {
             appearance: self.appearance,
+            compact_chrome: self.compact_chrome,
             islands: self.islands.map(|i| Islands {
                 background: f(i.background),
                 ocean: i.ocean.map(f),
@@ -379,6 +381,7 @@ impl Theme<Color> {
         };
         let mut t = Self {
             appearance: Appearance::Dark,
+            compact_chrome: false,
             islands: None,
             editor: surface(0x0028_2c33),
             panel: surface(0x002f_343e),

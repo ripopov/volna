@@ -1,28 +1,16 @@
 //! Islands workspace chrome; docking state and actions stay in GPUI-KIT.
 
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc};
 
-use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::base::{ElementExt as _, Tab, Tabs as TabList, dock as base};
-use gpui_kit::component::{
-    button::ButtonVariants,
-    dock::{ClosePanel, PanelHandle, ToggleZoom},
-    menu::DropdownMenu,
-};
+use gpui_kit::base::dock as base;
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, AppContext, Axis, Context, Empty, IntoElement, MouseMoveEvent, MouseUpEvent,
-    Pixels, Render, ScrollHandle, TestSupportExt, WeakEntity, Window, canvas, deferred, div, px,
+    Pixels, Render, WeakEntity, Window, canvas, deferred, div, px,
 };
 
 use crate::theme::{ThemePx, theme};
-use crate::ui::action_button;
-
-pub(crate) fn compact(window: &Window, cx: &App) -> bool {
-    let t = theme(cx);
-    t.islands.is_some() && window.viewport_size().width < t.px(560.)
-}
 
 fn backdrop(bounds: gpui_kit::Bounds<Pixels>, cx: &App) -> [gpui_kit::Background; 2] {
     use gpui_kit::{linear_color_stop, linear_gradient};
@@ -86,12 +74,19 @@ pub(crate) fn resize_thickness(active: bool, cx: &App) -> Pixels {
 }
 
 pub(crate) fn resize_handle(handle: &gpui_kit::base::ResizeHandleContext, cx: &App) -> AnyElement {
-    if handle.edge().is_some() && handle.state() == gpui_kit::base::ResizeHandleState::Idle {
+    let t = theme(cx);
+    let flat = t.compact_chrome && t.islands.is_none();
+    if !flat && handle.edge().is_some() && handle.state() == gpui_kit::base::ResizeHandleState::Idle
+    {
         return div().into_any_element();
     }
     let thickness = resize_thickness(handle.is_active(), cx);
     let color = if handle.state() == gpui_kit::base::ResizeHandleState::Idle {
-        theme(cx).border_variant
+        if flat {
+            t.border.blend(t.panel.text_muted.opacity(0.32))
+        } else {
+            t.border_variant
+        }
     } else {
         theme(cx).border_focused
     };
@@ -325,337 +320,6 @@ pub(crate) fn corners(top: bool, cx: &App) -> AnyElement {
     .inset_0()
     .size_full()
     .into_any_element()
-}
-
-#[derive(Default)]
-pub(crate) struct Tabs {
-    scroll: ScrollHandle,
-    active: Cell<Option<usize>>,
-    header_width: Rc<Cell<Pixels>>,
-    toolbar_width: Rc<Cell<Pixels>>,
-}
-
-impl Tabs {
-    pub(crate) fn render(
-        &self,
-        group: &base::TabGroupContext,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> AnyElement {
-        let t = *theme(cx);
-        let islands = t.islands.expect("island tabs");
-        let focused = window.is_window_active()
-            && group
-                .active_panel()
-                .is_some_and(|p| p.focus_handle(cx).contains_focused(window, cx));
-        let visible: Vec<_> = group
-            .panels()
-            .iter()
-            .enumerate()
-            .filter(|(_, panel)| panel.visible(cx))
-            .collect();
-        if self.active.replace(Some(group.active_ix())) != Some(group.active_ix())
-            && let Some(ix) = visible.iter().position(|(ix, _)| *ix == group.active_ix())
-        {
-            self.scroll.scroll_to_item(ix);
-        }
-        let selected = group.active_panel().map(|p| p.panel_id(cx));
-        let visible_indices = visible.iter().map(|(ix, _)| *ix).collect::<Vec<_>>();
-        let tab_count = visible.len();
-        let tabs = visible
-            .into_iter()
-            .enumerate()
-            .map(|(position, (ix, panel))| {
-                let active = Some(panel.panel_id(cx)) == selected && !group.is_collapsed();
-                let title = match PanelHandle::of(panel) {
-                    Some(handle) => handle.title(window, cx),
-                    None => div().child(panel.panel_name(cx)).into_any_element(),
-                };
-                Tab::new(ix)
-                    .set_position(position + 1, tab_count)
-                    .h(t.px(26.0))
-                    .px(t.px(8.0))
-                    .flex_none()
-                    .max_w_full()
-                    .whitespace_nowrap()
-                    .tab_stop(true)
-                    .focus_visible(move |s| {
-                        s.border_color(t.border_focused).shadow(vec![
-                            gpui_kit::BoxShadow::new(px(0.), px(0.), t.border_focused)
-                                .spread_radius(px(1.))
-                                .inset(),
-                        ])
-                    })
-                    .when(!active, |tab| {
-                        tab.hover(move |s| s.bg(t.hover.bg).text_color(t.panel.text))
-                    })
-                    .on_key_down({
-                        let group = group.clone();
-                        let indices = visible_indices.clone();
-                        move |event, window, cx| {
-                            let next = match event.keystroke.key.as_str() {
-                                "left" => Some((position + indices.len() - 1) % indices.len()),
-                                "right" => Some((position + 1) % indices.len()),
-                                "home" => Some(0),
-                                "end" => Some(indices.len() - 1),
-                                "enter" | "space" => Some(position),
-                                _ => None,
-                            };
-                            if let Some(next) = next {
-                                cx.stop_propagation();
-                                group.select_tab(indices[next], window, cx);
-                            }
-                        }
-                    })
-                    .relative()
-                    .child(title)
-                    .selected(active)
-                    .rounded(t.px(4.0))
-                    .border_0()
-                    .bg(if active && focused {
-                        islands.active_tab
-                    } else if active {
-                        islands.tab
-                    } else {
-                        gpui_kit::transparent_black()
-                    })
-                    .text_color(if active {
-                        t.panel.text
-                    } else {
-                        t.panel.text_muted
-                    })
-                    .debug_selector(move || format!("dock-tab-{ix}"))
-                    .on_click({
-                        let group = group.clone();
-                        move |_, window, cx| group.select_tab(ix, window, cx)
-                    })
-                    .when(group.is_draggable() && !group.is_collapsed(), |tab| {
-                        tab.when_some(group.drag_panel(ix, cx), |tab, drag| {
-                            let panel = panel.clone();
-                            tab.on_drag(drag, move |drag, offset, _, cx| {
-                                cx.stop_propagation();
-                                drag.set_drag_offset(offset);
-                                drag.set_preview_size(gpui_kit::size(px(180.), px(32.)));
-                                cx.new(|_| Preview {
-                                    panel: panel.clone(),
-                                })
-                            })
-                        })
-                    })
-                    .when(group.is_droppable(), |tab| {
-                        tab.drag_over::<base::DragPanel>(move |s, _, _, _| {
-                            s.border_l_2().border_color(t.border_focused)
-                        })
-                        .on_drop({
-                            let group = group.clone();
-                            move |drag: &base::DragPanel, window, cx| {
-                                group.drop_panel(drag.clone(), Some(ix), true, window, cx);
-                            }
-                        })
-                        .on_drop({
-                            let group = group.clone();
-                            move |drag: &base::AnyDrag, window, cx| {
-                                group.drop_item(drag.clone(), None, window, cx);
-                            }
-                        })
-                    })
-            })
-            .collect::<Vec<_>>();
-        let handle = group.active_panel().and_then(PanelHandle::of);
-        let panel = handle.map(PanelHandle::panel);
-        let zoomable = group.active_panel().is_some_and(|p| p.zoomable(cx))
-            && handle.is_some_and(|h| h.zoom_control(cx).is_some());
-        let buttons = handle
-            .and_then(|h| h.toolbar_buttons(window, cx))
-            .unwrap_or_default();
-        // Keep a readable title beside the actions, including after zoom or a panel switch.
-        let suffix = handle.and_then(|h| h.title_suffix(window, cx));
-        let has_tools = suffix.is_some() || !buttons.is_empty();
-        let stacked = has_tools && self.header_width.get() < self.toolbar_width.get() + t.px(224.);
-
-        let toolbar = div()
-            .id("island-tools")
-            .on_prepaint({
-                let width = self.toolbar_width.clone();
-                move |bounds, window, _| {
-                    if width.replace(bounds.size.width) != bounds.size.width {
-                        window.refresh();
-                    }
-                }
-            })
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_1()
-            .children(suffix)
-            .children(buttons);
-        let panel_controls = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(t.px(2.))
-            .when(zoomable || group.is_zoomed(), |el| {
-                el.child(
-                    action_button(
-                        "island-zoom",
-                        if group.is_zoomed() {
-                            IconName::Minimize
-                        } else {
-                            IconName::Maximize
-                        },
-                        cx,
-                    )
-                    .ghost()
-                    .tooltip(if group.is_zoomed() {
-                        "Restore panel size"
-                    } else {
-                        "Maximize panel"
-                    })
-                    .on_click({
-                        let group = group.clone();
-                        move |_, w, cx| group.toggle_zoom(w, cx)
-                    }),
-                )
-            })
-            .child(
-                action_button("island-menu", IconName::Ellipsis, cx)
-                    .ghost()
-                    .tooltip("Panel menu")
-                    .dropdown_menu({
-                        let closable = group.is_closable();
-                        let zoomed = group.is_zoomed();
-                        move |menu, w, cx| {
-                            menu.when_some(panel.clone(), |menu, panel| {
-                                panel.dropdown_menu(menu, w, cx)
-                            })
-                            .separator()
-                            .menu_with_disabled(
-                                if zoomed { "Zoom out" } else { "Zoom in" },
-                                Box::new(ToggleZoom),
-                                !zoomable && !zoomed,
-                            )
-                            .when(closable, |menu| {
-                                menu.menu("Close panel", Box::new(ClosePanel))
-                            })
-                        }
-                    }),
-            );
-        let trailing = div()
-            .id("island-tab-end")
-            .h_full()
-            .min_w(t.px(12.))
-            .flex_1()
-            .when(group.is_droppable(), |el| {
-                el.on_drop({
-                    let group = group.clone();
-                    move |drag: &base::DragPanel, window, cx| {
-                        group.drop_panel(drag.clone(), None, true, window, cx);
-                    }
-                })
-            });
-        let row = div().flex().items_center().w_full().min_w_0();
-        let row = row
-            .child(
-                TabList::new("island-tabs")
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .items_center()
-                    .gap(t.px(2.))
-                    .overflow_x_scroll()
-                    .track_scroll(&self.scroll)
-                    .children(tabs)
-                    .child(trailing),
-            )
-            .when(tab_count > 1, |el| {
-                el.child(
-                    action_button("island-tab-list", IconName::ChevronDown, cx)
-                        .ghost()
-                        .tooltip("All tabs")
-                        .dropdown_menu({
-                            let group = group.clone();
-                            move |mut menu, _, cx| {
-                                for (ix, panel) in group
-                                    .panels()
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, p)| p.visible(cx))
-                                {
-                                    let panel = panel.clone();
-                                    let group = group.clone();
-                                    menu = menu.item(
-                                        gpui_kit::component::menu::PopupMenuItem::element(
-                                            move |w, cx| match PanelHandle::of(&panel) {
-                                                Some(handle) => handle.title(w, cx),
-                                                None => div()
-                                                    .child(panel.panel_name(cx))
-                                                    .into_any_element(),
-                                            },
-                                        )
-                                        .on_click(move |_, w, cx| group.select_tab(ix, w, cx)),
-                                    );
-                                }
-                                menu
-                            }
-                        }),
-                )
-            });
-        let header = div()
-            .id(format!("island-header-{}", group.node().as_u64()))
-            .test_support()
-            .relative()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .justify_center()
-            .min_h(px(t.header_height))
-            .bg(islands.heading)
-            .px(t.px(4.))
-            .py(t.px(4.))
-            .border_b_1()
-            .border_color(t.border_variant)
-            .on_prepaint({
-                let width = self.header_width.clone();
-                move |bounds, window, _| {
-                    if width.replace(bounds.size.width) != bounds.size.width {
-                        window.refresh();
-                    }
-                }
-            });
-        let header = if stacked {
-            header.child(row.child(panel_controls)).child(
-                div()
-                    .id("island-toolbar")
-                    .flex()
-                    .w_full()
-                    .pt(t.px(3.))
-                    .overflow_x_scroll()
-                    .child(toolbar),
-            )
-        } else {
-            header.child(row.child(toolbar).child(panel_controls))
-        };
-        header.into_any_element()
-    }
-}
-
-struct Preview {
-    panel: Arc<dyn base::PanelView>,
-}
-impl Render for Preview {
-    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = *theme(cx);
-        div()
-            .py_1()
-            .px_3()
-            .rounded(t.px(6.))
-            .bg(t.panel.bg)
-            .border_1()
-            .border_color(t.border_focused)
-            .text_color(t.panel.text)
-            .children(PanelHandle::of(&self.panel).map(|h| h.title(w, cx)))
-    }
 }
 
 #[cfg(test)]

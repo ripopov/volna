@@ -9,6 +9,7 @@ mod derived;
 #[cfg(not(target_family = "wasm"))]
 pub mod desktop;
 mod dock;
+mod dock_tabs;
 mod frame_stats;
 mod islands;
 #[cfg(not(target_family = "wasm"))]

@@ -86,6 +86,119 @@ fn open_pipeline_table(
 }
 
 #[gpui_kit::test]
+fn pending_settings_tab_press_preserves_focus_when_the_trace_changes(cx: &mut TestAppContext) {
+    use gpui_kit::{
+        MouseButton, MouseDownEvent, PlatformInput, VisualTestContext, test::TestWindowExt as _,
+    };
+
+    init(cx);
+    let root = RootWindow::new(cx);
+    let mut view = VisualTestContext::from_window(root.root.into(), cx);
+    let settings = root
+        .update(&mut view, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(50)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            ws.dispatch(Command::Settings(SettingsCommand::Open), Some(window), cx);
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    view.run_until_parked();
+    view.update(|window, cx| {
+        window.render_frame(cx);
+        let tab = window.find(("panel-tab", settings.0)).bounds();
+        let position = point(tab.left() + px(30.), tab.center().y);
+        root.workspace.update(cx, |ws, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            window.focus(&ws.scopes_focus, cx);
+        });
+        window.dispatch_event(
+            PlatformInput::MouseDown(MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }),
+            cx,
+        );
+        assert!(root.workspace.read(cx).scopes_focus.is_focused(window));
+    });
+}
+
+#[gpui_kit::test]
+fn navigate_three_dock_tabs_then_enter_the_panel(cx: &mut TestAppContext) {
+    use gpui_kit::{VisualTestContext, test::TestWindowExt as _};
+    use volna_core::panels::PanelsCommand;
+    init(cx);
+    let root = RootWindow::new(cx);
+    let mut view = VisualTestContext::from_window(root.root.into(), cx);
+    let (first, third) = root
+        .update(&mut view, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            let first = ws.app.panels.focused_id();
+            for _ in 0..2 {
+                let group_of = ws.app.panels.focused_id();
+                ws.dispatch(
+                    Command::Panels(PanelsCommand::NewTab { group_of }),
+                    Some(window),
+                    cx,
+                );
+            }
+            let third = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::Panels(PanelsCommand::Focus(first)),
+                Some(window),
+                cx,
+            );
+            (first, third)
+        })
+        .unwrap();
+    view.run_until_parked();
+    for (keys, enter, previous, panel) in [
+        ("right right", "enter", first, third),
+        ("home", "space", third, first),
+        ("end", "enter", first, third),
+        ("right", "space", third, first),
+        ("left", "enter", first, third),
+    ] {
+        // The All tabs button follows the tab strip in keyboard order.
+        for _ in 0..64 {
+            if view.update(|window, cx| {
+                window.render_frame(cx);
+                window.find("dock-tab-list").focused() == Some(true)
+            }) {
+                break;
+            }
+            view.simulate_keystrokes("tab");
+            view.run_until_parked();
+        }
+        assert_eq!(
+            view.update(|window, _| window.find("dock-tab-list").focused()),
+            Some(true)
+        );
+        view.simulate_keystrokes("shift-tab");
+        view.simulate_keystrokes(keys);
+        view.run_until_parked();
+        root.update(&mut view, |ws, _, _| {
+            assert_eq!(ws.app.panels.focused_id(), previous)
+        })
+        .unwrap();
+        view.simulate_keystrokes(enter);
+        view.run_until_parked();
+        root.update(&mut view, |ws, window, cx| {
+            assert_eq!(ws.app.panels.focused_id(), panel, "{keys}");
+            assert!(
+                ws.panel_focus(panel, cx)
+                    .unwrap()
+                    .contains_focused(window, cx)
+            );
+        })
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
 fn compact_trace_reveal_and_wave_tools_focus_the_visible_region(cx: &mut TestAppContext) {
     use gpui_kit::{VisualTestContext, size, test::TestWindowExt as _};
     init(cx);
@@ -6462,7 +6575,7 @@ fn islands_split_headers_fill_their_slots_without_gutters(cx: &mut TestAppContex
                 .unwrap();
             let selectors: Vec<_> = nodes
                 .into_iter()
-                .map(|node| format!("island-header-{}", node.as_u64()))
+                .map(|node| format!("dock-header-{}", node.as_u64()))
                 .collect();
             let groups: Vec<_> = vcx.update(|window, _| {
                 selectors
@@ -6629,6 +6742,22 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
         })
         .unwrap();
     vcx.run_until_parked();
+    for id in [detail, origin] {
+        use gpui_kit::test::TestWindowExt as _;
+        let label = vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let tab = window.find(("panel-tab", id.0)).bounds();
+            point(tab.left() + px(30.), tab.center().y)
+        });
+        vcx.simulate_click(label, Default::default());
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, window, cx| {
+                assert_eq!(ws.app.panels.focused_id(), id);
+                assert!(ws.panel_focus(id, cx).unwrap().contains_focused(window, cx));
+            })
+            .unwrap();
+    }
     if let Some(island_theme) = island_theme {
         let snapshot = |ws: &Workspace, cx: &gpui_kit::App| {
             let area = ws.dock.as_ref().unwrap().read(cx).area.read(cx);
@@ -6690,7 +6819,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
                         .into_iter()
                         .filter_map(|node| {
                             window
-                                .try_find(format!("island-header-{}", node.as_u64()))
+                                .try_find(format!("dock-header-{}", node.as_u64()))
                                 .map(|header| header.bounds())
                         })
                         .collect::<Vec<_>>()
@@ -7602,8 +7731,8 @@ fn auxiliary_windows_route_keyboard_navigation_and_return_panels_without_losing_
             .unwrap();
         vcx.run_until_parked();
         vcx.update(|window, cx| window.draw(cx).clear(cx));
-        let menu =
-            vcx.update(|window, _| gpui_kit::test::TestWindowExt::find(window, "menu").bounds());
+        let menu = vcx
+            .update(|window, _| gpui_kit::test::TestWindowExt::find(window, "dock-menu").bounds());
         vcx.simulate_click(menu.center(), Modifiers::default());
         vcx.simulate_keystrokes("down enter");
         vcx.run_until_parked();
@@ -8331,6 +8460,13 @@ fn hovering_hierarchy_rows_shows_wrapped_descriptions_in_both_themes(cx: &mut Te
     for (width, dark) in [(900.0, true), (900.0, false), (360.0, true), (360.0, false)] {
         view.simulate_resize(size(px(width), px(700.0)));
         view.update(|_, cx| crate::theme::set(crate::theme::CoreTheme::volna(dark), cx));
+        if width == 360. {
+            use gpui_kit::test::TestWindowExt as _;
+            view.update(|window, cx| {
+                window.render_frame(cx);
+                window.click("compact-hierarchy", cx);
+            });
+        }
         for selector in [
             "scope-row-A-0",
             "member-row-A-0",

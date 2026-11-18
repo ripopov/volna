@@ -70,7 +70,8 @@ fn the_theme_is_the_design_sheet() {
             ("text", t.panel.text),
             ("text-muted", t.panel.text_muted),
             ("text-faint", t.panel.text_placeholder),
-            ("selection", t.selection.bg),
+            ("flat-selection", t.selection.bg),
+            ("flat-input-border", t.input_border),
             ("hover", t.hover.bg),
             ("accent", t.wave_cursor),
             ("on-accent", t.wave_cursor_text),
@@ -103,6 +104,17 @@ fn the_theme_is_the_design_sheet() {
         };
         assert_eq!(hue_from, s.number("stage-hue-from"));
         assert_eq!(l, s.number("stage-l"));
+    }
+}
+
+#[test]
+fn the_member_filter_remains_visible_before_hover_and_during_keyboard_entry() {
+    for (name, t) in both() {
+        for border in [t.input_border, t.input.icon_muted, t.border_focused] {
+            for surface in [t.input.bg, t.panel.bg] {
+                assert!(contrast(border, surface) >= 3.0, "{name}: filter outline");
+            }
+        }
     }
 }
 
