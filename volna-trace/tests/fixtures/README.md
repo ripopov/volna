@@ -14,13 +14,20 @@ Server process tests share this directory.
 
 ## Provenance
 
-These fixtures use the current VTR 3.4 wire format. Older recordings must be
+These fixtures use the VTR 4.0 wire format. Older recordings must be
 regenerated. Record IDs include embedded stages and events; locate records by
 their source, payload, and relationships when updating viewer expectations.
 
-The `feature_showcase`, `pipeline_showcase`, and `landing` recordings are copies
+The `feature_showcase` and `pipeline_showcase` recordings are copies
 of the outputs from the checked-in [Volna example generators](../../../volna/README.md#feature-pipeline-and-landing-examples).
 Regenerate the examples, then copy their `.vtr` files into this directory.
+
+The landing fixture uses the landing generator from Volna revision `e26aca7`.
+Run that generator against the current VTR crate to reproduce its seven-generator
+hierarchy. The full landing example also has a located event track.
+
+The two `printf` recordings are the `sample-inline.vtr` and `sample-threaded.vtr`
+outputs of the VTR C++ `vtr_printf_test`.
 
 `counter.vtr` and `picorv32.vtr` are converted from the checked-in VCDs in
 [`source`](source). From the workspace root:

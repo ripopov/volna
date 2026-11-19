@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from tempfile import TemporaryDirectory
 
 HERE = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[3]
@@ -33,6 +34,14 @@ SOURCES = {"TOP.tb.core.pipeline": "pipeline", "TOP.tb.core.bus": "bus"}
 
 def command(cli, *args):
     return subprocess.check_output([str(cli), *map(str, args)], text=True)
+
+
+def export_vcd(cli, trace, destination):
+    with TemporaryDirectory(dir=destination.parent) as temporary:
+        output = Path(temporary) / destination.name
+        command(cli, "to-vcd", trace, output)
+        output.replace(destination)
+    return destination.read_bytes()
 
 
 def tick_ns(value):
@@ -133,8 +142,7 @@ def main():
     cli = SDK / "target/release/vtr"
     baseline = simulate(verilate(verilator, env, out, 1, False), out / "baseline", "threaded", False, env)
     assert not transactions(cli, baseline)
-    command(cli, "to-vcd", baseline, out / "baseline.vcd")
-    waves = (out / "baseline.vcd").read_bytes()
+    waves = export_vcd(cli, baseline, out / "baseline.vcd")
     generated, manifest = None, []
     for threads in (1, 2):
         binary = verilate(verilator, env, out, threads, True)
@@ -143,7 +151,7 @@ def main():
                 name = f"{threads}-{execution}-{'bare' if bare else 'waves'}"
                 trace = simulate(binary, out / name, execution, bare, env)
                 info = command(cli, "info", trace)
-                assert "version:     3.4" in info and "timescale:   1e-12 s" in info, info
+                assert "version:     4.0" in info and "timescale:   1e-12 s" in info, info
                 assert "0 unresolved references" in info, info
                 records = transactions(cli, trace)
                 got = canonical(records)
@@ -164,9 +172,8 @@ def main():
                 if bare:
                     assert "0 variables (0 signals)" in info, info
                 else:
-                    vcd = trace.parent / "waves.vcd"
-                    command(cli, "to-vcd", trace, vcd)
-                    assert vcd.read_bytes() == waves, "bound tracer changed the design waveforms"
+                    captured = export_vcd(cli, trace, trace.parent / "waves.vcd")
+                    assert captured == waves, "bound tracer changed the design waveforms"
                     if threads == 1 and execution == "threaded":
                         generated = trace
                 manifest.append(dict(simulation_threads=threads, execution=execution, signal_free=bare, owners=len(records), trace=str(trace)))
