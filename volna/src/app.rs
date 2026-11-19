@@ -1570,6 +1570,7 @@ impl Workspace {
         let colors = t.bar;
         let main_menu = self.render_main_menu_button(cx);
         let chips = self.render_trace_chips(cx);
+        let compact = chips.is_some() && crate::theme::compact_workspace(window, cx);
         let file: Option<SharedString> = chips
             .is_none()
             .then(|| self.app.doc.name())
@@ -1647,10 +1648,7 @@ impl Workspace {
                             })
                             .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                             .text_color(colors.text)
-                            .when(
-                                !crate::theme::compact_workspace(window, cx) || chips.is_none(),
-                                |el| el.child("Volna"),
-                            ),
+                            .when(!compact, |el| el.child("Volna")),
                     )
                     .when_some(file, |el, name| {
                         el.child(div().text_color(colors.text_placeholder).child("—"))
@@ -1660,43 +1658,45 @@ impl Workspace {
             )
             .when(self.app.doc.is_loaded(), |el| {
                 el.child(self.render_wave_toolbar(window, cx))
-                    .child(Self::titlebar_divider(cx))
+                    .when(!compact, |el| el.child(Self::titlebar_divider(cx)))
                     .child(self.render_toolbar_navigation(window, cx))
-                    .child(Self::titlebar_divider(cx))
+                    .when(!compact, |el| el.child(Self::titlebar_divider(cx)))
             })
-            .child(
-                icon_button("open-file", IconName::FolderOpen, t.bar, t.bar_hover, cx)
-                    .tooltip(crate::ui::platform_hint(
-                        "Open trace (⌘O)",
-                        "Open trace (Ctrl+O)",
-                    ))
-                    .on_click(cx.listener(|this, _, w, cx| {
-                        this.dispatch(Command::RequestOpenDialog, Some(w), cx);
-                    })),
-            )
-            .when(self.app.doc.is_loaded(), |el| {
+            .when(!compact, |el| {
                 el.child(
-                    icon_button("add-trace", IconName::Plus, t.bar, t.bar_hover, cx)
+                    icon_button("open-file", IconName::FolderOpen, t.bar, t.bar_hover, cx)
                         .tooltip(crate::ui::platform_hint(
-                            "Add trace (⇧⌘O)",
-                            "Add trace (Ctrl+Shift+O)",
+                            "Open trace (⌘O)",
+                            "Open trace (Ctrl+O)",
                         ))
                         .on_click(cx.listener(|this, _, w, cx| {
-                            this.dispatch(Command::RequestAddTraceDialog, Some(w), cx);
+                            this.dispatch(Command::RequestOpenDialog, Some(w), cx);
                         })),
                 )
+                .when(self.app.doc.is_loaded(), |el| {
+                    el.child(
+                        icon_button("add-trace", IconName::Plus, t.bar, t.bar_hover, cx)
+                            .tooltip(crate::ui::platform_hint(
+                                "Add trace (⇧⌘O)",
+                                "Add trace (Ctrl+Shift+O)",
+                            ))
+                            .on_click(cx.listener(|this, _, w, cx| {
+                                this.dispatch(Command::RequestAddTraceDialog, Some(w), cx);
+                            })),
+                    )
+                })
+                .child(
+                    icon_button("open-settings", IconName::Settings, t.bar, t.bar_hover, cx)
+                        .selected(self.app.panels.settings_id().is_some())
+                        .tooltip(crate::ui::platform_hint(
+                            "Settings (⌘,)",
+                            "Settings (Ctrl+,)",
+                        ))
+                        .on_click(
+                            cx.listener(|this, _, w, cx| this.open_settings(&OpenSettings, w, cx)),
+                        ),
+                )
             })
-            .child(
-                icon_button("open-settings", IconName::Settings, t.bar, t.bar_hover, cx)
-                    .selected(self.app.panels.settings_id().is_some())
-                    .tooltip(crate::ui::platform_hint(
-                        "Settings (⌘,)",
-                        "Settings (Ctrl+,)",
-                    ))
-                    .on_click(
-                        cx.listener(|this, _, w, cx| this.open_settings(&OpenSettings, w, cx)),
-                    ),
-            )
             .when_some(right_controls, gpui_kit::ParentElement::child)
     }
 
