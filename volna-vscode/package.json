@@ -411,7 +411,7 @@
         },
         "volna.transaction.detailItems": {
           "default": 20,
-          "markdownDescription": "Maximum attributes, stages, events, or related records listed in each section of the Transaction panel. The admitted byte budget may truncate earlier.",
+          "markdownDescription": "Maximum stages, events, or related records listed in each section of Record details. Attribute trees have separate pages. The admitted byte budget may truncate earlier.",
           "maximum": 1000,
           "minimum": 1,
           "type": "integer"
