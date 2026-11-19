@@ -158,6 +158,7 @@ impl SidecarImage {
         }))
     }
 
+    #[cfg(not(target_family = "wasm"))]
     fn validated(
         self,
         identity: &vtr::activity::Identity,

@@ -58,6 +58,6 @@ fn main() {
     });
 }
 #[cfg(target_family = "wasm")]
-fn main() {
-    volna::web::start();
+fn main() -> Result<(), wasm_bindgen::JsValue> {
+    volna::web::start()
 }

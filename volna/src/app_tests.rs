@@ -180,10 +180,10 @@ fn navigate_three_dock_tabs_then_enter_the_panel(cx: &mut TestAppContext) {
         view.simulate_keystrokes("shift-tab");
         view.simulate_keystrokes(keys);
         view.run_until_parked();
-        root.update(&mut view, |ws, _, _| {
-            assert_eq!(ws.app.panels.focused_id(), previous)
-        })
-        .unwrap();
+        let focused = root
+            .update(&mut view, |ws, _, _| ws.app.panels.focused_id())
+            .unwrap();
+        assert_eq!(focused, previous, "{keys}");
         view.simulate_keystrokes(enter);
         view.run_until_parked();
         root.update(&mut view, |ws, window, cx| {
