@@ -12,6 +12,7 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "GPUI's Linux accessibility and portal dependencies require zbus 5 and zvariant; remove when those dependencies migrate to zbus 6." },
     { id = "RUSTSEC-2026-0371", reason = "GPUI's Linux accessibility and portal dependencies require zbus_names through zbus 5; remove when those dependencies migrate to zbus 6." },
     { id = "RUSTSEC-2026-0372", reason = "GPUI's Linux accessibility and portal dependencies require zvariant_derive through zvariant; remove when those dependencies migrate to zbus 6." },
+    { id = "RUSTSEC-2026-0543", reason = "GPUI requires chrono for date and time handling. Remove this exception when GPUI migrates to a maintained crate." },
 ]
 
 [licenses]
