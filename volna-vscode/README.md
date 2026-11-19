@@ -1,10 +1,13 @@
 # Volna for VS Code
 
-Open VTR, FST, and Kanata recordings in a read-only custom editor. The GPUI viewer
-runs in the webview; the bundled `volna-server` reads VTR on the workspace host,
-including Remote SSH workspaces. The bundled `vtr` CLI automatically converts FST
-and Kanata before the server starts. Kanata imports accept `.kanata` and `.log`,
-including their gzip-compressed forms; FST accepts `.fst` and `.fst.gz`.
+VS Code opens `.vtr` files in Volna's read-only waveform editor by default. Use
+**Volna: Open Waveform Viewer** from the Command Palette to import FST or Kanata
+recordings. Kanata imports accept `.kanata`, `.log`, and their gzip-compressed
+forms. FST imports accept `.fst` and `.fst.gz`.
+
+The GPUI viewer runs in the webview. The bundled `volna-server` reads VTR on the
+workspace host, including Remote SSH workspaces. The bundled `vtr` CLI converts
+FST and Kanata before the server starts.
 
 Conversion runs on the workspace host. A cancellable VS Code progress
 notification shows the phase, phase percentage when measurable, input file size,
@@ -67,8 +70,8 @@ lifetimes. `npm run test:package` checks platform identities, both executable
 architectures and contents, asset dependencies, and license integrity.
 
 On Linux, `npm run test:vsix` installs the built package into an isolated VS Code
-profile and opens VTR, FST, Kanata, and compressed Kanata fixtures through their
-default editor associations.
+profile. It checks that a plain log opens as text, VTR opens in Volna by default,
+and FST, Kanata, and compressed Kanata open when explicitly directed to Volna.
 It requires `code` and `xvfb-run`; Playwright connects to that VS Code process.
 Set `VOLNA_CODE` to use another VS Code binary.
 The test verifies the bundled tools, trace metadata, rendered viewer frames,

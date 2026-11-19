@@ -223,24 +223,6 @@
         "selector": [
           {
             "filenamePattern": "*.vtr"
-          },
-          {
-            "filenamePattern": "*.fst"
-          },
-          {
-            "filenamePattern": "*.fst.gz"
-          },
-          {
-            "filenamePattern": "*.kanata"
-          },
-          {
-            "filenamePattern": "*.kanata.gz"
-          },
-          {
-            "filenamePattern": "*.log"
-          },
-          {
-            "filenamePattern": "*.log.gz"
           }
         ],
         "priority": "default"

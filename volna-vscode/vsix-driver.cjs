@@ -44,14 +44,28 @@ exports.run = async function () {
     assert.ok(extension, "the VSIX is installed");
     await extension.activate();
     await vscode.commands.executeCommand("workbench.action.closeSidebar");
+    const logUri = vscode.Uri.file(path.join(root, "build.log"));
+    await fs.writeFile(logUri.fsPath, "Build succeeded\n");
+    await vscode.commands.executeCommand("vscode.open", logUri);
+    const logEditor = vscode.window.activeTextEditor;
+    assert.equal(logEditor?.document.uri.toString(), logUri.toString());
+    assert.equal(logEditor.document.getText(), "Build succeeded\n");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     for (const [index, { name, theme, converted }] of traces.entries()) {
       await vscode.workspace
         .getConfiguration("workbench")
         .update("colorTheme", theme, vscode.ConfigurationTarget.Global);
       const uri = vscode.Uri.file(path.join(root, name));
-      await vscode.commands.executeCommand("vscode.open", uri, {
-        preview: false,
-      });
+      if (converted)
+        await vscode.commands.executeCommand(
+          "vscode.openWith",
+          uri,
+          "volna.waveform",
+        );
+      else
+        await vscode.commands.executeCommand("vscode.open", uri, {
+          preview: false,
+        });
       const input = await until(
         () => {
           const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
@@ -61,7 +75,7 @@ exports.run = async function () {
             input
           );
         },
-        `${name} default custom editor`,
+        `${name} waveform editor`,
         10000,
       );
       assert.equal(input.viewType, "volna.waveform");
