@@ -19,6 +19,8 @@ use serde_json::value::RawValue;
 use std::collections::HashSet;
 use volna_trace::data::source::Lookup;
 
+pub use crate::trace::SavedTrace as Trace;
+
 pub const FORMAT: &str = "volna-workspace";
 pub const VERSION: u32 = 22;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -65,18 +67,6 @@ pub struct Workspace {
     pub sampling: crate::sampling::SamplingChoices,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Trace {
-    pub letter: TraceId,
-    pub path: String,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rename: Option<String>,
-    pub timescale: i8,
-    pub time_range: (u64, u64),
-    pub design_id: Option<String>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Shared {
     pub viewport: Viewport,
@@ -113,6 +103,7 @@ pub struct RestorePlan {
         std::mem::Discriminant<crate::trace::SlotState>,
     )>,
     retime: Option<crate::trace::Rescale>,
+    unavailable_traces: Vec<Trace>,
     renames: Vec<(TraceId, Option<String>)>,
     panels: Panels,
     shared: Shared,
@@ -168,7 +159,7 @@ impl Workspace {
     ) -> Result<Self> {
         ensure!(app.doc.is_loaded(), "no trace open");
         app.panels.validate()?;
-        let mut traces = Vec::new();
+        let mut traces = app.doc.traces().unavailable().to_vec();
         for slot in app.doc.traces().iter() {
             let Some(session) = slot.session() else {
                 continue;
@@ -187,6 +178,7 @@ impl Workspace {
                 design_id: info.design_id.clone(),
             });
         }
+        traces.sort_unstable_by_key(|trace| trace.letter);
         ensure!(
             traces.iter().any(|t| t.letter == TraceId::A),
             "trace A has no durable location"
@@ -274,6 +266,7 @@ impl Workspace {
         let mut report = RestoreReport::default();
         let mut letters = HashSet::new();
         let mut open = Traces::default();
+        let mut unavailable_traces = Vec::new();
         for saved in &self.traces {
             ensure!(
                 letters.insert(saved.letter),
@@ -291,6 +284,12 @@ impl Workspace {
                     "Trace {} is not open: {}",
                     saved.letter, saved.path
                 ));
+                if !saved.letter.is_a() {
+                    unavailable_traces.push(Trace {
+                        path: uri,
+                        ..saved.clone()
+                    });
+                }
                 continue;
             };
             if saved.letter != TraceId::A
@@ -428,6 +427,7 @@ impl Workspace {
                 .map(|s| (s.id, s.generation(), std::mem::discriminant(s.state())))
                 .collect(),
             retime,
+            unavailable_traces,
             renames,
             panels,
             shared: self.shared.clone(),
@@ -458,7 +458,7 @@ impl RestorePlan {
         );
         ensure!(app.doc.is_loaded(), "no trace open");
         app.retire_panels();
-        app.doc.restart();
+        app.doc.restart(self.unavailable_traces);
         app.doc.sampling = self.sampling;
         for (trace, name) in self.renames {
             app.doc.restore_trace_name(trace, name);

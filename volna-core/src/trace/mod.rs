@@ -149,6 +149,18 @@ pub enum SlotState {
     Error(String),
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SavedTrace {
+    pub letter: TraceId,
+    pub path: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename: Option<String>,
+    pub timescale: i8,
+    pub time_range: (u64, u64),
+    pub design_id: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct TraceSlot {
     pub id: TraceId,
@@ -254,6 +266,8 @@ impl TraceSlot {
 #[derive(Clone, Default)]
 pub struct TraceSet {
     slots: Vec<TraceSlot>,
+    // Reserve these letters for saved rows. Absolute URIs let saves rebase the paths.
+    unavailable: Vec<SavedTrace>,
     unit: Option<Unit>,
     revision: u64,
 }
@@ -326,9 +340,22 @@ impl TraceSet {
     }
 
     pub fn free_id(&self) -> Option<TraceId> {
-        (0..TraceId::MAX)
-            .filter_map(TraceId::new)
-            .find(|id| self.get(*id).is_none())
+        (0..TraceId::MAX).filter_map(TraceId::new).find(|id| {
+            self.get(*id).is_none() && !self.unavailable.iter().any(|trace| trace.letter == *id)
+        })
+    }
+
+    pub(crate) fn unavailable(&self) -> &[SavedTrace] {
+        &self.unavailable
+    }
+
+    pub(crate) fn restore_unavailable(&mut self, traces: Vec<SavedTrace>) {
+        self.unavailable = traces;
+        self.revision += 1;
+    }
+
+    pub(crate) fn mark_available(&mut self, id: TraceId) {
+        self.unavailable.retain(|trace| trace.letter != id);
     }
 
     pub(crate) fn insert(&mut self, slot: TraceSlot) {

@@ -78,10 +78,24 @@ impl Viewport {
         self.tick_boundary(x_px, width_px, true)
     }
 
-    fn tick_boundary(&self, x_px: f64, width_px: f64, exclusive: bool) -> Option<u64> {
+    pub(crate) fn nearest_tick(&self, x_px: f64, width_px: f64) -> u64 {
+        let (origin, offset) = self.tick_offset(x_px, width_px);
+        let lower = offset.floor();
+        origin
+            .saturating_add(lower as i128)
+            .saturating_add(i128::from(offset - lower >= 0.5))
+            .clamp(0, i128::from(u64::MAX)) as u64
+    }
+
+    fn tick_offset(&self, x_px: f64, width_px: f64) -> (i128, f64) {
         // Keep integer ticks distinct when the absolute time exceeds f64's precision.
         let origin = self.start.floor() as i128;
         let offset = self.start - origin as f64 + x_px / width_px * self.width();
+        (origin, offset)
+    }
+
+    fn tick_boundary(&self, x_px: f64, width_px: f64, exclusive: bool) -> Option<u64> {
+        let (origin, offset) = self.tick_offset(x_px, width_px);
         let offset = if exclusive {
             offset.ceil() - 1.0
         } else {

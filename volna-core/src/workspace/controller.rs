@@ -1,7 +1,7 @@
 //! Workspace lifecycle over the core's command/event loop.
 
 use super::{
-    RestorePlan, Workspace,
+    Workspace,
     persistence::{self, Candidate, Persistence, SaveTicket, Scheduler, Target},
 };
 use crate::trace::TraceId;
@@ -41,17 +41,9 @@ struct Waiting {
 }
 
 enum Transition {
-    Open {
-        spec: OpenSpec,
-        uri: Option<String>,
-    },
+    Open { spec: OpenSpec, uri: Option<String> },
     Close,
     OpenWorkspace(Box<Waiting>),
-    Restore {
-        plan: Box<RestorePlan>,
-        target: Target,
-        supersedes: Option<String>,
-    },
     Quit,
 }
 
@@ -162,28 +154,16 @@ impl App {
                     self.restore_failed(target, error);
                 }
             }
-            Transition::Restore {
-                plan,
-                target,
-                supersedes,
-            } => match plan.commit(self) {
-                Ok(report) => {
-                    if let Err(error) = self.workspace.scheduler.begin(Some(target), supersedes) {
-                        self.notice(error.to_string());
-                    }
-                    self.workspace.loading = false;
-                    self.workspace.scheduler.changed(Instant::now());
-                    self.notice_all(report.notices);
-                }
-                Err(error) => self.notice(error.to_string()),
-            },
             Transition::Quit => self.events.push(Event::Quit),
         }
     }
 
     fn begin_unsaved(&mut self) -> bool {
         match self.workspace.scheduler.begin(None, None) {
-            Ok(()) => true,
+            Ok(()) => {
+                self.workspace.waiting = None;
+                true
+            }
             Err(error) => {
                 self.notice(error.to_string());
                 false
@@ -339,26 +319,23 @@ impl App {
             .trace_uri
             .clone()
             .context("open the referenced trace first")?;
-        let plan = waiting
+        let report = waiting
             .workspace
-            .prepare(self, &uri, waiting.origin.location())?;
+            .prepare(self, &uri, waiting.origin.location())?
+            .commit(self)?;
+        let now = Instant::now();
         if waiting.explicit {
-            self.workspace.loading = false;
-            self.notice_all(waiting.notices);
-            self.transition(Transition::Restore {
-                plan: Box::new(plan),
-                target: waiting.target,
-                supersedes: waiting.supersedes,
-            });
-            return Ok(());
+            self.workspace.scheduler.replaced(now);
+        } else {
+            self.workspace
+                .scheduler
+                .begin(Some(waiting.target), waiting.supersedes)?;
         }
-        let report = plan.commit(self)?;
         self.notice_all(report.notices);
-        self.workspace
-            .scheduler
-            .begin(Some(waiting.target), waiting.supersedes)?;
         self.notice_all(waiting.notices);
         self.workspace.loading = false;
+        self.advance_transition();
+        self.persist_workspace(now, false);
         Ok(())
     }
 
@@ -368,6 +345,18 @@ impl App {
 
     pub(crate) fn workspace_trace_failed(&mut self, trace: TraceId, error: String) {
         self.workspace_trace_settled(trace, Some(error));
+    }
+
+    pub(crate) fn workspace_trace_cancelled(&mut self, trace: TraceId) {
+        if let Some(waiting) = self.workspace.waiting.as_mut()
+            && waiting.traces.contains(&trace)
+        {
+            waiting
+                .workspace
+                .traces
+                .retain(|saved| saved.letter != trace);
+        }
+        self.workspace_trace_settled(trace, Some("opening cancelled".into()));
     }
 
     fn workspace_trace_settled(&mut self, trace: TraceId, error: Option<String>) {
@@ -411,7 +400,7 @@ impl App {
             workspace: Box::new(workspace),
             origin,
             target,
-            supersedes: self.workspace.scheduler.supersedes().map(str::to_owned),
+            supersedes: None,
             notices: Vec::new(),
             explicit: true,
             traces: BTreeSet::default(),
@@ -445,14 +434,14 @@ impl App {
         } else {
             None
         };
-        let target = &ticket.target;
-        let path_of = |slot: &crate::trace::TraceSlot| {
-            slot.uri
-                .as_deref()
-                .map(|uri| target.trace_reference(uri))
-                .transpose()
-        };
-        let bytes = Workspace::capture(self, path_of, base).and_then(|w| w.to_bytes());
+        let bytes = Workspace::capture(self, |slot| Ok(slot.uri.clone()), base).and_then(
+            |mut workspace| {
+                for trace in &mut workspace.traces {
+                    trace.path = ticket.target.trace_reference(&trace.path)?;
+                }
+                workspace.to_bytes()
+            },
+        );
         match bytes {
             Ok(bytes) => self.events.push(Event::PersistWorkspace { ticket, bytes }),
             Err(error) => {

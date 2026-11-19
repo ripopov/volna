@@ -411,8 +411,9 @@ impl Document {
         }
     }
 
-    pub(crate) fn restart(&mut self) {
+    pub(crate) fn restart(&mut self, unavailable_traces: Vec<crate::trace::SavedTrace>) {
         self.epoch = self.next_generation();
+        self.traces.restore_unavailable(unavailable_traces);
         let loaded: Vec<TraceId> = self.traces.loaded().map(|(id, _)| id).collect();
         for id in loaded {
             let generation = self.next_generation();
@@ -484,6 +485,7 @@ impl Document {
             .expect("installed traces have slots");
         slot.placement = placement;
         slot.state = SlotState::Loaded(Arc::clone(&session));
+        self.traces.mark_available(id);
         self.load_scope_sizes(id, &session);
         if first {
             self.shared.viewport.set(Viewport::fit(self.limits()));

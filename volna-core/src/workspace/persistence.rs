@@ -226,6 +226,13 @@ impl Scheduler {
         self.last_error = Some(error);
     }
 
+    // Opening a preset keeps the current save destination and any queued save request.
+    pub(crate) fn replaced(&mut self, now: Instant) {
+        self.suspended = false;
+        self.last_error = None;
+        self.changed(now);
+    }
+
     pub fn changed(&mut self, now: Instant) {
         if !self.enabled() {
             return;

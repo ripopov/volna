@@ -371,6 +371,99 @@ fn a_workspace_reopens_every_trace_it_names() {
     assert!(!history(&app, TraceId::A, "pc").is_empty());
 }
 
+#[test]
+fn autosave_preserves_an_unavailable_trace_for_the_next_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let primary = copy_to(dir.path(), "primary.vtr");
+    let secondary = dir.path().join("secondary.vtr");
+    std::fs::copy(values_vtr(), &secondary).unwrap();
+    let mut app = reopen(&primary, Content::Missing);
+    app.add_resource(OpenSpec::Path(secondary.clone()), uri(&secondary));
+    complete_pending(&mut app);
+    app.handle(Command::AddVars(vec![var(&app, b(), "top.logic")]));
+    complete_pending(&mut app);
+    app.save_workspace(None);
+    let saved = app
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            Event::PersistWorkspace { bytes, .. } => Some(bytes),
+            _ => None,
+        })
+        .expect("initial workspace save");
+
+    let displaced = dir.path().join("displaced.vtr");
+    std::fs::rename(&secondary, &displaced).unwrap();
+    let mut app = reopen(&primary, Content::Bytes(saved));
+    let added = copy_to(dir.path(), "added.vtr");
+    app.add_resource(OpenSpec::Path(added.clone()), uri(&added));
+    complete_pending(&mut app);
+    let now = volna_core::Instant::now();
+    app.handle_at(Command::SetFilter("logic".into()), now);
+    app.tick(now + volna_core::workspace::persistence::IDLE);
+    let autosaved = app
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            Event::PersistWorkspace { bytes, .. } => Some(bytes),
+            _ => None,
+        })
+        .expect("autosave after changing the filter");
+
+    std::fs::rename(&displaced, &secondary).unwrap();
+    let app = reopen(&primary, Content::Bytes(autosaved));
+    assert_eq!(app.variables.filter, "logic");
+    assert_eq!(app.trace_chips().len(), 3);
+    assert_eq!(history(&app, b(), "logic").time(0), 5);
+}
+
+#[test]
+fn closing_during_workspace_restore_survives_a_pending_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let primary = copy_to(dir.path(), "primary.vtr");
+    let secondary = copy_to(dir.path(), "secondary.vtr");
+    let mut preset = reopen(&primary, Content::Missing);
+    preset.add_resource(OpenSpec::Path(secondary.clone()), uri(&secondary));
+    complete_pending(&mut preset);
+    preset.handle(Command::SetFilter("clock".into()));
+    let saved = Workspace::capture(&preset, |slot| Ok(slot.uri.clone()), None)
+        .unwrap()
+        .to_bytes()
+        .unwrap();
+
+    let mut app = reopen(&primary, Content::Missing);
+    let trace_uri = uri(&primary);
+    app.open_workspace(
+        Target::File {
+            uri: format!("{trace_uri}.volna.json"),
+        },
+        &saved,
+    )
+    .unwrap();
+    assert!(app.trace_chip(b()).unwrap().loading);
+    app.handle(Command::SaveWorkspace);
+    app.handle(Command::CloseTrace);
+
+    complete_pending(&mut app);
+    let (ticket, bytes) = app
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            Event::PersistWorkspace { ticket, bytes } => Some((ticket, bytes)),
+            _ => None,
+        })
+        .expect("the requested workspace save");
+    assert_eq!(Workspace::parse(&bytes).unwrap().sidebar.filter, "clock");
+    app.workspace_saved(ticket, None, volna_core::Instant::now());
+
+    assert!(
+        app.take_events()
+            .contains(&Event::TraceClosed { trace_uri }),
+        "closing should complete once the workspace is saved"
+    );
+    assert!(app.trace_chips().is_empty());
+}
+
 struct Cycles {
     info: volna_trace::data::TraceInfo,
     hierarchy: volna_trace::data::Hierarchy,

@@ -528,6 +528,63 @@ fn open_events_coalesce() {
 }
 
 #[test]
+fn clicking_a_late_waveform_places_the_cursor_on_the_exact_tick() {
+    use volna_core::app::SettingsCommand;
+    use volna_core::settings::Value;
+    use volna_core::wave::Viewport;
+
+    let origin = 1u64 << 53;
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let signal = writer
+        .signal(
+            vtr::SourceOptions::new("valid", None),
+            vtr::SignalKind::Bits {
+                width: 1,
+                states: 2,
+            },
+            vtr::VarType::Wire,
+            vtr::Direction::Output,
+        )
+        .unwrap();
+    for (offset, value) in [(0, 0), (513, 1), (1024, 0)] {
+        writer.advance_time(origin + offset).unwrap();
+        writer.emit_u64(signal, value).unwrap();
+    }
+    writer.close().unwrap();
+
+    let mut app = App::new();
+    app.handle(Command::Open(OpenSpec::Path(file.path().into())));
+    complete_pending(&mut app);
+    app.handle(Command::AddVars(a_all(vec![0])));
+    complete_pending(&mut app);
+    app.handle(Command::Settings(SettingsCommand::Set {
+        id: "waves.snapPixels".into(),
+        value: Value::Integer(0),
+    }));
+    app.doc.shared.viewport.set(Viewport {
+        start: origin as f64,
+        end: (origin + 1024) as f64,
+    });
+
+    frame(&mut app, &Theme::one_dark());
+    let layout = app.panels.focused_waves().unwrap().last_layout();
+    let x = layout.waves.left() + layout.waves.width() * (513.0 / 1024.0);
+    let panel = app.panels.focused_id();
+    app.handle(Command::Pointer(
+        panel,
+        PointerEvent::Down {
+            position: point(x, layout.row_y(0) + 12.0),
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    app.handle(Command::Pointer(panel, PointerEvent::Up));
+
+    assert_eq!(app.doc.shared.cursor, Some(origin + 513));
+}
+
+#[test]
 fn cursor_markers_and_selection_follow_the_document() {
     let (mut app, _) = loaded_app(100);
     let theme = Theme::one_dark();

@@ -4598,14 +4598,14 @@ fn snapped_time(
     width_px: f64,
     snap_px: f64,
 ) -> u64 {
-    let raw = vp.time_at(x_px, width_px).round().max(0.0);
+    let tick = vp.nearest_tick(x_px, width_px);
     if snap_px <= 0.0 {
-        return raw as u64;
+        return tick;
     }
     let tol = snap_px / vp.px_per_unit(width_px);
     let exact = vp.time_at(x_px, width_px).max(0.0);
     let clock_edge = clock.and_then(|c| crate::clock::nearest_edge(c, exact, tol));
-    let row_edge = edges.and_then(|e| row_edge(e, raw, exact, tol));
+    let row_edge = edges.and_then(|e| row_edge(e, exact.round(), exact, tol));
     [clock_edge, row_edge]
         .into_iter()
         .flatten()
@@ -4614,7 +4614,7 @@ fn snapped_time(
                 .abs()
                 .total_cmp(&(*b as f64 - exact).abs())
         })
-        .unwrap_or(raw as u64)
+        .unwrap_or(tick)
 }
 
 fn row_edge(edges: &EdgeSource<'_>, raw: f64, exact: f64, tol: f64) -> Option<u64> {
