@@ -172,6 +172,7 @@ pub enum UnknownPolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Reduction {
     Mean,
+    DutyCycle,
     Integral,
     Min,
     Max,

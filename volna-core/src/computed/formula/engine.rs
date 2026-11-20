@@ -1147,6 +1147,7 @@ impl<'a> Evaluator<'a> {
         let mut area = 0.0;
         let mut compensation = 0.0;
         let mut mean_scale = 1.0;
+        let mut high_ticks = 0_u64;
         let mut extremum: Option<f64> = None;
         let weight = tick_weight(self.options.time_base);
         let mut start = bounds.0;
@@ -1162,6 +1163,11 @@ impl<'a> Evaluator<'a> {
                 let duration = next - start;
                 known += duration;
                 match reduction {
+                    Reduction::DutyCycle => {
+                        if value != 0.0 {
+                            high_ticks += duration;
+                        }
+                    }
                     Reduction::Min => extremum = Some(extremum.map_or(value, |v| v.min(value))),
                     Reduction::Max => extremum = Some(extremum.map_or(value, |v| v.max(value))),
                     _ => {
@@ -1190,6 +1196,9 @@ impl<'a> Evaluator<'a> {
         let unknown = known < requested;
         let strict_unknown = unknown && self.options.unknown == UnknownPolicy::Gap;
         let value = match reduction {
+            Reduction::DutyCycle if known > 0 && !strict_unknown => {
+                Some(100.0 * (high_ticks as f64 / known as f64))
+            }
             Reduction::Mean if known > 0 && !strict_unknown => {
                 let mean = (area / known as f64) / mean_scale;
                 mean.is_finite().then_some(mean)

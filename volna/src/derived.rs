@@ -790,6 +790,7 @@ impl Render for DerivedEditor {
                 (if measurement {
                     &[
                         ("interval_mean", "Time mean"),
+                        ("duty_cycle", "Duty cycle (%)"),
                         ("interval_min", "Time min"),
                         ("interval_max", "Time max"),
                         ("interval_sum", "Sample sum"),

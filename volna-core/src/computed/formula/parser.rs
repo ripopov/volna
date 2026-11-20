@@ -750,8 +750,8 @@ impl Parser<'_> {
                     NodeKind::Waveform { captured: false },
                 )
             }
-            "interval_mean" | "interval_integral" | "interval_min" | "interval_max"
-            | "sample_mean" | "sample_min" | "sample_max" | "interval_sum" => {
+            "duty_cycle" | "interval_mean" | "interval_integral" | "interval_min"
+            | "interval_max" | "sample_mean" | "sample_min" | "sample_max" | "interval_sum" => {
                 let x = args.one_expression(name)?;
                 ensure!(
                     x.ty == Type::Real && x.kind.is_waveform_or_literal(),
@@ -759,6 +759,7 @@ impl Parser<'_> {
                 );
                 let reduction = match name {
                     "interval_mean" => Reduction::Mean,
+                    "duty_cycle" => Reduction::DutyCycle,
                     "interval_integral" => Reduction::Integral,
                     "interval_min" => Reduction::Min,
                     "interval_max" => Reduction::Max,

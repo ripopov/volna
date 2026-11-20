@@ -1365,3 +1365,48 @@ fn resumed_measurement_formula_can_remove_a_saved_boundary(cx: &mut TestAppConte
         assert_eq!((table.row_time(0), table.row_time(1)), (Some(0), Some(20)));
     });
 }
+
+#[gpui_kit::test]
+fn duty_cycle_previews_and_applies_percent_high_between_markers(cx: &mut TestAppContext) {
+    let session = OpenSpec::Bytes {
+        name: "feature.vtr".into(),
+        bytes: include_bytes!("../../examples/feature_showcase.vtr").to_vec(),
+    }
+    .open()
+    .unwrap();
+    let clock = session
+        .hierarchy()
+        .vars()
+        .position(|v| v.name == "clk")
+        .unwrap();
+    let (ws, mut vcx) = formula_workspace_session(cx, session, vec![clock]);
+    ws.update(&mut vcx, |ws, cx| {
+        let end = volna_core::moving_average::duration("10 ns", ws.app.doc.time_base()).unwrap();
+        ws.app.doc.add_marker(end).unwrap();
+        cx.notify();
+    });
+    click_control(&mut vcx, "measure-signal");
+    click_control(&mut vcx, "scope-marker-1");
+    for (button, expected) in [
+        ("preset-duty_cycle", 40.0),
+        ("preset-interval_mean", 0.4),
+        ("preset-duty_cycle", 40.0),
+    ] {
+        click_control(&mut vcx, button);
+        ws.read_with(&vcx, |ws, _| {
+            let Some(ComputationStatus::ReadyTable(rows)) = ws.app.derived_preview() else {
+                panic!("expected one reading per interval");
+            };
+            assert_eq!(rows[0].value, Some(expected));
+        });
+    }
+    click_control(&mut vcx, "derived-apply");
+    ws.read_with(&vcx, |ws, _| {
+        let row = ws.app.panels.focused_waves().unwrap().signal(1).unwrap();
+        let history = row.history.as_ref().unwrap();
+        assert_eq!(
+            history.value(history.index_at(0)),
+            volna_trace::data::WaveValue::Real(40.0)
+        );
+    });
+}

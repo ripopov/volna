@@ -308,6 +308,32 @@ fn interval_measurements_support_global_and_adjacent_marker_scopes() {
     }
 }
 
+#[test]
+fn duty_cycle_uses_known_elapsed_time_and_respects_interval_boundaries() {
+    let signal = real_history(&[0, 2, 8, 12], &[Some(-3.0), Some(-0.0), None, Some(5.0)]);
+    let inputs = aliases(&[("signal", FormulaType::Real)]);
+    let sources = [real_source(&signal, (0, 16))];
+    for (interval, unknown, expected) in [
+        ((0, 12), UnknownPolicy::Skip, Some(25.0)),
+        ((0, 12), UnknownPolicy::Gap, None),
+        ((8, 12), UnknownPolicy::Skip, None),
+        ((2, 8), UnknownPolicy::Gap, Some(0.0)),
+        ((13, 16), UnknownPolicy::Gap, Some(100.0)),
+    ] {
+        let reading = measurement(run(
+            "duty_cycle(signal)",
+            &inputs,
+            &sources,
+            EvaluationOptions {
+                interval: Some(interval),
+                unknown,
+                ..options((0, 16))
+            },
+        ));
+        assert_eq!(reading.value, expected, "{interval:?} with {unknown:?}");
+    }
+}
+
 // A user chooses skip-unknown measurements; known support and coverage survive while unknown time is excluded rather than treated as zero.
 #[test]
 fn skip_unknown_reports_known_support_and_coverage() {

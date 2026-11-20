@@ -20,6 +20,7 @@ pub const FUNCTIONS: &[(&str, &str)] = &[
     ),
     ("clock", "clock(period: …, high: …, phase: …)"),
     ("interval_mean", "interval_mean(x)"),
+    ("duty_cycle", "duty_cycle(x)"),
     ("interval_integral", "interval_integral(x)"),
     ("interval_min", "interval_min(x)"),
     ("interval_max", "interval_max(x)"),
@@ -153,6 +154,7 @@ impl Syntax {
             self.token_text(index),
             Some(
                 "interval_mean"
+                    | "duty_cycle"
                     | "sample_mean"
                     | "sample_min"
                     | "sample_max"

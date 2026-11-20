@@ -132,8 +132,8 @@ const SECTIONS: &[Section] = &[
         guidance: "Measurements plot one held value per interval. Start and End are selected initially. Select or deselect times to measure between adjacent selected boundaries. Adding the result to a waveform or table saves those timestamps. Intervals are [start, end), so an event at end is excluded. The missing-values control chooses strict gaps or skip-unknown support. Scale a measurement with literals or combine measurements with the same scope; a scalar cannot mix with a waveform or be captured with @.",
         examples: &[
             Example {
-                formula: "100 * interval_mean(real(valid))",
-                explanation: "Measure duty percentage. Whole range stays global even when markers exist.",
+                formula: "duty_cycle(real(valid))",
+                explanation: "Measure the percentage of elapsed time that the value is nonzero.",
             },
             Example {
                 formula: "interval_integral(a)",
