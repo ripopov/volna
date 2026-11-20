@@ -7,13 +7,6 @@ use anyhow::{Context, Result, bail, ensure};
 use super::language::{self, Diagnostic, SyntaxToken, TokenKind};
 use std::ops::Range;
 
-pub(super) fn reserved(name: &str) -> bool {
-    matches!(name, "true" | "false" | "posedge")
-        || language::FUNCTIONS
-            .iter()
-            .any(|(function, _)| *function == name)
-}
-
 #[derive(Clone, Debug)]
 enum Token {
     Number(u64),
@@ -564,7 +557,7 @@ impl Parser<'_> {
     }
 
     fn call(&mut self, name: &str, depth: usize) -> Result<Expr> {
-        ensure!(reserved(name), "Unknown function '{name}'.");
+        ensure!(language::is_function(name), "Unknown function '{name}'.");
         let mut args = Arguments::default();
         if !self.consume(&Token::RightParen) {
             let mut named = false;
@@ -758,7 +751,7 @@ impl Parser<'_> {
                 )
             }
             "interval_mean" | "interval_integral" | "interval_min" | "interval_max"
-            | "interval_sum" => {
+            | "sample_mean" | "sample_min" | "sample_max" | "interval_sum" => {
                 let x = args.one_expression(name)?;
                 ensure!(
                     x.ty == Type::Real && x.kind.is_waveform_or_literal(),
@@ -769,12 +762,15 @@ impl Parser<'_> {
                     "interval_integral" => Reduction::Integral,
                     "interval_min" => Reduction::Min,
                     "interval_max" => Reduction::Max,
+                    "sample_mean" => Reduction::SampleMean,
+                    "sample_min" => Reduction::SampleMin,
+                    "sample_max" => Reduction::SampleMax,
                     _ => Reduction::Sum,
                 };
-                if reduction == Reduction::Sum {
+                if reduction.uses_captures() {
                     ensure!(
                         x.kind == NodeKind::Waveform { captured: true },
-                        "interval_sum needs sample times. Choose a sampling signal or put @ after the entire value expression, for example: interval_sum((a - b) @ 1 us)."
+                        "{name} needs sample times. Choose a sampling signal or put @ after the entire value expression, for example: {name}((a - b) @ 1 us)."
                     );
                 }
                 self.push(

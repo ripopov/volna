@@ -930,7 +930,7 @@ fn stacked_groups_round_trip_through_workspaces() {
     )
     .unwrap();
     let panel = &saved["panels"][0];
-    assert_eq!(panel["version"], 23);
+    assert_eq!(panel["version"], 24);
     assert_eq!(panel["rows"][0]["style"], "stack");
     assert_eq!(panel["rows"][0]["height"], 3);
     let (_f2, session) = trace();

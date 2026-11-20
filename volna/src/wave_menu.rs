@@ -141,13 +141,20 @@ fn render_item(item: &MenuItem, select: Rc<Select>) -> PopupMenuItem {
         _ => None,
     };
     let entry = match &item.action {
-        MenuAction::Derived => PopupMenuItem::element(move |_, _| {
-            div()
-                .id("wave-menu-derived")
-                .debug_selector(|| "wave-menu-derived".into())
-                .aria_label(label.clone())
-                .child(label.clone())
-        }),
+        MenuAction::Derived | MenuAction::EditFormula => {
+            let selector = if item.action == MenuAction::EditFormula {
+                "wave-menu-edit-formula"
+            } else {
+                "wave-menu-derived"
+            };
+            PopupMenuItem::element(move |_, _| {
+                div()
+                    .id(selector)
+                    .debug_selector(move || selector.into())
+                    .aria_label(label.clone())
+                    .child(label.clone())
+            })
+        }
         MenuAction::Draw(draw) => {
             let draw = *draw;
             let (selector, icon, hint) = match draw {

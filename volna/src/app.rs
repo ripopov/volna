@@ -297,9 +297,9 @@ pub struct Workspace {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) native_imports: crate::native_import::Imports,
     pub(crate) dock: Option<Entity<crate::dock::DockHost>>,
-    pub(crate) derived_width: f32,
     pub(crate) panel_focus_pending: bool,
     compact_hierarchy: bool,
+    pub(crate) measure_table_collapsed: bool,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) waves_focus: FocusHandle,
     pub(crate) scopes_focus: FocusHandle,
@@ -732,9 +732,9 @@ impl Workspace {
             #[cfg(not(target_family = "wasm"))]
             native_imports: Default::default(),
             dock: None,
-            derived_width: 440.0,
             panel_focus_pending: false,
             compact_hierarchy: false,
+            measure_table_collapsed: false,
             system_dark: crate::theme::is_dark(window.appearance()),
             focus_handle: cx.focus_handle(),
             waves_focus,

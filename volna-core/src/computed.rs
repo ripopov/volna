@@ -10,14 +10,12 @@ mod jobs;
 pub use crate::data::numeric_input::Interpretation;
 pub use formula::engine::{
     CaptureSupport, Evaluation, EvaluationOptions, FormulaHistory, Measurement, MeasurementStatus,
-    Source, evaluate_program,
+    MeasurementSupport, Source, evaluate_program,
 };
 pub use formula::language;
 pub use formula::{Program, ResultKind, Type as FormulaType, UnknownPolicy};
 pub(crate) use jobs::Computations;
-pub use jobs::{
-    ComputationStatus, DerivedOutput, Key, MeasurementResult, MeasurementRow, MeasurementTable,
-};
+pub use jobs::{ComputationStatus, DerivedOutput, Key, MeasurementResult, MeasurementTable};
 
 use crate::{
     moving_average::duration,
@@ -65,43 +63,60 @@ impl Input {
     }
     #[must_use]
     pub fn label(&self, doc: &crate::Document) -> String {
-        let (mut path, nth) = self.source.locator(doc);
-        if let Some(slice) = self.interpretation.projection
-            && let Some(name) = path.last_mut()
-        {
-            *name = crate::wave::bus::BusIndices::new(name, self.shape.width()).label(slice);
-        }
-        let mut label = format!("{}: {}", self.source.trace(), path.join("."));
-        if let Some(nth) = nth {
-            write!(label, " (occurrence {})", nth + 1).expect("write to String");
-        }
-        label
+        input_label(
+            &self.source,
+            self.shape,
+            self.interpretation.projection,
+            doc,
+        )
     }
+}
+
+fn input_label(
+    source: &RowSource,
+    shape: SignalShape,
+    projection: Option<crate::data::projection::BitSlice>,
+    doc: &crate::Document,
+) -> String {
+    if let Some(definition) = source.computed() {
+        return format!("Formula · {}", definition.name);
+    }
+    let (mut path, nth) = source.locator(doc);
+    if let Some(slice) = projection
+        && let Some(name) = path.last_mut()
+    {
+        *name = crate::wave::bus::BusIndices::new(name, shape.width()).label(slice);
+    }
+    let mut label = format!("{}: {}", source.trace(), path.join("."));
+    if let Some(nth) = nth {
+        write!(label, " (occurrence {})", nth + 1).expect("write to String");
+    }
+    label
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Boundary {
+    Start,
+    End,
+    Marker(crate::marker::MarkerId),
+    Tick(u64),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MeasurementScope {
     #[default]
-    MarkerIntervals,
+    WholeRange,
     IntervalSnapshot {
         intervals: Vec<(u64, u64)>,
     },
-    WholeRange,
     Explicit {
         start: u64,
         end: u64,
     },
-    MarkerSnapshot {
-        start: u64,
-        end: u64,
-    },
-    LinkedMarkers {
-        start: crate::marker::MarkerId,
-        end: crate::marker::MarkerId,
-    },
-    MarkerSet {
-        markers: Vec<crate::marker::MarkerId>,
+    #[serde(skip)]
+    Selected {
+        boundaries: Vec<Boundary>,
     },
 }
 
@@ -135,8 +150,7 @@ impl Retime for Operation {
                             *end = by.time(*end);
                         }
                     }
-                    MeasurementScope::Explicit { start, end }
-                    | MeasurementScope::MarkerSnapshot { start, end } => {
+                    MeasurementScope::Explicit { start, end } => {
                         *start = by.time(*start);
                         *end = by.time(*end);
                     }
@@ -266,7 +280,13 @@ impl Draft {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
-    Open(Option<usize>),
+    Create(Option<usize>),
+    Edit(usize),
+    Measure(usize),
+    ResumeFormula,
+    BindRow(usize),
+    Pin,
+    Unpin(usize),
     SampleOnInputChanges,
     Sample {
         var: Traced<VarId>,
@@ -290,7 +310,25 @@ pub enum Command {
     Remove,
     Close,
 }
+pub struct PinnedReading {
+    pub expression: String,
+    pub sources: String,
+    pub reading: Measurement,
+}
+
+pub(crate) enum EditorTool {
+    Formula,
+    Measure { suspended: Option<Box<Editor>> },
+}
+
+pub(crate) enum DraftPreview {
+    Idle,
+    Active(Option<Key>),
+    Stopped,
+}
+
 pub struct Editor {
+    pub(crate) tool: EditorTool,
     pub id: u64,
     pub panel: crate::panels::PanelId,
     pub row: usize,
@@ -301,13 +339,11 @@ pub struct Editor {
     pub editing: bool,
     pub draft: Draft,
     pub domain: (u64, u64),
-    pub preview: Option<Key>,
+    pub(crate) preview: DraftPreview,
     pub calculation_revision: u64,
     pub error: Option<String>,
-    pub stopped: bool,
     pub(crate) display_definition: Definition,
     pub(crate) display_inputs: Vec<Input>,
-    pub(crate) last_result: Option<DerivedOutput>,
     pub(crate) reveal_preview: bool,
 }
 
@@ -387,19 +423,49 @@ impl InputDraft {
     }
     #[must_use]
     pub fn label(&self, doc: &crate::Document) -> String {
-        Input {
-            alias: self.alias.clone(),
-            source: self.source.clone(),
-            shape: self.shape,
-            interpretation: Interpretation {
-                kind: self.kind,
-                projection: self.projection(doc).ok().flatten(),
-            },
-        }
-        .label(doc)
+        input_label(
+            &self.source,
+            self.shape,
+            self.projection(doc).ok().flatten(),
+            doc,
+        )
     }
 }
 impl Editor {
+    #[must_use]
+    pub fn measuring(&self) -> bool {
+        matches!(self.tool, EditorTool::Measure { .. })
+    }
+
+    #[must_use]
+    pub fn has_suspended_formula(&self) -> bool {
+        matches!(self.tool, EditorTool::Measure { suspended: Some(_) })
+    }
+
+    pub(crate) fn suspended_formula_mut(&mut self) -> Option<&mut Self> {
+        match &mut self.tool {
+            EditorTool::Measure { suspended } => suspended.as_deref_mut(),
+            EditorTool::Formula => None,
+        }
+    }
+
+    pub(crate) fn preview_key(&self) -> Option<&Key> {
+        match &self.preview {
+            DraftPreview::Active(key) => key.as_ref(),
+            DraftPreview::Idle | DraftPreview::Stopped => None,
+        }
+    }
+
+    #[must_use]
+    pub fn stopped(&self) -> bool {
+        matches!(self.preview, DraftPreview::Stopped)
+    }
+
+    pub(crate) fn invalidate_preview(&mut self) {
+        self.calculation_revision += 1;
+        self.preview = DraftPreview::Idle;
+    }
+
     pub fn inputs(&self, doc: &crate::Document) -> Result<Vec<Input>> {
         self.bindings.iter().map(|b| b.resolve(doc)).collect()
     }

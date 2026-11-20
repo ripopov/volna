@@ -4,16 +4,16 @@ use volna_core::testing::a_all;
 use volna_trace::session::OpenSpec;
 
 #[gpui_kit::test]
-fn inspector_creates_edits_and_removes_real_waveforms_in_both_themes(cx: &mut TestAppContext) {
-    inspector_workflow(cx, false);
+fn formula_editor_creates_edits_and_removes_real_waveforms_in_both_themes(cx: &mut TestAppContext) {
+    formula_editor_workflow(cx, false);
 }
 
 #[gpui_kit::test]
-fn inspector_uses_a_signed_vector_and_produces_a_real_waveform(cx: &mut TestAppContext) {
-    inspector_workflow(cx, true);
+fn formula_editor_uses_a_signed_vector_and_produces_a_real_waveform(cx: &mut TestAppContext) {
+    formula_editor_workflow(cx, true);
 }
 
-fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
+fn formula_editor_workflow(cx: &mut TestAppContext, signed: bool) {
     cx.update(crate::init_app);
     let mut workspace = None;
     let root = cx.add_window(|window, cx| {
@@ -112,8 +112,7 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
         );
         assert!(
             matches!(ws.app.derived_preview(), Some(ComputationStatus::Ready(_))),
-            "preview key {:?}, error {:?}, status {}, draft {:?}",
-            ws.app.derived_editor.as_ref().unwrap().preview,
+            "error {:?}, status {}, draft {:?}",
             ws.app.derived_editor.as_ref().unwrap().error,
             match ws.app.derived_preview() {
                 Some(ComputationStatus::Waiting) => "waiting",
@@ -147,7 +146,7 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
     });
     vcx.simulate_keystrokes("shift-f10");
     vcx.run_until_parked();
-    click(&mut vcx, "wave-menu-derived");
+    click(&mut vcx, "wave-menu-edit-formula");
     ws.read_with(&vcx, |ws, _| {
         assert!(ws.app.derived_editor.as_ref().unwrap().editing);
     });
@@ -155,11 +154,10 @@ fn inspector_workflow(cx: &mut TestAppContext, signed: bool) {
         vcx.update(|_, cx| crate::theme::set(crate::theme::CoreTheme::volna(dark), cx));
         vcx.run_until_parked();
         vcx.update(|window, cx| window.draw(cx).clear(cx));
-        let inspector = vcx.debug_bounds("derived-signal-editor").unwrap();
-        assert!(inspector.size.width > px(280.0));
-        assert!(vcx.debug_bounds("average-preview").is_none());
+        let tray = vcx.debug_bounds("derived-signal-editor").unwrap();
+        assert!(tray.size.width > px(280.0));
         let status = vcx.debug_bounds("derived-status").unwrap();
-        assert!(status.left() >= inspector.left() && status.right() <= inspector.right());
+        assert!(status.left() >= tray.left() && status.right() <= tray.right());
     }
     click(&mut vcx, "derived-remove");
     ws.read_with(&vcx, |ws, _| {
@@ -445,6 +443,8 @@ fn formula_editor_adds_interval_results_to_the_existing_table(cx: &mut TestAppCo
     vcx.simulate_input("interval_max(3)");
     vcx.simulate_keystrokes("ctrl-enter");
     vcx.run_until_parked();
+    click_control(&mut vcx, "scope-marker-1");
+    click_control(&mut vcx, "scope-marker-2");
     click_control(&mut vcx, "derived-table");
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     ws.read_with(&vcx, |ws, _| {
@@ -467,27 +467,19 @@ fn formula_editor_adds_interval_results_to_the_existing_table(cx: &mut TestAppCo
     });
 }
 
-// A user widens the editor, scrolls the form with actions in place, and copies an actionable formula error.
+// A user expands the bottom editor, scrolls the form with actions in place, and copies an actionable formula error.
 #[gpui_kit::test]
 fn formula_editor_resizes_and_copies_diagnostics(cx: &mut TestAppContext) {
     let (ws, mut vcx) = formula_workspace(cx, vec![0]);
 
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     let original = vcx.debug_bounds("derived-signal-editor").unwrap();
-    click_control(&mut vcx, "derived-width");
+    click_control(&mut vcx, "derived-expand");
     vcx.update(|window, cx| window.draw(cx).clear(cx));
-    let widened = vcx.debug_bounds("derived-signal-editor").unwrap();
-    assert!(widened.size.width > original.size.width + px(100.0));
-    let divider = vcx.debug_bounds("derived-resize").unwrap();
-    let from = divider.center();
-    let to = gpui_kit::point(from.x + px(80.0), from.y);
-    vcx.simulate_mouse_down(from, gpui_kit::MouseButton::Left, Modifiers::default());
-    vcx.simulate_mouse_move(to, Some(gpui_kit::MouseButton::Left), Modifiers::default());
-    vcx.simulate_mouse_up(to, gpui_kit::MouseButton::Left, Modifiers::default());
-    vcx.run_until_parked();
-    vcx.update(|window, cx| window.draw(cx).clear(cx));
-    let dragged = vcx.debug_bounds("derived-signal-editor").unwrap();
-    assert!(dragged.size.width < widened.size.width - px(40.0));
+    let expanded = vcx.debug_bounds("derived-signal-editor").unwrap();
+    assert!(expanded.size.height > original.size.height + px(100.0));
+    assert_eq!(expanded.size.width, original.size.width);
+    assert_eq!(expanded.bottom(), original.bottom());
     let field = vcx.debug_bounds("formula-expression").unwrap();
     vcx.simulate_click(
         gpui_kit::point(field.center().x, field.bottom() - px(10.0)),
@@ -522,7 +514,7 @@ fn formula_editor_resizes_and_copies_diagnostics(cx: &mut TestAppContext) {
     click_control(&mut vcx, "input-details-0");
     vcx.simulate_resize(size(px(1000.0), px(650.0)));
     vcx.update(|window, cx| window.draw(cx).clear(cx));
-    let footer = vcx.debug_bounds("derived-status").unwrap();
+    let status = vcx.debug_bounds("derived-status").unwrap();
     let first_field = vcx.debug_bounds("derived-name").unwrap();
     let body = vcx.debug_bounds("derived-form-scroll").unwrap();
     let at = gpui_kit::point(body.left() + px(20.0), body.top() + px(90.0));
@@ -535,124 +527,44 @@ fn formula_editor_resizes_and_copies_diagnostics(cx: &mut TestAppContext) {
     vcx.run_until_parked();
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("derived-name").unwrap().top() < first_field.top());
-    assert_eq!(vcx.debug_bounds("derived-status").unwrap(), footer);
+    assert_eq!(vcx.debug_bounds("derived-status").unwrap(), status);
     ws.read_with(&vcx, |ws, _| assert!(ws.app.derived_editor.is_some()));
 }
 
-// A user chooses marker intervals, repairs a set after one marker is removed, and enters exact bounds before applying the definition.
+// A user selects two markers in reverse order and saves their interval. Removing a marker leaves the saved bounds intact.
 #[gpui_kit::test]
-fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut TestAppContext) {
+fn selected_marker_times_are_frozen_on_apply(cx: &mut TestAppContext) {
     let (ws, mut vcx) = formula_workspace(cx, vec![0]);
-    let (first, second, third, bounds) = ws.update(&mut vcx, |ws, cx| {
+    let (marker, left, right) = ws.update(&mut vcx, |ws, cx| {
         let (start, end) = ws.app.doc.limits();
-        let span = end - start;
-        let first = ws.app.doc.add_marker(start + span / 4).unwrap();
-        let second = ws.app.doc.add_marker(start + span / 2).unwrap();
-        let third = ws.app.doc.add_marker(start + span * 3 / 4).unwrap();
+        let left = start + (end - start) / 4;
+        let right = start + (end - start) / 2;
+        let marker = ws.app.doc.add_marker(left).unwrap();
+        ws.app.doc.add_marker(right).unwrap();
         cx.notify();
-        (first, second, third, (start, end))
+        (marker, left, right)
     });
-
-    vcx.update(|window, cx| window.draw(cx).clear(cx));
-    let field = vcx.debug_bounds("formula-expression").unwrap();
-    vcx.simulate_click(
-        gpui_kit::point(field.center().x, field.bottom() - px(10.0)),
-        Modifiers::default(),
-    );
-    vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
-        "cmd-a"
-    } else {
-        "ctrl-a"
-    });
-    vcx.simulate_input("interval_mean(input)");
-    vcx.simulate_keystrokes("ctrl-enter");
-    vcx.run_until_parked();
-
-    choose_scope(&mut vcx, 4);
-    click_control(&mut vcx, "scope-marker-3");
-    let time = |fraction| bounds.0 + (bounds.1 - bounds.0) * fraction / 4;
+    enter_formula(&mut vcx, "interval_mean(input)");
+    for choice in [
+        "scope-marker-2",
+        "scope-marker-1",
+        "scope-start",
+        "scope-end",
+    ] {
+        click_control(&mut vcx, choice);
+    }
     ws.read_with(&vcx, |ws, _| {
-        let Some(ComputationStatus::ReadyMeasurement(measurement)) = ws.app.derived_preview()
-        else {
-            panic!("linked marker interval did not preview");
+        let Some(ComputationStatus::ReadyMeasurement(reading)) = ws.app.derived_preview() else {
+            panic!("expected one interval")
         };
-        assert_eq!(measurement.bounds, (time(2), time(3)));
+        assert_eq!(reading.bounds, (left, right));
     });
-    choose_scope(&mut vcx, 3);
-    ws.read_with(&vcx, |ws, _| {
-        let Some(ComputationStatus::ReadyMeasurement(measurement)) = ws.app.derived_preview()
-        else {
-            panic!("marker snapshot did not preview");
-        };
-        assert_eq!(measurement.bounds, (time(2), time(3)));
-    });
-    choose_scope(&mut vcx, 5);
-    click_control(&mut vcx, "scope-marker-1");
-    click_control(&mut vcx, "scope-marker-2");
-    ws.read_with(&vcx, |ws, _| {
-        let Some(ComputationStatus::ReadyTable(rows)) = ws.app.derived_preview() else {
-            panic!("selected marker set did not preview");
-        };
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            (rows[0].start, rows[0].end, rows[0].bounds),
-            (Some(first), Some(third), (time(1), time(3)))
-        );
-    });
-    ws.update(&mut vcx, |ws, cx| {
-        assert!(ws.app.doc.remove_marker(third));
-        cx.notify();
-    });
-    click_control(&mut vcx, "scope-marker-2");
-    ws.read_with(&vcx, |ws, _| {
-        let Some(ComputationStatus::ReadyTable(rows)) = ws.app.derived_preview() else {
-            panic!("repaired marker set did not preview");
-        };
-        assert_eq!(rows.len(), 1);
-        assert_eq!(
-            (rows[0].start, rows[0].end, rows[0].bounds),
-            (Some(first), Some(second), (time(1), time(2)))
-        );
-    });
-    choose_scope(&mut vcx, 2);
-    let set_bound = |vcx: &mut VisualTestContext, selector, value: String| {
-        vcx.update(|window, cx| window.draw(cx).clear(cx));
-        let field = vcx.debug_bounds(selector).unwrap();
-        vcx.simulate_click(
-            gpui_kit::point(field.center().x, field.bottom() - px(10.0)),
-            Modifiers::default(),
-        );
-        vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
-            "cmd-a"
-        } else {
-            "ctrl-a"
-        });
-        vcx.simulate_input(&value);
-        vcx.simulate_keystrokes("enter");
-        vcx.run_until_parked();
-    };
-    let left = bounds.0 + (bounds.1 - bounds.0) / 4;
-    let right = bounds.0 + (bounds.1 - bounds.0) / 2;
-    set_bound(&mut vcx, "formula-scope-start", "invalid".into());
     click_control(&mut vcx, "derived-apply");
-    ws.read_with(&vcx, |ws, _| {
-        assert!(ws.app.derived_editor.is_some());
-        assert_eq!(ws.app.panels.focused_waves().unwrap().items().len(), 1);
-    });
-    set_bound(&mut vcx, "formula-scope-start", left.to_string());
-    set_bound(&mut vcx, "formula-scope-end", right.to_string());
-    click_control(&mut vcx, "derived-apply");
-    ws.read_with(&vcx, |ws, _| {
-        let source = &ws
-            .app
-            .panels
-            .focused_waves()
-            .unwrap()
-            .signal(1)
-            .unwrap()
-            .source;
+    ws.update(&mut vcx, |ws, _| {
+        assert!(ws.app.doc.remove_marker(marker));
+        let row = ws.app.panels.focused_waves().unwrap().signal(1).unwrap();
         let volna_core::computed::Operation::Formula { settings, .. } =
-            &source.computed().unwrap().operation;
+            &row.source.computed().unwrap().operation;
         assert_eq!(
             settings.scope,
             volna_core::computed::MeasurementScope::Explicit {
@@ -662,6 +574,7 @@ fn measurement_scope_controls_save_selected_markers_and_explicit_bounds(cx: &mut
         );
     });
 }
+
 // A user removes an input whose slice text is invalid; the remaining valid formula must resume its automatic preview.
 #[gpui_kit::test]
 fn removing_invalid_slice_resumes_preview(cx: &mut TestAppContext) {
@@ -694,7 +607,7 @@ fn removing_invalid_slice_resumes_preview(cx: &mut TestAppContext) {
             matches!(ws.app.derived_preview(), Some(ComputationStatus::Ready(_))),
             "remaining valid formula did not resume preview: error={:?}, stopped={}",
             editor.error,
-            editor.stopped
+            editor.stopped()
         );
     });
 }
@@ -779,26 +692,14 @@ fn recorded_picker_handles_large_scopes_and_superseded_queries(cx: &mut TestAppC
     });
 }
 
-fn choose_scope(vcx: &mut VisualTestContext, index: usize) {
-    click_control(vcx, "formula-scope");
-    for _ in 0..=index {
-        vcx.simulate_keystrokes("down");
-        vcx.run_until_parked();
-    }
-    vcx.simulate_keystrokes("enter");
-    vcx.run_until_parked();
-}
-
 // A user starts a moving average from a bound input, edits it, and applies it;
 // the preview must honor full-window warm-up and the saved formula must reopen.
 #[gpui_kit::test]
 fn moving_average_preset_previews_and_reopens_as_a_formula(cx: &mut TestAppContext) {
     let (ws, mut vcx) = formula_workspace(cx, vec![0]);
     vcx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(vcx.debug_bounds("operation-average").is_none());
-    assert!(vcx.debug_bounds("operation-formula").is_none());
     assert!(vcx.debug_bounds("formula-default-step").is_none());
-    assert!(vcx.debug_bounds("formula-scope").is_none());
+    assert!(vcx.debug_bounds("scope-start").is_none());
     click_control(&mut vcx, "preset-moving_avg");
     let field = vcx.debug_bounds("formula-expression").unwrap();
     vcx.simulate_click(field.center(), Modifiers::default());
@@ -820,7 +721,7 @@ fn moving_average_preset_previews_and_reopens_as_a_formula(cx: &mut TestAppConte
     click_control(&mut vcx, "derived-apply");
     vcx.simulate_keystrokes("shift-f10");
     vcx.run_until_parked();
-    click_control(&mut vcx, "wave-menu-derived");
+    click_control(&mut vcx, "wave-menu-edit-formula");
     ws.read_with(&vcx, |ws, _| {
         assert_eq!(
             ws.app.derived_editor.as_ref().unwrap().draft.formula,
@@ -872,7 +773,7 @@ fn aliases_insert_at_the_cursor_and_settings_follow_the_formula(cx: &mut TestApp
     click_control(&mut vcx, "preset-interval_mean");
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("formula-default-step").is_none());
-    assert!(vcx.debug_bounds("formula-scope").is_some());
+    assert!(vcx.debug_bounds("scope-start").is_some());
 }
 
 // A user creates a generator, removes its unused recorded binding, and edits the
@@ -895,7 +796,7 @@ fn generator_without_bindings_reopens_for_editing(cx: &mut TestAppContext) {
     click_control(&mut vcx, "derived-apply");
     vcx.simulate_keystrokes("shift-f10");
     vcx.run_until_parked();
-    click_control(&mut vcx, "wave-menu-derived");
+    click_control(&mut vcx, "wave-menu-edit-formula");
     ws.read_with(&vcx, |ws, _| {
         assert!(ws.app.derived_editor.as_ref().unwrap().bindings.is_empty());
         let Some(ComputationStatus::Ready(history)) = ws.app.derived_preview() else {
@@ -1162,7 +1063,7 @@ fn expression_actions_preserve_arithmetic_and_support_boolean_and_literal_values
     click_control(&mut vcx, "derived-apply");
     vcx.simulate_keystrokes("shift-f10");
     vcx.run_until_parked();
-    click_control(&mut vcx, "wave-menu-derived");
+    click_control(&mut vcx, "wave-menu-edit-formula");
     ws.read_with(&vcx, |ws, _| {
         let Some(ComputationStatus::ReadyMeasurement(value)) = ws.app.derived_preview() else {
             panic!("saved ratio mean did not reopen")
@@ -1284,8 +1185,7 @@ fn guide_replacements_keep_sampling_separate_from_measurement_operands(cx: &mut 
     });
 }
 
-// A user edits measurement bounds, leaves an unfinished bound, changes the value
-// expression, and chooses sampling. Neither the expression nor the invalid bound may be replaced by an older draft.
+// With only one boundary selected, a user can still edit the expression and sampling, then restore the second boundary.
 #[gpui_kit::test]
 fn sampling_preserves_expression_edits_while_measurement_bounds_are_invalid(
     cx: &mut TestAppContext,
@@ -1303,19 +1203,7 @@ fn sampling_preserves_expression_edits_while_measurement_bounds_are_invalid(
         .unwrap();
     let (ws, mut vcx) = formula_workspace_session(cx, session, vec![temperature]);
     click_control(&mut vcx, "preset-interval_mean");
-    choose_scope(&mut vcx, 2);
-    vcx.update(|window, cx| window.draw(cx).clear(cx));
-    let field = vcx.debug_bounds("formula-scope-start").unwrap();
-    vcx.simulate_click(
-        gpui_kit::point(field.center().x, field.bottom() - px(10.0)),
-        Modifiers::default(),
-    );
-    vcx.simulate_keystrokes(if cfg!(target_os = "macos") {
-        "cmd-a"
-    } else {
-        "ctrl-a"
-    });
-    vcx.simulate_input("unfinished");
+    click_control(&mut vcx, "scope-end");
     enter_formula(&mut vcx, "interval_mean(temperature_c + 7)");
     click_control(&mut vcx, "formula-sampling");
     click_control(&mut vcx, "choose-sampling-signal");
@@ -1327,10 +1215,11 @@ fn sampling_preserves_expression_edits_while_measurement_bounds_are_invalid(
         let expression = &ws.app.derived_editor.as_ref().unwrap().draft.formula;
         assert!(expression.contains("temperature_c + 7"), "{expression}");
         assert!(expression.contains("@data"), "{expression}");
+        assert!(ws.app.derived_preview().is_none());
     });
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("derived-error").is_some());
-    choose_scope(&mut vcx, 1);
+    click_control(&mut vcx, "scope-end");
     ws.read_with(&vcx, |ws, _| {
         assert!(matches!(
             ws.app.derived_preview(),
@@ -1339,7 +1228,7 @@ fn sampling_preserves_expression_edits_while_measurement_bounds_are_invalid(
     });
 }
 
-// A user narrows the window while deriving a signal. The inspector must remain
+// A user narrows the window while deriving a signal. The editor must remain
 // usable at 360 px, and closing it must restore the hierarchy without changing layout preferences.
 #[gpui_kit::test]
 fn a_narrow_formula_editor_temporarily_yields_the_hierarchy_space(cx: &mut TestAppContext) {
@@ -1359,4 +1248,120 @@ fn a_narrow_formula_editor_temporarily_yields_the_hierarchy_space(cx: &mut TestA
     click_control(&mut vcx, "derived-close");
     vcx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(vcx.debug_bounds("scopes-panel").is_some());
+}
+
+// Interrupt an unfinished formula to measure and pin a reading, then resume it and apply its original expression.
+#[gpui_kit::test]
+fn measure_pins_a_reading_and_returns_to_the_unapplied_formula(cx: &mut TestAppContext) {
+    let (ws, mut vcx) = formula_workspace(cx, vec![0]);
+    enter_formula(&mut vcx, "input * 0 + 9");
+    click_control(&mut vcx, "measure-signal");
+    assert!(vcx.debug_bounds("formula-expression").is_none());
+    click_control(&mut vcx, "preset-interval_max");
+    click_control(&mut vcx, "pin-reading");
+    click_control(&mut vcx, "derive-signal");
+    assert!(vcx.debug_bounds("formula-expression").is_some());
+    click_control(&mut vcx, "derived-apply");
+    ws.read_with(&vcx, |ws, _| {
+        let waves = ws.app.panels.focused_waves().unwrap();
+        assert_eq!(waves.pinned_readings.len(), 1);
+        assert_eq!(waves.items().len(), 2);
+        let history = waves.signal(1).unwrap().history.as_ref().unwrap();
+        assert_eq!(
+            history.value(history.index_at(0)),
+            volna_trace::data::WaveValue::Real(9.0)
+        );
+    });
+}
+
+// A user splits a measurement at a marker, tries dragging the fixed divider and collapses the preview,
+// then opens it again and commits the same interval rows.
+#[gpui_kit::test]
+fn measure_table_previews_the_intervals_before_commit(cx: &mut TestAppContext) {
+    let (ws, mut vcx) = formula_workspace(cx, vec![0]);
+    ws.update(&mut vcx, |ws, cx| {
+        ws.app.doc.add_marker(10).unwrap();
+        cx.notify();
+    });
+    click_control(&mut vcx, "measure-signal");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("measure-table-row-0").is_some());
+    assert!(vcx.debug_bounds("measure-table-row-10").is_none());
+    click_control(&mut vcx, "scope-marker-1");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("measure-table-row-10").is_some());
+    let pane = vcx.debug_bounds("measure-table-preview").unwrap();
+    let domain = vcx.debug_bounds("measure-output-domain").unwrap();
+    assert!((px(0.)..=px(16.)).contains(&(pane.top() - domain.bottom())));
+    let button = vcx.debug_bounds("derived-table").unwrap();
+    let start = gpui_kit::point(pane.center().x, pane.top() + px(1.));
+    let end = gpui_kit::point(start.x, start.y - px(55.));
+    let left = gpui_kit::MouseButton::Left;
+    vcx.simulate_mouse_down(start, left, Modifiers::default());
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    vcx.simulate_mouse_move(end, Some(left), Modifiers::default());
+    vcx.simulate_mouse_up(end, left, Modifiers::default());
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(vcx.debug_bounds("measure-table-preview").unwrap(), pane);
+    assert_eq!(vcx.debug_bounds("derived-table").unwrap(), button);
+    click_control(&mut vcx, "measure-table-toggle");
+    click_control(&mut vcx, "derived-close");
+    click_control(&mut vcx, "measure-signal");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(vcx.debug_bounds("measure-table-row-0").is_none());
+    click_control(&mut vcx, "measure-table-toggle");
+    click_control(&mut vcx, "scope-marker-1");
+    vcx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        vcx.debug_bounds("measure-table-preview")
+            .unwrap()
+            .size
+            .height,
+        pane.size.height
+    );
+    click_control(&mut vcx, "derived-table");
+    ws.read_with(&vcx, |ws, _| {
+        let table = ws
+            .app
+            .panels
+            .iter()
+            .find_map(|panel| panel.kind.table())
+            .unwrap();
+        assert_eq!(table.len(), 2);
+        assert_eq!((table.row_time(0), table.row_time(1)), (Some(0), Some(10)));
+    });
+}
+
+#[gpui_kit::test]
+fn resumed_measurement_formula_can_remove_a_saved_boundary(cx: &mut TestAppContext) {
+    let (ws, mut vcx) = formula_workspace(cx, vec![0]);
+    ws.update(&mut vcx, |ws, cx| {
+        ws.app.doc.add_marker(10).unwrap();
+        ws.app.doc.add_marker(20).unwrap();
+        cx.notify();
+    });
+    enter_formula(&mut vcx, "interval_max(3)");
+    click_control(&mut vcx, "scope-marker-1");
+    click_control(&mut vcx, "derived-apply");
+    vcx.simulate_keystrokes("shift-f10");
+    vcx.run_until_parked();
+    click_control(&mut vcx, "wave-menu-edit-formula");
+    click_control(&mut vcx, "scope-marker-2");
+    ws.update(&mut vcx, |ws, cx| {
+        let panel = ws.app.panels.focused_id();
+        ws.dispatch(
+            Command::Derived(panel, DerivedCommand::Measure(0)),
+            None,
+            cx,
+        );
+    });
+    vcx.run_until_parked();
+    click_control(&mut vcx, "derive-signal");
+    click_control(&mut vcx, "scope-tick-10");
+    click_control(&mut vcx, "derived-table");
+    ws.read_with(&vcx, |ws, _| {
+        let table = ws.app.panels.iter().find_map(|p| p.kind.table()).unwrap();
+        assert_eq!(table.len(), 2);
+        assert_eq!((table.row_time(0), table.row_time(1)), (Some(0), Some(20)));
+    });
 }

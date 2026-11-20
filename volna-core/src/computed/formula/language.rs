@@ -23,8 +23,15 @@ pub const FUNCTIONS: &[(&str, &str)] = &[
     ("interval_integral", "interval_integral(x)"),
     ("interval_min", "interval_min(x)"),
     ("interval_max", "interval_max(x)"),
+    ("sample_mean", "sample_mean(captured_waveform)"),
+    ("sample_min", "sample_min(captured_waveform)"),
+    ("sample_max", "sample_max(captured_waveform)"),
     ("interval_sum", "interval_sum(captured_waveform)"),
 ];
+
+pub(crate) fn is_function(name: &str) -> bool {
+    FUNCTIONS.iter().any(|(function, _)| *function == name)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -146,6 +153,9 @@ impl Syntax {
             self.token_text(index),
             Some(
                 "interval_mean"
+                    | "sample_mean"
+                    | "sample_min"
+                    | "sample_max"
                     | "interval_sum"
                     | "interval_integral"
                     | "interval_min"
@@ -288,7 +298,7 @@ fn scan(expression: &str) -> Vec<SyntaxToken> {
                 at += 1;
             }
             let word = &expression[start..at];
-            if FUNCTIONS.iter().any(|(name, _)| *name == word) {
+            if expression[at..].trim_start().starts_with('(') && is_function(word) {
                 TokenKind::Function
             } else if matches!(word, "true" | "false" | "posedge") {
                 TokenKind::Keyword

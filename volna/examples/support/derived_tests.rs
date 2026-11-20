@@ -44,7 +44,7 @@ fn scalar(app: &App, name: &str) -> f64 {
         panic!("{name} is not a measurement");
     };
     assert_eq!(value.status, MeasurementStatus::Complete, "{name}");
-    assert_eq!(value.coverage(), 1.0, "{name}");
+    assert_eq!(value.support.coverage(), Some(1.0), "{name}");
     value.value.unwrap()
 }
 
@@ -239,7 +239,7 @@ fn gpu_metrics_count_all_source_windows_and_preserve_bandwidth() -> Result<()> {
     let Some(MeasurementResult::Scalar(value)) = &requests.measurement else {
         unreachable!()
     };
-    assert_eq!(value.captures.unwrap().total, 64);
+    assert_eq!(value.support.captures().unwrap().total, 64);
     Ok(())
 }
 

@@ -41,8 +41,23 @@ the sensors do not measure the GPU experiment.
 
 Each wave tab has its own zoom and cursor. The first opens at 48 clocks so that
 handshakes remain readable; the other two show the whole recording. Formula rows
-use the shared cyan tint. Open any formula row with **Derive** to inspect or edit
-its expression and bindings.
+use the shared cyan tint. Choose **Edit formula…** in a formula row’s menu to edit its existing definition.
+Choose **Derive** to use selected rows as inputs to a new formula. The draft
+appears directly after the last selected input. During an edit it occupies the
+saved row. **Cancel** restores the saved waveform. Right-click another waveform
+and choose **Bind to open formula** to add it to the expression editor.
+
+Choose **Measure** with one waveform selected for a time-weighted mean over the full input range.
+Start and End are selected initially. Select a marker to split the range, or
+deselect an endpoint to trim it. Each adjacent pair of selected times gives
+one reading. **Table preview** shows the rows that **Add to table** will save.
+Click the preview heading to collapse or expand the table.
+Adding the result to a waveform or table saves the timestamps,
+so moving or deleting markers later leaves the saved intervals intact. Choose a sampling signal to enable sample mean, extrema, and sum.
+Sample statistics count each capture in the half-open interval, including
+repeated values. **Pin reading** keeps the value and bounds in this Waves panel
+for the session. **Use bounds** measures the current expression over that same
+interval. **Resume formula** returns to a draft interrupted by Measure.
 
 **Sampling** offers `stream.clk` rising edges as the trace default and
 `stats.sample_number` value changes as another saved choice. Saved formulas carry

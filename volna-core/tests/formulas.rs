@@ -120,6 +120,22 @@ fn take_derived(app: &mut App) -> LoadRequest {
     }
     panic!("derived work was not scheduled");
 }
+fn select_marker_boundaries(app: &mut App) {
+    use volna_core::computed::{Boundary, MeasurementScope};
+    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
+    let boundaries = [Boundary::Start, Boundary::End]
+        .into_iter()
+        .chain(
+            app.doc
+                .markers()
+                .iter()
+                .map(|marker| Boundary::Marker(marker.id)),
+        )
+        .collect();
+    draft.scope = MeasurementScope::Selected { boundaries };
+    command(app, Derive::Update(draft));
+}
+
 fn formula(app: &mut App, expression: &str) {
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = "result".into();
@@ -208,7 +224,7 @@ fn rename_draft(app: &mut App, name: &str) {
 #[test]
 fn one_two_and_three_recorded_inputs_follow_the_union_of_events() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "abs(-a) * 2 + 1");
     assert_eq!(number(preview(&app), 0), Some(5.0));
     assert_eq!(number(preview(&app), 7), None);
@@ -244,7 +260,7 @@ fn one_two_and_three_recorded_inputs_follow_the_union_of_events() {
 #[test]
 fn boolean_outputs_use_three_valued_logic_and_explicit_numeric_casts() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 3);
     add(&mut app, 4);
     command(&mut app, Derive::RemoveInput(0));
@@ -294,7 +310,7 @@ fn boolean_outputs_use_three_valued_logic_and_explicit_numeric_casts() {
 fn formulas_edit_cancel_undo_and_restore_with_hidden_inputs() {
     let (_file, mut app) = fixture();
     let undo = app.history.undo_steps().count();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 1);
     formula(&mut app, "a / b");
     assert_eq!(number(preview(&app), 5), None);
@@ -302,11 +318,11 @@ fn formulas_edit_cancel_undo_and_restore_with_hidden_inputs() {
     assert!(app.derived_editor.is_none());
     assert_eq!(app.history.undo_steps().count(), undo + 1);
     assert_eq!(number(result(&app), 3), Some(2.0));
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     formula(&mut app, "min(a,b)");
     command(&mut app, Derive::Close);
     assert_eq!(number(result(&app), 3), Some(2.0));
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     formula(&mut app, "max(a,b)");
     command(&mut app, Derive::Apply);
     assert_eq!(number(result(&app), 3), Some(8.0));
@@ -323,7 +339,7 @@ fn formulas_edit_cancel_undo_and_restore_with_hidden_inputs() {
     restore(&mut app, &bytes);
     assert_eq!(number(result(&app), 3), Some(8.0));
     assert_eq!(saved(&app), bytes);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Edit(0));
     assert_eq!(app.derived_editor.as_ref().unwrap().bindings.len(), 2);
 }
 
@@ -331,7 +347,7 @@ fn formulas_edit_cancel_undo_and_restore_with_hidden_inputs() {
 #[test]
 fn missing_inputs_are_preserved_until_explicitly_rebound() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 1);
     formula(&mut app, "a-b");
     command(&mut app, Derive::Apply);
@@ -342,7 +358,7 @@ fn missing_inputs_are_preserved_until_explicitly_rebound() {
     let row = app.panels.focused_waves().unwrap().signal(1).unwrap();
     assert!(row.history.is_none());
     assert!(row.error.as_ref().unwrap().contains("missing or ambiguous"));
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     assert!(app.derived_editor.is_some());
     assert!(app.derived_editor.as_ref().unwrap().error.is_some());
     command(&mut app, Derive::Rebind(1, Traced::new(TraceId::A, 1)));
@@ -359,7 +375,7 @@ fn missing_inputs_are_preserved_until_explicitly_rebound() {
     missing_trace["path"] = serde_json::json!("missing.vtr");
     data["traces"].as_array_mut().unwrap().push(missing_trace);
     restore(&mut app, &serde_json::to_vec(&data).unwrap());
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     assert!(app.derived_editor.is_some());
     command(&mut app, Derive::Rebind(1, Traced::new(TraceId::A, 1)));
     command(&mut app, Derive::Preview);
@@ -372,7 +388,7 @@ fn missing_inputs_are_preserved_until_explicitly_rebound() {
 #[test]
 fn edited_and_rebound_formulas_reject_late_results() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     pump(&mut app);
     add(&mut app, 1);
     formula(&mut app, "a");
@@ -414,7 +430,7 @@ fn edited_and_rebound_formulas_reject_late_results() {
 #[test]
 fn numeric_interpretations_slices_and_ieee_inputs_are_captured() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 5);
     add(&mut app, 6);
     command(&mut app, Derive::RemoveInput(0));
@@ -443,7 +459,7 @@ fn numeric_interpretations_slices_and_ieee_inputs_are_captured() {
     let bytes = saved(&app);
     restore(&mut app, &bytes);
     assert_eq!(number(result(&app), 0), Some(0.0));
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     command(
         &mut app,
         Derive::SetInput {
@@ -532,7 +548,7 @@ fn signed_vectors_preserve_values_in_analog_and_formula_inputs() {
             );
         }
 
-        command(&mut app, Derive::Open(Some(0)));
+        command(&mut app, Derive::Create(Some(0)));
         for slice in [String::new(), format!("{}:0", width - 2)] {
             command(
                 &mut app,
@@ -563,7 +579,7 @@ fn signed_vectors_preserve_values_in_analog_and_formula_inputs() {
 #[test]
 fn invalid_and_oversized_formulas_recover_without_applying_old_results() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     for expression in [
         "a +",
         "a && true",
@@ -599,7 +615,7 @@ fn selection_seeds_inputs_and_cross_trace_formulas_stop_at_the_shorter_recording
     app.handle(Command::AddVars(a_all([1, 2])));
     pump(&mut app);
     app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([0, 1, 2]);
-    command(&mut app, Derive::Open(None));
+    command(&mut app, Derive::Create(None));
     formula(&mut app, "(a+b+c)/3");
     assert_eq!(number(preview(&app), 3), Some(6.0));
     command(&mut app, Derive::Close);
@@ -625,7 +641,7 @@ fn selection_seeds_inputs_and_cross_trace_formulas_stop_at_the_shorter_recording
         .unwrap();
     pump(&mut app);
     app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([0]);
-    command(&mut app, Derive::Open(None));
+    command(&mut app, Derive::Create(None));
     command(&mut app, Derive::AddInput(Traced::new(trace, 0)));
     formula(&mut app, "a - a_2");
     let h = preview(&app);
@@ -644,7 +660,7 @@ fn selection_seeds_inputs_and_cross_trace_formulas_stop_at_the_shorter_recording
     app.handle(Command::Undo);
     pump(&mut app);
     assert_eq!(number(result(&app), 6), Some(-22.0));
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     app.handle(Command::RemoveTrace(trace));
     pump(&mut app);
     assert!(app.derived_editor.is_none());
@@ -677,7 +693,7 @@ fn ambiguous_paths_require_repair_and_valid_ordinals_survive_restore() {
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
     app.handle(Command::AddVars(a_all([0])));
     pump(&mut app);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 1);
     formula(&mut app, "same_2 - same");
     assert_eq!(number(preview(&app), 0), Some(5.0));
@@ -696,7 +712,7 @@ fn ambiguous_paths_require_repair_and_valid_ordinals_survive_restore() {
     let row = app.panels.focused_waves().unwrap().signal(1).unwrap();
     assert!(row.history.is_none());
     assert!(row.error.as_ref().unwrap().contains("missing or ambiguous"));
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     command(&mut app, Derive::Rebind(1, Traced::new(TraceId::A, 1)));
     command(&mut app, Derive::Preview);
     pump(&mut app);
@@ -708,7 +724,7 @@ fn ambiguous_paths_require_repair_and_valid_ordinals_survive_restore() {
 fn formula_memory_admission_failure_is_recoverable() {
     use volna_trace::remote::memory::MemoryBudget;
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     pump(&mut app);
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.formula = "a+1".into();
@@ -803,7 +819,7 @@ fn oversized_event_output_is_refused_and_releases_its_reservation() {
 #[test]
 fn saved_formula_domain_follows_current_recording() {
     let (_original, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a");
     command(&mut app, Derive::Apply);
     let bytes = saved(&app);
@@ -839,7 +855,7 @@ fn saved_formula_domain_follows_current_recording() {
 #[test]
 fn invalid_slice_text_prevents_apply_and_removal_recovers() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 5);
     formula(&mut app, "a+1");
     command(
@@ -923,7 +939,7 @@ fn synchronized_inputs_admit_intermediate_storage_and_release_it_on_close() {
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
     app.handle(Command::AddVars(a_all([0])));
     pump(&mut app);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 1);
     add(&mut app, 2);
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
@@ -952,7 +968,7 @@ fn synchronized_inputs_admit_intermediate_storage_and_release_it_on_close() {
 #[test]
 fn unchanged_formula_values_do_not_create_transitions_or_hide_gaps() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 1);
     formula(&mut app, "a >= 0");
     let h = preview(&app);
@@ -1003,7 +1019,7 @@ fn fields_from_one_bus_keep_independent_float_and_signed_interpretations() {
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
     app.handle(Command::AddVars(a_all([0])));
     pump(&mut app);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 0);
     command(
         &mut app,
@@ -1069,7 +1085,7 @@ fn real_formula_transitions_preserve_signed_zero() {
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
     app.handle(Command::AddVars(a_all([0])));
     pump(&mut app);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a");
     let h = preview(&app);
     assert_eq!(number(h, 0).unwrap().to_bits(), 0.0_f64.to_bits());
@@ -1084,10 +1100,10 @@ fn real_formula_transitions_preserve_signed_zero() {
 #[test]
 fn rebinding_a_saved_formula_changes_its_output_type() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a");
     command(&mut app, Derive::Apply);
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     command(&mut app, Derive::Rebind(0, Traced::new(TraceId::A, 3)));
     command(&mut app, Derive::Preview);
     pump(&mut app);
@@ -1119,7 +1135,7 @@ fn rebinding_a_saved_formula_changes_its_output_type() {
 #[test]
 fn temporal_formulas_and_captures_work_through_the_application() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(
         &mut app,
         "moving_avg(a, 4 ns, step: 2 ns, warmup: \"available\", unknown: \"skip\")",
@@ -1128,7 +1144,7 @@ fn temporal_formulas_and_captures_work_through_the_application() {
     command(&mut app, Derive::Apply);
     assert_eq!(number(result(&app), 4), Some(3.5));
 
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 4);
     formula(&mut app, "a + 1 @posedge ready");
     assert_eq!(preview(&app).capture_times(), Some(&[2][..]));
@@ -1145,7 +1161,7 @@ fn temporal_formulas_and_captures_work_through_the_application() {
 #[test]
 fn generator_formulas_need_no_recorded_inputs_and_restore_their_step() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     command(&mut app, Derive::RemoveInput(0));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = "generated".into();
@@ -1177,7 +1193,7 @@ fn generator_formulas_need_no_recorded_inputs_and_restore_their_step() {
 #[test]
 fn measurements_apply_restore_and_preserve_marker_intervals() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     command(&mut app, Derive::Rebind(0, Traced::new(TraceId::A, 4)));
     formula(&mut app, "interval_mean(real(a))");
     let Some(ComputationStatus::ReadyMeasurement(measurement)) = app.derived_preview() else {
@@ -1202,10 +1218,15 @@ fn measurements_apply_restore_and_preserve_marker_intervals() {
     for time in [0, 2, 7, 10] {
         app.doc.add_marker(time).unwrap();
     }
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.scope = volna_core::computed::MeasurementScope::MarkerSet {
-        markers: app.doc.markers().iter().map(|marker| marker.id).collect(),
+    draft.scope = volna_core::computed::MeasurementScope::Selected {
+        boundaries: app
+            .doc
+            .markers()
+            .iter()
+            .map(|marker| volna_core::computed::Boundary::Marker(marker.id))
+            .collect(),
     };
     command(&mut app, Derive::Update(draft));
     command(&mut app, Derive::Preview);
@@ -1214,9 +1235,9 @@ fn measurements_apply_restore_and_preserve_marker_intervals() {
         panic!("marker table preview did not complete");
     };
     assert_eq!(rows.len(), 3);
-    assert_eq!(rows[0].result.as_ref().unwrap().value, Some(0.0));
-    assert_eq!(rows[1].result.as_ref().unwrap().value, Some(1.0));
-    assert_eq!(rows[2].result.as_ref().unwrap().value, Some(0.0));
+    assert_eq!(rows[0].value, Some(0.0));
+    assert_eq!(rows[1].value, Some(1.0));
+    assert_eq!(rows[2].value, Some(0.0));
     command(&mut app, Derive::Apply);
     let second = app.doc.markers()[1].id;
     app.doc.shared.cursor = Some(3);
@@ -1227,14 +1248,14 @@ fn measurements_apply_restore_and_preserve_marker_intervals() {
         panic!("saved marker table did not recompute");
     };
     assert_eq!(app.doc.markers()[1].time, 3);
-    assert_eq!(rows[0].result.as_ref().unwrap().value, Some(0.0));
+    assert_eq!(rows[0].value, Some(0.0));
     let bytes = saved(&app);
     restore(&mut app, &bytes);
     let row = app.panels.focused_waves().unwrap().signal(1).unwrap();
     let Some(volna_core::computed::MeasurementResult::Table(rows)) = &row.measurement else {
         panic!("restored marker table did not recompute");
     };
-    assert_eq!(rows[0].result.as_ref().unwrap().value, Some(0.0));
+    assert_eq!(rows[0].value, Some(0.0));
 }
 
 // A user plots interval maxima across markers, including recording edges, then moves a marker and reopens the workspace.
@@ -1243,7 +1264,11 @@ fn interval_max_plots_marker_partitions_and_unknown_gaps() {
     let (_file, mut app) = fixture();
     let first = app.doc.add_marker(3).unwrap();
     app.doc.add_marker(8).unwrap();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
+    select_marker_boundaries(&mut app);
+    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
+    draft.skip_unknown = false;
+    command(&mut app, Derive::Update(draft));
     formula(&mut app, "interval_max(a)");
     command(&mut app, Derive::Apply);
     let assert_plot = |app: &App, first_max| {
@@ -1280,10 +1305,7 @@ fn interval_max_plots_marker_partitions_and_unknown_gaps() {
 #[test]
 fn interval_preview_follows_marker_edits_until_apply() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
-    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.skip_unknown = true;
-    command(&mut app, Derive::Update(draft));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "interval_max(a)");
     assert!(matches!(
         app.derived_preview(),
@@ -1291,13 +1313,15 @@ fn interval_preview_follows_marker_edits_until_apply() {
     ));
     let first = app.doc.add_marker(3).unwrap();
     let second = app.doc.add_marker(8).unwrap();
+    select_marker_boundaries(&mut app);
+    command(&mut app, Derive::Preview);
     pump(&mut app);
     let intervals = |app: &App| {
         let Some(ComputationStatus::ReadyTable(rows)) = app.derived_preview() else {
             panic!("interval preview is not ready")
         };
         rows.iter()
-            .map(|row| (row.bounds, row.result.as_ref().unwrap().value))
+            .map(|row| (row.bounds, row.value))
             .collect::<Vec<_>>()
     };
     assert_eq!(
@@ -1320,6 +1344,18 @@ fn interval_preview_follows_marker_edits_until_apply() {
         ]
     );
     assert!(app.doc.remove_marker(second));
+    pump(&mut app);
+    assert!(
+        app.derived_editor
+            .as_ref()
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("removed marker")
+    );
+    select_marker_boundaries(&mut app);
+    command(&mut app, Derive::Preview);
     pump(&mut app);
     assert_eq!(
         intervals(&app),
@@ -1344,15 +1380,92 @@ fn interval_preview_follows_marker_edits_until_apply() {
     assert_eq!(number(history, 6), Some(10.0));
 }
 
+// Select Start and a marker at the same tick, then move the marker. The reading should recover as soon as the interval has positive duration.
+#[test]
+fn moving_a_coincident_marker_recovers_the_measurement() {
+    use volna_core::computed::{Boundary, MeasurementScope};
+    let (_file, mut app) = fixture();
+    let marker = app.doc.add_marker(0).unwrap();
+    command(&mut app, Derive::Measure(0));
+    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
+    draft.scope = MeasurementScope::Selected {
+        boundaries: vec![Boundary::Start, Boundary::Marker(marker)],
+    };
+    command(&mut app, Derive::Update(draft));
+    command(&mut app, Derive::Preview);
+    pump(&mut app);
+    assert!(app.derived_preview().is_none());
+
+    app.doc.shared.cursor = Some(5);
+    app.handle(Command::Action(Action::SetMarker(marker)));
+    pump(&mut app);
+    assert!(matches!(
+        app.derived_preview(),
+        Some(ComputationStatus::ReadyMeasurement(reading)) if reading.bounds == (0, 5)
+    ));
+}
+
+// Interrupt an edit with Measure, add an unrelated signal, and apply the measurement above the formula. The resumed draft should update its original row.
+#[test]
+fn a_suspended_formula_follows_row_insertions() {
+    let (_file, mut app) = fixture();
+    app.handle(Command::AddVars(a_all([1])));
+    command(&mut app, Derive::Create(Some(1)));
+    formula(&mut app, "b * 0 + 9");
+    command(&mut app, Derive::Apply);
+    command(&mut app, Derive::Edit(2));
+    formula(&mut app, "b * 0 + 11");
+
+    command(&mut app, Derive::Measure(0));
+    app.handle(Command::AddVars(a_all([2])));
+    pump(&mut app);
+    command(&mut app, Derive::Apply);
+    pump(&mut app);
+    assert_eq!(number(preview(&app), 0), Some(11.0));
+    command(&mut app, Derive::Apply);
+    pump(&mut app);
+
+    let waves = app.panels.focused_waves().unwrap();
+    let names: Vec<_> = waves.items().iter().map(|row| row.name()).collect();
+    assert_eq!(names, ["a", "a measurement", "b", "result", "c"]);
+    assert_eq!(number(named_result(&app, "result"), 0), Some(11.0));
+}
+
+// Opening a workspace with a version-23 Waves panel preserves the workspace and marks the older panel unsupported.
+#[test]
+fn a_workspace_with_a_retired_measurement_scope_still_opens() {
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Measure(0));
+    pump(&mut app);
+    command(&mut app, Derive::Apply);
+    let mut snapshot: serde_json::Value = serde_json::from_slice(&saved(&app)).unwrap();
+    let waves = snapshot["panels"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|panel| panel["kind"] == "waves")
+        .unwrap();
+    waves["version"] = 23.into();
+    waves["rows"][1]["computed"]["definition"]["operation"]["settings"]["scope"] =
+        serde_json::json!({"kind": "marker_intervals"});
+    restore(&mut app, &serde_json::to_vec(&snapshot).unwrap());
+    assert!(
+        app.panels
+            .iter()
+            .any(|panel| matches!(panel.kind, volna_core::panels::PanelKind::Unsupported(_)))
+    );
+}
+
 // A user adds a clock row while editing, binds it, and sees the sampled interval result in the live waveform preview before applying.
 #[test]
 fn preview_remains_visible_when_rows_are_added_during_editing() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     app.handle(Command::AddVars(a_all([4])));
     pump(&mut app);
     add(&mut app, 4);
     app.doc.add_marker(3).unwrap();
+    select_marker_boundaries(&mut app);
     formula(&mut app, "interval_sum(a @posedge ready)");
     let panel = app.panels.focused_id();
     let theme = volna_core::Theme::one_dark();
@@ -1379,7 +1492,7 @@ fn deleting_rows_keeps_the_correct_preview_target() {
     let (_file, mut app) = fixture();
     app.handle(Command::AddVars(a_all([1])));
     pump(&mut app);
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Create(Some(1)));
     formula(&mut app, "b + 1");
     app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([0]);
     app.handle(Command::Action(Action::RemoveSelected));
@@ -1387,7 +1500,7 @@ fn deleting_rows_keeps_the_correct_preview_target() {
     command(&mut app, Derive::Apply);
     assert!(app.derived_editor.is_none());
     assert_eq!(number(named_result(&app, "result"), 0), Some(2.0));
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([1]);
     app.handle(Command::Action(Action::RemoveSelected));
     pump(&mut app);
@@ -1409,7 +1522,8 @@ fn interval_statistics_open_in_a_persistent_table() {
     let (_file, mut app) = fixture();
     app.doc.add_marker(3).unwrap();
     app.doc.add_marker(8).unwrap();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
+    select_marker_boundaries(&mut app);
     formula(&mut app, "interval_max(a)");
     command(&mut app, Derive::ApplyTable);
     pump(&mut app);
@@ -1465,18 +1579,18 @@ fn interval_statistics_open_in_a_persistent_table() {
 #[test]
 fn applied_formula_bindings_follow_identity_and_live_revisions() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a + 1");
     command(&mut app, Derive::Apply);
     app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([0, 1]);
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Create(Some(1)));
     formula(&mut app, "a + result * 2");
     assert_eq!(number(preview(&app), 0), Some(8.0));
     rename_draft(&mut app, "dependent");
     command(&mut app, Derive::Apply);
     assert_eq!(number(named_result(&app, "dependent"), 0), Some(8.0));
 
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = "renamed_source".into();
     draft.formula = "a * 2".into();
@@ -1496,11 +1610,11 @@ fn applied_formula_bindings_follow_identity_and_live_revisions() {
 #[test]
 fn removing_an_applied_formula_row_preserves_dependents() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a + 1");
     command(&mut app, Derive::Apply);
     app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([0, 1]);
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Create(Some(1)));
     formula(&mut app, "result * 3");
     rename_draft(&mut app, "dependent");
     command(&mut app, Derive::Apply);
@@ -1535,18 +1649,18 @@ fn removing_an_applied_formula_row_preserves_dependents() {
 #[test]
 fn applied_captured_formulas_retain_capture_metadata() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 4);
     formula(&mut app, "a @posedge ready");
     command(&mut app, Derive::Apply);
     app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([0, 1]);
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Create(Some(1)));
     formula(&mut app, "interval_sum(result)");
     let Some(ComputationStatus::ReadyMeasurement(measurement)) = app.derived_preview() else {
         panic!("applied capture measurement did not complete");
     };
     assert_eq!(measurement.value, Some(2.0));
-    assert_eq!(measurement.captures.unwrap().total, 1);
+    assert_eq!(measurement.support.captures().unwrap().total, 1);
     command(&mut app, Derive::Apply);
     let row = app.panels.focused_waves().unwrap().signal(2).unwrap();
     assert!(row.measurement.is_some());
@@ -1556,46 +1670,18 @@ fn applied_captured_formulas_retain_capture_metadata() {
 #[test]
 fn formula_cycles_are_rejected_with_the_complete_path() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a + 1");
     command(&mut app, Derive::Apply);
     app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([0, 1]);
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Create(Some(1)));
     formula(&mut app, "result + a");
     rename_draft(&mut app, "dependent");
     command(&mut app, Derive::Apply);
 
-    let second = app
-        .panels
-        .focused_waves()
-        .unwrap()
-        .items()
-        .iter()
-        .find_map(|entry| entry.signal().filter(|signal| signal.name == "dependent"))
-        .unwrap();
-    let second_definition = second.source.computed().unwrap().clone();
-    let second_inputs = match &second.source {
-        volna_core::wave::model::RowSource::Computed { inputs, .. } => inputs.clone(),
-        _ => unreachable!(),
-    };
-    command(&mut app, Derive::Open(Some(1)));
-    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
-    draft.formula = "second + a".into();
-    command(&mut app, Derive::Update(draft));
-    command(&mut app, Derive::AddInput(Traced::new(TraceId::A, 1)));
-    let second_binding = app.derived_editor.as_ref().unwrap().bindings[1].clone();
-    command(&mut app, Derive::RemoveInput(1));
-    let mut bindings = app.derived_editor.as_ref().unwrap().bindings.clone();
-    bindings.push(volna_core::computed::InputDraft {
-        alias: "second".into(),
-        source: volna_core::wave::model::RowSource::Computed {
-            inputs: second_inputs,
-            definition: second_definition,
-        },
-        ..second_binding
-    });
-    app.derived_editor.as_mut().unwrap().bindings = bindings;
-    command(&mut app, Derive::Preview);
+    command(&mut app, Derive::Edit(1));
+    command(&mut app, Derive::BindRow(2));
+    formula(&mut app, "dependent + a");
     let error = app
         .derived_editor
         .as_ref()
@@ -1609,13 +1695,15 @@ fn formula_cycles_are_rejected_with_the_complete_path() {
         app.derived_editor.as_ref().unwrap().bindings
     );
     assert!(error.contains("->"), "{error}");
+    command(&mut app, Derive::Apply);
+    assert_eq!(number(named_result(&app, "result"), 0), Some(3.0));
 }
 
 // A user restores a formula with an unused missing binding; only referenced sources are required for domain resolution and evaluation.
 #[test]
 fn unused_missing_bindings_do_not_block_evaluation() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 1);
     formula(&mut app, "a + 1");
     command(&mut app, Derive::Apply);
@@ -1632,12 +1720,12 @@ fn unused_missing_bindings_do_not_block_evaluation() {
 #[test]
 fn new_formulas_after_restore_allocate_fresh_identities() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a + 1");
     command(&mut app, Derive::Apply);
     let bytes = saved(&app);
     restore(&mut app, &bytes);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a * 3");
     rename_draft(&mut app, "second");
     command(&mut app, Derive::Apply);
@@ -1665,7 +1753,7 @@ fn new_formulas_after_restore_allocate_fresh_identities() {
 fn interval_measurements_admit_scratch_and_recover_after_refusal() {
     use volna_trace::remote::memory::MemoryBudget;
     let (_file, mut app) = fixture_with_end(100_000);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.formula = "interval_sum(a @ 1 ns)".into();
     draft.skip_unknown = true;
@@ -1687,7 +1775,7 @@ fn interval_measurements_admit_scratch_and_recover_after_refusal() {
         panic!("measurement did not recover after increasing the budget");
     };
     assert_eq!(value.value, Some(999_958.0));
-    assert_eq!(value.captures.unwrap().total, 100_000);
+    assert_eq!(value.support.captures().unwrap().total, 100_000);
     assert_eq!(budget.used(), 0);
 }
 
@@ -1697,7 +1785,7 @@ fn interval_table_enforces_one_work_limit_for_the_request() {
     use volna_core::computed::MeasurementScope;
     use volna_trace::remote::memory::MemoryBudget;
     let (_file, mut app) = fixture_with_end(100_000);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     let mut expression = "interval_max(a)".to_owned();
     for _ in 0..6 {
@@ -1725,7 +1813,7 @@ fn interval_table_enforces_one_work_limit_for_the_request() {
 #[test]
 fn waveform_table_preserves_the_terminal_sample_after_restore() {
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     command(&mut app, Derive::RemoveInput(0));
     formula(&mut app, "clock(period: 4 ns, high: 2 ns)");
     assert_eq!(preview(&app).time(5), 10);
@@ -1765,7 +1853,8 @@ fn interval_preview_retains_only_result_storage_until_closed() {
     let (_file, mut app) = fixture_with_end(100_000);
     app.doc.add_marker(3).unwrap();
     app.doc.add_marker(8).unwrap();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
+    select_marker_boundaries(&mut app);
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.formula = "interval_sum(a @ 1 ns)".into();
     draft.skip_unknown = true;
@@ -1776,10 +1865,7 @@ fn interval_preview_retains_only_result_storage_until_closed() {
     let Some(ComputationStatus::ReadyTable(rows)) = app.derived_preview() else {
         panic!("interval preview did not complete");
     };
-    let values: Vec<_> = rows
-        .iter()
-        .map(|row| row.result.as_ref().unwrap().value)
-        .collect();
+    let values: Vec<_> = rows.iter().map(|row| row.value).collect();
     assert_eq!(values, [Some(6.0), Some(32.0), Some(999_920.0)]);
     assert!(budget.used() > 0);
     command(&mut app, Derive::Close);
@@ -1792,7 +1878,7 @@ fn interval_preview_retains_only_result_storage_until_closed() {
 fn scientific_literals_share_editor_tokens_and_evaluation() {
     use volna_core::computed::language::{self, TokenKind};
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     let expression = "2e-3 + .5";
     let syntax = language::Syntax::new(expression);
     let tokens = syntax.tokens();
@@ -1860,7 +1946,7 @@ fn sampling_defaults_preserve_saved_measurements_and_survive_reopening() {
         .action
         .clone();
     app.handle(Command::MenuSelect(panel, action));
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     let expression = app.derived_editor.as_ref().unwrap().draft.formula.clone();
     formula(&mut app, &format!("interval_sum({expression})"));
     let Some(ComputationStatus::ReadyMeasurement(measurement)) = app.derived_preview() else {
@@ -1878,7 +1964,7 @@ fn sampling_defaults_preserve_saved_measurements_and_survive_reopening() {
         Traced::new(TraceId::A, 5),
         SamplingMode::ValueChanges,
     )));
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     pump(&mut app);
     assert_eq!(preview(&app).capture_times(), Some([2].as_slice()));
     command(&mut app, Derive::Close);
@@ -1898,7 +1984,7 @@ fn sampling_defaults_preserve_saved_measurements_and_survive_reopening() {
         panic!("saved measurement unavailable")
     };
     assert_eq!(value.value, Some(2.0));
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     pump(&mut app);
     assert_eq!(preview(&app).capture_times(), Some([3].as_slice()));
     assert_eq!(number(preview(&app), 3), Some(8.0));
@@ -1916,7 +2002,7 @@ fn sampling_defaults_preserve_saved_measurements_and_survive_reopening() {
 fn sampling_picker_updates_measurements_without_changing_their_meaning() {
     use volna_core::sampling::SamplingMode;
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "interval_sum(a + 1)");
     command(
         &mut app,
@@ -2005,12 +2091,12 @@ fn removing_sampling_choices_changes_only_new_formula_defaults() {
         SamplingMode::ValueChanges,
     )));
     app.handle(Command::Sampling(SamplingCommand::Remove(clock)));
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     pump(&mut app);
     assert_eq!(preview(&app).capture_times(), Some([3].as_slice()));
     command(&mut app, Derive::Close);
     app.handle(Command::Sampling(SamplingCommand::Remove(counter)));
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     pump(&mut app);
     assert!(preview(&app).capture_times().is_none());
     assert_eq!(number(preview(&app), 0), Some(2.0));
@@ -2060,7 +2146,7 @@ fn counter_sampling_preserves_exact_transitions_above_float_precision() {
     let mut app = App::new();
     app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
     app.handle(Command::AddVars(a_all([0])));
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     command(
         &mut app,
         Derive::Sample {
@@ -2088,7 +2174,7 @@ fn counter_sampling_preserves_exact_transitions_above_float_precision() {
 fn input_change_sampling_restores_updates_from_each_operand() {
     use volna_core::sampling::SamplingMode;
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 1);
     formula(&mut app, "a + b");
     command(
@@ -2111,7 +2197,7 @@ fn input_change_sampling_restores_updates_from_each_operand() {
     restore(&mut app, &bytes);
     assert_eq!(number(result(&app), 2), Some(6.0));
     assert_eq!(number(result(&app), 5), Some(8.0));
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     pump(&mut app);
     assert_eq!(number(preview(&app), 2), Some(6.0));
     assert!(preview(&app).capture_times().is_none());
@@ -2123,7 +2209,7 @@ fn input_change_sampling_restores_updates_from_each_operand() {
 fn sampling_can_be_replaced_when_all_input_slots_are_occupied() {
     use volna_core::sampling::SamplingMode;
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     for _ in 0..14 {
         add(&mut app, 1);
     }
@@ -2159,7 +2245,7 @@ fn sampling_can_be_replaced_when_all_input_slots_are_occupied() {
 fn unavailable_sampling_can_be_repaired_from_the_sampling_picker() {
     use volna_core::sampling::SamplingMode;
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     formula(&mut app, "a");
     command(
         &mut app,
@@ -2176,7 +2262,7 @@ fn unavailable_sampling_can_be_repaired_from_the_sampling_picker() {
         serde_json::json!(["missing_clock"]);
     data["sampling"]["choices"][0]["path"] = serde_json::json!(["missing_clock"]);
     restore(&mut app, &serde_json::to_vec(&data).unwrap());
-    command(&mut app, Derive::Open(Some(1)));
+    command(&mut app, Derive::Edit(1));
     command(
         &mut app,
         Derive::Sample {
@@ -2217,7 +2303,7 @@ fn unused_short_trace_does_not_truncate_derived_table_output() {
         .add_session(OpenSpec::Path(second.path().into()).open().unwrap())
         .unwrap();
     pump(&mut app);
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     command(&mut app, Derive::AddInput(Traced::new(trace, 0)));
     formula(&mut app, "a");
     command(&mut app, Derive::ApplyTable);
@@ -2237,7 +2323,7 @@ fn unused_short_trace_does_not_truncate_derived_table_output() {
 fn partially_captured_expressions_do_not_claim_one_sampling_rule() {
     use volna_core::sampling::SamplingMode;
     let (_file, mut app) = fixture();
-    command(&mut app, Derive::Open(Some(0)));
+    command(&mut app, Derive::Create(Some(0)));
     add(&mut app, 1);
     add(&mut app, 4);
     formula(&mut app, "a + (b @posedge ready)");
@@ -2261,4 +2347,131 @@ fn partially_captured_expressions_do_not_claim_one_sampling_rule() {
             .mode,
         SamplingMode::RisingEdge
     );
+}
+
+// Create from one applied waveform, then bind its recorded neighbor without moving the draft.
+#[test]
+fn deriving_from_an_applied_signal_adds_a_dependent_row() {
+    use volna_core::wave::model::MenuAction;
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Create(None));
+    formula(&mut app, "a + 1");
+    command(&mut app, Derive::Apply);
+    let panel = app.panels.focused_id();
+    let menu = |app: &mut App, row, action| {
+        app.panels.waves_mut(panel).unwrap().open_signal_menu(
+            &app.doc,
+            row,
+            volna_core::geometry::point(0.0, 0.0),
+        );
+        app.handle(Command::MenuSelect(panel, action));
+    };
+    menu(&mut app, 1, MenuAction::Derived);
+    menu(&mut app, 0, MenuAction::BindFormulaInput);
+    formula(&mut app, "result + a");
+    rename_draft(&mut app, "combined");
+    command(&mut app, Derive::Apply);
+    let waves = app.panels.focused_waves().unwrap();
+    assert_eq!(
+        waves
+            .items()
+            .iter()
+            .map(|entry| entry.name())
+            .collect::<Vec<_>>(),
+        ["a", "result", "combined"]
+    );
+    assert_eq!(number(named_result(&app, "result"), 0), Some(3.0));
+    assert_eq!(number(named_result(&app, "combined"), 0), Some(5.0));
+}
+
+// A finite time mean must survive preview, Apply, and reopening even when its unnormalized sum overflows.
+#[test]
+fn a_large_finite_time_mean_survives_apply_and_restore() {
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Measure(0));
+    formula(&mut app, "interval_mean(1e308)");
+    let Some(ComputationStatus::ReadyMeasurement(reading)) = app.derived_preview() else {
+        panic!("expected a scalar reading");
+    };
+    assert_eq!(reading.value, Some(1e308));
+    command(&mut app, Derive::Apply);
+    let bytes = saved(&app);
+    restore(&mut app, &bytes);
+    assert_eq!(number(named_result(&app, "result"), 0), Some(1e308));
+}
+
+// Pin a mean over periodic observations, including repeated values, and reuse the panel for another interval.
+#[test]
+fn pinned_sample_measurements_keep_the_observed_value_and_bounds() {
+    let (_file, mut app) = fixture();
+    command(&mut app, Derive::Measure(0));
+    let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
+    draft.scope = volna_core::computed::MeasurementScope::Explicit { start: 0, end: 7 };
+    command(&mut app, Derive::Update(draft));
+    // Ticks 0, 2, 4, 6 sample 2, 2, 8, 8. The interval excludes its end tick.
+    for (expression, expected) in [
+        ("sample_mean(1e308 @ 2 ns)", 1e308),
+        ("sample_min(a @ 2 ns)", 2.0),
+        ("sample_max(a @ 2 ns)", 8.0),
+        ("sample_mean(a @ 2 ns)", 5.0),
+    ] {
+        formula(&mut app, expression);
+        let Some(ComputationStatus::ReadyMeasurement(reading)) = app.derived_preview() else {
+            panic!("missing measurement")
+        };
+        assert_eq!(reading.value, Some(expected));
+        assert_eq!(reading.support.captures().unwrap().total, 4);
+    }
+    command(&mut app, Derive::Pin);
+    command(&mut app, Derive::Close);
+    command(&mut app, Derive::Measure(0));
+    let pins = &app.panels.focused_waves().unwrap().pinned_readings;
+    assert_eq!(pins.len(), 1);
+    assert_eq!(pins[0].reading.value, Some(5.0));
+    assert_eq!(pins[0].reading.bounds, (0, 7));
+    command(&mut app, Derive::Unpin(0));
+    assert!(
+        app.panels
+            .focused_waves()
+            .unwrap()
+            .pinned_readings
+            .is_empty()
+    );
+}
+
+#[test]
+fn measuring_in_another_panel_preserves_the_formula_and_its_target() {
+    use volna_core::panels::PanelsCommand;
+    let (_file, mut app) = fixture();
+    let original = app.panels.focused_id();
+    app.handle(Command::AddVars(a_all([1])));
+    command(&mut app, Derive::Create(Some(1)));
+    formula(&mut app, "b + 9");
+
+    app.handle(Command::Action(Action::SplitRight));
+    let second = app.panels.focused_id();
+    app.handle(Command::AddVars(a_all([2])));
+    command(&mut app, Derive::Measure(0));
+    pump(&mut app);
+    app.handle(Command::Panels(PanelsCommand::Focus(original)));
+    app.panels.focused_waves_mut().unwrap().selected = BTreeSet::from([0]);
+    app.handle(Command::Action(Action::RemoveSelected));
+    pump(&mut app);
+    app.handle(Command::Panels(PanelsCommand::Focus(second)));
+    command(&mut app, Derive::ResumeFormula);
+    assert_eq!(app.panels.focused_id(), original);
+    pump(&mut app);
+    command(&mut app, Derive::Apply);
+    pump(&mut app);
+
+    let waves = app.panels.waves(original).unwrap();
+    assert_eq!(
+        waves
+            .items()
+            .iter()
+            .map(|row| row.name())
+            .collect::<Vec<_>>(),
+        ["b", "result"]
+    );
+    assert_eq!(number(named_result(&app, "result"), 0), Some(10.0));
 }

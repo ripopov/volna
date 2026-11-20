@@ -522,7 +522,7 @@ pub fn write(path: &Path) -> Result<()> {
         .context("missing bandwidth waveform")?;
     restored.handle(volna_core::Command::Derived(
         stats_panel,
-        volna_core::computed::Command::Open(Some(traffic)),
+        volna_core::computed::Command::Create(Some(traffic)),
     ));
     pump(&mut restored)?;
     restored.handle(volna_core::Command::Derived(

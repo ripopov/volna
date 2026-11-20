@@ -129,7 +129,7 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         heading: "Measure an interval",
-        guidance: "Measurements plot one held value per interval. Each marker interval is the default: it includes the recording edges. Applying saves the boundaries, so markers can then be removed. Whole range plots one value over the recording. Other scopes use explicit tick bounds, a marker snapshot, linked markers, or adjacent pairs in a selected marker set. Intervals are [start, end), so an event at end is excluded. The missing-values control chooses strict gaps or skip-unknown support. Scale a measurement with literals or combine measurements with the same scope; a scalar cannot mix with a waveform or be captured with @.",
+        guidance: "Measurements plot one held value per interval. Start and End are selected initially. Select or deselect times to measure between adjacent selected boundaries. Adding the result to a waveform or table saves those timestamps. Intervals are [start, end), so an event at end is excluded. The missing-values control chooses strict gaps or skip-unknown support. Scale a measurement with literals or combine measurements with the same scope; a scalar cannot mix with a waveform or be captured with @.",
         examples: &[
             Example {
                 formula: "100 * interval_mean(real(valid))",

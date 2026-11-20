@@ -472,7 +472,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
         |app: &App| Workspace::capture(app, volna_core::testing::paths("trace.vtr"), None).unwrap();
     let before = capture(&app).to_bytes().unwrap();
     let undo_steps = app.history.undo_steps().count();
-    command(&mut app, Average::Open(Some(0)));
+    command(&mut app, Average::Create(Some(0)));
     pump(&mut app);
     assert!(matches!(
         app.derived_preview(),
@@ -482,7 +482,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
     assert_eq!(app.history.undo_steps().count(), undo_steps);
     command(&mut app, Average::Close);
     assert_eq!(capture(&app).to_bytes().unwrap(), before);
-    command(&mut app, Average::Open(Some(0)));
+    command(&mut app, Average::Create(Some(0)));
     draft(&mut app, "4 us");
     pump(&mut app);
     assert!(matches!(
@@ -501,7 +501,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
         .history
         .clone()
         .unwrap();
-    command(&mut app, Average::Open(Some(1)));
+    command(&mut app, Average::Edit(1));
     draft(&mut app, "8 us");
     pump(&mut app);
     command(&mut app, Average::Close);
@@ -517,7 +517,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
             .unwrap()
     ));
     assert_eq!(app.history.undo_steps().count(), undo_steps + 1);
-    command(&mut app, Average::Open(Some(1)));
+    command(&mut app, Average::Edit(1));
     draft(&mut app, "0 us");
     command(&mut app, Average::Apply);
     assert!(app.derived_editor.as_ref().unwrap().error.is_some());
@@ -555,7 +555,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
     pump(&mut app);
     assert_eq!(number(output(&app), 20000), Some(4.75));
     assert_eq!(capture(&app).to_bytes().unwrap(), saved);
-    command(&mut app, Average::Open(Some(1)));
+    command(&mut app, Average::Edit(1));
     command(&mut app, Average::Remove);
     assert_eq!(app.panels.focused_waves().unwrap().items().len(), 1);
     app.handle(Command::Undo);
@@ -578,7 +578,7 @@ fn create_edit_invalid_draft_restore_remove_and_undo_remain_usable() {
 #[test]
 fn cancelled_and_superseded_previews_cannot_publish_late_results() {
     let (_file, mut app) = fixture();
-    command(&mut app, Average::Open(Some(0)));
+    command(&mut app, Average::Create(Some(0)));
     draft(&mut app, "4 us");
     let stale = app
         .take_requests()
@@ -621,7 +621,7 @@ fn cancelled_and_superseded_previews_cannot_publish_late_results() {
 #[test]
 fn a_changed_row_list_rejects_apply_without_replacing_the_wrong_row() {
     let (_file, mut app) = fixture();
-    command(&mut app, Average::Open(Some(0)));
+    command(&mut app, Average::Create(Some(0)));
     draft(&mut app, "4 us");
     pump(&mut app);
     app.handle(Command::Action(Action::RemoveSelected));
@@ -641,7 +641,7 @@ fn a_changed_row_list_rejects_apply_without_replacing_the_wrong_row() {
 #[test]
 fn computed_row_survives_removing_its_displayed_input_and_reopens_without_it() {
     let (_file, mut app) = fixture();
-    command(&mut app, Average::Open(Some(0)));
+    command(&mut app, Average::Create(Some(0)));
     draft(&mut app, "4 us");
     pump(&mut app);
     command(&mut app, Average::Apply);
@@ -688,7 +688,7 @@ fn computed_row_survives_removing_its_displayed_input_and_reopens_without_it() {
 #[test]
 fn changing_the_timeline_timescale_preserves_definitions_and_undo() {
     let (_file, mut app) = fixture();
-    command(&mut app, Average::Open(Some(0)));
+    command(&mut app, Average::Create(Some(0)));
     draft(&mut app, "4 us");
     pump(&mut app);
     command(&mut app, Average::Apply);
@@ -773,7 +773,7 @@ fn format_row(app: &mut App, row: usize, format: &str) {
 }
 
 fn add_numeric_mean(app: &mut App, row: usize, name: &str) {
-    command(app, Average::Open(Some(row)));
+    command(app, Average::Create(Some(row)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     draft.name = name.into();
     let binding = &app.derived_editor.as_ref().unwrap().bindings[0];
@@ -806,7 +806,7 @@ fn named_mean<'a>(app: &'a App, name: &str) -> &'a volna_core::wave::model::Disp
 fn signed_unsigned_and_float_definitions_keep_distinct_results_and_restore_their_interpretation() {
     let (_file, mut app) = numeric_fixture();
     format_row(&mut app, 0, "sdec");
-    assert!(app.can_derive_signal(app.panels.focused_id()));
+    assert!(app.panels.focused_waves().unwrap().can_derive_signal());
     add_numeric_mean(&mut app, 0, "signed_mean");
     format_row(&mut app, 0, "udec");
     add_numeric_mean(&mut app, 0, "unsigned_mean");
@@ -871,7 +871,7 @@ fn signed_unsigned_and_float_definitions_keep_distinct_results_and_restore_their
         .iter()
         .position(|e| e.name() == "signed_mean")
         .unwrap();
-    command(&mut app, Average::Open(Some(signed_row)));
+    command(&mut app, Average::Edit(signed_row));
     assert_eq!(
         app.derived_editor.as_ref().unwrap().bindings[0].kind,
         NumericKind::Signed
@@ -969,8 +969,8 @@ fn text_and_event_sources_do_not_offer_a_numeric_average() {
     let count = app.panels.waves(panel).unwrap().items().len();
     for row in 0..count {
         app.panels.waves_mut(panel).unwrap().selected = std::collections::BTreeSet::from([row]);
-        assert!(!app.can_derive_signal(panel));
-        command(&mut app, Average::Open(Some(row)));
+        assert!(!app.panels.waves(panel).unwrap().can_derive_signal());
+        command(&mut app, Average::Create(Some(row)));
         assert!(app.derived_editor.is_none());
     }
 }
@@ -992,7 +992,9 @@ fn preview_frame(app: &mut App) {
 fn live_preview_rows_keep_bidirectional_layout_positions() {
     let (_file, mut app) = numeric_fixture();
     for source in 0..3 {
-        command(&mut app, Average::Open(Some(source)));
+        app.panels.focused_waves_mut().unwrap().selected =
+            std::collections::BTreeSet::from([source]);
+        command(&mut app, Average::Create(Some(source)));
         pump(&mut app);
         preview_frame(&mut app);
         let waves = app.panels.focused_waves().unwrap();
@@ -1073,7 +1075,7 @@ fn dragging_rows_across_a_live_preview_preserves_its_input() {
         .unwrap()
         .source
         .clone();
-    command(&mut app, Average::Open(Some(0)));
+    command(&mut app, Average::Create(Some(0)));
     let mut draft = app.derived_editor.as_ref().unwrap().draft.clone();
     let binding = &app.derived_editor.as_ref().unwrap().bindings[0];
     let alias = if binding.effective_shape(&app.doc) == SignalShape::Bit {
@@ -1117,7 +1119,7 @@ fn dragging_rows_across_a_live_preview_preserves_its_input() {
     );
     assert_eq!(number(mean.history.as_deref().unwrap(), 4), Some(0.0));
 
-    command(&mut app, Average::Open(Some(3)));
+    command(&mut app, Average::Edit(3));
     drag_between_rows(&mut app, 0, 3, 0.9);
     assert_eq!(app.derived_editor.as_ref().unwrap().row, 2);
     command(&mut app, Average::Apply);
@@ -1142,7 +1144,7 @@ fn dragging_rows_across_a_live_preview_preserves_its_input() {
 #[test]
 fn calculation_revision_changes_only_when_calculation_fields_change() {
     let (_file, mut app) = fixture();
-    command(&mut app, Average::Open(Some(0)));
+    command(&mut app, Average::Create(Some(0)));
     pump(&mut app);
     let Some(volna_core::computed::ComputationStatus::Ready(history)) = app.derived_preview()
     else {
@@ -1151,14 +1153,12 @@ fn calculation_revision_changes_only_when_calculation_fields_change() {
     let expected = [0, 4, 8].map(|time| number(history.as_ref(), time));
     let editor = app.derived_editor.as_ref().unwrap();
     let revision = editor.calculation_revision;
-    let key = editor.preview.clone();
     let mut draft = editor.draft.clone();
     for name in ["renamed", "", "renamed_again"] {
         draft.name = name.into();
         command(&mut app, Average::Update(draft.clone()));
         let editor = app.derived_editor.as_ref().unwrap();
         assert_eq!(editor.calculation_revision, revision);
-        assert_eq!(editor.preview, key);
         assert_eq!(editor.error.is_some(), name.is_empty());
         pump(&mut app);
         if !name.is_empty() {
@@ -1177,7 +1177,7 @@ fn calculation_revision_changes_only_when_calculation_fields_change() {
     command(&mut app, Average::Update(draft.clone()));
     let editor = app.derived_editor.as_ref().unwrap();
     assert_eq!(editor.calculation_revision, revision + 1);
-    assert!(editor.preview.is_none());
+    assert!(app.derived_preview().is_none());
     command(&mut app, Average::Update(draft));
     assert_eq!(
         app.derived_editor.as_ref().unwrap().calculation_revision,

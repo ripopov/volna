@@ -176,6 +176,17 @@ enum Reduction {
     Min,
     Max,
     Sum,
+    SampleMean,
+    SampleMin,
+    SampleMax,
+}
+impl Reduction {
+    fn uses_captures(self) -> bool {
+        matches!(
+            self,
+            Self::Sum | Self::SampleMean | Self::SampleMin | Self::SampleMax
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -268,6 +279,14 @@ pub struct Program {
 }
 
 impl Program {
+    #[must_use]
+    pub fn measures_captures(&self) -> bool {
+        self.nodes.last().is_some_and(|root| {
+            matches!(root.node, Node::Reduce { x, .. }
+            if self.nodes[x].kind == NodeKind::Waveform { captured: true })
+        })
+    }
+
     pub fn with_bindings(expression: &str, inputs: &[super::Input]) -> Result<Self> {
         Self::parse_captured(
             expression,
@@ -356,7 +375,7 @@ impl Program {
 #[must_use]
 pub fn valid_alias(alias: &str) -> bool {
     alias.len() <= 64
-        && !parser::reserved(alias)
+        && !matches!(alias, "true" | "false" | "posedge")
         && alias
             .bytes()
             .next()

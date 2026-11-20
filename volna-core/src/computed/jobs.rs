@@ -13,17 +13,9 @@ use volna_trace::{
     remote::memory::MemoryBudget,
 };
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct MeasurementRow {
-    pub start: Option<crate::marker::MarkerId>,
-    pub end: Option<crate::marker::MarkerId>,
-    pub bounds: (u64, u64),
-    pub result: Result<super::Measurement, &'static str>,
-}
-
 #[derive(Debug)]
 pub struct MeasurementTable {
-    rows: Buffer<MeasurementRow>,
+    rows: Buffer<super::Measurement>,
     timeline: Buffer<(u64, Option<f64>)>,
 }
 
@@ -34,9 +26,9 @@ impl MeasurementTable {
 }
 
 impl std::ops::Deref for MeasurementTable {
-    type Target = [MeasurementRow];
+    type Target = [super::Measurement];
 
-    fn deref(&self) -> &[MeasurementRow] {
+    fn deref(&self) -> &[super::Measurement] {
         &self.rows
     }
 }
@@ -51,6 +43,16 @@ impl PartialEq for MeasurementTable {
 pub enum MeasurementResult {
     Scalar(super::Measurement),
     Table(Arc<MeasurementTable>),
+}
+
+impl MeasurementResult {
+    #[must_use]
+    pub fn readings(&self) -> &[super::Measurement] {
+        match self {
+            Self::Scalar(reading) => std::slice::from_ref(reading),
+            Self::Table(rows) => rows,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -72,17 +74,10 @@ impl DerivedOutput {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct TableInterval {
-    start: Option<crate::marker::MarkerId>,
-    end: Option<crate::marker::MarkerId>,
-    bounds: (u64, u64),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ResolvedScope {
     Waveform,
-    Scalar(Option<(u64, u64)>),
-    Table(Vec<TableInterval>),
+    Scalar((u64, u64)),
+    Table(Vec<(u64, u64)>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -91,7 +86,9 @@ pub struct Key {
     domain: (u64, u64),
     pub(crate) inputs: Vec<KeyInput>,
     pub(crate) calculation: Arc<super::Program>,
-    formula: super::FormulaSettings,
+    default_step: u64,
+    saved_range: (u64, u64),
+    unknown: super::UnknownPolicy,
     scope: ResolvedScope,
     timescale: i8,
     time_unit: Option<String>,
@@ -163,7 +160,6 @@ impl Key {
             super::input_types(&inputs)?,
             super::input_captures(&inputs)?,
         )?;
-        let formula = settings.clone();
         let mut key_inputs = Vec::new();
         for (index, input) in inputs.iter().enumerate() {
             let used = calculation.uses_input(index);
@@ -221,13 +217,15 @@ impl Key {
             domain.0 <= domain.1,
             "Formula inputs have no common time range."
         );
-        let scope = resolve_scope(doc, &formula, calculation.kind, domain)?;
+        let scope = resolve_scope(doc, settings, calculation.kind, domain)?;
         Ok(Self {
             generation: doc.generation(),
             domain,
             inputs: key_inputs,
             calculation,
-            formula,
+            default_step: settings.default_step,
+            saved_range: settings.saved_range,
+            unknown: settings.unknown,
             scope,
             timescale: doc.timescale(),
             time_unit: doc.time_base().unit.map(str::to_owned),
@@ -293,7 +291,6 @@ impl Key {
             }
         }
         let program = &self.calculation;
-        let settings = &self.formula;
         let inputs = self
             .inputs
             .iter()
@@ -305,14 +302,14 @@ impl Key {
             })
             .collect::<Vec<_>>();
         let options = super::EvaluationOptions {
-            saved_range: settings.saved_range,
-            default_step: settings.default_step,
+            saved_range: self.saved_range,
+            default_step: self.default_step,
             time_base: crate::wave::timeline::TimeBase {
                 timescale: self.timescale,
                 unit: self.time_unit.as_deref(),
             },
             interval: None,
-            unknown: settings.unknown,
+            unknown: self.unknown,
         };
         match &self.scope {
             ResolvedScope::Waveform => {
@@ -327,7 +324,7 @@ impl Key {
             }
             ResolvedScope::Scalar(interval) => {
                 let options = super::EvaluationOptions {
-                    interval: *interval,
+                    interval: Some(*interval),
                     ..options
                 };
                 match super::evaluate_program(program, &inputs, options, budget, cancelled)? {
@@ -345,30 +342,16 @@ impl Key {
                 )?;
                 let mut rows = Buffer::new(budget)?;
                 let mut timeline: Buffer<(u64, Option<f64>)> = Buffer::new(budget)?;
-                for interval in intervals {
-                    let result = if interval.bounds.0 >= interval.bounds.1 {
-                        Err("Coincident markers do not define a positive interval.")
+                for &bounds in intervals {
+                    let reading = evaluator.measure(bounds)?;
+                    let sample = (bounds.0, reading.value);
+                    if let Some(last) = timeline.last_mut().filter(|last| last.0 == bounds.0) {
+                        *last = sample;
                     } else {
-                        Ok(evaluator.measure(interval.bounds)?)
-                    };
-                    if interval.bounds.0 < interval.bounds.1 {
-                        let sample = (
-                            interval.bounds.0,
-                            result.as_ref().ok().and_then(|value| value.value),
-                        );
-                        if let Some(last) = timeline.last_mut().filter(|last| last.0 == sample.0) {
-                            *last = sample;
-                        } else {
-                            timeline.push(sample)?;
-                        }
-                        timeline.push((interval.bounds.1, None))?;
+                        timeline.push(sample)?;
                     }
-                    rows.push(MeasurementRow {
-                        start: interval.start,
-                        end: interval.end,
-                        bounds: interval.bounds,
-                        result,
-                    })?;
+                    timeline.push((bounds.1, None))?;
+                    rows.push(reading)?;
                 }
                 Ok(DerivedOutput::IntervalTable(Arc::new(MeasurementTable {
                     rows,
@@ -433,10 +416,7 @@ fn resolve_scope(
 ) -> anyhow::Result<ResolvedScope> {
     if kind != ResultKind::ScalarMeasurement {
         anyhow::ensure!(
-            matches!(
-                settings.scope,
-                MeasurementScope::WholeRange | MeasurementScope::MarkerIntervals
-            ),
+            matches!(settings.scope, MeasurementScope::WholeRange),
             "Waveform formulas use Whole range scope."
         );
         return Ok(ResolvedScope::Waveform);
@@ -450,90 +430,64 @@ fn resolve_scope(
             bounds.0 >= domain.0 && bounds.1 <= domain.1,
             "Measurement bounds must be inside the resolved source domain."
         );
-        Ok(ResolvedScope::Scalar(Some(bounds)))
+        Ok(ResolvedScope::Scalar(bounds))
     };
     match &settings.scope {
         MeasurementScope::IntervalSnapshot { intervals } => {
-            let mut rows = Vec::with_capacity(intervals.len());
             for &bounds in intervals {
                 single(bounds)?;
-                anyhow::ensure!(
-                    rows.last()
-                        .is_none_or(|previous: &TableInterval| previous.bounds.1 <= bounds.0),
-                    "Saved intervals must be ordered and non-overlapping."
-                );
-                rows.push(TableInterval {
-                    start: None,
-                    end: None,
-                    bounds,
-                });
             }
-            Ok(ResolvedScope::Table(rows))
-        }
-        MeasurementScope::MarkerIntervals => {
-            let mut boundaries = vec![(domain.0, None)];
-            boundaries.extend(
-                doc.markers()
-                    .iter()
-                    .filter(|marker| marker.time > domain.0 && marker.time < domain.1)
-                    .map(|marker| (marker.time, Some(marker.id))),
+            anyhow::ensure!(
+                intervals.windows(2).all(|pair| pair[0].1 <= pair[1].0),
+                "Saved intervals must be ordered and non-overlapping."
             );
-            boundaries.sort_by_key(|(time, _)| *time);
-            boundaries.dedup_by_key(|(time, _)| *time);
-            boundaries.push((domain.1, None));
-            if boundaries.len() == 2 {
-                return Ok(ResolvedScope::Scalar(None));
+            Ok(ResolvedScope::Table(intervals.clone()))
+        }
+        MeasurementScope::Selected { boundaries } => {
+            use super::Boundary;
+            let mut times = Vec::with_capacity(boundaries.len());
+            let mut markers = HashSet::new();
+            for boundary in boundaries {
+                match *boundary {
+                    Boundary::Start => times.push(domain.0),
+                    Boundary::End => times.push(domain.1),
+                    Boundary::Tick(tick) => times.push(tick),
+                    Boundary::Marker(id) => {
+                        markers.insert(id);
+                    }
+                }
+            }
+            if !markers.is_empty() {
+                for marker in doc.markers() {
+                    if markers.remove(&marker.id) {
+                        times.push(marker.time);
+                    }
+                }
+                if let Some(id) = markers.iter().min() {
+                    anyhow::bail!("Deselect removed marker M{id} to update the measurement.");
+                }
+            }
+            anyhow::ensure!(
+                times
+                    .iter()
+                    .all(|time| (domain.0..=domain.1).contains(time)),
+                "Selected time is outside the input range."
+            );
+            times.sort_unstable();
+            times.dedup();
+            anyhow::ensure!(
+                times.len() >= 2,
+                "Select at least two distinct boundary times."
+            );
+            if times.len() == 2 {
+                return single((times[0], times[1]));
             }
             Ok(ResolvedScope::Table(
-                boundaries
-                    .windows(2)
-                    .map(|pair| TableInterval {
-                        start: pair[0].1,
-                        end: pair[1].1,
-                        bounds: (pair[0].0, pair[1].0),
-                    })
-                    .collect(),
+                times.windows(2).map(|pair| (pair[0], pair[1])).collect(),
             ))
         }
-        MeasurementScope::WholeRange => Ok(ResolvedScope::Scalar(None)),
-        MeasurementScope::Explicit { start, end }
-        | MeasurementScope::MarkerSnapshot { start, end } => single((*start, *end)),
-        MeasurementScope::LinkedMarkers { start, end } => {
-            let marker = |id| {
-                doc.markers()
-                    .iter()
-                    .find(|marker| marker.id == id)
-                    .map(|marker| marker.time)
-                    .with_context(|| {
-                        format!("Marker {id} is missing; repair the measurement scope.")
-                    })
-            };
-            let (start, end) = (marker(*start)?, marker(*end)?);
-            single((start.min(end), start.max(end)))
-        }
-        MeasurementScope::MarkerSet { markers } => {
-            let mut markers = markers
-                .iter()
-                .map(|id| {
-                    doc.markers()
-                        .iter()
-                        .find(|marker| &marker.id == id)
-                        .cloned()
-                        .with_context(|| format!("Marker {id} is missing; repair the marker set."))
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            markers.sort_by_key(|marker| marker.time);
-            Ok(ResolvedScope::Table(
-                markers
-                    .windows(2)
-                    .map(|pair| TableInterval {
-                        start: Some(pair[0].id),
-                        end: Some(pair[1].id),
-                        bounds: (pair[0].time, pair[1].time),
-                    })
-                    .collect(),
-            ))
-        }
+        MeasurementScope::WholeRange => single(domain),
+        MeasurementScope::Explicit { start, end } => single((*start, *end)),
     }
 }
 
@@ -544,6 +498,18 @@ pub enum Status {
     ReadyMeasurement(super::Measurement),
     ReadyTable(Arc<MeasurementTable>),
     Failed(String),
+}
+
+impl Status {
+    #[must_use]
+    pub fn output(&self) -> Option<DerivedOutput> {
+        match self {
+            Self::Ready(history) => Some(DerivedOutput::Waveform(history.clone())),
+            Self::ReadyMeasurement(reading) => Some(DerivedOutput::Measurement(*reading)),
+            Self::ReadyTable(rows) => Some(DerivedOutput::IntervalTable(rows.clone())),
+            _ => None,
+        }
+    }
 }
 
 struct Job {

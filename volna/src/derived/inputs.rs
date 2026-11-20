@@ -34,16 +34,17 @@ impl DerivedEditor {
         let Some(editor) = owner.read(cx).app.derived_editor.as_ref() else {
             return;
         };
-        let inputs = editor.bindings.clone();
+        let inputs = &editor.bindings;
         if self.bindings.len() == inputs.len()
             && self
                 .bindings
                 .iter()
-                .zip(&inputs)
+                .zip(inputs)
                 .all(|(fields, input)| fields.matches(input))
         {
             return;
         }
+        let inputs = inputs.clone();
         let mut previous = std::mem::take(&mut self.bindings)
             .into_iter()
             .map(Some)
@@ -129,7 +130,6 @@ impl DerivedEditor {
     pub(super) fn input_controls(
         &mut self,
         inputs: &[volna_core::computed::InputDraft],
-        _: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         use volna_core::data::NumericKind;
@@ -146,53 +146,6 @@ impl DerivedEditor {
             let owner = self.owner.upgrade().unwrap();
             let doc = &owner.read(cx).app.doc;
             let shape = input.effective_shape(doc);
-            let mut formats = div().flex().flex_wrap().gap_1();
-            let kinds = if shape == volna_trace::data::SignalShape::Real {
-                vec![NumericKind::Real]
-            } else if shape == volna_trace::data::SignalShape::Bit {
-                vec![NumericKind::Unsigned]
-            } else {
-                let mut kinds = vec![NumericKind::Unsigned, NumericKind::Signed];
-                if matches!(shape.width(), 16 | 32 | 64) {
-                    kinds.push(NumericKind::Float);
-                }
-                kinds
-            };
-            for kind in kinds {
-                let label = if shape == volna_trace::data::SignalShape::Bit {
-                    "Boolean"
-                } else {
-                    volna_core::computed::Interpretation {
-                        kind,
-                        projection: None,
-                    }
-                    .label()
-                };
-                let slice = input.slice.clone();
-                let alias = input.alias.clone();
-                formats = formats.child(
-                    Button::new(("input-format", index * 4 + kind as usize))
-                        .label(label)
-                        .xsmall()
-                        .selected(
-                            input.kind == kind || shape == volna_trace::data::SignalShape::Bit,
-                        )
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            view.preview_task = None;
-                            view.send(
-                                DerivedCommand::SetInput {
-                                    index,
-                                    alias: alias.clone(),
-                                    kind,
-                                    slice: slice.clone(),
-                                },
-                                window,
-                                cx,
-                            );
-                            view.send(DerivedCommand::Preview, window, cx);
-                        })),
-                );
-            }
             let alias = input.alias.clone();
             let expanded = fields.expanded;
             let summary = div()
@@ -241,57 +194,6 @@ impl DerivedEditor {
                             cx.notify();
                         })),
                 );
-            let mut details = div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child("Alias")
-                        .debug_selector(move || format!("recorded-input-{index}-alias"))
-                        .child(Input::new(&fields.alias).small()),
-                )
-                .child(formats);
-            if input.shape.is_digital() && input.shape.width() > 1 {
-                details = details.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child("Bit or slice (optional)")
-                        .debug_selector(move || format!("recorded-input-{index}-slice"))
-                        .child(Input::new(&fields.slice).small()),
-                );
-            }
-            details = details.child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        Button::new(("rebind-input", index))
-                            .label("Replace…")
-                            .ghost()
-                            .xsmall()
-                            .debug_selector(move || format!("replace-input-{index}"))
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                view.open_picker(InputPicker::Replace(index), window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new(("remove-input", index))
-                            .label("Remove")
-                            .ghost()
-                            .xsmall()
-                            .debug_selector(move || format!("remove-input-{index}"))
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                view.send(DerivedCommand::RemoveInput(index), window, cx);
-                                view.send(DerivedCommand::Preview, window, cx);
-                            })),
-                    ),
-            );
             let binding = div()
                 .flex()
                 .flex_col()
@@ -300,7 +202,108 @@ impl DerivedEditor {
                 .border_1()
                 .border_color(t.border)
                 .child(summary)
-                .when(expanded, |el| el.child(details));
+                .when(expanded, |el| {
+                    let mut formats = div().flex().flex_wrap().gap_1();
+                    let kinds = if shape == volna_trace::data::SignalShape::Real {
+                        vec![NumericKind::Real]
+                    } else if shape == volna_trace::data::SignalShape::Bit {
+                        vec![NumericKind::Unsigned]
+                    } else {
+                        let mut kinds = vec![NumericKind::Unsigned, NumericKind::Signed];
+                        if matches!(shape.width(), 16 | 32 | 64) {
+                            kinds.push(NumericKind::Float);
+                        }
+                        kinds
+                    };
+                    for kind in kinds {
+                        let label = if shape == volna_trace::data::SignalShape::Bit {
+                            "Boolean"
+                        } else {
+                            volna_core::computed::Interpretation {
+                                kind,
+                                projection: None,
+                            }
+                            .label()
+                        };
+                        let slice = input.slice.clone();
+                        let alias = input.alias.clone();
+                        formats = formats.child(
+                            Button::new(("input-format", index * 4 + kind as usize))
+                                .label(label)
+                                .xsmall()
+                                .selected(
+                                    input.kind == kind
+                                        || shape == volna_trace::data::SignalShape::Bit,
+                                )
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.preview_task = None;
+                                    view.send(
+                                        DerivedCommand::SetInput {
+                                            index,
+                                            alias: alias.clone(),
+                                            kind,
+                                            slice: slice.clone(),
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                    view.send(DerivedCommand::Preview, window, cx);
+                                })),
+                        );
+                    }
+                    let mut details = div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child("Alias")
+                                .debug_selector(move || format!("recorded-input-{index}-alias"))
+                                .child(Input::new(&fields.alias).small()),
+                        )
+                        .child(formats);
+                    if input.shape.is_digital() && input.shape.width() > 1 {
+                        details = details.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child("Bit or slice (optional)")
+                                .debug_selector(move || format!("recorded-input-{index}-slice"))
+                                .child(Input::new(&fields.slice).small()),
+                        );
+                    }
+                    details = details.child(
+                        div()
+                            .flex()
+                            .gap_1()
+                            .child(
+                                Button::new(("rebind-input", index))
+                                    .label("Replace…")
+                                    .ghost()
+                                    .xsmall()
+                                    .debug_selector(move || format!("replace-input-{index}"))
+                                    .on_click(cx.listener(move |view, _, window, cx| {
+                                        view.open_picker(InputPicker::Replace(index), window, cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new(("remove-input", index))
+                                    .label("Remove")
+                                    .ghost()
+                                    .xsmall()
+                                    .debug_selector(move || format!("remove-input-{index}"))
+                                    .on_click(cx.listener(move |view, _, window, cx| {
+                                        view.send(DerivedCommand::RemoveInput(index), window, cx);
+                                        view.send(DerivedCommand::Preview, window, cx);
+                                    })),
+                            ),
+                    );
+                    el.child(details)
+                });
             result = result.child(binding);
         }
         result = result.child(
@@ -331,7 +334,7 @@ impl DerivedEditor {
                 .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape" {
                         view.close_picker();
-                        view.expression.read(cx).focus_handle(cx).focus(window, cx);
+                        view.focus_editor(window, cx);
                         cx.stop_propagation();
                         cx.notify();
                     }
@@ -487,7 +490,7 @@ impl DerivedEditor {
                         .xsmall()
                         .on_click(cx.listener(|view, _, window, cx| {
                             view.close_picker();
-                            view.expression.read(cx).focus_handle(cx).focus(window, cx);
+                            view.focus_editor(window, cx);
                             cx.notify();
                         })),
                 ),

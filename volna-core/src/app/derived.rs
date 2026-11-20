@@ -2,37 +2,58 @@
 
 use super::App;
 use crate::computed::{
-    Command, ComputationStatus, Draft, Editor, Input, InputDraft, Interpretation, Key, Operation,
-    input_domain,
+    Command, ComputationStatus, Definition, Draft, DraftPreview, Editor, EditorTool, Input,
+    InputDraft, Interpretation, Key, Operation, input_domain,
 };
 use crate::panels::PanelId;
 use crate::trace::Traced;
-use crate::wave::model::RowSource;
+use crate::wave::model::{DraftRows, RowSource};
 use anyhow::{Context, Result, ensure};
 use std::collections::HashSet;
 use volna_trace::data::{SignalShape, VarId};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Create,
+    Edit,
+    Measure,
+}
+
+impl Editor {
+    fn prepare(&self, doc: &crate::Document) -> Result<(Vec<Input>, Definition, Key)> {
+        let inputs = self.inputs(doc)?;
+        let definition = self.definition(doc.limits(), doc.time_base(), &inputs)?;
+        let key = Key::new(doc, &inputs, &definition)?;
+        Ok((inputs, definition, key))
+    }
+
+    fn refresh_preview(&mut self, doc: &crate::Document) -> Result<()> {
+        self.preview = DraftPreview::Active(None);
+        let (inputs, definition, key) = self.prepare(doc)?;
+        self.domain = key.domain();
+        self.display_definition = definition;
+        self.display_inputs = inputs;
+        self.preview = DraftPreview::Active(Some(key));
+        self.error = None;
+        Ok(())
+    }
+
+    fn track_row(&mut self, row: Option<usize>, revision: u64) {
+        if let Some(row) = row {
+            self.row = row;
+            self.revision = revision;
+        }
+    }
+}
+
 impl App {
     #[must_use]
     pub fn derived_preview(&self) -> Option<&ComputationStatus> {
-        self.computations
-            .status(self.derived_editor.as_ref()?.preview.as_ref()?)
-    }
-    #[must_use]
-    pub fn can_derive_signal(&self, panel: PanelId) -> bool {
-        self.panels.waves(panel).is_some_and(|w| {
-            !w.selected.is_empty()
-                && w.selected.iter().all(|&r| {
-                    w.signal(r).is_some_and(|s| {
-                        if w.selected.len() == 1 {
-                            s.numeric_kind().is_some() || s.source.computed().is_some()
-                        } else {
-                            (s.numeric_kind().is_some() || s.source.computed().is_some())
-                                && (s.source.signal().is_some() || s.source.computed().is_some())
-                        }
-                    })
-                })
-        })
+        let editor = self.derived_editor.as_ref()?;
+        if editor.error.is_some() {
+            return None;
+        }
+        self.computations.status(editor.preview_key()?)
     }
     pub fn recorded_input(&self, var: Traced<VarId>) -> Result<Input> {
         let v = self
@@ -72,168 +93,184 @@ impl App {
         self.sync_derived_row();
         self.changed();
     }
-    fn edit_derived(&mut self, panel: PanelId, command: Command) -> Result<()> {
-        if let Command::Open(row) = command {
-            let waves = self
-                .panels
-                .waves(panel)
-                .context("Waveform panel was closed.")?;
-            let row = row
-                .or_else(|| waves.selected.first().copied())
-                .context("Select recorded numeric signals, then choose Derive.")?;
-            let signal = waves
-                .signal(row)
-                .context("Select a recorded numeric signal.")?;
-            let (mut inputs, definition) = if let RowSource::Computed { inputs, definition } =
-                &signal.source
-                && !(waves.selected.len() > 1 && waves.selected.contains(&row))
-            {
-                (inputs.clone(), Some(definition))
+    fn open_formula(&mut self, panel: PanelId, row: Option<usize>, purpose: Purpose) -> Result<()> {
+        let waves = self
+            .panels
+            .waves(panel)
+            .context("Waveform panel was closed.")?;
+        let row = match row {
+            Some(row) if purpose != Purpose::Create || !waves.selected.contains(&row) => row,
+            _ => *waves
+                .selected
+                .last()
+                .context("Select waveform inputs, then choose Derive.")?,
+        };
+        let signal = waves
+            .signal(row)
+            .context("Select a recorded numeric signal.")?;
+        let (mut inputs, definition) = if purpose == Purpose::Edit {
+            let RowSource::Computed { inputs, definition } = &signal.source else {
+                anyhow::bail!("Select an applied formula to edit.");
+            };
+            (inputs.clone(), Some(definition))
+        } else {
+            let selected = if purpose == Purpose::Create && waves.selected.contains(&row) {
+                waves.selected.iter().copied().collect::<Vec<_>>()
             } else {
-                let selected = if waves.selected.contains(&row) {
-                    waves.selected.iter().copied().collect::<Vec<_>>()
-                } else {
-                    vec![row]
-                };
-                let mut inputs = Vec::new();
-                for r in selected {
-                    let s = waves
-                        .signal(r)
-                        .context("Select recorded numeric signals.")?;
-                    ensure!(
-                        s.source.signal().is_some() || s.source.computed().is_some(),
-                        "Choose recorded or applied waveform inputs."
-                    );
-                    let kind = if s.source.computed().is_some() {
-                        if s.source_shape == SignalShape::Real {
-                            crate::data::NumericKind::Real
-                        } else {
-                            crate::data::NumericKind::Unsigned
-                        }
-                    } else {
-                        s.numeric_kind().context("Choose a numeric input format.")?
-                    };
-                    let mut input = Input {
-                        alias: String::new(),
-                        source: s.source.clone(),
-                        shape: s.source_shape,
-                        interpretation: Interpretation {
-                            kind,
-                            projection: s.projection,
-                        },
-                    };
-                    input.alias =
-                        unique_alias(&s.name, inputs.iter().map(|i: &Input| i.alias.as_str()));
-                    input.validate()?;
-                    inputs.push(input);
-                }
-                (inputs, None)
+                vec![row]
             };
-            // Unavailable inputs must remain editable; Preview requires a current domain.
-            let domain = input_domain(&inputs, &self.doc).unwrap_or_else(|_| self.doc.limits());
-            let interval = (domain.1 - domain.0).div_ceil(2000).max(1);
-            let mut draft = Draft {
-                name: format!("{}_derived", signal.name),
-                interval: duration_text(interval, self.doc.time_base()),
-                skip_unknown: false,
-                formula: inputs
-                    .first()
-                    .map_or_else(|| "0".into(), |input| input.alias.clone()),
-                scope: crate::computed::MeasurementScope::MarkerIntervals,
-            };
-            if inputs.len() > 1 {
-                draft.name = "formula".into();
+            ensure!(
+                selected.len() <= crate::computed::formula::MAX_INPUTS,
+                "Select at most 16 waveform inputs."
+            );
+            let mut inputs = Vec::with_capacity(selected.len());
+            for r in selected {
+                let s = waves
+                    .signal(r)
+                    .context("Select recorded numeric signals.")?;
+                let alias = unique_alias(&s.name, inputs.iter().map(|i: &Input| i.alias.as_str()));
+                inputs.push(waveform_input(s, alias)?);
             }
-            if let Some(d) = definition {
-                draft.name.clone_from(&d.name);
-                match &d.operation {
-                    Operation::Formula {
-                        expression,
-                        settings,
-                    } => {
-                        draft.formula.clone_from(expression);
-                        draft.interval = duration_text(settings.default_step, self.doc.time_base());
-                        draft.skip_unknown =
-                            settings.unknown == crate::computed::UnknownPolicy::Skip;
-                        draft.scope = settings.scope.clone();
-                    }
+            (inputs, None)
+        };
+        // Unavailable inputs must remain editable; Preview requires a current domain.
+        let domain = input_domain(&inputs, &self.doc).unwrap_or_else(|_| self.doc.limits());
+        let interval = (domain.1 - domain.0).div_ceil(2000).max(1);
+        let mut draft = Draft {
+            name: format!("{}_derived", signal.name),
+            interval: duration_text(interval, self.doc.time_base()),
+            skip_unknown: true,
+            formula: inputs
+                .first()
+                .map_or_else(|| "0".into(), |input| input.alias.clone()),
+            scope: crate::computed::MeasurementScope::WholeRange,
+        };
+        if inputs.len() > 1 {
+            draft.name = "formula".into();
+        }
+        if let Some(d) = definition {
+            draft.name.clone_from(&d.name);
+            match &d.operation {
+                Operation::Formula {
+                    expression,
+                    settings,
+                } => {
+                    draft.formula.clone_from(expression);
+                    draft.interval = duration_text(settings.default_step, self.doc.time_base());
+                    draft.skip_unknown = settings.unknown == crate::computed::UnknownPolicy::Skip;
+                    draft.scope = settings.scope.clone();
                 }
             }
-            if definition.is_none()
-                && let Some(first) = inputs.first()
-                && inputs.iter().all(|input| {
-                    self.doc.traces().iter().all(|trace| {
-                        trace.id == first.source.trace() || !input.source.uses_trace(trace.id)
-                    })
+        }
+        if purpose == Purpose::Measure {
+            let value = if inputs[0].ty() == crate::computed::FormulaType::Boolean {
+                format!("real({})", draft.formula)
+            } else {
+                draft.formula
+            };
+            draft.formula = format!("interval_mean({value})");
+            draft.name = format!("{} measurement", signal.name);
+        }
+        if purpose == Purpose::Create
+            && let Some(first) = inputs.first()
+            && inputs.iter().all(|input| {
+                self.doc.traces().iter().all(|trace| {
+                    trace.id == first.source.trace() || !input.source.uses_trace(trace.id)
                 })
-                && let Some(choice) = self.doc.sampling.default_for(first.source.trace())
-            {
-                let mut sampled_draft = draft.clone();
-                let mut sampled_inputs = inputs.clone();
-                match self.sample_draft(&mut sampled_draft, &mut sampled_inputs, choice) {
-                    Ok(()) => {
-                        draft = sampled_draft;
-                        inputs = sampled_inputs;
-                    }
-                    Err(error) => self.events.push(crate::Event::Notice(format!(
-                        "Default sampling was not applied: {error:#}"
-                    ))),
+            })
+            && let Some(choice) = self.doc.sampling.default_for(first.source.trace())
+        {
+            let mut sampled_draft = draft.clone();
+            let mut sampled_inputs = inputs.clone();
+            match self.sample_draft(&mut sampled_draft, &mut sampled_inputs, choice) {
+                Ok(()) => {
+                    draft = sampled_draft;
+                    inputs = sampled_inputs;
                 }
+                Err(error) => self.events.push(crate::Event::Notice(format!(
+                    "Default sampling was not applied: {error:#}"
+                ))),
             }
-            let (definition_id, definition_revision) = definition
-                .as_ref()
-                .map(|definition| (definition.id, definition.revision))
-                .unwrap_or_default();
-            let mut display_definition =
-                draft.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
-            display_definition.id = definition_id;
-            display_definition.revision = definition_revision;
-            let last_result = definition.and_then(|_| {
-                if let Some(history) = &signal.history {
-                    Some(crate::computed::DerivedOutput::Waveform(history.clone()))
-                } else {
-                    signal
-                        .measurement
-                        .as_ref()
-                        .map(|measurement| match measurement {
-                            crate::computed::MeasurementResult::Scalar(measurement) => {
-                                crate::computed::DerivedOutput::Measurement(*measurement)
-                            }
-                            crate::computed::MeasurementResult::Table(rows) => {
-                                crate::computed::DerivedOutput::IntervalTable(rows.clone())
-                            }
-                        })
-                }
-            });
-            self.next_derived_editor += 1;
-            self.derived_editor = Some(Editor {
-                id: self.next_derived_editor,
-                panel,
-                row,
-                revision: waves.revision(),
-                definition_id,
-                definition_revision,
-                bindings: inputs
-                    .iter()
-                    .cloned()
-                    .map(|i| InputDraft::new(i, &self.doc))
-                    .collect(),
-                editing: definition.is_some(),
-                draft,
-                domain,
-                preview: None,
-                calculation_revision: 0,
-                error: None,
-                stopped: false,
-                display_definition,
-                display_inputs: inputs,
-                last_result,
-                reveal_preview: true,
-            });
-            if let Some(waves) = self.panels.waves_mut(panel) {
-                waves.menu_dismiss();
-            }
-            return self.edit_derived(panel, Command::Preview);
+        }
+        let (definition_id, definition_revision) = definition
+            .as_ref()
+            .map(|definition| (definition.id, definition.revision))
+            .unwrap_or_default();
+        let mut display_definition =
+            draft.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
+        display_definition.id = definition_id;
+        display_definition.revision = definition_revision;
+        let tool = if purpose == Purpose::Measure {
+            let suspended = self
+                .derived_editor
+                .take()
+                .and_then(|editor| match editor.tool {
+                    EditorTool::Measure { suspended } => suspended,
+                    EditorTool::Formula => Some(Box::new(editor)),
+                });
+            EditorTool::Measure { suspended }
+        } else {
+            EditorTool::Formula
+        };
+        self.next_derived_editor += 1;
+        self.derived_editor = Some(Editor {
+            id: self.next_derived_editor,
+            tool,
+            panel,
+            row,
+            revision: waves.revision(),
+            definition_id,
+            definition_revision,
+            bindings: inputs
+                .iter()
+                .cloned()
+                .map(|i| InputDraft::new(i, &self.doc))
+                .collect(),
+            editing: definition.is_some(),
+            draft,
+            domain,
+            preview: DraftPreview::Idle,
+            calculation_revision: 0,
+            error: None,
+            display_definition,
+            display_inputs: inputs,
+            reveal_preview: true,
+        });
+        if let Some(waves) = self.panels.waves_mut(panel) {
+            waves.menu_dismiss();
+        }
+        self.edit_derived(panel, Command::Preview)
+    }
+    fn close_formula(&mut self) -> Result<()> {
+        let Some(Editor {
+            tool: EditorTool::Measure {
+                suspended: Some(parked),
+            },
+            ..
+        }) = self.derived_editor.take()
+        else {
+            return Ok(());
+        };
+        let mut editor = *parked;
+        let Some(waves) = self.panels.waves(editor.panel) else {
+            return Ok(());
+        };
+        editor.track_row(waves.draft_rows.suspended, waves.revision());
+        let panel = editor.panel;
+        let resume = !editor.stopped() && editor.revision == waves.revision();
+        editor.reveal_preview = true;
+        self.derived_editor = Some(editor);
+        if resume {
+            self.edit_derived(panel, Command::Preview)?;
+        }
+        Ok(())
+    }
+    fn edit_derived(&mut self, panel: PanelId, command: Command) -> Result<()> {
+        match command {
+            Command::Create(row) => return self.open_formula(panel, row, Purpose::Create),
+            Command::Edit(row) => return self.open_formula(panel, Some(row), Purpose::Edit),
+            Command::Measure(row) => return self.open_formula(panel, Some(row), Purpose::Measure),
+            _ => {}
         }
         if let Command::Sample {
             var,
@@ -255,10 +292,7 @@ impl App {
             editor
                 .bindings
                 .retain(|input| !sampling_aliases.contains(&input.alias));
-            editor.calculation_revision += 1;
-            editor.preview = None;
-            editor.stopped = false;
-            editor.error = None;
+            editor.invalidate_preview();
             return self.edit_derived(panel, Command::Preview);
         }
         let replacement = match &command {
@@ -274,11 +308,34 @@ impl App {
         match command {
             Command::Update(draft) => {
                 if editor.draft.calculation_changed(&draft) {
-                    editor.calculation_revision += 1;
-                    editor.preview = None;
-                    editor.stopped = false;
+                    editor.invalidate_preview();
                 }
                 editor.draft = draft;
+            }
+            Command::BindRow(row) => {
+                let waves = self
+                    .panels
+                    .waves_mut(panel)
+                    .context("Waveform panel was closed.")?;
+                waves.menu_dismiss();
+                let signal = waves.signal(row).context("Input row was removed.")?;
+                ensure!(
+                    !editor.editing || editor.row != row,
+                    "A formula cannot bind itself."
+                );
+                ensure!(
+                    editor.bindings.len() < crate::computed::formula::MAX_INPUTS,
+                    "Use at most 16 waveform inputs."
+                );
+                let alias = unique_alias(
+                    &signal.name,
+                    editor.bindings.iter().map(|i| i.alias.as_str()),
+                );
+                editor
+                    .bindings
+                    .push(InputDraft::new(waveform_input(signal, alias)?, &self.doc));
+                editor.invalidate_preview();
+                return self.edit_derived(panel, Command::Preview);
             }
             Command::AddInput(_) => {
                 ensure!(
@@ -327,48 +384,73 @@ impl App {
                 }
             }
             Command::Preview => {
-                editor.preview = None;
-                editor.stopped = false;
-                let inputs = editor.inputs(&self.doc)?;
-                let definition =
-                    editor.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
-                let key = Key::new(&self.doc, &inputs, &definition)?;
-                editor.domain = key.domain();
-                editor.preview = Some(key);
-                editor.display_definition = definition;
+                editor.refresh_preview(&self.doc)?;
                 self.computations.retry();
-            }
-            Command::Stop => {
-                editor.preview = None;
-                editor.stopped = true;
-                editor.error = None;
-            }
-            Command::Close => {
-                self.derived_editor = None;
                 return Ok(());
             }
-            Command::Apply | Command::ApplyTable => {
-                let inputs = editor.inputs(&self.doc)?;
-                let mut definition =
-                    editor.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
-                let current = Key::new(&self.doc, &inputs, &definition)?;
+            Command::Stop => {
+                editor.preview = DraftPreview::Stopped;
+                editor.error = None;
+                return Ok(());
+            }
+            Command::Close => return self.close_formula(),
+            Command::ResumeFormula => {
+                let original = editor
+                    .suspended_formula_mut()
+                    .context("No suspended formula to resume.")?
+                    .panel;
+                if original != panel && self.panels.waves(original).is_some() {
+                    self.panel_command(crate::panels::PanelsCommand::Focus(original));
+                }
+                return self.close_formula();
+            }
+            Command::Unpin(index) => {
+                let pins = &mut self
+                    .panels
+                    .waves_mut(panel)
+                    .context("Waveform panel was closed.")?
+                    .pinned_readings;
+                if index < pins.len() {
+                    pins.remove(index);
+                }
+                return Ok(());
+            }
+            Command::Pin | Command::Apply | Command::ApplyTable => {
+                let (inputs, mut definition, current) = editor.prepare(&self.doc)?;
                 editor.domain = current.domain();
                 ensure!(
-                    editor.preview.as_ref() == Some(&current),
+                    editor.preview_key() == Some(&current),
                     "Wait for the current draft to finish updating."
                 );
-                let output = match self.computations.status(&current) {
-                    Some(ComputationStatus::Ready(history)) => {
-                        crate::computed::DerivedOutput::Waveform(history.clone())
-                    }
-                    Some(ComputationStatus::ReadyMeasurement(measurement)) => {
-                        crate::computed::DerivedOutput::Measurement(*measurement)
-                    }
-                    Some(ComputationStatus::ReadyTable(rows)) => {
-                        crate::computed::DerivedOutput::IntervalTable(rows.clone())
-                    }
-                    _ => anyhow::bail!("Wait for the live preview to finish updating."),
-                };
+                let output = self
+                    .computations
+                    .status(&current)
+                    .and_then(ComputationStatus::output)
+                    .context("Wait for the live preview to finish updating.")?;
+                if command == Command::Pin {
+                    let crate::computed::DerivedOutput::Measurement(reading) = output else {
+                        anyhow::bail!("Select a single interval to pin.");
+                    };
+                    ensure!(
+                        reading.value.is_some(),
+                        "The interval has no defined reading."
+                    );
+                    let pin = crate::computed::PinnedReading {
+                        expression: editor.draft.formula.clone(),
+                        sources: inputs
+                            .iter()
+                            .map(|input| format!("{} = {}", input.alias, input.label(&self.doc)))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        reading,
+                    };
+                    self.panels
+                        .waves_mut(panel)
+                        .context("Waveform panel was closed.")?
+                        .pinned_readings
+                        .push(pin);
+                    return Ok(());
+                }
                 if matches!(command, Command::ApplyTable) {
                     let data = crate::table::statistics::Statistics::from_output(
                         definition.name,
@@ -380,18 +462,13 @@ impl App {
                         crate::table::TableSource::Statistics(std::sync::Arc::new(data)),
                         panel,
                     )?;
-                    self.derived_editor = None;
-                    return Ok(());
+                    return self.close_formula();
                 }
                 let Operation::Formula { settings, .. } = &mut definition.operation;
                 match &output {
                     crate::computed::DerivedOutput::IntervalTable(rows) => {
                         settings.scope = crate::computed::MeasurementScope::IntervalSnapshot {
-                            intervals: rows
-                                .iter()
-                                .filter(|row| row.bounds.0 < row.bounds.1)
-                                .map(|row| row.bounds)
-                                .collect(),
+                            intervals: rows.iter().map(|row| row.bounds).collect(),
                         };
                     }
                     crate::computed::DerivedOutput::Measurement(value) => {
@@ -441,8 +518,7 @@ impl App {
                         output,
                         &self.doc.translators,
                     )?;
-                self.derived_editor = None;
-                return Ok(());
+                return self.close_formula();
             }
             Command::Remove => {
                 ensure!(editor.editing, "This definition has not been added yet.");
@@ -459,26 +535,22 @@ impl App {
                 self.derived_editor = None;
                 return Ok(());
             }
-            Command::Open(_) | Command::Sample { .. } | Command::SampleOnInputChanges => {
+            Command::Create(_)
+            | Command::Edit(_)
+            | Command::Measure(_)
+            | Command::Sample { .. }
+            | Command::SampleOnInputChanges => {
                 unreachable!()
             }
         }
         if inputs_changed {
-            editor.calculation_revision += 1;
-            editor.preview = None;
-            editor.stopped = false;
+            editor.invalidate_preview();
         }
-        let inputs = editor.inputs(&self.doc)?;
-        match editor
-            .definition(self.doc.limits(), self.doc.time_base(), &inputs)
-            .and_then(|definition| Key::new(&self.doc, &inputs, &definition))
-        {
-            Ok(key) => {
-                editor.domain = key.domain();
-                editor.error = None;
-            }
-            Err(error) => editor.error = Some(format!("{error:#}")),
-        }
+        let (inputs, definition, key) = editor.prepare(&self.doc)?;
+        editor.domain = key.domain();
+        editor.display_inputs = inputs;
+        editor.display_definition = definition;
+        editor.error = None;
         Ok(())
     }
     pub(super) fn derived_demand(&self) -> HashSet<Key> {
@@ -496,24 +568,22 @@ impl App {
                 self.derived_editor
                     .as_ref()
                     .filter(|e| e.error.is_none())
-                    .and_then(|e| e.preview.clone()),
+                    .and_then(|e| e.preview_key().cloned()),
             )
             .collect()
     }
     pub(super) fn derived_sources(&self) -> HashSet<Traced<volna_trace::data::SignalRef>> {
         self.derived_demand()
-            .into_iter()
-            .flat_map(|key| key.signals().collect::<Vec<_>>())
+            .iter()
+            .flat_map(Key::signals)
             .collect()
     }
 
     pub(super) fn sync_derived(&mut self) -> Vec<crate::LoadRequest> {
-        if self
-            .derived_editor
-            .as_ref()
-            .is_some_and(|e| self.panels.waves(e.panel).is_none())
+        if let Some(editor) = &self.derived_editor
+            && self.panels.waves(editor.panel).is_none()
         {
-            self.derived_editor = None;
+            self.derived_command(editor.panel, Command::Close);
         }
         self.doc.formula_definitions.clear();
         for (inputs, definition) in self
@@ -535,7 +605,7 @@ impl App {
         }
         self.refresh_derived_preview();
         let wanted = self.derived_demand();
-        let sources = self.derived_sources();
+        let sources: HashSet<_> = wanted.iter().flat_map(Key::signals).collect();
         let resident = self.resident_histories();
         let requests = self.computations.sync(
             wanted,
@@ -560,7 +630,7 @@ impl App {
                 .waves(editor.panel)
                 .is_some_and(|waves| waves.revision() != editor.revision)
         {
-            editor.preview = None;
+            editor.preview = DraftPreview::Idle;
             editor.error = Some(
                 "The source row changed or was removed. Reopen the derived-signal editor.".into(),
             );
@@ -569,22 +639,12 @@ impl App {
         let Some(editor) = self
             .derived_editor
             .as_mut()
-            .filter(|editor| !editor.stopped && editor.preview.is_some())
+            .filter(|editor| matches!(editor.preview, DraftPreview::Active(_)))
         else {
             return;
         };
-        let current = editor.inputs(&self.doc).and_then(|inputs| {
-            let definition = editor.definition(self.doc.limits(), self.doc.time_base(), &inputs)?;
-            Key::new(&self.doc, &inputs, &definition)
-        });
-        match current {
-            Ok(key) => {
-                editor.domain = key.domain();
-                editor.preview = Some(key);
-                editor.error = None;
-            }
-            // Retain the active key so a later marker edit can repair the scope.
-            Err(error) => editor.error = Some(format!("{error:#}")),
+        if let Err(error) = editor.refresh_preview(&self.doc) {
+            editor.error = Some(format!("{error:#}"));
         }
     }
     pub(super) fn attach_derived(&mut self) {
@@ -597,104 +657,115 @@ impl App {
         let Some(editor) = &mut self.derived_editor else {
             return;
         };
-        let Some(waves) = self.panels.waves_mut(editor.panel) else {
+        if let Some(suspended) = editor.suspended_formula_mut()
+            && let Some(waves) = self.panels.waves(suspended.panel)
+        {
+            suspended.track_row(waves.draft_rows.suspended, waves.revision());
+        }
+        let Some(waves) = self.panels.waves(editor.panel) else {
             return;
         };
-        if waves.revision() == editor.revision {
-            return;
-        }
-        if let Some(preview) = &waves.preview
-            && preview.revision == waves.revision()
-        {
-            editor.row = preview.source_row;
-            editor.revision = preview.revision;
+        let revision = waves.revision();
+        if editor.revision != revision {
+            editor.track_row(waves.draft_rows.active, revision);
             self.sync_derived_row();
-        } else {
-            waves.preview = None;
         }
     }
 
-    pub(super) fn sync_derived_row(&mut self) {
+    fn sync_derived_row(&mut self) {
         for waves in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
             waves.preview = None;
+            waves.draft_rows = DraftRows::default();
         }
         let Some(editor) = &mut self.derived_editor else {
             return;
         };
-        let Some(waves) = self
-            .panels
-            .waves_mut(editor.panel)
-            .filter(|w| w.revision() == editor.revision)
-        else {
+        if let Some(suspended) = editor.suspended_formula_mut()
+            && let Some(waves) = self.panels.waves_mut(suspended.panel)
+            && suspended.revision == waves.revision()
+        {
+            waves.draft_rows.suspended = Some(suspended.row);
+        }
+        let Some(waves) = self.panels.waves_mut(editor.panel) else {
             return;
         };
-        if let Ok((definition, inputs)) = editor.inputs(&self.doc).and_then(|inputs| {
-            editor
-                .definition(self.doc.limits(), self.doc.time_base(), &inputs)
-                .map(|definition| (definition, inputs))
-        }) {
-            editor.display_definition = definition;
-            editor.display_inputs = inputs;
-        }
-        let computation = editor
-            .preview
-            .as_ref()
-            .and_then(|key| self.computations.status(key));
-        let output = match computation {
-            Some(ComputationStatus::Ready(history)) => {
-                Some(crate::computed::DerivedOutput::Waveform(history.clone()))
-            }
-            Some(ComputationStatus::ReadyMeasurement(measurement)) => {
-                Some(crate::computed::DerivedOutput::Measurement(*measurement))
-            }
-            Some(ComputationStatus::ReadyTable(rows)) => {
-                Some(crate::computed::DerivedOutput::IntervalTable(rows.clone()))
-            }
-            _ => None,
+        let revision = waves.revision();
+        let active = (editor.revision == revision).then_some(editor.row);
+        waves.draft_rows.active = active;
+        let Some(row) = active else {
+            return;
         };
-        let ready = editor.error.is_none() && output.is_some();
-        if let Some(output) = output {
-            editor.last_result = Some(output);
-        }
+        let computation = editor
+            .preview_key()
+            .and_then(|key| self.computations.status(key));
+        let output = computation.and_then(ComputationStatus::output);
         let status = if editor.error.is_some() {
-            "Invalid settings · outdated"
-        } else if editor.stopped {
-            "Stopped · outdated"
+            "Invalid settings"
+        } else if editor.stopped() {
+            "Stopped"
         } else {
             match computation {
-                Some(
-                    ComputationStatus::Ready(_)
-                    | ComputationStatus::ReadyMeasurement(_)
-                    | ComputationStatus::ReadyTable(_),
-                ) => "Live preview",
+                _ if output.is_some() => "Live preview",
                 Some(ComputationStatus::Waiting) => "Loading input…",
-                Some(ComputationStatus::Failed(_)) => "Failed · outdated",
+                Some(ComputationStatus::Failed(_)) => "Failed",
                 _ => "Updating…",
             }
         };
-        let Ok((at, entry, editing)) = waves.derived_row(
+        let Ok((at, mut entry, editing)) = waves.derived_row(
             crate::wave::model::DerivedPlacement {
-                row: editor.row,
-                revision: editor.revision,
+                row,
+                revision,
                 editing: editor.editing,
             },
             editor.display_definition.clone(),
             editor.display_inputs.clone(),
-            editor.last_result.clone(),
+            output.filter(|_| editor.error.is_none()),
             &self.doc.translators,
         ) else {
             return;
         };
+        if let Some(signal) = entry.signal_mut()
+            && signal.height.is_default()
+        {
+            signal.height = signal.height.step(1);
+        }
         waves.preview = Some(crate::wave::model::PreviewRow {
-            source_row: editor.row,
-            revision: editor.revision,
+            revision,
             index: if editing { at } else { waves.items().len() },
             before: at,
             entry,
             status: status.into(),
-            stale: !ready,
         });
     }
+}
+
+fn waveform_input(signal: &crate::wave::model::DisplayedSignal, alias: String) -> Result<Input> {
+    let kind = if signal.source.computed().is_some() {
+        if signal.source_shape == SignalShape::Real {
+            crate::data::NumericKind::Real
+        } else {
+            crate::data::NumericKind::Unsigned
+        }
+    } else {
+        ensure!(
+            signal.source.signal().is_some(),
+            "Choose a recorded or applied waveform."
+        );
+        signal
+            .numeric_kind()
+            .context("Choose a numeric input format.")?
+    };
+    let input = Input {
+        alias,
+        source: signal.source.clone(),
+        shape: signal.source_shape,
+        interpretation: Interpretation {
+            kind,
+            projection: signal.projection,
+        },
+    };
+    input.validate()?;
+    Ok(input)
 }
 
 fn duration_text(ticks: u64, base: crate::wave::timeline::TimeBase<'_>) -> String {
@@ -719,7 +790,9 @@ pub(super) fn unique_alias<'a>(name: &str, inputs: impl Iterator<Item = &'a str>
         })
         .take(48)
         .collect::<String>();
-    let base = if crate::computed::formula::valid_alias(&base) {
+    let base = if crate::computed::formula::valid_alias(&base)
+        && !crate::computed::language::is_function(&base)
+    {
         base
     } else {
         "input".into()

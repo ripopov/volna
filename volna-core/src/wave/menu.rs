@@ -13,6 +13,17 @@ fn command(action: MenuAction, label: &str) -> MenuEntry {
 }
 
 impl WaveModel {
+    pub fn can_derive_signal(&self) -> bool {
+        !self.selected.is_empty()
+            && self.selected.len() <= crate::computed::formula::MAX_INPUTS
+            && self.selected.iter().all(|&row| {
+                self.signal(row).is_some_and(|s| {
+                    (s.source.computed().is_some() && s.measurement.is_none())
+                        || (s.source.signal().is_some() && s.numeric_kind().is_some())
+                })
+            })
+    }
+
     pub fn open_signal_menu(&mut self, doc: &Document, row: usize, position: Point) {
         if row >= self.items().len() {
             return;
@@ -164,18 +175,26 @@ impl WaveModel {
             }
         }
         entries.push(MenuEntry::Separator);
-        if let Some(signal) = self
-            .signal(row)
-            .filter(|s| s.numeric_kind().is_some() || s.source.computed().is_some())
+        if targets.len() == 1
+            && self
+                .signal(row)
+                .is_some_and(|s| s.source.computed().is_some())
         {
-            entries.push(command(
-                MenuAction::Derived,
-                if signal.source.computed().is_some() {
-                    "Edit derived signal…"
-                } else {
-                    "Derive signal…"
-                },
-            ));
+            entries.push(command(MenuAction::EditFormula, "Edit formula…"));
+        }
+        if self.can_derive_signal() {
+            if targets.len() == 1 {
+                if let Some(preview) = &self.preview
+                    && preview.index != row
+                {
+                    entries.push(command(
+                        MenuAction::BindFormulaInput,
+                        "Bind to open formula",
+                    ));
+                }
+                entries.push(command(MenuAction::MeasureSignal, "Measure signal…"));
+            }
+            entries.push(command(MenuAction::Derived, "Derive signal…"));
         }
         entries.push(command(
             MenuAction::OpenTable,

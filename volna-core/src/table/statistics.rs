@@ -20,6 +20,27 @@ pub struct Statistic {
     pub value: Option<f64>,
 }
 
+impl From<&crate::computed::Measurement> for Statistic {
+    fn from(reading: &crate::computed::Measurement) -> Self {
+        Self {
+            start: reading.bounds.0,
+            end: Some(reading.bounds.1),
+            value: reading.value,
+        }
+    }
+}
+
+#[must_use]
+pub fn column_title(name: &str, intervals: bool, index: usize) -> &str {
+    match index {
+        0 if intervals => "Start",
+        0 => "Time",
+        1 => name,
+        2 => "End (ticks)",
+        _ => "",
+    }
+}
+
 impl Statistics {
     pub(crate) fn from_output(
         name: String,
@@ -30,18 +51,10 @@ impl Statistics {
         use crate::computed::DerivedOutput;
         let mut rows = Buffer::new(budget)?;
         match output {
-            DerivedOutput::Measurement(value) => rows.push(Statistic {
-                start: value.bounds.0,
-                end: Some(value.bounds.1),
-                value: value.value,
-            })?,
+            DerivedOutput::Measurement(value) => rows.push(value.into())?,
             DerivedOutput::IntervalTable(values) => {
-                for row in values.iter().filter(|row| row.bounds.0 < row.bounds.1) {
-                    rows.push(Statistic {
-                        start: row.bounds.0,
-                        end: Some(row.bounds.1),
-                        value: row.result.as_ref().ok().and_then(|value| value.value),
-                    })?;
+                for reading in values.iter() {
+                    rows.push(reading.into())?;
                 }
             }
             DerivedOutput::Waveform(history) => {

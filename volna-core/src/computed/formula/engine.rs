@@ -114,29 +114,50 @@ pub struct CaptureSupport {
     pub total: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasurementSupport {
+    Time { known: u64, total: u64 },
+    Samples(CaptureSupport),
+    Combined { fully_known: bool },
+}
+
+impl MeasurementSupport {
+    fn fully_known(self) -> bool {
+        match self {
+            Self::Time { known, total } => known == total,
+            Self::Samples(count) => count.known == count.total,
+            Self::Combined { fully_known } => fully_known,
+        }
+    }
+
+    #[must_use]
+    pub fn captures(self) -> Option<CaptureSupport> {
+        match self {
+            Self::Samples(count) => Some(count),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn coverage(self) -> Option<f64> {
+        if self.fully_known() {
+            return Some(1.0);
+        }
+        match self {
+            Self::Time { known, total } => Some(known as f64 / total as f64),
+            Self::Samples(count) => Some(count.known as f64 / count.total as f64),
+            Self::Combined { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Measurement {
     pub value: Option<f64>,
     pub bounds: (u64, u64),
-    pub requested_ticks: u64,
-    pub known_ticks: u64,
-    pub captures: Option<CaptureSupport>,
+    pub support: MeasurementSupport,
     pub policy: UnknownPolicy,
     pub status: MeasurementStatus,
-}
-
-impl Measurement {
-    #[must_use]
-    pub fn coverage(self) -> f64 {
-        match self.captures {
-            Some(captures) if captures.total > 0 => captures.known as f64 / captures.total as f64,
-            Some(_) => 1.0,
-            None if self.requested_ticks > 0 => {
-                self.known_ticks as f64 / self.requested_ticks as f64
-            }
-            None => 0.0,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -960,9 +981,10 @@ impl<'a> Evaluator<'a> {
             "Measurement bounds must be inside the resolved source domain."
         );
         let support = value.support.unwrap_or(Support {
-            requested: bounds.1 - bounds.0,
-            known: bounds.1 - bounds.0,
-            captures: None,
+            observations: MeasurementSupport::Time {
+                known: bounds.1 - bounds.0,
+                total: bounds.1 - bounds.0,
+            },
             status: MeasurementStatus::Complete,
         });
         Ok(Measurement {
@@ -971,9 +993,7 @@ impl<'a> Evaluator<'a> {
                 Value::Boolean(_) => bail!("Scalar formulas must produce Real values."),
             },
             bounds,
-            requested_ticks: support.requested,
-            known_ticks: support.known,
-            captures: support.captures,
+            support: support.observations,
             policy: self.options.unknown,
             status: if value.value.real().is_some() {
                 support.status
@@ -1007,7 +1027,8 @@ impl<'a> Evaluator<'a> {
                 let right = self.scalar_value(right)?;
                 let support = match (left.support, right.support) {
                     (Some(support), None) | (None, Some(support)) => Some(support),
-                    _ => None,
+                    (Some(a), Some(b)) => Some(a.combine(b)),
+                    (None, None) => None,
                 };
                 Ok(Scalar {
                     value: evaluate::binary(operator, left.value, right.value),
@@ -1026,7 +1047,11 @@ impl<'a> Evaluator<'a> {
                     bounds.0 >= domain.0 && bounds.1 <= domain.1,
                     "Measurement bounds must be inside the resolved source domain."
                 );
-                let (value, support) = self.reduce(reduction, &waveform, bounds)?;
+                let (value, support) = if reduction.uses_captures() {
+                    self.reduce_samples(reduction, &waveform, bounds)?
+                } else {
+                    self.reduce_time(reduction, &waveform, bounds)?
+                };
                 Ok(Scalar {
                     value,
                     support: Some(support),
@@ -1036,122 +1061,154 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn reduce(
+    fn reduce_samples(
         &mut self,
         reduction: Reduction,
         waveform: &Waveform,
         bounds: (u64, u64),
     ) -> Result<(Value, Support)> {
-        if reduction == Reduction::Sum {
-            let first = waveform.captures.partition_point(|time| *time < bounds.0);
-            let end = waveform.captures.partition_point(|time| *time < bounds.1);
-            let captures = &waveform.captures[first..end];
-            let mut sum = 0.0;
-            let mut known = 0;
-            let mut unknown = 0;
-            for time in captures.iter().copied() {
-                self.work.spend(1)?;
-                match waveform.value_at(time) {
-                    Value::Real(Some(value)) => {
-                        sum += value;
-                        known += 1;
-                    }
-                    _ => unknown += 1,
-                }
+        let first = waveform.captures.partition_point(|time| *time < bounds.0);
+        let end = waveform.captures.partition_point(|time| *time < bounds.1);
+        let captures = &waveform.captures[first..end];
+        let mut aggregate: f64 = match reduction {
+            Reduction::SampleMin => f64::INFINITY,
+            Reduction::SampleMax => f64::NEG_INFINITY,
+            _ => 0.0,
+        };
+        let mut known = 0;
+        let mut unknown = 0;
+        let mut event = waveform
+            .events
+            .partition_point(|event| event.time < bounds.0);
+        let mut held = event
+            .checked_sub(1)
+            .map_or(Value::Real(None), |i| waveform.events[i].value);
+        for time in captures.iter().copied() {
+            self.work.spend(1)?;
+            while let Some(next) = waveform.events.get(event).filter(|next| next.time <= time) {
+                held = next.value;
+                event += 1;
             }
-            let value = if unknown > 0 && self.options.unknown == UnknownPolicy::Gap {
-                None
-            } else {
-                sum.is_finite().then_some(sum)
-            };
-            return Ok((
-                Value::Real(value),
-                Support {
-                    requested: bounds.1 - bounds.0,
-                    known: bounds.1 - bounds.0,
-                    captures: Some(CaptureSupport {
-                        known,
-                        total: captures.len(),
-                    }),
-                    status: if unknown > 0 {
-                        MeasurementStatus::UnknownData
-                    } else if value.is_none() {
-                        MeasurementStatus::NonFinite
-                    } else {
-                        MeasurementStatus::Complete
-                    },
-                },
-            ));
+            match held {
+                Value::Real(Some(value)) => {
+                    known += 1;
+                    aggregate = match reduction {
+                        Reduction::SampleMin => aggregate.min(value),
+                        Reduction::SampleMax => aggregate.max(value),
+                        Reduction::SampleMean => {
+                            let delta = value - aggregate;
+                            if delta.is_finite() {
+                                aggregate + delta / known as f64
+                            } else {
+                                aggregate * ((known - 1) as f64 / known as f64)
+                                    + value / known as f64
+                            }
+                        }
+                        _ => aggregate + value,
+                    };
+                }
+                _ => unknown += 1,
+            }
         }
+        let value = if unknown > 0 && self.options.unknown == UnknownPolicy::Gap {
+            None
+        } else {
+            (aggregate.is_finite() && (known > 0 || reduction == Reduction::Sum))
+                .then_some(aggregate)
+        };
+        Ok((
+            Value::Real(value),
+            Support {
+                observations: MeasurementSupport::Samples(CaptureSupport {
+                    known,
+                    total: captures.len(),
+                }),
+                status: if known == 0 && reduction != Reduction::Sum {
+                    MeasurementStatus::NoKnownData
+                } else if unknown > 0 {
+                    MeasurementStatus::UnknownData
+                } else if value.is_none() {
+                    MeasurementStatus::NonFinite
+                } else {
+                    MeasurementStatus::Complete
+                },
+            },
+        ))
+    }
+
+    fn reduce_time(
+        &mut self,
+        reduction: Reduction,
+        waveform: &Waveform,
+        bounds: (u64, u64),
+    ) -> Result<(Value, Support)> {
         let requested = bounds.1 - bounds.0;
         let mut known = 0_u64;
         let mut area = 0.0;
         let mut compensation = 0.0;
+        let mut mean_scale = 1.0;
         let mut extremum: Option<f64> = None;
-        let mut unknown = false;
         let weight = tick_weight(self.options.time_base);
         let mut start = bounds.0;
-        let mut next_event = waveform
-            .events
-            .partition_point(|event| event.time <= bounds.0);
+        let mut next_event = waveform.events.partition_point(|event| event.time <= start);
         while start < bounds.1 {
             self.work.spend(1)?;
             let next = waveform
                 .events
                 .get(next_event)
-                .filter(|event| event.time < bounds.1)
-                .map_or(bounds.1, |event| event.time);
-            next_event += 1;
-            let duration = next - start;
-            match waveform.value_at(start) {
-                Value::Real(Some(value)) => {
-                    known += duration;
-                    let term = value
-                        * duration as f64
-                        * if reduction == Reduction::Integral {
-                            weight
+                .map_or(bounds.1, |event| event.time.min(bounds.1));
+            let held = next_event.checked_sub(1).map(|i| waveform.events[i].value);
+            if let Some(Value::Real(Some(value))) = held {
+                let duration = next - start;
+                known += duration;
+                match reduction {
+                    Reduction::Min => extremum = Some(extremum.map_or(value, |v| v.min(value))),
+                    Reduction::Max => extremum = Some(extremum.map_or(value, |v| v.max(value))),
+                    _ => {
+                        let term = if reduction == Reduction::Mean {
+                            // A u64 duration can add 64 exponent bits to a finite input.
+                            const SCALE: f64 = 1.0 / (u64::MAX as f64);
+                            if mean_scale == 1.0 && value.abs() > f64::MAX * SCALE {
+                                mean_scale = SCALE;
+                                area *= SCALE;
+                                compensation *= SCALE;
+                            }
+                            (value * mean_scale) * duration as f64
                         } else {
-                            1.0
+                            value * (duration as f64 * weight)
                         };
-                    let delta = term - compensation;
-                    let total = area + delta;
-                    compensation = (total - area) - delta;
-                    area = total;
-                    extremum = Some(match (reduction, extremum) {
-                        (Reduction::Min, Some(current)) => current.min(value),
-                        (Reduction::Max, Some(current)) => current.max(value),
-                        _ => value,
-                    });
+                        let delta = term - compensation;
+                        let total = area + delta;
+                        compensation = (total - area) - delta;
+                        area = total;
+                    }
                 }
-                _ => unknown = true,
             }
             start = next;
+            next_event += 1;
         }
+        let unknown = known < requested;
         let strict_unknown = unknown && self.options.unknown == UnknownPolicy::Gap;
         let value = match reduction {
             Reduction::Mean if known > 0 && !strict_unknown => {
-                let divisor = match self.options.unknown {
-                    UnknownPolicy::Gap => requested,
-                    UnknownPolicy::Skip => known,
-                };
-                (area / divisor as f64)
-                    .is_finite()
-                    .then_some(area / divisor as f64)
+                let mean = (area / known as f64) / mean_scale;
+                mean.is_finite().then_some(mean)
             }
             Reduction::Integral if !strict_unknown => area.is_finite().then_some(area),
-            Reduction::Min | Reduction::Max if known > 0 && !strict_unknown => extremum,
+            Reduction::Min | Reduction::Max if !strict_unknown => extremum,
             _ => None,
         };
         Ok((
             Value::Real(value),
             Support {
-                requested,
-                known,
-                captures: None,
-                status: if unknown {
-                    MeasurementStatus::UnknownData
-                } else if known == 0 && reduction != Reduction::Integral {
+                observations: MeasurementSupport::Time {
+                    known,
+                    total: requested,
+                },
+                status: if known == 0 && reduction != Reduction::Integral {
                     MeasurementStatus::NoKnownData
+                } else if unknown {
+                    MeasurementStatus::UnknownData
                 } else if value.is_none() {
                     MeasurementStatus::NonFinite
                 } else {
@@ -1170,10 +1227,26 @@ struct Scalar {
 
 #[derive(Clone, Copy)]
 struct Support {
-    requested: u64,
-    known: u64,
-    captures: Option<CaptureSupport>,
+    observations: MeasurementSupport,
     status: MeasurementStatus,
+}
+
+impl Support {
+    fn combine(self, other: Self) -> Self {
+        use MeasurementStatus::{Complete, NoKnownData, NonFinite, UnknownData};
+        // Counts from independent operands do not identify which timestamps overlap.
+        Self {
+            observations: MeasurementSupport::Combined {
+                fully_known: self.observations.fully_known() && other.observations.fully_known(),
+            },
+            status: match (self.status, other.status) {
+                (NonFinite, _) | (_, NonFinite) => NonFinite,
+                (NoKnownData, _) | (_, NoKnownData) => NoKnownData,
+                (UnknownData, _) | (_, UnknownData) => UnknownData,
+                (Complete, Complete) => Complete,
+            },
+        }
+    }
 }
 
 fn positive(value: u64, name: &str) -> Result<u64> {

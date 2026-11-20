@@ -376,9 +376,10 @@ mod tests {
             crate::computed::MeasurementResult::Scalar(crate::computed::Measurement {
                 value: Some(55.0),
                 bounds: (0, 20),
-                requested_ticks: 20,
-                known_ticks: 11,
-                captures: None,
+                support: crate::computed::MeasurementSupport::Time {
+                    known: 11,
+                    total: 20,
+                },
                 policy: crate::computed::UnknownPolicy::Gap,
                 status: crate::computed::MeasurementStatus::Complete,
             }),

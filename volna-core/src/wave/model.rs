@@ -250,39 +250,28 @@ pub(super) fn measurement_text(result: &crate::computed::MeasurementResult) -> S
         let value = measurement
             .value
             .map_or_else(|| "unavailable".into(), |value| value.to_string());
-        let support = measurement.captures.map_or_else(
-            || {
-                format!(
-                    "{}/{} ticks",
-                    measurement.known_ticks, measurement.requested_ticks
-                )
-            },
-            |captures| format!("{}/{} captures", captures.known, captures.total),
+        use crate::computed::MeasurementSupport;
+        let support = match measurement.support {
+            MeasurementSupport::Time { known, total } => format!("{known}/{total} ticks"),
+            MeasurementSupport::Samples(count) => {
+                format!("{}/{} captures", count.known, count.total)
+            }
+            MeasurementSupport::Combined { .. } => "combined".to_owned(),
+        };
+        let coverage = measurement.support.coverage().map_or_else(
+            || "unavailable".to_owned(),
+            |v| format!("{:.2}%", v * 100.0),
         );
         format!(
-            "value={value} bounds=[{}, {}) policy={:?} support={support} coverage={:.2}% status={:?}",
-            measurement.bounds.0,
-            measurement.bounds.1,
-            measurement.policy,
-            measurement.coverage() * 100.0,
-            measurement.status
+            "value={value} bounds=[{}, {}) policy={:?} support={support} coverage={coverage} status={:?}",
+            measurement.bounds.0, measurement.bounds.1, measurement.policy, measurement.status
         )
     }
     match result {
         crate::computed::MeasurementResult::Scalar(measurement) => value(measurement),
-        crate::computed::MeasurementResult::Table(rows) => rows
-            .iter()
-            .map(|row| match &row.result {
-                Ok(measurement) => format!(
-                    "[{}, {}): {}",
-                    row.bounds.0,
-                    row.bounds.1,
-                    value(measurement)
-                ),
-                Err(error) => format!("[{}, {}): {error}", row.bounds.0, row.bounds.1),
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+        crate::computed::MeasurementResult::Table(rows) => {
+            rows.iter().map(value).collect::<Vec<_>>().join("\n")
+        }
     }
 }
 
@@ -866,6 +855,9 @@ pub enum Drag {
 pub enum MenuAction {
     Sampling(crate::sampling::SamplingCommand),
     Derived,
+    EditFormula,
+    BindFormulaInput,
+    MeasureSignal,
     CopyValues,
     CopyPaths,
     Format(String),
@@ -1059,17 +1051,33 @@ impl RowEdit {
 
 // Draft presentation stays outside the row tree used by persistence and undo.
 pub(crate) struct PreviewRow {
-    pub source_row: usize,
     pub revision: u64,
     pub index: usize,
     pub before: usize,
     pub entry: Entry,
     pub status: String,
-    pub stale: bool,
+}
+
+// Row edits must follow the suspended formula even while Measure owns the preview.
+#[derive(Default)]
+pub(crate) struct DraftRows {
+    pub active: Option<usize>,
+    pub suspended: Option<usize>,
+}
+
+impl DraftRows {
+    fn remap(&self, mut position: impl FnMut(usize) -> Option<usize>) -> Self {
+        Self {
+            active: self.active.and_then(&mut position),
+            suspended: self.suspended.and_then(position),
+        }
+    }
 }
 
 pub struct WaveModel {
     pub(crate) preview: Option<PreviewRow>,
+    pub(crate) draft_rows: DraftRows,
+    pub pinned_readings: Vec<crate::computed::PinnedReading>,
     pub(super) transaction_detail: std::cell::RefCell<lane::DetailCache>,
     transaction_scroll: Option<(usize, f32)>,
     pub(super) items: Vec<Entry>,
@@ -1154,6 +1162,8 @@ impl WaveModel {
     pub fn new() -> Self {
         WaveModel {
             preview: None,
+            draft_rows: DraftRows::default(),
+            pinned_readings: Vec::new(),
             transaction_detail: Default::default(),
             transaction_scroll: None,
             items: Vec::new(),
@@ -1188,6 +1198,8 @@ impl WaveModel {
 
     pub fn reset(&mut self, limits: Option<(u64, u64)>) {
         self.preview = None;
+        self.draft_rows = DraftRows::default();
+        self.pinned_readings.clear();
         self.nav.reset(limits);
         self.items.clear();
         self.journal = RowJournal::default();
@@ -1389,27 +1401,16 @@ impl WaveModel {
                 }
             }
         }
-        let preview_source = self.preview_source_after(&splices);
-        let new_preview = self
-            .preview
-            .as_ref()
-            .is_some_and(|preview| preview.index == self.items.len());
+        let draft_rows = self
+            .draft_rows
+            .remap(|row| self.row_after_splices(row, &splices));
         let inverse = tree::apply(&mut self.items, splices)?;
+        self.draft_rows = draft_rows;
         self.edited();
-        if let (Some(preview), Some(source_row)) = (&mut self.preview, preview_source) {
-            preview.source_row = source_row;
-            preview.revision = self.revision;
-            preview.index = if new_preview {
-                self.items.len()
-            } else {
-                source_row
-            };
-        }
         Ok(inverse)
     }
 
-    fn preview_source_after(&self, splices: &[Splice]) -> Option<usize> {
-        let mut row = self.preview.as_ref()?.source_row;
+    fn row_after_splices(&self, mut row: usize, splices: &[Splice]) -> Option<usize> {
         let source = &self.items.get(row)?.signal()?.source;
         for splice in splices {
             if row < splice.at {
@@ -1527,6 +1528,7 @@ impl WaveModel {
     pub(crate) fn restore_rows(&mut self, items: Vec<Entry>) {
         debug_assert!(tree::validate(&items).is_ok());
         self.items = items;
+        self.draft_rows = DraftRows::default();
         self.edited();
     }
 
@@ -1925,6 +1927,17 @@ impl WaveModel {
     }
 
     pub(crate) fn retime_derived(&mut self, by: crate::trace::Rescale) {
+        use crate::trace::Retime;
+        for pin in &mut self.pinned_readings {
+            pin.reading.bounds.0.retime(by);
+            pin.reading.bounds.1.retime(by);
+            if let crate::computed::MeasurementSupport::Time { known, total } =
+                &mut pin.reading.support
+            {
+                known.retime(by);
+                total.retime(by);
+            }
+        }
         for entry in &mut self.items {
             entry.retime_derived(by);
         }
@@ -1998,10 +2011,7 @@ impl WaveModel {
                 .iter()
                 .position(|r| *r == a)
         });
-        let preview_source = self
-            .preview
-            .as_ref()
-            .and_then(|p| moved.position(p.source_row));
+        let draft_rows = self.draft_rows.remap(|row| moved.position(row));
         let roots = moved.roots;
         let anchor = rank
             .and_then(|k| roots.iter().nth(k).copied())
@@ -2021,10 +2031,7 @@ impl WaveModel {
                 anchor,
             },
         );
-        if let (Some(preview), Some(source_row)) = (&mut self.preview, preview_source) {
-            preview.source_row = source_row;
-            preview.revision = self.revision;
-        }
+        self.draft_rows = draft_rows;
         true
     }
 
@@ -2836,6 +2843,9 @@ impl WaveModel {
         if matches!(
             action,
             MenuAction::Derived
+                | MenuAction::BindFormulaInput
+                | MenuAction::MeasureSignal
+                | MenuAction::EditFormula
                 | MenuAction::OpenTable
                 | MenuAction::OpenPipeline(_)
                 | MenuAction::CopyValues

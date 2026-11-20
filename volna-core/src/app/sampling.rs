@@ -111,9 +111,7 @@ impl App {
             .into_iter()
             .map(|input| InputDraft::new(input, &self.doc))
             .collect();
-        editor.calculation_revision += 1;
-        editor.preview = None;
-        editor.stopped = false;
+        editor.invalidate_preview();
         editor.error = None;
         Ok(())
     }

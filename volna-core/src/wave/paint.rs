@@ -238,13 +238,7 @@ pub(crate) fn paint(
         } else {
             inks.ink(model.items(), ix)
         };
-        let ink = plots.ink(ix, inherited, theme).map(|color| {
-            if preview.is_some_and(|p| p.stale) {
-                color.with_alpha(0.45)
-            } else {
-                color
-            }
-        });
+        let ink = plots.ink(ix, inherited, theme);
         let inked;
         let t: &Theme = match ink {
             Some(color) => {
@@ -469,13 +463,15 @@ pub(crate) fn paint(
             }
         }
 
-        if let Some(a) = &item.analog
-            && full_h >= 2.0 * row_h - 0.5
+        if full_h >= 2.0 * row_h - 0.5
+            && let Some(label) = preview
+                .map(|preview| format!("Draft · {}", preview.status))
+                .or_else(|| {
+                    item.analog
+                        .as_ref()
+                        .map(|a| format!("{} · {}", a.draw.label(), a.range.label()))
+                })
         {
-            let label = model.preview_at(ix).map_or_else(
-                || format!("{} · {}", a.draw.label(), a.range.label()),
-                |preview| format!("Draft · {}", preview.status),
-            );
             p.scene.clipped(layout.names, |scene| {
                 scene.text(
                     point(name_x, y + row_h - z(4.0)),

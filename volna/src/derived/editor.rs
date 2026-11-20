@@ -115,16 +115,7 @@ impl CompletionProvider for Completions {
         let Some(prefix) = syntax.completion_prefix(offset) else {
             return Task::ready(Ok(CompletionResponse::Array(Vec::new())));
         };
-        let mut items = FUNCTIONS
-            .iter()
-            .filter(|(name, _)| name.starts_with(prefix))
-            .map(|(name, signature)| CompletionItem {
-                label: (*name).into(),
-                detail: Some((*signature).into()),
-                kind: Some(CompletionItemKind::FUNCTION),
-                ..Default::default()
-            })
-            .collect::<Vec<_>>();
+        let mut items = Vec::new();
         if let Some(owner) = self.0.upgrade()
             && let Some(editor) = &owner.read(cx).app.derived_editor
         {
@@ -141,6 +132,17 @@ impl CompletionProvider for Completions {
                     }),
             );
         }
+        items.extend(
+            FUNCTIONS
+                .iter()
+                .filter(|(name, _)| name.starts_with(prefix))
+                .map(|(name, signature)| CompletionItem {
+                    label: (*name).into(),
+                    detail: Some((*signature).into()),
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    ..Default::default()
+                }),
+        );
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 

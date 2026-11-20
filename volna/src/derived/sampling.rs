@@ -64,7 +64,7 @@ impl DerivedEditor {
         if let Some(formula) = formula {
             self.expression
                 .update(cx, |input, cx| input.set_value(formula, window, cx));
-            self.expression.read(cx).focus_handle(cx).focus(window, cx);
+            self.focus_editor(window, cx);
         }
         self.close_picker();
         self.sync_bindings(window, cx);

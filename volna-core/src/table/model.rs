@@ -2185,13 +2185,9 @@ impl TableModel {
     #[must_use]
     pub fn column_title(&self, source_index: usize) -> &str {
         match &self.source {
-            TableSource::Statistics(data) => match source_index {
-                0 if data.has_intervals() => "Start",
-                0 => "Time",
-                1 => &data.name,
-                2 => "End (ticks)",
-                _ => "",
-            },
+            TableSource::Statistics(data) => {
+                super::statistics::column_title(&data.name, data.has_intervals(), source_index)
+            }
             TableSource::Generator(_) => {
                 self.transaction_column(source_index)
                     .map_or("", |c| match c {

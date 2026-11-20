@@ -1225,38 +1225,58 @@ impl Panel for CanvasPanelView {
                     view.dispatch(PanelsCommand::NewTab { group_of: view.id }, window, cx);
                 })),
         );
-        if self
-            .ws
-            .upgrade()
-            .is_some_and(|owner| owner.read(cx).app.panels.waves(self.id).is_some())
-        {
-            let enabled = self
-                .ws
-                .upgrade()
-                .is_some_and(|owner| owner.read(cx).app.can_derive_signal(self.id));
-            let owner = self.ws.clone();
-            let panel = self.id;
-            let generation = self.generation;
-            buttons.insert(
-                0,
-                Button::new("derive-signal")
-                    .label("Derive")
-                    .ghost()
-                    .small()
-                    .disabled(!enabled)
-                    .tooltip("Create or edit a derived signal from the selected waveform")
-                    .debug_selector(|| "derive-signal".into())
-                    .on_click(move |_, window, cx| {
-                        drop(owner.update(cx, |ws, cx| {
-                            ws.dispatch_if_current(
-                                generation,
-                                Command::Derived(panel, volna_core::computed::Command::Open(None)),
-                                Some(window),
-                                cx,
-                            );
-                        }));
-                    }),
-            );
+        let workspace = self.ws.upgrade()?;
+        let app = &workspace.read(cx).app;
+        if let Some(waves) = app.panels.waves(self.id) {
+            use volna_core::computed::Command as Formula;
+            let eligible = waves.can_derive_signal();
+            let resume = app
+                .derived_editor
+                .as_ref()
+                .is_some_and(|e| e.panel == self.id && e.has_suspended_formula());
+            let selected = waves
+                .selected
+                .first()
+                .copied()
+                .filter(|_| eligible && waves.selected.len() == 1);
+            let commands = [
+                (
+                    "derive-signal",
+                    if resume { "Resume formula" } else { "Derive" },
+                    if resume {
+                        Some(Formula::ResumeFormula)
+                    } else {
+                        eligible.then_some(Formula::Create(None))
+                    },
+                ),
+                ("measure-signal", "Measure", selected.map(Formula::Measure)),
+            ];
+            for (index, (id, label, command)) in commands.into_iter().enumerate() {
+                let owner = self.ws.clone();
+                let panel = self.id;
+                let generation = self.generation;
+                buttons.insert(
+                    index,
+                    Button::new(id)
+                        .label(label)
+                        .ghost()
+                        .small()
+                        .disabled(command.is_none())
+                        .debug_selector(move || id.into())
+                        .on_click(move |_, window, cx| {
+                            if let Some(command) = command.clone() {
+                                drop(owner.update(cx, |ws, cx| {
+                                    ws.dispatch_if_current(
+                                        generation,
+                                        Command::Derived(panel, command),
+                                        Some(window),
+                                        cx,
+                                    );
+                                }));
+                            }
+                        }),
+                );
+            }
         }
         if let Some((follow, activity, navigator_visible, occupancy_visible)) =
             self.ws.upgrade().and_then(|owner| {
@@ -1554,6 +1574,7 @@ impl Render for CanvasPanelView {
             .size_full()
             .relative()
             .flex()
+            .flex_col()
             .track_focus(&self.focus)
             .key_context("Waves")
             .when(unsupported, |el| {
@@ -1564,7 +1585,7 @@ impl Render for CanvasPanelView {
             })
             .when(!unsupported, |el| {
                 let waves = ws.read(cx).app.panels.waves(self.id).is_some();
-                el.child(div().flex_1().min_w_0().h_full().child(
+                el.child(div().flex_1().min_h_0().w_full().child(
                     crate::canvas::PanelCanvas::new(ws, self.id, self.generation).waves(waves),
                 ))
             })

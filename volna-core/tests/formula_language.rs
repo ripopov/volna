@@ -193,8 +193,8 @@ fn rising_edge_captures_apply_simultaneous_updates_and_retain_repeats() {
         },
     ));
     assert_eq!(sum.value, Some(0.0));
-    assert_eq!(sum.captures.unwrap().total, 2);
-    assert_eq!(sum.captures.unwrap().known, 2);
+    assert_eq!(sum.support.captures().unwrap().total, 2);
+    assert_eq!(sum.support.captures().unwrap().known, 2);
 }
 
 // A user samples a flat value on a periodic grid; every requested timestamp remains available to sample-count measurements.
@@ -219,7 +219,7 @@ fn periodic_capture_keeps_equal_values_and_starts_at_the_domain_start() {
         },
     ));
     assert_eq!(sum.value, Some(9.0));
-    assert_eq!(sum.captures.unwrap().total, 3);
+    assert_eq!(sum.support.captures().unwrap().total, 3);
 }
 
 // A user generates signals without recorded bindings; the saved range anchors the sine grid and exact clock transitions.
@@ -324,11 +324,44 @@ fn skip_unknown_reports_known_support_and_coverage() {
         },
     ));
     assert_eq!(skipped.value, Some(8.0 / 3.0));
-    assert_eq!(skipped.known_ticks, 6);
-    assert_eq!(skipped.coverage(), 0.6);
+    assert_eq!(
+        skipped.support,
+        volna_core::computed::MeasurementSupport::Time {
+            known: 6,
+            total: 10
+        }
+    );
+    assert_eq!(skipped.support.coverage(), Some(0.6));
     let strict = measurement(run("interval_mean(a)", &inputs, &sources, options((0, 10))));
     assert_eq!(strict.value, None);
-    assert_eq!(strict.known_ticks, 6);
+    assert_eq!(strict.support, skipped.support);
+}
+
+// Two independently measured signals have gaps at different times. Combining their
+// readings must preserve the policy and avoid reporting full coverage.
+#[test]
+fn combined_measurements_preserve_partial_coverage() {
+    let a = real_history(&[0, 5], &[Some(2.0), None]);
+    let b = real_history(&[0, 5], &[None, Some(3.0)]);
+    let inputs = aliases(&[("a", FormulaType::Real), ("b", FormulaType::Real)]);
+    let sources = [real_source(&a, (0, 10)), real_source(&b, (0, 10))];
+    for (policy, expected) in [(UnknownPolicy::Gap, None), (UnknownPolicy::Skip, Some(5.0))] {
+        let reading = measurement(run(
+            "interval_mean(a) + interval_max(b)",
+            &inputs,
+            &sources,
+            EvaluationOptions {
+                unknown: policy,
+                ..options((0, 10))
+            },
+        ));
+        assert_eq!(reading.value, expected);
+        assert_eq!(reading.support.coverage(), None);
+        assert_eq!(
+            reading.status,
+            volna_core::computed::MeasurementStatus::UnknownData
+        );
+    }
 }
 
 // A user relies on exact type and grammar diagnostics; malformed calls and ambiguous capture or comparison chains never evaluate.
@@ -504,7 +537,7 @@ fn interval_sum_never_treats_unknown_captures_as_zero() {
         options((0, 3)),
     ));
     assert_eq!(strict.value, None);
-    assert_eq!(strict.captures.unwrap().total, 3);
+    assert_eq!(strict.support.captures().unwrap().total, 3);
     let skipped = measurement(run(
         "interval_sum(a @ 1 us)",
         &inputs,
@@ -515,8 +548,8 @@ fn interval_sum_never_treats_unknown_captures_as_zero() {
         },
     ));
     assert_eq!(skipped.value, Some(3.0));
-    assert_eq!(skipped.captures.unwrap().known, 2);
-    assert_eq!(skipped.captures.unwrap().total, 3);
+    assert_eq!(skipped.support.captures().unwrap().known, 2);
+    assert_eq!(skipped.support.captures().unwrap().total, 3);
 }
 
 // A user evaluates extrema and time-weighted area; only positive-duration held values contribute and the physical time unit is applied once.

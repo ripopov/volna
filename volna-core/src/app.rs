@@ -1235,8 +1235,12 @@ impl App {
         self.dispatch(command, now);
         self.sync_derived_source();
         if !pointer {
-            self.computations
-                .retain(&self.derived_demand(), &self.derived_sources());
+            let wanted = self.derived_demand();
+            let sources = wanted
+                .iter()
+                .flat_map(crate::computed::Key::signals)
+                .collect();
+            self.computations.retain(&wanted, &sources);
             self.digital_cache.prune();
         }
         for waves in self.panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
@@ -1596,14 +1600,25 @@ impl App {
                     }
                     return;
                 }
-                if action == MenuAction::Derived {
-                    let row = self
-                        .panels
-                        .waves(panel)
-                        .and_then(|w| w.menu.as_ref())
-                        .map(|m| m.row);
-                    self.derived_command(panel, crate::computed::Command::Open(row));
-                    return;
+                if let Some(row) = self
+                    .panels
+                    .waves(panel)
+                    .and_then(|waves| waves.menu.as_ref())
+                    .filter(|menu| menu.kind == WaveMenuKind::Signal)
+                    .map(|menu| menu.row)
+                {
+                    use crate::computed::Command as Formula;
+                    let command = match action {
+                        MenuAction::Derived => Some(Formula::Create(Some(row))),
+                        MenuAction::EditFormula => Some(Formula::Edit(row)),
+                        MenuAction::MeasureSignal => Some(Formula::Measure(row)),
+                        MenuAction::BindFormulaInput => Some(Formula::BindRow(row)),
+                        _ => None,
+                    };
+                    if let Some(command) = command {
+                        self.derived_command(panel, command);
+                        return;
+                    }
                 }
                 if matches!(action, MenuAction::OpenTable) {
                     let row = self
