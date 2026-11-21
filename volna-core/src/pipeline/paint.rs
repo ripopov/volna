@@ -247,9 +247,14 @@ pub fn paint(
                             let ink = ink.with_alpha(ink.a * dim_alpha);
                             p.scene.clipped(cells, |scene| {
                                 scene.quad(rect, Color::TRANSPARENT, 0.0, 1.0, ink);
+                                // Keep strokes that straddle the viewport edge in the hatch path.
+                                let left = rect.left().max(cells.left() - 1.0);
+                                let right = rect.right().min(cells.right() + 1.0);
+                                let hatch =
+                                    Rect::from_xywh(left, rect.top(), right - left, rect.height());
                                 marks::hatch_with(
                                     scene,
-                                    rect,
+                                    hatch,
                                     cells.left(),
                                     z(HOLLOW_HATCH_PX).max(2.0),
                                     ink.with_alpha(0.55 * dim_alpha),

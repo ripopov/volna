@@ -3235,6 +3235,133 @@ fn flushed_and_open_rows_are_told_apart_by_colour() {
 }
 
 #[test]
+fn panning_a_merged_pipeline_keeps_long_flushed_stages_hatched_and_outlined() {
+    use volna_core::wave::viewport::Viewport;
+
+    const BEGIN: u64 = 100;
+    const END: u64 = 10_100;
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let scope = writer.scope("simd", None).unwrap();
+    let [first, second] = ["slot0", "slot1"].map(|name| {
+        writer
+            .transactions::<()>(vtr::SourceOptions::new(name, Some(scope)), "PIPELINE")
+            .unwrap()
+    });
+    let execute = writer.intern("execute").unwrap();
+    let lane = writer.intern("0").unwrap();
+    let flushed = writer.begin_at(first, BEGIN, &(), None).unwrap();
+    writer
+        .embedded_stage(flushed.owner(), BEGIN, execute, lane, Some(END), vec![])
+        .unwrap();
+    writer.end_at(flushed, END, vtr::Status::Aborted).unwrap();
+    for (begin, end) in [(0, 10), (END + 100, END + 110)] {
+        let tx = writer.begin_at(second, begin, &(), None).unwrap();
+        writer.end_at(tx, end, vtr::Status::Ok).unwrap();
+    }
+    writer.close().unwrap();
+
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
+    app.handle(Command::OpenMergedPipeline {
+        tracks: [first, second]
+            .map(|source| a(TrackRef(source.id())))
+            .to_vec(),
+    });
+    complete_pending(&mut app);
+    let panel = app.panels.focused_id();
+    let theme = Theme::one_dark();
+
+    for (start, edge) in [(BEGIN - 20, BEGIN), (END - 80, END)] {
+        app.doc.shared.viewport.set(Viewport {
+            start: start as f64,
+            end: (start + 100) as f64,
+        });
+        let paint = |app: &mut App| {
+            frame(app, panel, &theme);
+            let pipeline = app.panels.pipeline(panel).unwrap();
+            let cells = pipeline.last_layout().cells;
+            let outline = app
+                .scene()
+                .prims
+                .iter()
+                .find_map(|prim| match prim {
+                    Prim::Quad {
+                        rect,
+                        fill,
+                        border_width: 1.0,
+                        ..
+                    } if *fill == volna_core::Color::TRANSPARENT => Some(*rect),
+                    _ => None,
+                })
+                .expect("the flushed stage has a hollow outline");
+            let (visible_edge, near_viewport_edge) = if edge == BEGIN {
+                assert!(outline.right() > cells.right());
+                (outline.left(), cells.right() - 1.0)
+            } else {
+                assert!(outline.left() < cells.left());
+                (outline.right(), cells.left() + 1.0)
+            };
+            let tick_x = cells.left()
+                + pipeline
+                    .nav
+                    .viewport(&app.doc)
+                    .x_of_tick(edge, f64::from(cells.width())) as f32;
+            assert!((visible_edge - tick_x).abs() < 3.0);
+
+            let hatch = app
+                .scene()
+                .prims
+                .iter()
+                .find_map(|prim| match prim {
+                    Prim::Lines { segments, .. }
+                        if segments.first().is_some_and(|[a, b]| {
+                            b.x > a.x && a.y == outline.bottom() && b.y == outline.top()
+                        }) =>
+                    {
+                        Some(segments)
+                    }
+                    _ => None,
+                })
+                .expect("the flushed stage has a diagonal hatch");
+            assert!(
+                hatch.len() <= cells.width().ceil() as usize,
+                "{} hatch segments for a {} px viewport",
+                hatch.len(),
+                cells.width()
+            );
+            assert!(
+                hatch
+                    .iter()
+                    .any(|[a, b]| a.x <= near_viewport_edge && b.x >= near_viewport_edge)
+            );
+            let middle = cells.left() + 0.5 * cells.width();
+            let hatch_at_center: Vec<_> = hatch
+                .iter()
+                .filter_map(|[a, b]| {
+                    let x = a.x.midpoint(b.x);
+                    ((x - middle).abs() < 20.0).then_some(x)
+                })
+                .collect();
+            assert!(!hatch_at_center.is_empty());
+            (cells, visible_edge, hatch_at_center)
+        };
+        let (cells, edge_before, hatch_before) = paint(&mut app);
+        wheel_with(
+            &mut app,
+            panel,
+            in_box(cells, 0.5, 0.5),
+            -cells.width() / 8.0,
+            0.0,
+            Modifiers::default(),
+        );
+        let (_, edge_after, hatch_after) = paint(&mut app);
+        assert!(edge_before > edge_after + 0.1 * cells.width());
+        assert_eq!(hatch_before, hatch_after, "hatch alignment during pan");
+    }
+}
+
+#[test]
 fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     let (mut app, session, waves, pipeline) = opened(30);
     complete_pending(&mut app);
