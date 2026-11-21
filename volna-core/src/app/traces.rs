@@ -191,6 +191,9 @@ impl App {
                     table.state = crate::table::TableState::Failed(error.to_string());
                 }
             }
+            if let Some(pipeline) = panel.kind.pipeline_mut() {
+                pipeline.refresh(doc);
+            }
         }
         self.sync_analog_summaries();
         self.sync_group_summaries();
@@ -239,6 +242,7 @@ impl App {
         }
         self.collect_edits();
         self.sync_lane_tracks();
+        self.sync_transaction_analysis();
         let Some(slot) = self.forget_trace(trace) else {
             return;
         };

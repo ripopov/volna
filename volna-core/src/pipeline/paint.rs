@@ -73,7 +73,7 @@ pub fn paint(
     focused: bool,
     marker_tooltip_visible: bool,
 ) {
-    let layout = model.last_layout().clone();
+    let layout = model.last_layout();
     let bounds = layout.bounds;
     let t = p.theme;
     let z = |v: f32| v * t.zoom;
@@ -131,7 +131,11 @@ pub fn paint(
     }
 
     let hover_row = match model.hover {
-        Some(Hit::Row(row) | Hit::Cell { row, .. }) => Some(row),
+        Some(Hit::Row(row) | Hit::Cell { row, .. } | Hit::SourceBadge { row, .. }) => Some(row),
+        _ => None,
+    };
+    let hover_badge_row = match model.hover {
+        Some(Hit::SourceBadge { row, .. }) => Some(row),
         _ => None,
     };
     let selected_row = model.selected_row(doc);
@@ -152,17 +156,28 @@ pub fn paint(
                 let border = row_px >= EDGE_MIN_PX;
                 let palette = model.palette();
                 let primary = palette.primary_lane();
-                let band = t.editor.text.with_alpha(0.28);
-                let band_edge = t.editor.text.with_alpha(0.5);
+                let merged = model.is_merged();
+                let band_base = t.editor.text.with_alpha(0.28);
+                let band_edge_base = t.editor.text.with_alpha(0.5);
                 let mut cell_texts = Vec::new();
                 let mut open_edges = Vec::new();
                 for r in layout.row_range.clone() {
-                    let Some((_, tx)) = set.get(r) else { continue };
+                    let Some((source_index, tx)) = set.get(r) else {
+                        continue;
+                    };
                     let y = layout.row_y(r);
                     let row_rect = Rect::new(point(cells.left(), y), size(cells.width(), row_px));
+                    let dimmed = model.is_source_dimmed(source_index);
+                    let dim_alpha = if dimmed { 0.18 } else { 1.0 };
+                    let band = band_base.with_alpha(band_base.a * dim_alpha);
+                    let band_edge = band_edge_base.with_alpha(band_edge_base.a * dim_alpha);
                     if tx.status == Status::Aborted {
-                        p.scene
-                            .clipped(cells, |scene| scene.fill(row_rect, t.wave_flush));
+                        p.scene.clipped(cells, |scene| {
+                            scene.fill(
+                                row_rect,
+                                t.wave_flush.with_alpha(t.wave_flush.a * dim_alpha),
+                            );
+                        });
                     }
                     if hover_row == Some(r) {
                         p.scene
@@ -229,6 +244,7 @@ pub fn paint(
                             } else {
                                 style.edge
                             };
+                            let ink = ink.with_alpha(ink.a * dim_alpha);
                             p.scene.clipped(cells, |scene| {
                                 scene.quad(rect, Color::TRANSPARENT, 0.0, 1.0, ink);
                                 marks::hatch_with(
@@ -236,23 +252,25 @@ pub fn paint(
                                     rect,
                                     cells.left(),
                                     z(HOLLOW_HATCH_PX).max(2.0),
-                                    ink.with_alpha(0.55),
+                                    ink.with_alpha(0.55 * dim_alpha),
                                 );
                             });
                         } else {
+                            let fill_c = style.fill.with_alpha(style.fill.a * dim_alpha);
                             let (border_w, border_c) = if border && xb - xa >= 3.0 {
-                                (1.0, style.edge)
+                                (1.0, style.edge.with_alpha(style.edge.a * dim_alpha))
                             } else {
                                 (0.0, Color::TRANSPARENT)
                             };
                             p.scene.clipped(cells, |scene| {
-                                scene.quad(rect, style.fill, 0.0, border_w, border_c);
+                                scene.quad(rect, fill_c, 0.0, border_w, border_c);
                             });
                         }
                         last_right = Some(last_right.map_or(xb, |r: f32| r.max(xb)));
                         let label_left = xa.max(cells.left());
                         let label_right = xb.min(cells.right());
-                        if band_height >= TEXT_MIN_PX
+                        if !dimmed
+                            && band_height >= TEXT_MIN_PX
                             && let Some((label, w)) = fitting_stage_label(
                                 &mut p,
                                 &stage.name,
@@ -279,17 +297,35 @@ pub fn paint(
                         }
                         let rect =
                             Rect::from_xywh(xa, y + pad, xb - xa, (row_px - 2.0 * pad).max(1.0));
+                        let fill_c = style.fill.with_alpha(style.fill.a * dim_alpha);
                         let (border_w, border_c) = if border && xb - xa >= 3.0 {
-                            (1.0, style.edge)
+                            (1.0, style.edge.with_alpha(style.edge.a * dim_alpha))
                         } else {
                             (0.0, Color::TRANSPARENT)
                         };
                         p.scene.clipped(cells, |scene| {
-                            scene.quad(rect, style.fill, 0.0, border_w, border_c);
+                            scene.quad(rect, fill_c, 0.0, border_w, border_c);
                         });
                         last_right = Some(xb);
                     }
+                    // 3px source-accent stripe on the true left edge of the transaction bar.
+                    if merged
+                        && !dimmed
+                        && border
+                        && let Some(xr) = last_right
+                        && (tx.begin as f64) >= viewport.start
+                        && (tx.begin as f64) <= viewport.end
+                        && let Some(source) = model.sources.get(source_index)
+                    {
+                        let xl = x_of(tx.begin) + gap / 2.0;
+                        let tick_w = z(3.0).min((xr - xl).max(1.0));
+                        let accent = t.source_accent(source.color_slot);
+                        let tick =
+                            Rect::from_xywh(xl, y + pad, tick_w, (row_px - 2.0 * pad).max(1.0));
+                        p.scene.clipped(cells, |scene| scene.fill(tick, accent));
+                    }
                     if tx.status == Status::Open
+                        && !dimmed
                         && let Some(xr) = last_right
                     {
                         let x = snap(xr) + 0.5;
@@ -328,16 +364,24 @@ pub fn paint(
                     let mut incoming = Vec::new();
                     let mut outgoing = Vec::new();
                     for edge in generator.relations_of(selection.id) {
-                        let forward = generator.transaction_ordinal(edge.relation.from)
-                            == generator.transaction_ordinal(selection.id);
+                        let forward = match edge.from_generator {
+                            Some(from_gen) => {
+                                from_gen == selection.track.item
+                                    && edge.relation.from == selection.id
+                            }
+                            None => {
+                                generator.transaction_ordinal(edge.relation.from)
+                                    == generator.transaction_ordinal(selection.id)
+                            }
+                        };
                         let (other, other_generator) = if forward {
                             (edge.relation.to, edge.to_generator)
                         } else {
                             (edge.relation.from, edge.from_generator)
                         };
-                        let Some(other_row) =
-                            other_generator.and_then(|generator| set.row_of(generator, other))
-                        else {
+                        let Some(other_row) = other_generator.and_then(|generator| {
+                            set.row_of(selection.track.trace, generator, other)
+                        }) else {
                             continue;
                         };
                         let Some((_, tx)) = set.get(other_row) else {
@@ -358,17 +402,42 @@ pub fn paint(
                 });
             }
 
+            let merged = model.is_merged();
+            let badges = model.badges();
             let label_font = (row_px * 0.62).clamp(z(7.0), t.mono_size);
-            let digits = set.len().max(1).to_string().len();
+            let badge_font = layout.badge_font;
+            let digits = (set.len().max(1)).ilog10() as usize + 1;
             let digit_w = p.width("0", FontRole::Mono, label_font);
-            let index_right = labels.left() + z(8.0) + digit_w * digits as f32;
+            let badge_left = layout.badge_left;
+            let badge_w = layout.badge_width;
+            let index_right = if merged {
+                layout.badge_right() + z(6.0) + digit_w * digits as f32
+            } else {
+                labels.left() + z(8.0) + digit_w * digits as f32
+            };
             let text_left = index_right + z(8.0);
             if row_px >= LABEL_MIN_PX {
-                let mut texts: Vec<(Point, String, Color)> = Vec::new();
+                let badge_widths: Vec<f32> = if merged {
+                    badges
+                        .labels
+                        .iter()
+                        .map(|lbl| p.width(&lbl.badge, FontRole::Mono, badge_font))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let is_dark = contrast(Color::rgb(0x00ff_ffff), t.panel.bg)
+                    > contrast(Color::rgb(0x0000_0000), t.panel.bg);
+                let mut texts: Vec<(Point, String, Color, f32)> = Vec::new();
                 let mut fills: Vec<(Rect, Color)> = Vec::new();
+                let mut quads: Vec<(Rect, Color, f32, f32, Color)> = Vec::new();
                 for r in layout.row_range.clone() {
-                    let Some((_, tx)) = set.get(r) else { continue };
+                    let Some((source_index, tx)) = set.get(r) else {
+                        continue;
+                    };
                     let y = layout.row_y(r);
+                    let dimmed = model.is_source_dimmed(source_index);
+                    let dim_alpha = if dimmed { 0.25 } else { 1.0 };
                     if hover_row == Some(r) {
                         fills.push((
                             Rect::new(point(labels.left(), y), size(labels.width(), row_px)),
@@ -381,40 +450,111 @@ pub fn paint(
                             t.wave_row_selected,
                         ));
                     }
+                    if merged && let Some(source) = model.sources.get(source_index) {
+                        let accent = t.source_accent(source.color_slot);
+                        let stripe_alpha = if dimmed { 0.22 } else { 1.0 };
+                        fills.push((
+                            Rect::from_xywh(
+                                labels.left(),
+                                y + 1.0,
+                                z(3.0),
+                                (row_px - 2.0).max(1.0),
+                            ),
+                            accent.with_alpha(accent.a * stripe_alpha),
+                        ));
+                        if let Some(lbl) = badges.labels.get(source_index) {
+                            let pill_pad = (row_px * 0.14).clamp(1.0, z(3.0));
+                            let pill_h = (row_px - 2.0 * pill_pad).max(1.0);
+                            let badge_hovered = hover_badge_row == Some(r);
+                            let source_focused = model.focused_source == Some(source_index);
+                            let base_alpha = if is_dark { 0.14 } else { 0.10 };
+                            let fill_alpha = if badge_hovered || source_focused {
+                                (base_alpha + 0.08) * dim_alpha
+                            } else {
+                                base_alpha * dim_alpha
+                            };
+                            let (border_w, border_c) = if badge_hovered || source_focused {
+                                (1.0, accent.with_alpha(0.75 * dim_alpha))
+                            } else {
+                                (0.0, Color::TRANSPARENT)
+                            };
+                            quads.push((
+                                Rect::from_xywh(badge_left, y + pill_pad, badge_w, pill_h),
+                                accent.with_alpha(fill_alpha),
+                                z(3.0),
+                                border_w,
+                                border_c,
+                            ));
+                            let bw = badge_widths.get(source_index).copied().unwrap_or(0.0);
+                            texts.push((
+                                point(snap(badge_left + ((badge_w - bw) * 0.5).max(z(2.0))), y),
+                                lbl.badge.clone(),
+                                accent.with_alpha(accent.a * dim_alpha),
+                                badge_font,
+                            ));
+                        }
+                    }
                     let index = r.to_string();
-                    let w = p.width(&index, FontRole::Mono, label_font);
+                    let w = digit_w * index.len() as f32;
+                    let idx_color = t
+                        .panel
+                        .text_placeholder
+                        .with_alpha(t.panel.text_placeholder.a * dim_alpha);
                     texts.push((
                         point(snap(index_right - w), y),
                         index,
-                        t.panel.text_placeholder,
+                        idx_color,
+                        label_font,
                     ));
-                    let label = PipelineModel::label(tx).to_owned();
-                    let (label, color) = match tx.status {
+                    let label = PipelineModel::label(tx);
+                    let color = match tx.status {
                         Status::Aborted => {
+                            let stripe_x = if merged {
+                                labels.left() + z(3.0)
+                            } else {
+                                labels.left()
+                            };
                             fills.push((
                                 Rect::new(
-                                    point(labels.left(), y + pad),
+                                    point(stripe_x, y + pad),
                                     size(z(2.0), row_px - 2.0 * pad),
                                 ),
-                                t.editor.error,
+                                t.editor.error.with_alpha(t.editor.error.a * dim_alpha),
                             ));
-                            (label, t.panel.text_muted)
+                            t.panel.text_muted
                         }
-                        Status::Open => (label, t.panel.text_muted),
-                        _ => (label, t.panel.text),
+                        Status::Open => t.panel.text_muted,
+                        _ => t.panel.text,
                     };
                     if !label.is_empty() {
-                        texts.push((point(text_left, y), label, color));
+                        texts.push((
+                            point(text_left, y),
+                            label.to_owned(),
+                            color.with_alpha(color.a * dim_alpha),
+                            label_font,
+                        ));
                     }
                 }
                 p.scene.clipped(labels, |scene| {
                     for (rect, color) in fills {
                         scene.fill(rect, color);
                     }
-                    for (origin, text, color) in texts {
-                        scene.text(origin, row_px, text, FontRole::Mono, label_font, color);
+                    for (rect, color, radius, border_w, border_c) in quads {
+                        scene.quad(rect, color, radius, border_w, border_c);
+                    }
+                    for (origin, text, color, font_size) in texts {
+                        scene.text(origin, row_px, text, FontRole::Mono, font_size, color);
                     }
                 });
+                if merged && !layout.is_overview() {
+                    let badge_col = Rect::from_xywh(
+                        labels.left(),
+                        labels.top(),
+                        (layout.badge_right() + z(2.0) - labels.left()).min(labels.width()),
+                        labels.height(),
+                    );
+                    p.scene.cursors.push((badge_col, CursorIcon::PointingHand));
+                }
             } else {
                 let ticks = set.aborted_presence(&map);
                 p.scene.clipped(labels, |scene| {
@@ -438,7 +578,16 @@ pub fn paint(
                 size(bounds.width(), cells.height()),
             );
             p.scene.fill(area, t.editor.bg);
-            let path = model.track.path().join(".");
+            let path = if model.is_merged() {
+                model.badges().panel_title.clone()
+            } else {
+                model
+                    .sources
+                    .first()
+                    .map_or_else(String::new, |s| s.track.path().join("."))
+            };
+            let all_hidden = !model.sources.is_empty()
+                && (0..model.sources.len()).all(|i| !model.is_source_effectively_visible(i));
             let (title, hint, error): (String, String, bool) = match &rows {
                 Rows::Loading => (format!("Loading {path}…"), String::new(), false),
                 Rows::Failed(e) => (format!("Cannot load {path}"), (*e).to_owned(), true),
@@ -448,6 +597,11 @@ pub fn paint(
                     false,
                 ),
                 Rows::Unavailable => ("No trace open".into(), String::new(), false),
+                Rows::Ready(_) if all_hidden => (
+                    "All sources hidden".into(),
+                    "Use Show All or toggle a source chip to display transactions".into(),
+                    false,
+                ),
                 Rows::Ready(_) => (
                     "No transactions recorded".into(),
                     format!("{path} has no records"),
@@ -554,22 +708,41 @@ pub fn paint(
     p.scene.clipped(
         Rect::new(header.origin, size(labels.width(), header.height())),
         |scene| {
-            scene.text(
-                point(labels.left() + z(8.0), header.top()),
-                header.height(),
-                "#",
-                FontRole::UiSemibold,
-                t.ui_size_small,
-                t.panel.text_muted,
-            );
-            scene.text(
-                point(labels.left() + z(36.0), header.top()),
-                header.height(),
-                "Label",
-                FontRole::UiSemibold,
-                t.ui_size_small,
-                t.panel.text_muted,
-            );
+            if model.is_merged() {
+                scene.text(
+                    point(layout.badge_left, header.top()),
+                    header.height(),
+                    "Src",
+                    FontRole::UiSemibold,
+                    t.ui_size_small,
+                    t.panel.text_muted,
+                );
+                scene.text(
+                    point(layout.badge_right() + z(6.0), header.top()),
+                    header.height(),
+                    "# · Label",
+                    FontRole::UiSemibold,
+                    t.ui_size_small,
+                    t.panel.text_muted,
+                );
+            } else {
+                scene.text(
+                    point(labels.left() + z(8.0), header.top()),
+                    header.height(),
+                    "#",
+                    FontRole::UiSemibold,
+                    t.ui_size_small,
+                    t.panel.text_muted,
+                );
+                scene.text(
+                    point(labels.left() + z(36.0), header.top()),
+                    header.height(),
+                    "Label",
+                    FontRole::UiSemibold,
+                    t.ui_size_small,
+                    t.panel.text_muted,
+                );
+            }
         },
     );
     overlay::header_ticks(&mut p, &column, &tick_list, unit);

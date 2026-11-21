@@ -239,6 +239,12 @@ impl Theme<Color> {
         ]);
         let tints = [t.wave_signal, t.tx_relation_out, accent];
         t.sidebar_tints = tints.map(|c| stroke(c, &[t.panel.bg, t.selection.bg, t.hover.bg]));
+        t.source_accents = if dark {
+            super::SOURCE_ACCENTS_DARK
+        } else {
+            super::SOURCE_ACCENTS_LIGHT
+        }
+        .map(Color::rgb);
         t
     }
 

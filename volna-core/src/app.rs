@@ -246,6 +246,14 @@ pub enum Command {
     OpenPipeline {
         track: Traced<TrackRef>,
     },
+    OpenMergedPipeline {
+        tracks: Vec<Traced<TrackRef>>,
+    },
+    AddToPipeline {
+        panel: PanelId,
+        tracks: Vec<Traced<TrackRef>>,
+    },
+    PipelineSources(PanelId, crate::pipeline::PipelineSourceCommand),
     OpenTable {
         selected: Vec<Traced<Member>>,
         clicked: Option<Traced<Member>>,
@@ -910,11 +918,11 @@ impl App {
                 self.changed();
             }
             Some(Delivered::Track) => {
-                self.sync_transaction_analysis();
-                self.initialize_pipelines();
                 for pipeline in self.panels.pipelines_mut() {
                     pipeline.refresh(&self.doc);
                 }
+                self.sync_transaction_analysis();
+                self.initialize_pipelines();
                 let Self { panels, doc, .. } = self;
                 for waves in panels.iter_mut().filter_map(|p| p.kind.waves_mut()) {
                     waves.fit_lanes(doc);
@@ -1372,6 +1380,11 @@ impl App {
                 self.add_to_waves(&members);
             }
             Command::OpenPipeline { track } => self.open_pipeline(track),
+            Command::OpenMergedPipeline { tracks } => self.open_merged_pipeline(tracks),
+            Command::AddToPipeline { panel, tracks } => self.add_to_pipeline(panel, tracks),
+            Command::PipelineSources(panel, command) => {
+                self.pipeline_source_command(panel, command);
+            }
             Command::OpenTable { selected, clicked } => self.open_table(&selected, clicked),
             Command::OpenTableFromPanel { panel, row } => self.open_table_from_panel(panel, row),
             Command::PipelineMeasured(panel, size) => {
@@ -2008,22 +2021,34 @@ impl App {
         let mut occupancy = std::collections::HashMap::new();
         for (track, source) in &wanted {
             occupancy.insert(
-                (track.trace, vec![Arc::as_ptr(source) as usize]),
+                crate::document::OccupancyKey(track.trace, vec![Arc::as_ptr(source) as usize]),
                 vec![source.clone()],
             );
         }
         for pipeline in self.panels.iter().filter_map(|p| p.kind.pipeline()) {
             if pipeline.occupancy.visible
+                && let Some(trace) = pipeline.primary_trace()
                 && let crate::pipeline::Rows::Ready(rows) = pipeline.rows(&self.doc)
+                && !rows.generators().is_empty()
             {
                 let sources = rows.generators().to_vec();
                 occupancy.insert(
-                    (
-                        pipeline.track.trace(),
-                        sources.iter().map(|s| Arc::as_ptr(s) as usize).collect(),
-                    ),
+                    crate::document::OccupancyKey(trace, rows.generator_ptrs().to_vec()),
                     sources,
                 );
+                if let Some(src_idx) = pipeline.highlight_source()
+                    && let Some((src_trace, src_gens)) =
+                        pipeline.source_generators(&self.doc, src_idx)
+                    && !src_gens.is_empty()
+                {
+                    occupancy.insert(
+                        crate::document::OccupancyKey(
+                            src_trace,
+                            src_gens.iter().map(|s| Arc::as_ptr(s) as usize).collect(),
+                        ),
+                        src_gens,
+                    );
+                }
             }
         }
         let budget = self.viewer_memory_budget();
@@ -2090,7 +2115,7 @@ impl App {
         self.panel_command(PanelsCommand::Focus(target));
         let Self { panels, doc, .. } = self;
         if let Some(pipeline) = panels.pipeline_mut(target) {
-            pipeline.reveal_record(doc, track.item, shown.id, now);
+            pipeline.reveal_record(doc, track, shown.id, now);
         }
         self.changed();
     }
@@ -2242,7 +2267,7 @@ impl App {
             .panels
             .get(panel)
             .and_then(|p| p.kind.pipeline())
-            .and_then(|pipeline| pipeline.track.track())
+            .and_then(|pipeline| pipeline.primary_table_track(&self.doc))
         {
             self.track_table(track)
         } else {
@@ -2343,36 +2368,62 @@ impl App {
     }
 
     fn open_pipeline(&mut self, track: Traced<TrackRef>) {
-        let Some(session) = self.doc.session(track.trace).cloned() else {
-            return;
-        };
-        if !session.capabilities().transactions {
-            self.events
-                .push(Event::Notice("This trace records no transactions.".into()));
+        self.open_merged_pipeline(vec![track]);
+    }
+
+    fn open_merged_pipeline(&mut self, tracks: Vec<Traced<TrackRef>>) {
+        let mut unique = Vec::with_capacity(tracks.len());
+        for track in tracks {
+            if !unique.contains(&track) {
+                unique.push(track);
+            }
+        }
+        if unique.is_empty() {
             return;
         }
-        let Some(declaration) = session.tracks().iter().find(|t| t.id == track.item) else {
-            self.events.push(Event::Notice(format!(
-                "Unknown transaction track {}",
-                track.item.0
-            )));
-            return;
-        };
-        let existing = self.panels.pipeline_for_track(track);
-        let model = PipelineModel::open(
-            TrackSource::Resolved {
-                track,
+        let mut resolved = Vec::with_capacity(unique.len());
+        for track in &unique {
+            let Some(session) = self.doc.session(track.trace) else {
+                continue;
+            };
+            if !session.capabilities().transactions {
+                self.events
+                    .push(Event::Notice("This trace records no transactions.".into()));
+                return;
+            }
+            let Some(declaration) = session.tracks().iter().find(|t| t.id == track.item) else {
+                self.events.push(Event::Notice(format!(
+                    "Unknown transaction track {}",
+                    track.item.0
+                )));
+                return;
+            };
+            resolved.push(TrackSource::Resolved {
+                track: *track,
                 path: declaration.path.clone(),
-            },
+            });
+        }
+        if resolved.is_empty() {
+            return;
+        }
+        let existing = if resolved.len() == 1 {
+            self.panels.pipeline_for_track(unique[0])
+        } else {
+            None
+        };
+        let model = PipelineModel::open_merged(
+            resolved,
             self.settings.resolved().link_by_default(),
             &self.doc,
+            Some(self.viewer_memory_budget()),
         );
+        let label_title = model.badges().panel_title.clone();
         let inspector = TransactionModel::new(
             self.viewer_memory_budget(),
             self.settings.resolved().transaction.detail_items,
         );
         let focused = self.panels.focused_id();
-        let label = Some(format!("Open pipeline {}", declaration.path.join(".")));
+        let label = Some(format!("Open pipeline {label_title}"));
         let beside = self.panels.center_target(focused);
         match self.restructure(label, |panels| {
             let replace_start = existing.is_none()
@@ -2403,12 +2454,112 @@ impl App {
                     w.menu_dismiss();
                 }
                 self.sync_selection();
+                self.sync_transaction_analysis();
             }
             Err(error) => {
                 self.events.push(Event::Notice(error.to_string()));
                 self.changed();
             }
         }
+    }
+
+    fn add_to_pipeline(&mut self, panel: PanelId, tracks: Vec<Traced<TrackRef>>) {
+        let mut added = false;
+        let mut notice = None;
+        for track in tracks {
+            let Some(declaration) = self
+                .doc
+                .session(track.trace)
+                .and_then(|s| s.tracks().iter().find(|t| t.id == track.item))
+                .map(|t| t.path.clone())
+            else {
+                continue;
+            };
+            let Self { panels, doc, .. } = self;
+            let Some(pipeline) = panels.pipeline_mut(panel) else {
+                return;
+            };
+            match pipeline.add_source(
+                doc,
+                TrackSource::Resolved {
+                    track,
+                    path: declaration,
+                },
+            ) {
+                Ok(changed) => added |= changed,
+                Err(error) => {
+                    notice = Some(error.to_string());
+                    break;
+                }
+            }
+        }
+        let had_notice = notice.is_some();
+        if let Some(error) = notice {
+            self.events.push(Event::Notice(error));
+        }
+        if added {
+            self.sync_transaction_analysis();
+            self.layout_changed();
+        } else if had_notice {
+            self.changed();
+        }
+    }
+
+    fn pipeline_source_command(
+        &mut self,
+        panel: PanelId,
+        command: crate::pipeline::PipelineSourceCommand,
+    ) {
+        let is_hover = matches!(command, crate::pipeline::PipelineSourceCommand::Hover(_));
+        let is_structural = matches!(
+            command,
+            crate::pipeline::PipelineSourceCommand::Add(_)
+                | crate::pipeline::PipelineSourceCommand::Remove(_)
+                | crate::pipeline::PipelineSourceCommand::Reorder { .. }
+                | crate::pipeline::PipelineSourceCommand::SetAlias(_, _)
+        );
+        let result = {
+            let Self { panels, doc, .. } = self;
+            let Some(pipeline) = panels.pipeline_mut(panel) else {
+                return;
+            };
+            pipeline.source_command(doc, command)
+        };
+        match result {
+            Ok(true) => {
+                self.sync_transaction_analysis();
+                if is_structural {
+                    self.layout_changed();
+                } else {
+                    self.changed();
+                }
+            }
+            Err(error) if !is_hover => {
+                self.events.push(Event::Notice(error.to_string()));
+                self.changed();
+            }
+            Ok(false) | Err(_) => {}
+        }
+    }
+
+    #[must_use]
+    pub fn scope_transaction_tracks(
+        &self,
+        scope: Traced<ScopeId>,
+        recursive: bool,
+    ) -> Vec<(String, Traced<TrackRef>)> {
+        let Some(h) = self.doc.hierarchy(scope.trace) else {
+            return Vec::new();
+        };
+        self.scope_members(scope, recursive, false)
+            .into_iter()
+            .filter(|m| self.member_clock(*m).is_none())
+            .filter_map(|m| {
+                let track = h.member_track(m.item)?;
+                let name = h.member_name(m.item).to_owned();
+                Some((name, m.with(track)))
+            })
+            .collect()
     }
 
     #[must_use]
@@ -2692,10 +2843,10 @@ impl App {
     fn pipeline_clocks(&self) -> Vec<ClockKey> {
         let mut keys: Vec<ClockKey> = Vec::new();
         for p in self.panels.iter().filter_map(|p| p.kind.pipeline()) {
-            if let Some(c) = p.clock(&self.doc)
-                && !keys.iter().any(|k| c.is(k))
-            {
-                keys.push(c.key());
+            for c in p.clocks(&self.doc) {
+                if !keys.iter().any(|k| c.is(k)) {
+                    keys.push(c.key());
+                }
             }
         }
         keys
@@ -3089,7 +3240,11 @@ impl App {
                 Action::GoToCursor => p.go_to_cursor(doc, now),
                 Action::PanLeft => p.pan_fraction(doc, -0.25, now),
                 Action::PanRight => p.pan_fraction(doc, 0.25, now),
-                Action::ClearSelection => p.escape(doc),
+                Action::ClearSelection => {
+                    if p.escape(doc) {
+                        self.sync_transaction_analysis();
+                    }
+                }
                 Action::MoveSelectionUp => p.move_selection(doc, panel, -1, now),
                 Action::MoveSelectionDown => p.move_selection(doc, panel, 1, now),
                 Action::IncreaseRowHeight => p.step_row_height(doc, 1, now),
@@ -3303,6 +3458,30 @@ impl App {
                     .tracks()
                     .iter()
                     .filter(|t| t.kind == "PIPELINE")
+                    .map(move |t| {
+                        let path = t.path.join(".");
+                        let label = if traces.is_combined() {
+                            format!("{trace} · {path}")
+                        } else {
+                            path
+                        };
+                        (label, Traced::new(trace, t.id))
+                    })
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn transaction_generators(&self) -> Vec<(String, Traced<TrackRef>)> {
+        let traces = self.doc.traces();
+        let clocks = &self.doc.clocks;
+        traces
+            .loaded()
+            .flat_map(|(trace, session)| {
+                session
+                    .tracks()
+                    .iter()
+                    .filter(move |t| !clocks.is_clock_track(Traced::new(trace, t.id)))
                     .map(move |t| {
                         let path = t.path.join(".");
                         let label = if traces.is_combined() {
@@ -3788,7 +3967,7 @@ impl App {
             };
             return format!(
                 "panel={} pipeline track={} focused={} linked=({},{}) {state} rows={count} top={:.2} row_px={:.2} label_w={} cursor={:?} markers={} viewport=({:.0},{:.0}) hover={:?} drag={:?} navigator=({},{:.0}) navigator_rect=({:.0},{:.0},{:.0},{:.0}) occupancy=({},{:.0}) occupancy_rect=({:.0},{:.0},{:.0},{:.0})",
-                id.0, p.track.path().join("."), id == self.panels.focused_id(), p.nav.link.viewport, p.nav.link.cursor,
+                id.0, p.badges().panel_title, id == self.panels.focused_id(), p.nav.link.viewport, p.nav.link.cursor,
                 rows.top, rows.row_px, p.label_width,
                 p.nav.cursor(&self.doc), self.doc.markers().len(),
                 p.nav.viewport(&self.doc).start, p.nav.viewport(&self.doc).end,

@@ -178,7 +178,7 @@ impl PanelKind {
     #[must_use]
     pub fn trace(&self) -> Option<crate::trace::TraceId> {
         match self {
-            Self::Pipeline(p) => Some(p.track.trace()),
+            Self::Pipeline(p) => p.single_trace(),
             Self::Table(t) => {
                 let mut traces = t.source.traces();
                 let first = traces.next()?;
@@ -192,7 +192,7 @@ impl PanelKind {
     #[must_use]
     pub fn shows_trace(&self, trace: crate::trace::TraceId) -> bool {
         match self {
-            Self::Pipeline(p) => p.track.trace() == trace,
+            Self::Pipeline(p) => p.has_only_trace(trace),
             Self::Table(t) => t.source.traces().any(|t| t == trace),
             Self::Transaction(m) => {
                 m.pinned() && m.shown().is_some_and(|r| r.track.trace() == trace)
@@ -284,7 +284,16 @@ impl Panel {
             .unwrap_or_else(|| match &self.kind {
                 PanelKind::Waves(_) => format!("Waves{number}"),
                 PanelKind::Pipeline(p) => {
-                    format!("Pipeline{number} · {}", track_name(p.track.path()))
+                    if p.is_merged() {
+                        if compact {
+                            p.badges().compact_title.clone()
+                        } else {
+                            p.badges().panel_title.clone()
+                        }
+                    } else {
+                        let path = p.sources.first().map_or(&[][..], |s| s.track.path());
+                        format!("Pipeline{number} · {}", track_name(path))
+                    }
                 }
                 PanelKind::Table(t) => match &t.source {
                     crate::table::TableSource::Statistics(data) => {
@@ -349,10 +358,8 @@ impl Panel {
             PanelKind::Waves(w) => w.take_edits(id, history),
             PanelKind::Table(t) => t.take_edits(id, history),
             PanelKind::Transaction(t) => t.take_edits(id, history),
-            PanelKind::Pipeline(_)
-            | PanelKind::Start
-            | PanelKind::Settings
-            | PanelKind::Unsupported(_) => {}
+            PanelKind::Pipeline(p) => p.take_edits(id, history),
+            PanelKind::Start | PanelKind::Settings | PanelKind::Unsupported(_) => {}
         }
     }
 
@@ -642,6 +649,14 @@ impl Panels {
     }
 
     #[must_use]
+    pub fn active_pipeline(&self) -> Option<PanelId> {
+        if self.pipeline(self.focused).is_some() {
+            return Some(self.focused);
+        }
+        self.first(|kind| kind.pipeline().is_some())
+    }
+
+    #[must_use]
     pub fn pipeline_for_track(
         &self,
         track: crate::trace::Traced<volna_trace::data::transactions::TrackRef>,
@@ -650,7 +665,7 @@ impl Panels {
             self.panels[id]
                 .kind
                 .pipeline()
-                .is_some_and(|p| p.track.track() == Some(track))
+                .is_some_and(|p| p.sources.len() == 1 && p.sources[0].track.track() == Some(track))
         })
     }
     #[must_use]
@@ -662,9 +677,8 @@ impl Panels {
     ) -> Option<PanelId> {
         self.layout.panels().into_iter().find(|panel| {
             self.panels[panel].kind.pipeline().is_some_and(|p| {
-                p.track.trace() == track.trace
-                    && matches!(p.rows(doc), crate::pipeline::Rows::Ready(set)
-                        if set.row_of(track.item, id).is_some())
+                matches!(p.rows(doc), crate::pipeline::Rows::Ready(set)
+                    if set.row_of(track.trace, track.item, id).is_some())
             })
         })
     }

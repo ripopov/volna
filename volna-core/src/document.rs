@@ -101,6 +101,45 @@ pub(crate) enum TraceEdit {
     Rename(TraceId, Option<String>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct OccupancyKey(pub(crate) TraceId, pub(crate) Vec<usize>);
+
+trait OccupancyLookup {
+    fn parts(&self) -> (TraceId, &[usize]);
+}
+
+impl OccupancyLookup for OccupancyKey {
+    fn parts(&self) -> (TraceId, &[usize]) {
+        (self.0, &self.1)
+    }
+}
+
+impl OccupancyLookup for (TraceId, &[usize]) {
+    fn parts(&self) -> (TraceId, &[usize]) {
+        *self
+    }
+}
+
+impl<'a> std::borrow::Borrow<dyn OccupancyLookup + 'a> for OccupancyKey {
+    fn borrow(&self) -> &(dyn OccupancyLookup + 'a) {
+        self
+    }
+}
+
+impl PartialEq for dyn OccupancyLookup + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.parts() == other.parts()
+    }
+}
+
+impl Eq for dyn OccupancyLookup + '_ {}
+
+impl std::hash::Hash for dyn OccupancyLookup + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.parts().hash(state);
+    }
+}
+
 pub struct Document {
     pub sampling: crate::sampling::SamplingChoices,
     traces: TraceSet,
@@ -133,7 +172,7 @@ pub struct Document {
     >,
     transaction_index_limits: Option<(u64, u64)>,
     occupancies: AnalysisCache<
-        (TraceId, Vec<usize>),
+        OccupancyKey,
         crate::data::occupancy::Occupancy,
         Vec<std::sync::Weak<LoadedGenerator>>,
     >,
@@ -632,7 +671,7 @@ impl Document {
             | LoadRequest::Derived { .. } => true,
         });
         self.transaction_indexes.retain(|(t, _)| t.trace != trace);
-        self.occupancies.retain(|(t, _)| *t != trace);
+        self.occupancies.retain(|key| key.0 != trace);
         self.summaries.retain(|(s, _, _)| s.trace != trace);
         if self.selection.is_some_and(|s| s.track.trace == trace) {
             self.select(None);
@@ -699,15 +738,30 @@ impl Document {
         trace: TraceId,
         sources: &[Arc<LoadedGenerator>],
     ) -> Option<&AnalysisLoad<crate::data::occupancy::Occupancy>> {
-        self.occupancies.get(&(
-            trace,
-            sources.iter().map(|s| Arc::as_ptr(s) as usize).collect(),
-        ))
+        if sources.len() <= 16 {
+            let mut buf = [0usize; 16];
+            for (slot, s) in buf.iter_mut().zip(sources) {
+                *slot = Arc::as_ptr(s) as usize;
+            }
+            return self.occupancy_by_ptrs(trace, &buf[..sources.len()]);
+        }
+        let ptrs: Vec<usize> = sources.iter().map(|s| Arc::as_ptr(s) as usize).collect();
+        self.occupancy_by_ptrs(trace, &ptrs)
+    }
+
+    #[must_use]
+    pub(crate) fn occupancy_by_ptrs(
+        &self,
+        trace: TraceId,
+        ptrs: &[usize],
+    ) -> Option<&AnalysisLoad<crate::data::occupancy::Occupancy>> {
+        let key: &(dyn OccupancyLookup + '_) = &(trace, ptrs);
+        self.occupancies.get(key)
     }
 
     pub(crate) fn sync_occupancies(
         &mut self,
-        wanted: HashMap<(TraceId, Vec<usize>), Vec<Arc<LoadedGenerator>>>,
+        wanted: HashMap<OccupancyKey, Vec<Arc<LoadedGenerator>>>,
         budget: &volna_trace::remote::memory::MemoryBudget,
     ) {
         let limits = (budget.limit(), budget.object_limit());
@@ -716,21 +770,31 @@ impl Document {
             self.occupancy_limits = Some(limits);
         }
         self.occupancies
-            .sync(wanted, |&(trace, _), sources, request| {
+            .sync(wanted, |OccupancyKey(trace, _), sources, request| {
                 let owners = sources.iter().map(Arc::downgrade).collect();
                 self.requests.push(LoadRequest::Occupancy {
                     generation: self.epoch,
                     request,
-                    trace,
+                    trace: *trace,
                     sources,
                     budget: budget.clone(),
                 });
                 (owners, AnalysisLoad::Building(request))
             });
+        let occupancies = &self.occupancies;
         self.requests.retain(|load| match load {
-            LoadRequest::Occupancy { trace, sources, request, .. } => {
-                let key = (*trace, sources.iter().map(|s| Arc::as_ptr(s) as usize).collect());
-                matches!(self.occupancies.get(&key), Some(AnalysisLoad::Building(current)) if current == request)
+            LoadRequest::Occupancy {
+                trace,
+                sources,
+                request,
+                ..
+            } => {
+                let ptrs: Vec<usize> = sources.iter().map(|s| Arc::as_ptr(s) as usize).collect();
+                let key: &(dyn OccupancyLookup + '_) = &(*trace, ptrs.as_slice());
+                matches!(
+                    occupancies.get(key),
+                    Some(AnalysisLoad::Building(current)) if current == request
+                )
             }
             _ => true,
         });
@@ -1264,7 +1328,9 @@ impl Document {
                     log::warn!("Occupancy unavailable: {error:#}");
                 }
                 let changed = generation == self.epoch
-                    && self.occupancies.deliver(&(trace, sources), request, result);
+                    && self
+                        .occupancies
+                        .deliver(&OccupancyKey(trace, sources), request, result);
                 if changed && outdated_refusal {
                     self.occupancies.retry_failed();
                 }

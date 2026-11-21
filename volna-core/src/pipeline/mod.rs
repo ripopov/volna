@@ -20,11 +20,16 @@ mod selection;
 mod stage_layout;
 pub use selection::ZoomSelection;
 pub mod rows;
+pub mod sources;
 pub mod zoom;
 
 pub use layout::PipelineLayout;
 pub use model::{Hit, PipelineModel, RowBoundary, Rows, TrackSource};
 pub use palette::{StagePalette, StageStyle, StageSwatch};
 pub use rows::RowView;
+pub use sources::{
+    FocusStyle, PipelineSource, PipelineSourceCommand, SourceBadges, SourceLabel, SourceLoadStatus,
+    compute_source_badges,
+};
 
 pub(crate) mod workspace;

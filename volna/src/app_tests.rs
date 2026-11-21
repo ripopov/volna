@@ -1,6 +1,8 @@
 //! GPUI adapter tests: the load loop runs on the GPUI executor and theme changes leave core
 //! state alone.
 
+#[path = "merged_pipeline_tests.rs"]
+mod merged_pipeline;
 #[path = "transaction_panel/tests.rs"]
 mod transaction_occupancy;
 

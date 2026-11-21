@@ -244,7 +244,9 @@ fn waveform_menu_opens_the_clicked_generator_in_pipeline_view() {
         app.handle(Command::MenuSelect(waves, action));
         let pipeline = app.panels.focused_id();
         assert_eq!(
-            app.panels.pipeline(pipeline).unwrap().track.track(),
+            app.panels.pipeline(pipeline).unwrap().sources[0]
+                .track
+                .track(),
             Some(track)
         );
         assert!(app.panels.waves(waves).unwrap().menu.is_none());
@@ -3024,7 +3026,8 @@ fn click_sets_the_shared_cursor_to_the_cycle_and_the_wave_value_follows() {
         let p = app.panels.pipeline(pipeline).unwrap();
         let l = p.last_layout();
         let row = l.row_range.start + 1;
-        let (_, tx) = match p.rows(&app.doc) {
+        let rows = p.rows(&app.doc);
+        let (_, tx) = match &rows {
             Rows::Ready(set) => set.get(row).unwrap(),
             _ => panic!(),
         };
@@ -3261,7 +3264,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
         .unwrap()
         .clone();
     assert_eq!(
-        panel_json["track"],
+        panel_json["sources"][0]["track"],
         serde_json::json!(["cpu", "thread0", "instruction"])
     );
     assert_eq!(panel_json["rows"]["row_px"], 12.0);
@@ -3282,7 +3285,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     plan.commit(&mut restored).unwrap();
     assert_eq!(restored.panels.len(), 3);
     let p = restored.panels.pipeline(pipeline).unwrap();
-    assert_eq!(p.track.path(), ["cpu", "thread0", "instruction"]);
+    assert_eq!(p.sources[0].track.path(), ["cpu", "thread0", "instruction"]);
     assert!(p.is_attached());
     assert!(!p.nav.link.cursor && p.nav.link.viewport);
     assert_eq!(p.nav.local_cursor, Some(7));
@@ -3313,7 +3316,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     let mut altered = json.clone();
     for panel in altered["panels"].as_array_mut().unwrap() {
         if panel["kind"] == "pipeline" {
-            panel["track"] = serde_json::json!(["gone", "stream"]);
+            panel["sources"][0]["track"] = serde_json::json!(["gone", "stream"]);
         }
     }
     let mut other = App::new();
@@ -3335,7 +3338,7 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
     plan.commit(&mut other).unwrap();
     let p = other.panels.pipeline(pipeline).unwrap();
     assert_eq!(
-        p.track,
+        p.sources[0].track,
         TrackSource::Unresolved {
             trace: TraceId::A,
             path: vec!["gone".into(), "stream".into()]
@@ -3360,7 +3363,10 @@ fn workspace_round_trip_keeps_pipeline_panels_and_unresolved_tracks_survive() {
         .iter()
         .find(|p| p["kind"] == "pipeline")
         .unwrap();
-    assert_eq!(kept["track"], serde_json::json!(["gone", "stream"]));
+    assert_eq!(
+        kept["sources"][0]["track"],
+        serde_json::json!(["gone", "stream"])
+    );
     let mut bad = json;
     for panel in bad["panels"].as_array_mut().unwrap() {
         if panel["kind"] == "pipeline" {
@@ -3414,6 +3420,7 @@ fn closing_the_last_panel_releases_the_track_and_late_delivery_is_ignored() {
         .panels
         .pipeline(app.panels.focused_id())
         .unwrap()
+        .sources[0]
         .track
         .track()
         .unwrap();
@@ -4867,10 +4874,7 @@ fn occupancy_is_independent_of_waveform_layout_and_shared_when_both_show_a_gener
         }
     }
     assert_eq!(builds, 1);
-    let track = app
-        .panels
-        .pipeline(pipeline)
-        .unwrap()
+    let track = app.panels.pipeline(pipeline).unwrap().sources[0]
         .track
         .track()
         .unwrap();

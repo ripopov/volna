@@ -15,6 +15,7 @@ pub(crate) enum Prop {
     },
     Table(crate::table::model::Prop),
     Transaction(crate::transaction::model::Prop),
+    Pipeline(crate::pipeline::model::Prop),
 }
 
 impl Prop {
@@ -24,6 +25,7 @@ impl Prop {
             Self::Clocks { .. } => (1, 0),
             Self::Table(prop) => (2, prop.kind()),
             Self::Transaction(prop) => (3, prop.kind()),
+            Self::Pipeline(prop) => (4, prop.kind()),
         }
     }
 
@@ -38,6 +40,7 @@ impl Prop {
                 .sum(),
             Self::Table(prop) => prop.bytes(),
             Self::Transaction(prop) => prop.bytes(),
+            Self::Pipeline(prop) => prop.bytes(),
         }
     }
 }
@@ -105,6 +108,9 @@ impl PanelKind {
             Self::Transaction(t) if label.is_none() || !t.pinned() => {
                 t.forget_trace(doc, trace);
             }
+            Self::Pipeline(p) => {
+                p.forget_trace(doc, trace, label.is_some());
+            }
             _ => {}
         }
     }
@@ -128,6 +134,7 @@ impl Panel {
                 .kind
                 .transaction()
                 .is_some_and(|t| t.matches_prop(prop)),
+            Prop::Pipeline(prop) => self.kind.pipeline().is_some_and(|p| p.matches_prop(prop)),
         }
     }
 
@@ -158,6 +165,12 @@ impl Panel {
                     .transaction_mut()
                     .context("not a transaction panel")?
                     .swap_prop(doc, prop),
+            ),
+            Prop::Pipeline(prop) => Prop::Pipeline(
+                self.kind
+                    .pipeline_mut()
+                    .context("not a pipeline panel")?
+                    .swap_prop(doc, prop)?,
             ),
         })
     }

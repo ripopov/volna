@@ -280,11 +280,23 @@ impl App {
                 let (markers, attached) = self.doc.swap_markers(markers, attached);
                 Edit::Markers { markers, attached }
             }
-            Edit::Prop { panel, prop } => Edit::Prop {
-                panel,
-                prop: self.swap_prop(panel, prop)?,
-            },
-            Edit::Traces(edit) => Edit::Traces(self.apply_trace_edit(edit)?),
+            Edit::Prop { panel, prop } => {
+                let is_pipeline = matches!(prop, Prop::Pipeline(_));
+                let inverse = self.swap_prop(panel, prop)?;
+                if is_pipeline {
+                    self.sync_transaction_analysis();
+                    self.layout_changed();
+                }
+                Edit::Prop {
+                    panel,
+                    prop: inverse,
+                }
+            }
+            Edit::Traces(edit) => {
+                let inverse = self.apply_trace_edit(edit)?;
+                self.sync_transaction_analysis();
+                Edit::Traces(inverse)
+            }
             Edit::Layout(structure) => {
                 let mut inverse = self.panels.install(*structure)?;
                 for panel in &mut inverse.reopen {
@@ -295,6 +307,7 @@ impl App {
                 }
                 let notices = self.adopt_panels(&inverse.close);
                 self.events.extend(notices.into_iter().map(Event::Notice));
+                self.sync_transaction_analysis();
                 self.layout_changed();
                 Edit::Layout(Box::new(inverse))
             }

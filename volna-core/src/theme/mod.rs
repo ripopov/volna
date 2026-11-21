@@ -137,6 +137,7 @@ pub struct Theme<C = Color> {
     pub stage_text: C,
     pub stages: StageLadder,
     pub markers: [MarkerColors<C>; 6],
+    pub source_accents: [C; 10],
 
     pub ui_font: &'static str,
     pub mono_font: &'static str,
@@ -179,6 +180,32 @@ fn ca(hex: u32, a: f32) -> Color {
     c(hex).with_alpha(a)
 }
 
+pub(crate) const SOURCE_ACCENTS_DARK: [u32; 10] = [
+    0x0074_ade8,
+    0x005e_c9b0,
+    0x00e5_c07b,
+    0x00c6_78dd,
+    0x00e0_6c75,
+    0x0098_c379,
+    0x00d1_9a66,
+    0x0056_b6c2,
+    0x00bc_a9f7,
+    0x00ea_9bc7,
+];
+
+pub(crate) const SOURCE_ACCENTS_LIGHT: [u32; 10] = [
+    0x002d_6cb0,
+    0x000f_7a66,
+    0x009a_6700,
+    0x008a_3fb0,
+    0x00c0_222d,
+    0x001a_7f37,
+    0x00a1_4f00,
+    0x0000_768a,
+    0x0071_52b5,
+    0x00a2_3e7c,
+];
+
 impl<C: Copy> Theme<C> {
     pub fn trace(&self, trace: crate::trace::TraceId) -> MarkerColors<C> {
         self.markers[trace.index() % self.markers.len()]
@@ -210,6 +237,10 @@ impl<C: Copy> Theme<C> {
 
     pub fn marker(&self, index: usize) -> MarkerColors<C> {
         self.markers[index % self.markers.len()]
+    }
+
+    pub fn source_accent(&self, slot: usize) -> C {
+        self.source_accents[slot % self.source_accents.len()]
     }
 
     pub fn font_family(&self, role: FontRole) -> &'static str {
@@ -279,6 +310,7 @@ impl<C: Copy> Theme<C> {
             stage_text: f(self.stage_text),
             stages: self.stages,
             markers: self.markers.map(|m| m.map(f)),
+            source_accents: self.source_accents.map(f),
             ui_font: self.ui_font,
             mono_font: self.mono_font,
             ui_size: self.ui_size,
@@ -449,6 +481,7 @@ impl Theme<Color> {
                 text: c(0x0028_2c33),
                 hover_text: c(0x0028_2c33),
             }),
+            source_accents: SOURCE_ACCENTS_DARK.map(c),
             ui_font: "Inter",
             mono_font: "JetBrains Mono",
             ui_size: 13.0,
@@ -654,6 +687,13 @@ impl Theme<Color> {
             text: fallback_text(t.panel.text, charts[i]),
             hover_text: fallback_text(t.panel.text, charts[i]),
         });
+        let raw_accents = if dark {
+            SOURCE_ACCENTS_DARK
+        } else {
+            SOURCE_ACCENTS_LIGHT
+        };
+        t.source_accents =
+            raw_accents.map(|hex| stroke(c(hex), &[t.panel.bg, t.editor.bg, t.hover.bg]));
         t
     }
 }

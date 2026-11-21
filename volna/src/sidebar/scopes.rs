@@ -535,7 +535,7 @@ impl Workspace {
                         let trace = node.trace;
                         let scope_menu = move |menu: gpui_kit::component::menu::PopupMenu,
                                                _: &mut Window,
-                                               _: &mut gpui_kit::Context<
+                                               menu_cx: &mut gpui_kit::Context<
                             gpui_kit::component::menu::PopupMenu,
                         >| {
                             if !addable {
@@ -556,20 +556,95 @@ impl Workspace {
                                     }));
                                 })
                             };
-                            let menu = menu.item(add("Add to Waves", true, false)).item(add(
+                            let mut menu = menu.item(add("Add to Waves", true, false)).item(add(
                                 "Add to Waves as Group",
                                 true,
                                 true,
                             ));
                             if nested {
-                                menu.item(add(
+                                menu = menu.item(add(
                                     "Add to Waves as Group, This Scope Only",
                                     false,
                                     true,
-                                ))
-                            } else {
-                                menu
+                                ));
                             }
+                            if let Some(ws) = owner.upgrade() {
+                                let app = &ws.read(menu_cx).app;
+                                let tracks =
+                                    app.scope_transaction_tracks(Traced::new(node.trace, id), true);
+                                let active_pipeline = app.panels.active_pipeline();
+                                // Group peer generators by leaf name (e.g. Instruction vs Warp)
+                                // so right-clicking simt_partition[0] offers clean peer merges.
+                                let mut groups: Vec<(String, Vec<_>)> = Vec::new();
+                                for (leaf, track) in tracks {
+                                    if let Some((_, list)) =
+                                        groups.iter_mut().find(|(n, _)| *n == leaf)
+                                    {
+                                        if !list.contains(&track) {
+                                            list.push(track);
+                                        }
+                                    } else {
+                                        groups.push((leaf, vec![track]));
+                                    }
+                                }
+                                let mergeable: Vec<_> = groups
+                                    .into_iter()
+                                    .filter(|(_, list)| list.len() >= 2)
+                                    .collect();
+                                if !mergeable.is_empty() {
+                                    menu = menu.separator();
+                                    let multi_group = mergeable.len() > 1;
+                                    for (leaf, list) in mergeable {
+                                        let label = if multi_group {
+                                            format!("Open Merged Pipeline: {leaf} ({})", list.len())
+                                        } else {
+                                            format!("Open Merged Pipeline ({})", list.len())
+                                        };
+                                        let open_owner = owner.clone();
+                                        let open_tracks = list.clone();
+                                        menu = menu.item(PopupMenuItem::new(label).on_click(
+                                            move |_, window, cx| {
+                                                drop(open_owner.update(cx, |ws, cx| {
+                                                    ws.dispatch(
+                                                        Command::OpenMergedPipeline {
+                                                            tracks: open_tracks.clone(),
+                                                        },
+                                                        Some(window),
+                                                        cx,
+                                                    );
+                                                }));
+                                            },
+                                        ));
+                                        if let Some(panel) = active_pipeline {
+                                            let add_label = if multi_group {
+                                                format!(
+                                                    "Add {leaf} ({}) to Active Pipeline",
+                                                    list.len()
+                                                )
+                                            } else {
+                                                format!("Add {} to Active Pipeline", list.len())
+                                            };
+                                            let add_owner = owner.clone();
+                                            menu =
+                                                menu.item(PopupMenuItem::new(add_label).on_click(
+                                                    move |_, window, cx| {
+                                                        drop(add_owner.update(cx, |ws, cx| {
+                                                            ws.dispatch(
+                                                                Command::AddToPipeline {
+                                                                    panel,
+                                                                    tracks: list.clone(),
+                                                                },
+                                                                Some(window),
+                                                                cx,
+                                                            );
+                                                        }));
+                                                    },
+                                                ));
+                                        }
+                                    }
+                                }
+                            }
+                            menu
                         };
                         let guides = (0..depth).map(|d| {
                             div()

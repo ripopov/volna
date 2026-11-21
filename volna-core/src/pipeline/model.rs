@@ -2,14 +2,21 @@
 //! row axis, the label column, hover and drags) and every input rule that mutates it.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 use web_time::Instant;
 
 use super::layout::{LABEL_W_DEFAULT, LABEL_W_MAX, LABEL_W_MIN, LayoutInput, PipelineLayout};
 use super::palette::StagePalette;
+use super::row_set::{MergedRows, RowStream};
 use super::rows::{ROW_PX_DEFAULT, ROW_PX_MAX, ROW_PX_MIN, RowView};
 use super::selection::{ZoomPreview, ZoomSelection, ZoomTarget};
+use super::sources::{
+    FocusStyle, PipelineSource, PipelineSourceCommand, SourceBadges, SourceLoadStatus, clean_alias,
+    compute_source_badges, disjoint_stage_notice,
+};
 use super::zoom::{self, CYCLE_PX_MAX, ROW_PX_CAP, ZoomBox, ZoomPoint};
 use crate::clock::ClockKey;
+use crate::data::loaded_tracks::LoadedGenerator;
 use crate::document::{Document, TrackLoadState, TxSelection};
 use crate::geometry::{Modifiers, MouseButton, Point, Rect};
 use crate::marker::LaneHit;
@@ -23,6 +30,7 @@ use crate::wave::viewport::{FIT_MARGIN_PX, Viewport};
 use volna_trace::data::transactions::{
     AttributeValue, Status, TrackRef, Transaction, TransactionRef, TransactionStage,
 };
+use volna_trace::remote::memory::MemoryBudget;
 
 pub const LABEL_ATTRIBUTE: &str = "vtr.label";
 const DRAG_THRESHOLD_PX: f32 = 3.0;
@@ -81,6 +89,7 @@ pub enum Hit {
     Navigator,
     NavigatorSplit,
     Activity(super::ActivityCommand),
+    SourceBadge { row: usize, source: usize },
     Row(usize),
     Cell { row: usize, stage: usize },
     LabelSplit,
@@ -132,9 +141,56 @@ pub enum Rows<'a> {
 
 pub use super::row_set::RowSet;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourcesSnapshot {
+    pub(crate) sources: Vec<PipelineSource>,
+    pub(crate) focused_source: Option<usize>,
+    pub(crate) focus_style: FocusStyle,
+    pub(crate) next_color_slot: usize,
+}
+
+pub(crate) enum Prop {
+    Sources(SourcesSnapshot),
+}
+
+impl Prop {
+    pub(crate) fn kind(&self) -> u8 {
+        match self {
+            Self::Sources(_) => 0,
+        }
+    }
+
+    pub(crate) fn bytes(&self) -> usize {
+        match self {
+            Self::Sources(snap) => snap
+                .sources
+                .iter()
+                .map(|s| {
+                    s.track.path().iter().map(|p| p.len() + 24).sum::<usize>()
+                        + s.alias.as_ref().map_or(0, String::len)
+                        + 64
+                })
+                .sum(),
+        }
+    }
+}
+
+enum VisibleStatus<'a> {
+    ReadyMatched,
+    ReadyNeedsRebuild,
+    Loading,
+    Failed(&'a str),
+    Unresolved,
+    AllHidden,
+    Unavailable,
+}
+
 pub struct PipelineModel {
     pub follow: super::FollowActivity,
-    pub track: TrackSource,
+    pub sources: Vec<PipelineSource>,
+    pub focused_source: Option<usize>,
+    pub focus_style: FocusStyle,
+    pub hovered_source: Option<usize>,
     pub nav: NavState,
     pub rows: Tween<RowView>,
     pub row_cap: f32,
@@ -146,18 +202,49 @@ pub struct PipelineModel {
     pub pointer: Option<Point>,
     pub frames_painted: u64,
     attached: bool,
+    next_color_slot: usize,
+    sources_before: crate::history::Before<SourcesSnapshot>,
+    sources_edit_label: Option<String>,
     opening: Option<super::opening::OpeningView>,
     palette: StagePalette,
+    badges: SourceBadges,
+    merged: MergedRows,
+    disjoint_notice: Option<String>,
+    budget: Option<MemoryBudget>,
     layout: PipelineLayout,
 }
 
 impl PipelineModel {
     #[must_use]
     pub fn new(track: TrackSource, link: Link) -> Self {
+        Self::from_sources(vec![PipelineSource::new(track, 0)], link)
+    }
+
+    #[must_use]
+    pub fn new_merged(tracks: Vec<TrackSource>, link: Link) -> Self {
+        let sources = tracks
+            .into_iter()
+            .enumerate()
+            .map(|(slot, track)| PipelineSource::new(track, slot))
+            .collect();
+        Self::from_sources(sources, link)
+    }
+
+    #[must_use]
+    pub fn from_sources(sources: Vec<PipelineSource>, link: Link) -> Self {
         let mut nav = NavState::new();
         nav.link = link;
+        let next_color_slot = sources
+            .iter()
+            .map(|s| s.color_slot.saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        let badges = compute_source_badges(&sources);
         Self {
-            track,
+            sources,
+            focused_source: None,
+            focus_style: FocusStyle::default(),
+            hovered_source: None,
             follow: super::FollowActivity::default(),
             nav,
             rows: Tween::new(RowView::default()),
@@ -170,17 +257,172 @@ impl PipelineModel {
             pointer: None,
             frames_painted: 0,
             attached: false,
+            next_color_slot,
+            sources_before: crate::history::Before::default(),
+            sources_edit_label: None,
             opening: None,
             palette: StagePalette::default(),
+            badges,
+            merged: MergedRows::default(),
+            disjoint_notice: None,
+            budget: None,
             layout: PipelineLayout::default(),
         }
     }
 
-    pub(crate) fn open(track: TrackSource, link: Link, doc: &Document) -> Self {
-        let mut model = Self::new(track, link);
+    pub(crate) fn open_merged(
+        tracks: Vec<TrackSource>,
+        link: Link,
+        doc: &Document,
+        budget: Option<MemoryBudget>,
+    ) -> Self {
+        let mut model = Self::new_merged(tracks, link);
+        model.budget = budget;
         model.nav.reset(Some(doc.limits()));
         model.opening = Some(super::opening::OpeningView::default());
         model
+    }
+
+    pub(crate) fn set_memory_budget(&mut self, budget: Option<MemoryBudget>) {
+        self.budget = budget;
+    }
+
+    #[must_use]
+    pub fn is_merged(&self) -> bool {
+        self.sources.len() > 1
+    }
+
+    #[must_use]
+    pub fn primary_trace(&self) -> Option<TraceId> {
+        self.sources.first().map(|s| s.track.trace())
+    }
+
+    #[must_use]
+    pub fn single_trace(&self) -> Option<TraceId> {
+        let first = self.primary_trace()?;
+        self.sources
+            .iter()
+            .all(|s| s.track.trace() == first)
+            .then_some(first)
+    }
+
+    #[must_use]
+    pub fn uses_trace(&self, trace: TraceId) -> bool {
+        self.sources.iter().any(|s| s.track.trace() == trace)
+    }
+
+    #[must_use]
+    pub fn has_only_trace(&self, trace: TraceId) -> bool {
+        !self.sources.is_empty() && self.sources.iter().all(|s| s.track.trace() == trace)
+    }
+
+    #[must_use]
+    pub fn badges(&self) -> &SourceBadges {
+        &self.badges
+    }
+
+    #[must_use]
+    pub fn disjoint_notice(&self) -> Option<&str> {
+        self.disjoint_notice.as_deref()
+    }
+
+    /// The source index currently emphasized (hovered chip or soloed source in Dim mode).
+    #[must_use]
+    pub fn highlight_source(&self) -> Option<usize> {
+        if !self.is_merged() {
+            return None;
+        }
+        self.hovered_source
+            .filter(|&i| i < self.sources.len())
+            .or_else(|| {
+                (self.focus_style == FocusStyle::Dim)
+                    .then_some(self.focused_source)
+                    .flatten()
+                    .filter(|&i| i < self.sources.len())
+            })
+    }
+
+    #[must_use]
+    pub fn is_source_dimmed(&self, source_index: usize) -> bool {
+        self.highlight_source()
+            .is_some_and(|focused| focused != source_index)
+    }
+
+    #[must_use]
+    pub fn is_source_effectively_visible(&self, source_index: usize) -> bool {
+        let Some(source) = self.sources.get(source_index) else {
+            return false;
+        };
+        if let Some(focused) = self.focused_source
+            && self.focus_style == FocusStyle::Isolate
+            && focused < self.sources.len()
+        {
+            return source_index == focused;
+        }
+        source.visible
+    }
+
+    #[must_use]
+    pub fn source_status(&self, doc: &Document, index: usize) -> SourceLoadStatus {
+        let Some(source) = self.sources.get(index) else {
+            return SourceLoadStatus::Unavailable;
+        };
+        let Some(track) = source.track.track() else {
+            return SourceLoadStatus::Unresolved;
+        };
+        if !self.attached {
+            return SourceLoadStatus::Unavailable;
+        }
+        match doc.track(track) {
+            Some(TrackLoadState::Ready(loaded)) => SourceLoadStatus::Ready {
+                count: loaded
+                    .generators
+                    .iter()
+                    .map(|g| g.transactions().len())
+                    .sum(),
+            },
+            Some(TrackLoadState::Loading) => SourceLoadStatus::Loading,
+            Some(TrackLoadState::Failed(err)) => SourceLoadStatus::Failed(err.clone()),
+            None => SourceLoadStatus::Unavailable,
+        }
+    }
+
+    pub(crate) fn source_generators(
+        &self,
+        doc: &Document,
+        source_index: usize,
+    ) -> Option<(TraceId, Vec<Arc<LoadedGenerator>>)> {
+        let (trace, gens) = self.source_generators_ref(doc, source_index)?;
+        Some((trace, gens.to_vec()))
+    }
+
+    pub(crate) fn source_generators_ref<'a>(
+        &self,
+        doc: &'a Document,
+        source_index: usize,
+    ) -> Option<(TraceId, &'a [Arc<LoadedGenerator>])> {
+        let source = self.sources.get(source_index)?;
+        let track = source.track.track()?;
+        match doc.track(track) {
+            Some(TrackLoadState::Ready(loaded)) => Some((track.trace, &loaded.generators)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn primary_table_track(&self, doc: &Document) -> Option<Traced<TrackRef>> {
+        if let Some(row) = self.selected_row(doc)
+            && let Rows::Ready(set) = self.rows(doc)
+            && let Some((src_idx, _, _)) = set.get_with_trace(row)
+            && let Some(track) = self.sources.get(src_idx).and_then(|s| s.track.track())
+        {
+            return Some(track);
+        }
+        if let Some(focused) = self.focused_source
+            && let Some(track) = self.sources.get(focused).and_then(|s| s.track.track())
+        {
+            return Some(track);
+        }
+        self.sources.iter().find_map(|s| s.track.track())
     }
 
     pub(crate) fn opening_measurement(&self) -> Option<super::ViewportSize> {
@@ -214,21 +456,33 @@ impl PipelineModel {
         {
             return false;
         }
-        let Rows::Ready(set) = self.rows(doc) else {
+        // Wait for all resolved visible sources to finish loading before framing the first record
+        // so opening a merged panel frames the true earliest merged transaction.
+        if self.sources.iter().enumerate().any(|(i, s)| {
+            self.is_source_effectively_visible(i)
+                && s.track
+                    .track()
+                    .is_some_and(|t| matches!(doc.track(t), Some(TrackLoadState::Loading)))
+        }) {
             return false;
+        }
+        self.sync_merged_cache(doc);
+        let first_info = {
+            let Rows::Ready(set) = self.rows(doc) else {
+                return false;
+            };
+            set.get(0)
+                .map(|(_, first)| (first.begin, super::opening::fallback_time_unit(first)))
         };
         self.opening = None;
-        let Some((_, first)) = set.get(0) else {
+        let Some((first_begin, fallback_unit)) = first_info else {
             return false;
         };
         let unit = self
             .clock(doc)
             .and_then(|clock| clock.timeline())
-            .map_or_else(
-                || super::opening::fallback_time_unit(first),
-                |_| self.cycle_units(doc, first.begin as f64),
-            );
-        let viewport = super::opening::viewport(first.begin, unit, size, doc.limits());
+            .map_or(fallback_unit, |_| self.cycle_units(doc, first_begin as f64));
+        let viewport = super::opening::viewport(first_begin, unit, size, doc.limits());
         self.nav.viewport_state_mut(doc).set(viewport);
         self.rows.set(RowView::default());
         // Following the viewport center would immediately scroll past the first record.
@@ -238,26 +492,38 @@ impl PipelineModel {
 
     #[must_use]
     pub fn clone_view(&self) -> Self {
-        Self {
-            track: self.track.clone(),
-            follow: self.follow,
-            nav: self.nav.clone_view(),
-            rows: Tween::new(self.rows.target()),
-            row_cap: self.row_cap,
-            label_width: self.label_width,
-            navigator: self.navigator,
-            occupancy: self.occupancy,
-            palette: self.palette.clone(),
-            ..Self::new(self.track.clone(), self.nav.link)
-        }
+        let mut cloned = Self::from_sources(self.sources.clone(), self.nav.link);
+        cloned.focused_source = self.focused_source;
+        cloned.focus_style = self.focus_style;
+        cloned.follow = self.follow;
+        cloned.nav = self.nav.clone_view();
+        cloned.rows = Tween::new(self.rows.target());
+        cloned.row_cap = self.row_cap;
+        cloned.label_width = self.label_width;
+        cloned.navigator = self.navigator;
+        cloned.occupancy = self.occupancy;
+        cloned.palette = self.palette.clone();
+        cloned.disjoint_notice.clone_from(&self.disjoint_notice);
+        cloned.budget.clone_from(&self.budget);
+        cloned.next_color_slot = self.next_color_slot;
+        cloned
     }
 
     pub fn attach(&mut self, doc: &mut Document) -> anyhow::Result<()> {
         if self.attached {
             return Ok(());
         }
-        if let Some(track) = self.track.track() {
-            doc.retain_track(track)?;
+        let mut retained = Vec::with_capacity(self.sources.len());
+        for source in &self.sources {
+            if let Some(track) = source.track.track() {
+                if let Err(err) = doc.retain_track(track) {
+                    for prev in retained {
+                        doc.release_track(prev);
+                    }
+                    return Err(err);
+                }
+                retained.push(track);
+            }
         }
         self.attached = true;
         self.refresh(doc);
@@ -268,10 +534,13 @@ impl PipelineModel {
         if !self.attached {
             return;
         }
-        if let Some(track) = self.track.track() {
-            doc.release_track(track);
+        for source in &self.sources {
+            if let Some(track) = source.track.track() {
+                doc.release_track(track);
+            }
         }
         self.attached = false;
+        self.merged.clear();
     }
 
     #[must_use]
@@ -279,16 +548,555 @@ impl PipelineModel {
         self.attached
     }
 
-    pub fn refresh(&mut self, doc: &Document) {
-        if let Rows::Ready(set) = self.rows(doc) {
-            self.palette = StagePalette::build(set.generators());
+    fn snapshot_sources(&self) -> SourcesSnapshot {
+        SourcesSnapshot {
+            sources: self.sources.clone(),
+            focused_source: self.focused_source,
+            focus_style: self.focus_style,
+            next_color_slot: self.next_color_slot,
         }
     }
 
+    fn note_sources_before(&mut self, label: impl Into<String>) {
+        let snap = self.snapshot_sources();
+        self.sources_before.note(|| snap);
+        if self.sources_edit_label.is_none() {
+            self.sources_edit_label = Some(label.into());
+        }
+    }
+
+    pub(crate) fn take_edits(&mut self, panel: PanelId, history: &mut crate::history::History) {
+        let label = self.sources_edit_label.take();
+        if let Some(before) = self.sources_before.take() {
+            history.record(
+                crate::history::Edit::Prop {
+                    panel,
+                    prop: crate::panels::content::Prop::Pipeline(Prop::Sources(before)),
+                },
+                label.or_else(|| Some("Edit pipeline sources".into())),
+            );
+        }
+    }
+
+    pub(crate) fn matches_prop(&self, prop: &Prop) -> bool {
+        match prop {
+            Prop::Sources(snap) => {
+                self.sources == snap.sources
+                    && self.focused_source == snap.focused_source
+                    && self.focus_style == snap.focus_style
+            }
+        }
+    }
+
+    pub(crate) fn swap_prop(&mut self, doc: &mut Document, prop: Prop) -> anyhow::Result<Prop> {
+        match prop {
+            Prop::Sources(next) => {
+                let old = self.snapshot_sources();
+                if self.attached {
+                    let old_tracks: Vec<Traced<TrackRef>> =
+                        old.sources.iter().filter_map(|s| s.track.track()).collect();
+                    let new_tracks: Vec<Traced<TrackRef>> = next
+                        .sources
+                        .iter()
+                        .filter_map(|s| s.track.track())
+                        .collect();
+                    let mut newly_retained = Vec::new();
+                    for &track in &new_tracks {
+                        if !old_tracks.contains(&track) {
+                            if let Err(err) = doc.retain_track(track) {
+                                for prev in newly_retained {
+                                    doc.release_track(prev);
+                                }
+                                return Err(err);
+                            }
+                            newly_retained.push(track);
+                        }
+                    }
+                    for &track in &old_tracks {
+                        if !new_tracks.contains(&track) {
+                            doc.release_track(track);
+                        }
+                    }
+                }
+                self.sources = next.sources;
+                self.focused_source = next.focused_source;
+                self.focus_style = next.focus_style;
+                self.next_color_slot = next.next_color_slot;
+                self.hovered_source = None;
+                self.hover = None;
+                self.refresh(doc);
+                self.clamp_and_follow_after_visibility_change(doc);
+                Ok(Prop::Sources(old))
+            }
+        }
+    }
+
+    pub fn add_source(&mut self, doc: &mut Document, track: TrackSource) -> anyhow::Result<bool> {
+        let duplicate = self
+            .sources
+            .iter()
+            .any(|existing| match (&existing.track, &track) {
+                (
+                    TrackSource::Resolved { track: a, .. },
+                    TrackSource::Resolved { track: b, .. },
+                ) => a == b,
+                _ => {
+                    existing.track.trace() == track.trace() && existing.track.path() == track.path()
+                }
+            });
+        if duplicate {
+            return Ok(false);
+        }
+        if self.attached
+            && let Some(resolved) = track.track()
+        {
+            doc.retain_track(resolved)?;
+        }
+        self.note_sources_before("Add pipeline source");
+        let slot = self.next_color_slot;
+        self.next_color_slot += 1;
+        self.sources.push(PipelineSource::new(track, slot));
+        self.hover = None;
+        self.badges = compute_source_badges(&self.sources);
+        self.refresh(doc);
+        self.clamp_and_follow_after_visibility_change(doc);
+        Ok(true)
+    }
+
+    pub fn remove_source(&mut self, doc: &mut Document, index: usize) -> bool {
+        if self.sources.len() <= 1 || index >= self.sources.len() {
+            return false;
+        }
+        self.note_sources_before("Remove pipeline source");
+        self.remove_source_inner(doc, index);
+        self.badges = compute_source_badges(&self.sources);
+        self.refresh(doc);
+        self.clamp_and_follow_after_visibility_change(doc);
+        true
+    }
+
+    fn remove_source_inner(&mut self, doc: &mut Document, index: usize) {
+        let removed = self.sources.remove(index);
+        if self.attached
+            && let Some(track) = removed.track.track()
+        {
+            doc.release_track(track);
+        }
+        self.focused_source = match self.focused_source {
+            Some(f) if f == index => {
+                self.focus_style = FocusStyle::Dim;
+                None
+            }
+            Some(f) if f > index => Some(f - 1),
+            other => other,
+        };
+        self.hovered_source = match self.hovered_source {
+            Some(h) if h == index => None,
+            Some(h) if h > index => Some(h - 1),
+            other => other,
+        };
+        // A panel reduced back to one source hides the chip strip, so ensure the sole source
+        // cannot be stranded in hidden or isolated focus state.
+        if self.sources.len() == 1 {
+            self.focused_source = None;
+            self.focus_style = FocusStyle::Dim;
+            self.hovered_source = None;
+            self.sources[0].visible = true;
+        }
+        self.hover = None;
+    }
+
+    pub fn reorder_source(&mut self, doc: &Document, from: usize, to: usize) -> bool {
+        if from == to || from >= self.sources.len() || to >= self.sources.len() {
+            return false;
+        }
+        self.note_sources_before("Reorder pipeline sources");
+        let item = self.sources.remove(from);
+        self.sources.insert(to, item);
+        let remap = |idx: usize| {
+            if idx == from {
+                to
+            } else if from < to && idx > from && idx <= to {
+                idx - 1
+            } else if to < from && idx >= to && idx < from {
+                idx + 1
+            } else {
+                idx
+            }
+        };
+        self.focused_source = self.focused_source.map(remap);
+        self.hovered_source = self.hovered_source.map(remap);
+        self.hover = None;
+        self.badges = compute_source_badges(&self.sources);
+        self.refresh(doc);
+        true
+    }
+
+    pub fn forget_trace(&mut self, doc: &mut Document, trace: TraceId, record_undo: bool) {
+        if self.has_only_trace(trace) {
+            if !record_undo {
+                self.detach(doc);
+            }
+            return;
+        }
+        if !self.uses_trace(trace) {
+            return;
+        }
+        if record_undo {
+            self.note_sources_before(format!("Close trace {trace}"));
+        }
+        let mut removed_any = false;
+        let mut idx = 0;
+        while idx < self.sources.len() {
+            if self.sources[idx].track.trace() == trace {
+                if self.sources.len() <= 1 {
+                    break;
+                }
+                self.remove_source_inner(doc, idx);
+                removed_any = true;
+            } else {
+                idx += 1;
+            }
+        }
+        if removed_any {
+            self.badges = compute_source_badges(&self.sources);
+            self.refresh(doc);
+            self.clamp_and_follow_after_visibility_change(doc);
+        }
+    }
+
+    pub fn source_command(
+        &mut self,
+        doc: &mut Document,
+        command: PipelineSourceCommand,
+    ) -> anyhow::Result<bool> {
+        match command {
+            PipelineSourceCommand::Add(track) => {
+                let Some(session) = doc.session(track.trace) else {
+                    return Ok(false);
+                };
+                let Some(declaration) = session.tracks().iter().find(|t| t.id == track.item) else {
+                    return Ok(false);
+                };
+                let path = declaration.path.clone();
+                self.add_source(doc, TrackSource::Resolved { track, path })
+            }
+            PipelineSourceCommand::Remove(index) => Ok(self.remove_source(doc, index)),
+            PipelineSourceCommand::Reorder { from, to } => Ok(self.reorder_source(doc, from, to)),
+            PipelineSourceCommand::ToggleVisible(index) => {
+                if index >= self.sources.len() {
+                    return Ok(false);
+                }
+                if let Some(focused) = self.focused_source
+                    && self.focus_style == FocusStyle::Isolate
+                {
+                    // Exit isolate into explicit multi-source visibility toggling.
+                    self.focused_source = None;
+                    self.focus_style = FocusStyle::Dim;
+                    for (i, s) in self.sources.iter_mut().enumerate() {
+                        s.visible = i == focused || i == index;
+                    }
+                    if focused == index {
+                        self.sources[index].visible = false;
+                    }
+                } else {
+                    self.sources[index].visible = !self.sources[index].visible;
+                    if !self.sources[index].visible && self.focused_source == Some(index) {
+                        self.focused_source = None;
+                        self.focus_style = FocusStyle::Dim;
+                    }
+                }
+                self.hover = None;
+                self.sync_merged_cache(doc);
+                self.clamp_and_follow_after_visibility_change(doc);
+                Ok(true)
+            }
+            PipelineSourceCommand::SetVisible(index, visible) => {
+                if index >= self.sources.len() {
+                    return Ok(false);
+                }
+                if let Some(focused) = self.focused_source
+                    && self.focus_style == FocusStyle::Isolate
+                {
+                    if visible == (index == focused) {
+                        return Ok(false);
+                    }
+                    self.focused_source = None;
+                    self.focus_style = FocusStyle::Dim;
+                    for (i, s) in self.sources.iter_mut().enumerate() {
+                        s.visible = i == focused;
+                    }
+                    self.sources[index].visible = visible;
+                } else {
+                    let source = &mut self.sources[index];
+                    if source.visible == visible {
+                        return Ok(false);
+                    }
+                    source.visible = visible;
+                    if !visible && self.focused_source == Some(index) {
+                        self.focused_source = None;
+                        self.focus_style = FocusStyle::Dim;
+                    }
+                }
+                self.hover = None;
+                self.sync_merged_cache(doc);
+                self.clamp_and_follow_after_visibility_change(doc);
+                Ok(true)
+            }
+            PipelineSourceCommand::SetAlias(index, alias) => {
+                let Some(source) = self.sources.get(index) else {
+                    return Ok(false);
+                };
+                let cleaned = clean_alias(alias.as_deref());
+                if source.alias == cleaned {
+                    return Ok(false);
+                }
+                self.note_sources_before("Rename pipeline source badge");
+                self.sources[index].alias = cleaned;
+                self.badges = compute_source_badges(&self.sources);
+                Ok(true)
+            }
+            PipelineSourceCommand::ToggleFocus(index) => {
+                if index >= self.sources.len() {
+                    return Ok(false);
+                }
+                let was_isolate =
+                    self.focus_style == FocusStyle::Isolate && self.focused_source.is_some();
+                let mut visibility_changed = false;
+                if !self.sources[index].visible {
+                    self.sources[index].visible = true;
+                    self.focused_source = Some(index);
+                    visibility_changed = true;
+                } else if self.focused_source == Some(index) {
+                    self.focused_source = None;
+                    self.focus_style = FocusStyle::Dim;
+                } else {
+                    self.focused_source = Some(index);
+                }
+                let is_isolate =
+                    self.focus_style == FocusStyle::Isolate && self.focused_source.is_some();
+                if was_isolate || is_isolate || visibility_changed {
+                    self.hover = None;
+                    self.sync_merged_cache(doc);
+                }
+                self.clamp_and_follow_after_visibility_change(doc);
+                Ok(true)
+            }
+            PipelineSourceCommand::Isolate(index) => {
+                if index >= self.sources.len() {
+                    return Ok(false);
+                }
+                self.sources[index].visible = true;
+                self.focused_source = Some(index);
+                self.focus_style = FocusStyle::Isolate;
+                self.hover = None;
+                self.sync_merged_cache(doc);
+                self.clamp_and_follow_after_visibility_change(doc);
+                Ok(true)
+            }
+            PipelineSourceCommand::SetFocusStyle(style) => {
+                if self.focus_style == style
+                    || (self.focused_source.is_none() && style != FocusStyle::Dim)
+                {
+                    return Ok(false);
+                }
+                self.focus_style = style;
+                self.hover = None;
+                self.sync_merged_cache(doc);
+                self.clamp_and_follow_after_visibility_change(doc);
+                Ok(true)
+            }
+            PipelineSourceCommand::ClearFocusAndShowAll => {
+                let changed = self.focused_source.is_some()
+                    || self.focus_style != FocusStyle::Dim
+                    || self.sources.iter().any(|s| !s.visible);
+                if !changed {
+                    return Ok(false);
+                }
+                self.focused_source = None;
+                self.focus_style = FocusStyle::Dim;
+                for s in &mut self.sources {
+                    s.visible = true;
+                }
+                self.hover = None;
+                self.sync_merged_cache(doc);
+                self.clamp_and_follow_after_visibility_change(doc);
+                Ok(true)
+            }
+            PipelineSourceCommand::Hover(index) => {
+                let next = index.filter(|&i| i < self.sources.len());
+                if self.hovered_source == next {
+                    return Ok(false);
+                }
+                self.hovered_source = next;
+                Ok(true)
+            }
+            PipelineSourceCommand::RetryFailed => Ok(self.retry(doc)),
+        }
+    }
+
+    fn clamp_and_follow_after_visibility_change(&mut self, doc: &Document) {
+        if !self.laid_out() {
+            return;
+        }
+        let zoom = self.layout.zoom;
+        let mut rows = self.rows.target().zoomed(zoom);
+        rows.clamp(self.cells_h(), self.row_count(doc), zoom);
+        self.rows.set(rows.unzoomed(zoom));
+        if self.follow == super::FollowActivity::Following {
+            let _ = self.follow_activity(doc);
+        } else if let Some(target) = self.activity(doc).target {
+            let rows = self.rows.target().zoomed(zoom);
+            let visible = f64::from(self.cells_h() / rows.row_px);
+            let pos = target as f64 + 0.5;
+            if pos < rows.top || pos > rows.top + visible {
+                self.center_row(doc, target);
+            }
+        }
+    }
+
+    fn merged_cache_status<'a>(&self, doc: &'a Document) -> VisibleStatus<'a> {
+        let mut visible_sources = 0usize;
+        let mut ready_gens = 0usize;
+        let mut total_rows = 0usize;
+        let mut any_loading = false;
+        let mut first_failed: Option<&'a str> = None;
+        let mut any_unresolved = false;
+        let mut any_unavailable = false;
+
+        let fp = self.merged.fingerprint();
+        let mut fp_idx = 0usize;
+        let mut fp_ok = true;
+        for (i, source) in self.sources.iter().enumerate() {
+            if !self.is_source_effectively_visible(i) {
+                continue;
+            }
+            visible_sources += 1;
+            let Some(track) = source.track.track() else {
+                any_unresolved = true;
+                continue;
+            };
+            match doc.track(track) {
+                Some(TrackLoadState::Ready(loaded)) => {
+                    ready_gens += loaded.generators.len();
+                    for g in &loaded.generators {
+                        total_rows += g.transactions().len();
+                        let entry = (i, track.trace, Arc::as_ptr(g) as usize);
+                        if fp.get(fp_idx) != Some(&entry) {
+                            fp_ok = false;
+                        }
+                        fp_idx += 1;
+                    }
+                }
+                Some(TrackLoadState::Loading) => any_loading = true,
+                Some(TrackLoadState::Failed(err)) => {
+                    first_failed.get_or_insert(err.as_str());
+                }
+                None => any_unavailable = true,
+            }
+        }
+        let matched = fp_ok && fp_idx == fp.len();
+
+        if ready_gens > 0 && total_rows > 0 {
+            return if matched {
+                VisibleStatus::ReadyMatched
+            } else {
+                VisibleStatus::ReadyNeedsRebuild
+            };
+        }
+        if any_loading {
+            return VisibleStatus::Loading;
+        }
+        if let Some(error) = first_failed {
+            return VisibleStatus::Failed(error);
+        }
+        if ready_gens > 0 {
+            return if matched {
+                VisibleStatus::ReadyMatched
+            } else {
+                VisibleStatus::ReadyNeedsRebuild
+            };
+        }
+        if any_unresolved {
+            return VisibleStatus::Unresolved;
+        }
+        if visible_sources == 0 {
+            return VisibleStatus::AllHidden;
+        }
+        if any_unavailable {
+            return VisibleStatus::Unavailable;
+        }
+        VisibleStatus::Unavailable
+    }
+
+    fn collect_visible_streams(&self, doc: &Document) -> Vec<RowStream> {
+        let mut streams = Vec::new();
+        for (i, source) in self.sources.iter().enumerate() {
+            if !self.is_source_effectively_visible(i) {
+                continue;
+            }
+            let Some(track) = source.track.track() else {
+                continue;
+            };
+            if let Some(TrackLoadState::Ready(loaded)) = doc.track(track) {
+                for g in &loaded.generators {
+                    streams.push(RowStream {
+                        source_index: i,
+                        trace: track.trace,
+                        generator: Arc::clone(g),
+                    });
+                }
+            }
+        }
+        streams
+    }
+
+    pub(crate) fn sync_merged_cache(&mut self, doc: &Document) {
+        if !self.attached {
+            self.merged.clear();
+            return;
+        }
+        match self.merged_cache_status(doc) {
+            VisibleStatus::ReadyMatched => {}
+            VisibleStatus::AllHidden if self.merged.is_empty() && self.merged.matches(&[]) => {}
+            _ => {
+                let streams = self.collect_visible_streams(doc);
+                self.merged.rebuild(streams, self.budget.as_ref());
+            }
+        }
+    }
+
+    pub fn refresh(&mut self, doc: &Document) {
+        self.badges = compute_source_badges(&self.sources);
+        if !self.attached {
+            self.merged.clear();
+            return;
+        }
+        let mut all_gens = Vec::new();
+        let mut by_source = Vec::new();
+        for (i, source) in self.sources.iter().enumerate() {
+            if let Some(track) = source.track.track()
+                && let Some(TrackLoadState::Ready(loaded)) = doc.track(track)
+            {
+                all_gens.extend(loaded.generators.iter().cloned());
+                by_source.push((i, loaded.generators.clone()));
+            }
+        }
+        if !all_gens.is_empty() {
+            self.palette = StagePalette::build(&all_gens);
+        }
+        self.disjoint_notice = disjoint_stage_notice(&self.sources, &by_source);
+        self.sync_merged_cache(doc);
+    }
+
     pub fn retry(&mut self, doc: &mut Document) -> bool {
-        self.track
-            .track()
-            .is_some_and(|track| doc.retry_track(track))
+        let mut retried = false;
+        for source in &self.sources {
+            if let Some(track) = source.track.track() {
+                retried |= doc.retry_track(track);
+            }
+        }
+        retried
     }
 
     #[must_use]
@@ -297,18 +1105,30 @@ impl PipelineModel {
     }
 
     #[must_use]
-    pub fn rows<'a>(&self, doc: &'a Document) -> Rows<'a> {
-        let Some(track) = self.track.track() else {
-            return Rows::Unresolved;
-        };
-        if !self.attached {
+    pub fn rows<'a>(&'a self, doc: &'a Document) -> Rows<'a> {
+        if self.sources.is_empty() || !self.attached {
             return Rows::Unavailable;
         }
-        match doc.track(track) {
-            Some(TrackLoadState::Ready(loaded)) => Rows::Ready(RowSet::new(&loaded.generators)),
-            Some(TrackLoadState::Loading) => Rows::Loading,
-            Some(TrackLoadState::Failed(error)) => Rows::Failed(error),
-            None => Rows::Unavailable,
+        match self.merged_cache_status(doc) {
+            VisibleStatus::ReadyMatched => Rows::Ready(RowSet::borrowed(&self.merged)),
+            VisibleStatus::ReadyNeedsRebuild => {
+                let streams = self.collect_visible_streams(doc);
+                Rows::Ready(RowSet::owned(MergedRows::build(
+                    streams,
+                    self.budget.as_ref(),
+                )))
+            }
+            VisibleStatus::Loading => Rows::Loading,
+            VisibleStatus::Failed(error) => Rows::Failed(error),
+            VisibleStatus::Unresolved => Rows::Unresolved,
+            VisibleStatus::AllHidden => {
+                if self.merged.matches(&[]) {
+                    Rows::Ready(RowSet::borrowed(&self.merged))
+                } else {
+                    Rows::Ready(RowSet::owned(MergedRows::default()))
+                }
+            }
+            VisibleStatus::Unavailable => Rows::Unavailable,
         }
     }
 
@@ -355,13 +1175,10 @@ impl PipelineModel {
     #[must_use]
     pub fn selected_row(&self, doc: &Document) -> Option<usize> {
         let selection = self.nav.selection(doc)?;
-        if selection.track.trace != self.track.trace() {
-            return None;
-        }
         let Rows::Ready(set) = self.rows(doc) else {
             return None;
         };
-        set.row_of(selection.track.item, selection.id)
+        set.row_of(selection.track.trace, selection.track.item, selection.id)
     }
 
     #[must_use]
@@ -370,7 +1187,20 @@ impl PipelineModel {
             return None;
         }
         match self.hit_at(p, doc) {
-            Some(Hit::Row(row)) if row < self.row_count(doc) => Some(row),
+            Some(Hit::Row(row) | Hit::SourceBadge { row, .. }) if row < self.row_count(doc) => {
+                Some(row)
+            }
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn label_badge_at(&self, doc: &Document, p: Point) -> Option<usize> {
+        if !self.is_merged() || self.layout.is_overview() || !self.layout.badge_column_contains(p) {
+            return None;
+        }
+        match self.hit_at(p, doc) {
+            Some(Hit::SourceBadge { source, .. }) if source < self.sources.len() => Some(source),
             _ => None,
         }
     }
@@ -380,11 +1210,11 @@ impl PipelineModel {
             let Rows::Ready(set) = self.rows(doc) else {
                 return false;
             };
-            let Some((_, tx)) = set.get(row) else {
+            let Some((_, trace, tx)) = set.get_with_trace(row) else {
                 return false;
             };
             TxSelection {
-                track: Traced::new(self.track.trace(), tx.generator),
+                track: Traced::new(trace, tx.generator),
                 id: tx.id,
                 origin: panel,
             }
@@ -437,15 +1267,16 @@ impl PipelineModel {
     pub fn reveal_record(
         &mut self,
         doc: &mut Document,
-        track: TrackRef,
+        track: Traced<TrackRef>,
         id: TransactionRef,
         now: Instant,
     ) -> bool {
+        self.sync_merged_cache(doc);
         let Some((row, begin, end)) = ({
             let Rows::Ready(set) = self.rows(doc) else {
                 return false;
             };
-            set.row_of(track, id).and_then(|row| {
+            set.row_of(track.trace, track.item, id).and_then(|row| {
                 let (_, tx) = set.get(row)?;
                 Some((row, tx.begin, tx.end))
             })
@@ -543,6 +1374,14 @@ impl PipelineModel {
         if self.hover == Some(Hit::Overview) {
             return Some("Pipeline presence · zoom in to inspect records".into());
         }
+        if let Some(Hit::SourceBadge { source, .. }) = self.hover
+            && let Some(lbl) = self.badges.labels.get(source)
+        {
+            return Some(format!(
+                "{} [{}] · Click to Solo, double-click to Isolate",
+                lbl.distinguishing, lbl.badge
+            ));
+        }
         let (row, stage) = match self.hover? {
             Hit::Row(row) => (row, None),
             Hit::Cell { row, stage } => (row, Some(stage)),
@@ -551,8 +1390,14 @@ impl PipelineModel {
         let Rows::Ready(set) = self.rows(doc) else {
             return None;
         };
-        let (_, tx) = set.get(row)?;
-        let mut text = format!("#{row}");
+        let (source_index, tx) = set.get(row)?;
+        let mut text = if self.is_merged()
+            && let Some(lbl) = self.badges.labels.get(source_index)
+        {
+            format!("[{}] #{row}", lbl.badge)
+        } else {
+            format!("#{row}")
+        };
         match tx.status {
             Status::Aborted => text.push_str(" flushed"),
             Status::Open => text.push_str(" open"),
@@ -590,6 +1435,7 @@ impl PipelineModel {
         margins: crate::panels::TimelineMargins,
         device_scale: f64,
     ) -> &PipelineLayout {
+        self.sync_merged_cache(doc);
         let (row_count, failed) = match self.rows(doc) {
             Rows::Ready(set) => (set.len(), false),
             Rows::Failed(_) => (0, true),
@@ -618,6 +1464,9 @@ impl PipelineModel {
             viewport: self.nav.viewport(doc),
             failed,
             device_scale,
+            is_merged: self.is_merged(),
+            max_badge_chars: self.badges.max_badge_chars,
+            mono_size: theme.mono_size,
         };
         self.layout = PipelineLayout::compute(input);
         if let Some(Drag::BoxZoom(selection)) = self.drag
@@ -631,18 +1480,16 @@ impl PipelineModel {
             self.follow_activity(doc)
         };
         let rows_before = self.rows.target();
-        let layout = if self.rows.value == input.rows {
-            self.layout.clone()
-        } else {
-            PipelineLayout::compute(LayoutInput {
+        if self.rows.value != input.rows {
+            self.layout = PipelineLayout::compute(LayoutInput {
                 rows: self.rows.value,
                 ..input
-            })
-        };
-        if !self.rows.is_animating() {
-            self.rows.set(layout.rows.unzoomed(layout.zoom));
+            });
         }
-        self.layout = layout;
+        if !self.rows.is_animating() {
+            let unzoomed = self.layout.rows.unzoomed(self.layout.zoom);
+            self.rows.set(unzoomed);
+        }
         let activity = match followed {
             Some(activity) if self.rows.target() == rows_before => activity,
             _ => self.activity(doc),
@@ -733,6 +1580,13 @@ impl PipelineModel {
             return Some(Hit::Overview);
         }
         if layout.labels.contains(p) {
+            if self.is_merged()
+                && layout.badge_column_contains(p)
+                && let Rows::Ready(set) = self.rows(doc)
+                && let Some((source, _)) = set.get(row)
+            {
+                return Some(Hit::SourceBadge { row, source });
+            }
             return Some(Hit::Row(row));
         }
         let Rows::Ready(set) = self.rows(doc) else {
@@ -1217,20 +2071,43 @@ impl PipelineModel {
         }
     }
 
-    pub fn escape(&mut self, doc: &mut Document) {
+    pub fn escape(&mut self, doc: &mut Document) -> bool {
         if self.drag.is_some() {
             self.drag = None;
+            false
         } else if self.selected_row(doc).is_some() || self.nav.ruler_selection().is_some() {
             self.nav.clear_ruler_selection();
             self.nav.select(doc, None);
+            false
+        } else if self.focused_source.is_some() || self.sources.iter().any(|s| !s.visible) {
+            self.source_command(doc, PipelineSourceCommand::ClearFocusAndShowAll)
+                .unwrap_or(false)
         } else {
             self.nav.set_cursor(doc, None);
+            false
         }
     }
 
     #[must_use]
     pub fn clock<'a>(&self, doc: &'a Document) -> Option<&'a crate::clock::Clock> {
-        doc.clocks.linked(self.track.track()?)
+        self.sources
+            .iter()
+            .find_map(|s| doc.clocks.linked(s.track.track()?))
+    }
+
+    pub fn clocks<'a>(&self, doc: &'a Document) -> Vec<&'a crate::clock::Clock> {
+        let mut clocks = Vec::new();
+        for source in &self.sources {
+            if let Some(track) = source.track.track()
+                && let Some(clock) = doc.clocks.linked(track)
+                && !clocks
+                    .iter()
+                    .any(|c: &&crate::clock::Clock| c.key() == clock.key())
+            {
+                clocks.push(clock);
+            }
+        }
+        clocks
     }
 
     fn cycle_at(&self, doc: &Document, x: f32) -> u64 {
@@ -1519,6 +2396,10 @@ impl PipelineModel {
                 return;
             }
             if ruler.is_some() {
+                return;
+            }
+            if let Some(source) = self.label_badge_at(doc, p) {
+                drop(self.source_command(doc, PipelineSourceCommand::ToggleFocus(source)));
                 return;
             }
             if let Some(row) = self.label_row_at(doc, p) {

@@ -42,6 +42,9 @@ struct TableStamp {
 #[derive(PartialEq)]
 struct PipelineStamp {
     follow: crate::pipeline::FollowActivity,
+    sources: Vec<crate::pipeline::PipelineSource>,
+    focused_source: Option<usize>,
+    focus_style: crate::pipeline::FocusStyle,
     clocks: crate::clock::ClockView,
     link: Link,
     viewport: Option<Viewport>,
@@ -50,6 +53,7 @@ struct PipelineStamp {
     row_cap: f32,
     label_width: f32,
     navigator: crate::pipeline::NavigatorSettings,
+    occupancy: crate::pipeline::OccupancySettings,
 }
 #[derive(PartialEq)]
 struct WaveStamp {
@@ -97,6 +101,7 @@ impl Stamp {
                 | Command::Recent(_)
                 | Command::Open(_)
                 | Command::CloseTrace
+                | Command::PipelineSources(_, crate::pipeline::PipelineSourceCommand::Hover(_))
         ) {
             return None;
         }
@@ -109,6 +114,8 @@ impl Stamp {
             | Command::PipelineActivity(id, _)
             | Command::PipelineNavigator(id, _)
             | Command::PipelineOccupancy(id, _)
+            | Command::PipelineSources(id, _)
+            | Command::AddToPipeline { panel: id, .. }
             | Command::MenuSelect(id, _)
             | Command::RenameMarker(id, _)
             | Command::ZoomToSpan(id, ..)
@@ -164,6 +171,9 @@ impl Stamp {
             }),
             pipeline: app.panels.pipeline(panel).map(|p| PipelineStamp {
                 follow: p.follow,
+                sources: p.sources.clone(),
+                focused_source: p.focused_source,
+                focus_style: p.focus_style,
                 clocks: p.nav.clocks().clone(),
                 link: p.nav.link,
                 viewport: (!p.nav.link.viewport).then(|| p.nav.local_viewport.target()),
@@ -176,6 +186,7 @@ impl Stamp {
                 row_cap: p.row_cap,
                 label_width: p.label_width,
                 navigator: p.navigator,
+                occupancy: p.occupancy,
             }),
             table: app
                 .panels

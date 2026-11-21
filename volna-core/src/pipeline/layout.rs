@@ -32,6 +32,9 @@ pub struct PipelineLayout {
     pub labels: Rect,
     pub cells: Rect,
     pub label_split: Rect,
+    pub badge_left: f32,
+    pub badge_width: f32,
+    pub badge_font: f32,
     pub navigator: super::navigator::Navigator,
     pub navigator_split: Rect,
     pub navigator_grip_target: Rect,
@@ -66,6 +69,9 @@ pub struct LayoutInput<'a> {
     pub viewport: Viewport,
     pub failed: bool,
     pub device_scale: f64,
+    pub is_merged: bool,
+    pub max_badge_chars: usize,
+    pub mono_size: f32,
 }
 
 impl PipelineLayout {
@@ -144,6 +150,13 @@ impl PipelineLayout {
             point(labels.right() - z(SPLITTER_TOLERANCE), bounds.top()),
             size(z(2.0 * SPLITTER_TOLERANCE), bounds.height()),
         );
+        let badge_left = labels.left() + z(7.0);
+        let badge_font = (rows.row_px * 0.54).clamp(z(7.0), input.mono_size * 0.9);
+        let badge_width = if input.is_merged {
+            (badge_font * 0.62 * input.max_badge_chars.max(2) as f32 + z(10.0)).max(z(26.0))
+        } else {
+            0.0
+        };
         let gutter = input.margins.gutter(input.bounds);
         let navigator_width = (input.navigator_width * zoom).min(gutter.width());
         let navigator = super::navigator::Navigator::new(
@@ -184,6 +197,9 @@ impl PipelineLayout {
             labels,
             cells,
             label_split,
+            badge_left,
+            badge_width,
+            badge_font,
             navigator,
             navigator_split,
             navigator_grip_target,
@@ -233,6 +249,19 @@ impl PipelineLayout {
     #[must_use]
     pub fn time_at(&self, viewport: &Viewport, x: f32) -> f64 {
         viewport.time_at(f64::from(x - self.cells.left()), self.cells_width_f64())
+    }
+
+    #[must_use]
+    pub fn badge_right(&self) -> f32 {
+        self.badge_left + self.badge_width
+    }
+
+    #[must_use]
+    pub fn badge_column_contains(&self, p: Point) -> bool {
+        self.badge_width > 0.0
+            && self.labels.contains(p)
+            && p.x >= self.labels.left()
+            && p.x <= (self.badge_right() + 2.0 * self.zoom).min(self.labels.right())
     }
 }
 
@@ -284,6 +313,9 @@ mod tests {
             },
             failed: false,
             device_scale: 1.0,
+            is_merged: false,
+            max_badge_chars: 2,
+            mono_size: 12.0 * zoom,
         })
     }
 

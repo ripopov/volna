@@ -72,7 +72,8 @@ impl PipelineModel {
         let Rows::Ready(rows) = self.rows(doc) else {
             return None;
         };
-        let load = doc.occupancy(self.track.trace(), rows.generators())?;
+        let trace = self.primary_trace()?;
+        let load = doc.occupancy_by_ptrs(trace, rows.generator_ptrs())?;
         let AnalysisLoad::Ready(summary) = load else {
             return None;
         };
@@ -118,13 +119,35 @@ pub(super) fn paint(
         return;
     }
     let viewport = model.nav.viewport(doc);
+    let highlight = model.highlight_source();
+    let visible_sources = (0..model.sources.len())
+        .filter(|&i| model.is_source_effectively_visible(i))
+        .count();
     scene.clipped(area, |scene| {
-        let load = match model.rows(doc) {
-            Rows::Ready(rows) => doc.occupancy(model.track.trace(), rows.generators()),
+        let load = match (model.primary_trace(), model.rows(doc)) {
+            (Some(trace), Rows::Ready(rows)) if !rows.generator_ptrs().is_empty() => {
+                doc.occupancy_by_ptrs(trace, rows.generator_ptrs())
+            }
             _ => None,
         };
         if let Some(AnalysisLoad::Ready(summary)) = load {
             crate::occupancy_plot::paint(scene, summary, &viewport, area, theme);
+            if let Some(src_idx) = highlight
+                && visible_sources > 1
+                && let Some((src_trace, src_gens)) = model.source_generators_ref(doc, src_idx)
+                && let Some(AnalysisLoad::Ready(overlay)) = doc.occupancy(src_trace, src_gens)
+                && let Some(source) = model.sources.get(src_idx)
+            {
+                crate::occupancy_plot::paint_overlay(
+                    scene,
+                    overlay,
+                    summary.maximum(),
+                    &viewport,
+                    area,
+                    theme.source_accent(source.color_slot),
+                    theme,
+                );
+            }
         } else {
             scene.fill(area, theme.panel.bg);
             scene.text(
@@ -132,6 +155,8 @@ pub(super) fn paint(
                 24.0 * theme.zoom,
                 if matches!(load, Some(AnalysisLoad::Failed)) {
                     "Occupancy unavailable"
+                } else if visible_sources == 0 {
+                    "No visible sources"
                 } else {
                     "Preparing occupancy…"
                 },
@@ -163,6 +188,31 @@ pub(super) fn paint(
             theme.ui_size_small,
             theme.panel.text_muted,
         );
+        if model.is_merged() && labels.height() >= 40.0 * theme.zoom {
+            let subtitle = if let Some(src_idx) = highlight
+                && let Some(lbl) = model.badges().labels.get(src_idx)
+            {
+                format!("Total + {} overlay", lbl.badge)
+            } else if model.focus_style == super::FocusStyle::Isolate
+                && let Some(src_idx) = model.focused_source
+                && let Some(lbl) = model.badges().labels.get(src_idx)
+            {
+                format!("Isolated {}", lbl.badge)
+            } else {
+                format!("{visible_sources} sources")
+            };
+            scene.text(
+                point(
+                    labels.left() + 6.0 * theme.zoom,
+                    labels.top() + 20.0 * theme.zoom,
+                ),
+                18.0 * theme.zoom,
+                subtitle,
+                FontRole::Mono,
+                theme.ui_size_small * 0.9,
+                theme.panel.text_placeholder,
+            );
+        }
     });
     scene.cursors.push((area, CursorIcon::PointingHand));
 }

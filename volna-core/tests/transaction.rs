@@ -294,7 +294,9 @@ fn pipeline_label_can_reveal_either_transaction_boundary_without_changing_scale(
         let Rows::Ready(set) = pipeline.rows(&app.doc) else {
             panic!("not loaded")
         };
-        let row = set.row_of(instruction, add).unwrap();
+        let row = set
+            .row_of(volna_core::trace::TraceId::A, instruction, add)
+            .unwrap();
         let (_, tx) = set.get(row).unwrap();
         let layout = pipeline.last_layout();
         assert!(layout.row_range.contains(&row));
@@ -387,7 +389,9 @@ fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
         let Rows::Ready(set) = p.rows(&app.doc) else {
             panic!("not loaded")
         };
-        let row = set.row_of(insn, add).unwrap();
+        let row = set
+            .row_of(volna_core::trace::TraceId::A, insn, add)
+            .unwrap();
         let layout = p.last_layout();
         assert!(layout.row_range.contains(&row));
         let vp = p.nav.viewport(&app.doc);

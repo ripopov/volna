@@ -101,6 +101,65 @@ pub(crate) fn paint(
     }
 }
 
+/// Paint a single source's occupancy contribution over the aggregate occupancy plot using the
+/// aggregate peak scale so engineers can compare one source's concurrency against the total.
+pub(crate) fn paint_overlay(
+    scene: &mut Scene,
+    summary: &crate::data::occupancy::Occupancy,
+    aggregate_peak: usize,
+    viewport: &Viewport,
+    area: Rect,
+    color: crate::color::Color,
+    t: &Theme,
+) {
+    let z = |v: f32| v * t.zoom;
+    let bottom = area.bottom() - z(3.0);
+    let heading = if area.height() >= z(32.0) {
+        z(17.0)
+    } else {
+        0.0
+    };
+    let height = (area.height() - z(7.0) - heading).max(1.0);
+    let peak = aggregate_peak.max(1) as f64;
+    let columns = (area.width().ceil().max(1.0) as usize).min(PIXELS);
+    let step = viewport.width() / columns as f64;
+    let w = area.width() / columns as f32;
+    let mut fills = Vec::with_capacity(columns);
+    let mut peaks = Vec::with_capacity(columns * 2);
+    let mut previous = None;
+    for x in 0..columns {
+        let start = viewport.start + x as f64 * step;
+        let sample = summary.sample(start, start + step);
+        let left = area.left() + x as f32 * w;
+        let h = (height * (sample.average / peak) as f32).clamp(0.0, height);
+        push_horizontal_run(&mut fills, Rect::from_xywh(left, bottom - h, w, h));
+        let y = bottom - (height * (sample.peak as f64 / peak) as f32).clamp(0.0, height);
+        if let Some(old) = previous.filter(|&old| old != y) {
+            peaks.push([point(left, old), point(left, y)]);
+        }
+        if let Some(last) = peaks
+            .last_mut()
+            .filter(|last| last[0].y == y && last[1].y == y && (last[1].x - left).abs() < 0.01)
+        {
+            last[1].x = left + w;
+        } else {
+            peaks.push([point(left, y), point(left + w, y)]);
+        }
+        previous = Some(y);
+    }
+    if let (Some(first), Some(last)) = (fills.first(), fills.last()) {
+        let mut points = Vec::with_capacity(fills.len() * 2 + 2);
+        points.push(point(first.left(), bottom));
+        for rect in &fills {
+            points.push(rect.origin);
+            points.push(point(rect.right(), rect.top()));
+        }
+        points.push(point(last.right(), bottom));
+        scene.polygon(points, color.with_alpha(0.32));
+    }
+    scene.lines(peaks, color.with_alpha(0.92), 1.5);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

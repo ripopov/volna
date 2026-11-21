@@ -1343,6 +1343,30 @@ impl PanelCanvas {
                     .panel_focus(panel, cx)
                     .unwrap_or_else(|| ws.read(cx).waves_focus.clone());
                 window.focus(&focus, cx);
+                let badge_source = if button == volna_core::geometry::MouseButton::Left {
+                    let app = &ws.read(cx).app;
+                    app.panels
+                        .pipeline(panel)
+                        .and_then(|p| p.label_badge_at(&app.doc, cpoint(ev.position)))
+                } else {
+                    None
+                };
+                if let Some(source) = badge_source {
+                    let cmd = if ev.click_count >= 2 {
+                        volna_core::pipeline::PipelineSourceCommand::Isolate(source)
+                    } else {
+                        volna_core::pipeline::PipelineSourceCommand::ToggleFocus(source)
+                    };
+                    ws.update(cx, |ws, cx| {
+                        ws.dispatch_if_current(
+                            generation,
+                            Command::PipelineSources(panel, cmd),
+                            Some(window),
+                            cx,
+                        );
+                    });
+                    return;
+                }
                 send(
                     &ws,
                     PointerEvent::Down {

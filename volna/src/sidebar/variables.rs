@@ -187,7 +187,6 @@ impl Workspace {
                         }
                         let description: SharedString =
                             h.member_description(member).to_owned().into();
-                        let track = h.member_track(member).map(|track| traced.with(track));
                         let clock = this.app.member_clock(traced).is_some();
                         let generation = this.app.doc.generation();
                         let sampling_items = member.var().map_or_else(Vec::new, |var| {
@@ -361,20 +360,87 @@ impl Workspace {
                                 } else {
                                     menu.item(add("Add to Waves", Command::AddToWaves))
                                 };
-                                let menu = if let Some(track) = track.filter(|_| !clock) {
-                                    let owner = owner.clone();
-                                    menu.item(PopupMenuItem::new("Open in Pipeline").on_click(
-                                        move |_, window, cx| {
-                                            drop(owner.update(cx, |workspace, cx| {
-                                                workspace.dispatch(
-                                                    Command::OpenPipeline { track },
-                                                    Some(window),
-                                                    cx,
-                                                );
-                                            }));
-                                        },
-                                    ))
+                                let (selected_tracks, active_pipeline) = owner
+                                    .upgrade()
+                                    .map(|ws| {
+                                        let app = &ws.read(menu_cx).app;
+                                        let list = &app.variables;
+                                        let members: Vec<_> = if list.selected.contains(&ix) {
+                                            list.selected
+                                                .iter()
+                                                .filter_map(|&i| list.rows.get(i).copied())
+                                                .collect()
+                                        } else {
+                                            vec![traced]
+                                        };
+                                        let mut tracks = Vec::new();
+                                        for m in members {
+                                            if app.member_clock(m).is_some() {
+                                                continue;
+                                            }
+                                            if let Some(h) = app.doc.hierarchy(m.trace)
+                                                && let Some(t) = h.member_track(m.item)
+                                            {
+                                                let tr = m.with(t);
+                                                if !tracks.contains(&tr) {
+                                                    tracks.push(tr);
+                                                }
+                                            }
+                                        }
+                                        (tracks, app.panels.active_pipeline())
+                                    })
+                                    .unwrap_or_default();
+                                let menu = if selected_tracks.is_empty() {
+                                    menu
                                 } else {
+                                    let count = selected_tracks.len();
+                                    let open_label = if count > 1 {
+                                        format!("Open Merged Pipeline ({count})")
+                                    } else {
+                                        "Open in Pipeline".into()
+                                    };
+                                    let owner_open = owner.clone();
+                                    let tracks_open = selected_tracks.clone();
+                                    let mut menu =
+                                        menu.item(PopupMenuItem::new(open_label).on_click(
+                                            move |_, window, cx| {
+                                                drop(owner_open.update(cx, |workspace, cx| {
+                                                    let cmd = if tracks_open.len() > 1 {
+                                                        Command::OpenMergedPipeline {
+                                                            tracks: tracks_open.clone(),
+                                                        }
+                                                    } else {
+                                                        Command::OpenPipeline {
+                                                            track: tracks_open[0],
+                                                        }
+                                                    };
+                                                    workspace.dispatch(cmd, Some(window), cx);
+                                                }));
+                                            },
+                                        ));
+                                    if let Some(panel) = active_pipeline {
+                                        let add_label = if count > 1 {
+                                            format!("Add {count} to Active Pipeline")
+                                        } else {
+                                            "Add to Active Pipeline".into()
+                                        };
+                                        let owner_add = owner.clone();
+                                        let tracks_add = selected_tracks;
+                                        menu = menu.item(PopupMenuItem::new(add_label).on_click(
+                                            move |_, window, cx| {
+                                                drop(owner_add.update(cx, |workspace, cx| {
+                                                    workspace.dispatch(
+                                                        Command::AddToPipeline {
+                                                            panel,
+                                                            tracks: tracks_add.clone(),
+                                                        },
+                                                        Some(window),
+                                                        cx,
+                                                    );
+                                                }));
+                                            },
+                                        ));
+                                    }
                                     menu
                                 };
                                 menu.item(PopupMenuItem::new("Open in table").on_click(

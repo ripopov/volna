@@ -345,7 +345,7 @@ mod tests {
             )
             .unwrap(),
         )];
-        let rows = RowSet::new(&generators);
+        let rows = RowSet::from_generators(&generators);
         let map = Navigator::new(Rect::from_xywh(0.0, 0.0, 64.0, 30.0), rows.len());
         for theme in [
             Theme::volna(true),
@@ -394,7 +394,7 @@ mod tests {
                 )
                 .unwrap(),
             )];
-            let set = RowSet::new(&generators);
+            let set = RowSet::from_generators(&generators);
             for width in [0.5, 32.0, 128.0] {
                 let map = Navigator::new(Rect::from_xywh(10.0, 20.0, width, 31.0), set.len());
                 let mut scene = Scene::default();

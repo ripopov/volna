@@ -1090,6 +1090,7 @@ fn rename_panel(
 
 pub(crate) struct CanvasPanelView {
     derived_signal: Option<Entity<crate::derived::DerivedEditor>>,
+    pub(crate) pipeline_sources: Option<Entity<crate::pipeline_sources::PipelineSourcesView>>,
     pub(crate) table_columns: Option<Entity<crate::table_columns::ColumnPicker>>,
     pub(crate) table_filters: Option<Entity<crate::table_filters::FilterRow>>,
     pub(crate) table_copy: Option<gpui_kit::Task<()>>,
@@ -1121,6 +1122,7 @@ impl CanvasPanelView {
         .detach();
         Self {
             derived_signal: None,
+            pipeline_sources: None,
             ws,
             id,
             generation,
@@ -1278,7 +1280,7 @@ impl Panel for CanvasPanelView {
                 );
             }
         }
-        if let Some((follow, activity, navigator_visible, occupancy_visible)) =
+        if let Some((follow, activity, navigator_visible, occupancy_visible, source_count)) =
             self.ws.upgrade().and_then(|owner| {
                 let ws = owner.read(cx);
                 let pipeline = ws.app.panels.pipeline(self.id)?;
@@ -1287,12 +1289,52 @@ impl Panel for CanvasPanelView {
                     pipeline.activity(&ws.app.doc),
                     pipeline.navigator.visible,
                     pipeline.occupancy.visible,
+                    pipeline.sources.len(),
                 ))
             })
         {
             use volna_core::pipeline::{ActivityCommand, FollowActivity};
             let generation = self.generation;
             let panel = self.id;
+            let drawer_open = self
+                .pipeline_sources
+                .as_ref()
+                .is_some_and(|view| view.read(cx).is_drawer_open());
+            buttons.insert(
+                0,
+                Button::new("pipeline-sources-btn")
+                    .debug_selector(|| "pipeline-sources-btn".into())
+                    .label(if source_count > 1 {
+                        format!("Sources ({source_count})")
+                    } else {
+                        "Sources".into()
+                    })
+                    .ghost()
+                    .small()
+                    .selected(drawer_open)
+                    .tooltip("Add, remove, reorder, or alias merged pipeline sources")
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        let entity = view
+                            .pipeline_sources
+                            .get_or_insert_with(|| {
+                                cx.new(|cx| {
+                                    crate::pipeline_sources::PipelineSourcesView::new(
+                                        view.ws.clone(),
+                                        view.id,
+                                        view.generation,
+                                        window,
+                                        cx,
+                                    )
+                                })
+                            })
+                            .clone();
+                        entity.update(
+                            cx,
+                            crate::pipeline_sources::PipelineSourcesView::toggle_drawer,
+                        );
+                        cx.notify();
+                    })),
+            );
             if !compact_chrome {
                 let owner = self.ws.clone();
                 let navigator_hint = if navigator_visible {
@@ -1472,14 +1514,8 @@ impl Panel for CanvasPanelView {
             .upgrade()
             .and_then(|owner| {
                 let workspace = owner.read(cx);
-                let track = workspace
-                    .app
-                    .panels
-                    .get(self.id)?
-                    .kind
-                    .pipeline()?
-                    .track
-                    .track()?;
+                let pipeline = workspace.app.panels.get(self.id)?.kind.pipeline()?;
+                let track = pipeline.sources.iter().find_map(|s| s.track.track())?;
                 Some(
                     workspace
                         .app
@@ -1569,6 +1605,20 @@ impl Render for CanvasPanelView {
         } else {
             self.derived_signal = None;
         }
+        let is_pipeline = ws.read(cx).app.panels.pipeline(self.id).is_some();
+        if is_pipeline && self.pipeline_sources.is_none() {
+            self.pipeline_sources = Some(cx.new(|cx| {
+                crate::pipeline_sources::PipelineSourcesView::new(
+                    self.ws.clone(),
+                    self.id,
+                    self.generation,
+                    window,
+                    cx,
+                )
+            }));
+        } else if !is_pipeline {
+            self.pipeline_sources = None;
+        }
         div()
             .id(("wave-panel", self.id.0))
             .size_full()
@@ -1585,7 +1635,11 @@ impl Render for CanvasPanelView {
             })
             .when(!unsupported, |el| {
                 let waves = ws.read(cx).app.panels.waves(self.id).is_some();
-                el.child(div().flex_1().min_h_0().w_full().child(
+                el.when_some(
+                    self.pipeline_sources.clone(),
+                    gpui_kit::ParentElement::child,
+                )
+                .child(div().flex_1().min_h_0().w_full().child(
                     crate::canvas::PanelCanvas::new(ws, self.id, self.generation).waves(waves),
                 ))
             })

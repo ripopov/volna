@@ -44,6 +44,34 @@ impl Default for Node {
     }
 }
 
+pub(crate) trait TransactionTable {
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn get(&self, index: usize) -> &Transaction;
+}
+
+impl TransactionTable for [Transaction] {
+    fn len(&self) -> usize {
+        <[Transaction]>::len(self)
+    }
+
+    fn get(&self, index: usize) -> &Transaction {
+        &self[index]
+    }
+}
+
+impl TransactionTable for Vec<Transaction> {
+    fn len(&self) -> usize {
+        Vec::len(self)
+    }
+
+    fn get(&self, index: usize) -> &Transaction {
+        &self[index]
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RowIndex {
     nodes: Vec<Node>,
@@ -53,8 +81,23 @@ pub(crate) struct RowIndex {
 }
 
 impl RowIndex {
-    pub(crate) async fn build<F: std::future::Future<Output = ()>>(
-        records: &[Transaction],
+    pub(crate) fn build_sync<T: TransactionTable + ?Sized>(
+        records: &T,
+        budget: Option<&MemoryBudget>,
+    ) -> Option<Self> {
+        let mut checkpoint = || std::future::ready(());
+        let mut future = std::pin::pin!(Self::build(records, budget, &mut checkpoint));
+        match std::future::Future::poll(
+            future.as_mut(),
+            &mut std::task::Context::from_waker(std::task::Waker::noop()),
+        ) {
+            std::task::Poll::Ready(index) => index,
+            std::task::Poll::Pending => unreachable!("synchronous RowIndex build never yields"),
+        }
+    }
+
+    pub(crate) async fn build<T: TransactionTable + ?Sized, F: std::future::Future<Output = ()>>(
+        records: &T,
         budget: Option<&MemoryBudget>,
         checkpoint: &mut impl FnMut() -> F,
     ) -> Option<Self> {
@@ -97,11 +140,16 @@ impl RowIndex {
         };
         let max_spans = (limit - node_bytes) / std::mem::size_of::<Span>();
         let mut union = Vec::with_capacity(FRAGMENTS + 1);
-        for (leaf, rows) in records.chunks(BLOCK).enumerate() {
+        let len = records.len();
+        let leaf_count = len.div_ceil(BLOCK);
+        for leaf in 0..leaf_count {
+            let start = leaf * BLOCK;
+            let end = (start + BLOCK).min(len);
             let mut node = Node::default();
             union.clear();
             let mut complete = true;
-            for tx in rows {
+            for idx in start..end {
+                let tx = records.get(idx);
                 checkpoint().await;
                 node.min_end = node.min_end.min(tx.end);
                 node.max_end = node.max_end.max(tx.end);
@@ -189,9 +237,9 @@ impl RowIndex {
         &self.spans[node.union as usize..node.union as usize + node.len as usize]
     }
 
-    pub(crate) fn raster(
+    pub(crate) fn raster<T: TransactionTable + ?Sized>(
         &self,
-        records: &[Transaction],
+        records: &T,
         offset: usize,
         map: &PixelMap,
         mask: &mut PresenceMask,
@@ -199,11 +247,11 @@ impl RowIndex {
         self.visit_pixels(1, 0..self.leaves * BLOCK, records, offset, map, mask);
     }
 
-    fn visit_pixels(
+    fn visit_pixels<T: TransactionTable + ?Sized>(
         &self,
         i: usize,
         rows: Range<usize>,
-        records: &[Transaction],
+        records: &T,
         offset: usize,
         map: &PixelMap,
         mask: &mut PresenceMask,
@@ -246,7 +294,7 @@ impl RowIndex {
             }
         }
         if i >= self.leaves {
-            raster_source(&records[rows.start..end], offset + rows.start, map, mask);
+            raster_source_range(records, rows.start..end, offset, map, mask);
         } else {
             let mid = usize::midpoint(rows.start, rows.end);
             self.visit_pixels(i * 2, rows.start..mid, records, offset, map, mask);
@@ -254,9 +302,9 @@ impl RowIndex {
         }
     }
 
-    pub(crate) fn raster_aborted(
+    pub(crate) fn raster_aborted<T: TransactionTable + ?Sized>(
         &self,
-        records: &[Transaction],
+        records: &T,
         offset: usize,
         map: &PixelMap,
         mask: &mut PresenceMask,
@@ -264,11 +312,11 @@ impl RowIndex {
         self.visit_aborted(1, 0..self.leaves * BLOCK, records, offset, map, mask);
     }
 
-    fn visit_aborted(
+    fn visit_aborted<T: TransactionTable + ?Sized>(
         &self,
         i: usize,
         rows: Range<usize>,
-        records: &[Transaction],
+        records: &T,
         offset: usize,
         map: &PixelMap,
         mask: &mut PresenceMask,
@@ -292,9 +340,9 @@ impl RowIndex {
             return;
         }
         if i >= self.leaves {
-            for (row, tx) in records[rows.start..end].iter().enumerate() {
-                if tx.status == Status::Aborted {
-                    map.aborted(rows.start + row + offset, mask);
+            for row in rows.start..end {
+                if records.get(row).status == Status::Aborted {
+                    map.aborted(row + offset, mask);
                 }
             }
         } else {
@@ -304,10 +352,24 @@ impl RowIndex {
         }
     }
 
-    pub(crate) fn activity(
+    pub(crate) fn activity<T: TransactionTable + ?Sized>(
         &self,
-        records: &[Transaction],
+        records: &T,
         offset: usize,
+        view: Viewport,
+        visible: Range<f64>,
+        anchor: f64,
+        center: f64,
+    ) -> Activity {
+        self.activity_mapped(records, |i| offset + i, view, visible, anchor, center)
+    }
+
+    /// Activity query over a monotonically mapped row coordinate space (e.g. a single source's
+    /// stream ordinals mapped to merged panel rows via a strictly increasing reverse index).
+    pub(crate) fn activity_mapped<T: TransactionTable + ?Sized, M: Fn(usize) -> usize>(
+        &self,
+        records: &T,
+        row_map: M,
         view: Viewport,
         visible: Range<f64>,
         anchor: f64,
@@ -315,7 +377,7 @@ impl RowIndex {
     ) -> Activity {
         let query = ActivityQuery {
             records,
-            offset,
+            row_map,
             view,
             visible,
             anchor,
@@ -329,62 +391,64 @@ impl RowIndex {
         activity
     }
 
-    fn count_activity(
+    fn count_activity<T: TransactionTable + ?Sized, M: Fn(usize) -> usize>(
         &self,
         i: usize,
         rows: Range<usize>,
-        query: &ActivityQuery<'_>,
+        query: &ActivityQuery<'_, T, M>,
         out: &mut Activity,
     ) {
         let records = query.records;
-        let offset = query.offset;
         let view = query.view;
         let visible = &query.visible;
         let end = rows.end.min(records.len());
         if rows.start >= end
-            || records[rows.start].begin as f64 > view.end
+            || records.get(rows.start).begin as f64 > view.end
             || (self.nodes[i].max_end as f64) < view.start
         {
             return;
         }
-        let first = offset + rows.start;
-        let last = offset + end;
+        let first = (query.row_map)(rows.start);
+        let last_row = (query.row_map)(end - 1);
+        let last = last_row + 1;
         let zone = if last as f64 <= visible.start {
             0
         } else if first as f64 >= visible.end {
             2
-        } else if first as f64 + 1.0 > visible.start && ((last - 1) as f64) < visible.end {
+        } else if first as f64 + 1.0 > visible.start && (last_row as f64) < visible.end {
             1
         } else {
             3
         };
         if zone != 3
-            && records[end - 1].begin as f64 <= view.end
+            && records.get(end - 1).begin as f64 <= view.end
             && self.nodes[i].min_end as f64 >= view.start
         {
             match zone {
                 0 => {
                     out.above += end - rows.start;
-                    out.nearest_above = Some(last - 1);
+                    out.nearest_above =
+                        Some(out.nearest_above.map_or(last_row, |p| p.max(last_row)));
                 }
                 1 => out.visible += end - rows.start,
                 _ => {
                     out.below += end - rows.start;
-                    out.nearest_below.get_or_insert(first);
+                    out.nearest_below = Some(out.nearest_below.map_or(first, |p| p.min(first)));
                 }
             }
         } else if i >= self.leaves {
-            for (row, tx) in records[rows.start..end].iter().enumerate() {
+            for idx in rows.start..end {
+                let tx = records.get(idx);
                 if tx.begin as f64 > view.end || (tx.end as f64) < view.start {
                     continue;
                 }
-                let row = first + row;
+                let row = (query.row_map)(idx);
                 if row as f64 + 1.0 <= visible.start {
                     out.above += 1;
-                    out.nearest_above = Some(row);
+                    out.nearest_above = Some(out.nearest_above.map_or(row, |p| p.max(row)));
                 } else if row as f64 >= visible.end {
                     out.below += 1;
-                    out.nearest_below.get_or_insert(row);
+                    out.nearest_below = Some(out.nearest_below.map_or(row, |p| p.min(row)));
                 } else {
                     out.visible += 1;
                 }
@@ -396,40 +460,42 @@ impl RowIndex {
         }
     }
 
-    fn nearest(
+    fn nearest<T: TransactionTable + ?Sized, M: Fn(usize) -> usize>(
         &self,
         i: usize,
         rows: Range<usize>,
-        query: &ActivityQuery<'_>,
+        query: &ActivityQuery<'_, T, M>,
         best: &mut (f64, f64, usize),
     ) {
         let records = query.records;
-        let offset = query.offset;
         let view = query.view;
         let anchor = query.anchor;
         let center = query.center;
         let end = rows.end.min(records.len());
         if rows.start >= end
-            || records[rows.start].begin as f64 > view.end
+            || records.get(rows.start).begin as f64 > view.end
             || (self.nodes[i].max_end as f64) < view.start
         {
             return;
         }
-        let distance = (records[rows.start].begin as f64 - anchor)
+        let first = (query.row_map)(rows.start);
+        let last_row = (query.row_map)(end - 1);
+        let distance = (records.get(rows.start).begin as f64 - anchor)
             .max(anchor - self.nodes[i].max_end as f64)
             .max(0.0);
-        let row_distance = (offset as f64 + rows.start as f64 + 0.5 - center)
-            .max(center - (offset as f64 + end as f64 - 0.5))
+        let row_distance = (first as f64 + 0.5 - center)
+            .max(center - (last_row as f64 + 0.5))
             .max(0.0);
-        if (distance, row_distance, offset + rows.start) >= *best {
+        if (distance, row_distance, first) >= *best {
             return;
         }
         if i >= self.leaves {
-            for (row, tx) in records[rows.start..end].iter().enumerate() {
+            for idx in rows.start..end {
+                let tx = records.get(idx);
                 if tx.begin as f64 > view.end || (tx.end as f64) < view.start {
                     continue;
                 }
-                let row = offset + rows.start + row;
+                let row = (query.row_map)(idx);
                 let score = (
                     (tx.begin as f64 - anchor)
                         .max(anchor - tx.end as f64)
@@ -443,7 +509,12 @@ impl RowIndex {
             }
         } else {
             let mid = usize::midpoint(rows.start, rows.end);
-            let children = if center < (offset + mid) as f64 {
+            let split = if mid < end {
+                (query.row_map)(mid) as f64
+            } else {
+                (last_row + 1) as f64
+            };
+            let children = if center < split {
                 [(i * 2, rows.start..mid), (i * 2 + 1, mid..rows.end)]
             } else {
                 [(i * 2 + 1, mid..rows.end), (i * 2, rows.start..mid)]
@@ -470,9 +541,9 @@ impl RowIndex {
     }
 }
 
-struct ActivityQuery<'a> {
-    records: &'a [Transaction],
-    offset: usize,
+struct ActivityQuery<'a, T: TransactionTable + ?Sized, M: Fn(usize) -> usize> {
+    records: &'a T,
+    row_map: M,
     view: Viewport,
     visible: Range<f64>,
     anchor: f64,
@@ -512,19 +583,30 @@ fn insert(union: &mut Vec<Span>, span: Span) {
     union.truncate(len);
 }
 
-pub(crate) fn raster_source(
-    records: &[Transaction],
+pub(crate) fn raster_source<T: TransactionTable + ?Sized>(
+    records: &T,
     offset: usize,
     map: &PixelMap,
     mask: &mut PresenceMask,
 ) {
-    for (row, tx) in records.iter().enumerate() {
+    raster_source_range(records, 0..records.len(), offset, map, mask);
+}
+
+fn raster_source_range<T: TransactionTable + ?Sized>(
+    records: &T,
+    range: Range<usize>,
+    offset: usize,
+    map: &PixelMap,
+    mask: &mut PresenceMask,
+) {
+    for row in range {
         let Some(y) = map
             .y
             .interval((offset + row) as u64, (offset + row + 1) as u64)
         else {
             continue;
         };
+        let tx = records.get(row);
         for span in geometry(tx) {
             if let Some(x) = map.x.interval(span.begin, span.end) {
                 mask.fill(x, y.clone());

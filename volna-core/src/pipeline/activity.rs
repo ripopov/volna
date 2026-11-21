@@ -49,6 +49,13 @@ impl PipelineModel {
             .target()
             .zoomed(self.last_layout().zoom.max(f32::EPSILON));
         let visible = f64::from(self.last_layout().cells.height() / rows.row_px);
+        if self.is_merged()
+            && self.focus_style == super::FocusStyle::Dim
+            && let Some(focused) = self.focused_source
+            && self.is_source_effectively_visible(focused)
+        {
+            return set.activity_for_source(focused, view, rows.top..rows.top + visible, anchor);
+        }
         set.activity(view, rows.top..rows.top + visible, anchor)
     }
 
