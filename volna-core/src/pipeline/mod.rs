@@ -23,7 +23,7 @@ pub mod rows;
 pub mod zoom;
 
 pub use layout::PipelineLayout;
-pub use model::{Hit, PipelineModel, Rows, TrackSource};
+pub use model::{Hit, PipelineModel, RowBoundary, Rows, TrackSource};
 pub use palette::{StagePalette, StageStyle, StageSwatch};
 pub use rows::RowView;
 

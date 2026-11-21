@@ -1,6 +1,6 @@
 //! Initial framing from pixel geometry and the recording's current time units.
 
-use super::{PipelineModel, model::START_MARGIN_PX, rows::ROW_PX_DEFAULT};
+use super::{PipelineModel, model::ROW_JUMP_MARGIN_PX, rows::ROW_PX_DEFAULT};
 use crate::wave::viewport::Viewport;
 use volna_trace::data::transactions::Transaction;
 
@@ -39,7 +39,7 @@ pub(super) fn viewport(begin: u64, unit: f64, size: ViewportSize, limits: (u64, 
     let zoom = f64::from(size.zoom);
     let side = f64::from(ROW_PX_DEFAULT) * zoom;
     let width = size.width / side * unit;
-    let margin = (START_MARGIN_PX * zoom).min(size.width * 0.1);
+    let margin = (ROW_JUMP_MARGIN_PX * zoom).min(size.width * 0.1);
     let start = begin as f64 - margin / side * unit;
     let mut viewport = Viewport {
         start,

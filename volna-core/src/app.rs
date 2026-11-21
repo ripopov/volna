@@ -23,7 +23,7 @@ use crate::geometry::{Modifiers, Rect};
 use crate::geometry::{MouseButton, Point};
 use crate::marker::{LaneHit, LaneVerb, Reference};
 use crate::panels::{Panel, PanelId, PanelKind, Panels, PanelsCommand};
-use crate::pipeline::{PipelineLayout, PipelineModel, TrackSource};
+use crate::pipeline::{PipelineLayout, PipelineModel, RowBoundary, TrackSource};
 use crate::scene::{Scene, TextCache, TextMeasure};
 use crate::session::{LoadRequest, LoadResult};
 use crate::settings::{self, Value};
@@ -274,9 +274,10 @@ pub enum Command {
         from: PanelId,
         key: String,
     },
-    PanToTransactionStart {
+    PanToTransactionBoundary {
         panel: PanelId,
         row: usize,
+        boundary: RowBoundary,
     },
     Transaction(PanelId, TransactionCommand),
     Clocks(ClockCommand),
@@ -1423,9 +1424,13 @@ impl App {
             Command::ShowAttributeColumn { from, key } => {
                 self.show_attribute_column(from, key, now);
             }
-            Command::PanToTransactionStart { panel, row } => {
+            Command::PanToTransactionBoundary {
+                panel,
+                row,
+                boundary,
+            } => {
                 if let Some(pipeline) = self.panels.pipeline_mut(panel)
-                    && pipeline.pan_to_row_start(&mut self.doc, row, now)
+                    && pipeline.pan_to_row_boundary(&mut self.doc, row, boundary, now)
                 {
                     self.changed();
                 }
@@ -1548,18 +1553,16 @@ impl App {
                     self.changed();
                 }
             }
-            Command::MenuSelect(panel, MenuAction::PipelineStart(row)) => {
+            Command::MenuSelect(panel, action @ MenuAction::PipelineBoundary { row, boundary }) => {
                 let valid = self.transient_menu.as_ref().is_some_and(|(owner, menu)| {
                     *owner == panel
                         && menu.kind == WaveMenuKind::PipelineLabel
-                        && menu
-                            .items()
-                            .any(|item| item.action == MenuAction::PipelineStart(row))
+                        && menu.items().any(|item| item.action == action)
                 });
                 if valid {
                     self.transient_menu = None;
                     if let Some(pipeline) = self.panels.pipeline_mut(panel) {
-                        pipeline.pan_to_row_start(&mut self.doc, row, now);
+                        pipeline.pan_to_row_boundary(&mut self.doc, row, boundary, now);
                     }
                     self.changed();
                 }
@@ -3553,13 +3556,18 @@ impl App {
                 kind: WaveMenuKind::PipelineLabel,
                 row: self.transient_menus,
                 position,
-                entries: vec![MenuEntry::Item(MenuItem {
-                    action: MenuAction::PipelineStart(row),
-                    label: "Go to start".into(),
-                    badge: Some("double-click".into()),
-                    state: crate::wave::model::MenuItemState::Command,
-                    disabled: false,
-                })],
+                entries: [
+                    (RowBoundary::Start, "Go to start", "double-click"),
+                    (RowBoundary::End, "Go to end", "Shift + double-click"),
+                ]
+                .into_iter()
+                .map(|(boundary, label, badge)| {
+                    MenuEntry::Item(MenuItem {
+                        badge: Some(badge.into()),
+                        ..MenuItem::plain(MenuAction::PipelineBoundary { row, boundary }, label)
+                    })
+                })
+                .collect(),
             },
         ));
         true

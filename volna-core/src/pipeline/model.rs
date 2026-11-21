@@ -26,9 +26,15 @@ use volna_trace::data::transactions::{
 
 pub const LABEL_ATTRIBUTE: &str = "vtr.label";
 const DRAG_THRESHOLD_PX: f32 = 3.0;
-pub(super) const START_MARGIN_PX: f64 = 32.0;
+pub(super) const ROW_JUMP_MARGIN_PX: f64 = 32.0;
 pub const SCROLL_ROWS: f64 = 3.0;
 const ROW_HEIGHT_STEP: f64 = std::f64::consts::SQRT_2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowBoundary {
+    Start,
+    End,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrackSource {
@@ -460,17 +466,29 @@ impl PipelineModel {
         true
     }
 
-    pub fn pan_to_row_start(&mut self, doc: &mut Document, row: usize, now: Instant) -> bool {
-        let begin = match self.rows(doc) {
-            Rows::Ready(set) => set.get(row).map(|(_, tx)| tx.begin),
+    pub(crate) fn pan_to_row_boundary(
+        &mut self,
+        doc: &mut Document,
+        row: usize,
+        boundary: RowBoundary,
+        now: Instant,
+    ) -> bool {
+        let lifetime = match self.rows(doc) {
+            Rows::Ready(set) => set.get(row).map(|(_, tx)| (tx.begin, tx.end)),
             _ => None,
         };
-        let Some(begin) = begin else { return false };
+        let Some((begin, end)) = lifetime else {
+            return false;
+        };
         let width_px = self.cells_w();
-        let margin_px = (START_MARGIN_PX * f64::from(self.layout.zoom)).min(width_px * 0.1);
+        let margin_px = (ROW_JUMP_MARGIN_PX * f64::from(self.layout.zoom)).min(width_px * 0.1);
         let mut target = self.nav.viewport_state(doc).target();
         let width = target.width();
-        target.start = begin as f64 - width * margin_px / width_px;
+        let margin = width * margin_px / width_px;
+        target.start = match boundary {
+            RowBoundary::Start => begin as f64 - margin,
+            RowBoundary::End => end as f64 + margin - width,
+        };
         target.end = target.start + width;
         target.clamp_preserving_width(doc.limits());
         self.suspend_follow();

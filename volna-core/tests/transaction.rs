@@ -13,7 +13,7 @@ use volna_core::pipeline::{FollowActivity, Rows};
 use volna_core::scene::MonoMeasure;
 use volna_core::transaction::{RefRole, SectionKey, TransactionCommand, TxPanelState, TxView};
 use volna_core::wave::PointerEvent;
-use volna_core::wave::model::{MenuAction, WaveMenuKind};
+use volna_core::wave::model::WaveMenuKind;
 use volna_core::wave::viewport::Viewport;
 use volna_core::workspace::Workspace;
 use volna_core::{Instant, Theme};
@@ -283,11 +283,13 @@ fn located_and_embedded_activity_share_the_instruction_view_and_relation_navigat
 }
 
 #[test]
-fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
+fn pipeline_label_can_reveal_either_transaction_boundary_without_changing_scale() {
+    use volna_core::pipeline::RowBoundary;
+
     let (mut app, session, panel) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let instruction = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
     let add = labelled(session.as_ref(), instruction, "80000008: add  a3, a1, a0");
-    let (row, begin, label) = {
+    let (row, begin, end, label) = {
         let pipeline = app.panels.pipeline(panel).unwrap();
         let Rows::Ready(set) = pipeline.rows(&app.doc) else {
             panic!("not loaded")
@@ -299,6 +301,7 @@ fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
         (
             row,
             tx.begin,
+            tx.end,
             point(layout.labels.left() + 20.0, layout.row_y(row) + 4.0),
         )
     };
@@ -327,7 +330,11 @@ fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
         Some(row)
     );
     app.panels.pipeline_mut(panel).unwrap().follow = FollowActivity::Following;
-    app.handle(Command::PanToTransactionStart { panel, row });
+    app.handle(Command::PanToTransactionBoundary {
+        panel,
+        row,
+        boundary: RowBoundary::Start,
+    });
     let pipeline = app.panels.pipeline(panel).unwrap();
     let viewport = pipeline.nav.viewport(&app.doc);
     assert!((viewport.width() - initial.width()).abs() < 1e-9);
@@ -339,41 +346,35 @@ fn pipeline_label_goes_to_transaction_start_without_changing_scale() {
     assert_eq!(pipeline.selected_row(&app.doc), Some(row));
     assert_eq!(app.panels.iter().count(), 2);
 
-    app.panels
-        .pipeline_mut(panel)
-        .unwrap()
-        .nav
-        .viewport_state_mut(&mut app.doc)
-        .set(initial);
-    app.handle(Command::Pointer(
-        panel,
-        PointerEvent::Down {
-            position: label,
-            button: MouseButton::Right,
-            modifiers: Modifiers::default(),
-        },
-    ));
-    let menu = app.menu().unwrap();
-    assert_eq!(menu.kind, WaveMenuKind::PipelineLabel);
-    assert_eq!(
-        menu.items().next().unwrap().action,
-        MenuAction::PipelineStart(row)
-    );
-    app.handle(Command::MenuSelect(panel, MenuAction::PipelineStart(row)));
-    let viewport = app.panels.pipeline(panel).unwrap().nav.viewport(&app.doc);
-    assert!(
-        (viewport.x_of_tick(
-            begin,
-            app.panels
-                .pipeline(panel)
-                .unwrap()
-                .last_layout()
-                .cells_width_f64()
-        ) - 32.0)
-            .abs()
-            < 1e-6
-    );
-    assert!(app.menu().is_none());
+    let cells_width = pipeline.last_layout().cells_width_f64();
+    for (label_text, hint, tick, x) in [
+        ("Go to start", "double-click", begin, 32.0),
+        ("Go to end", "Shift + double-click", end, cells_width - 32.0),
+    ] {
+        app.panels
+            .pipeline_mut(panel)
+            .unwrap()
+            .nav
+            .viewport_state_mut(&mut app.doc)
+            .set(initial);
+        app.handle(Command::Pointer(
+            panel,
+            PointerEvent::Down {
+                position: label,
+                button: MouseButton::Right,
+                modifiers: Modifiers::default(),
+            },
+        ));
+        let menu = app.menu().unwrap();
+        assert_eq!(menu.kind, WaveMenuKind::PipelineLabel);
+        let item = menu.items().find(|item| item.label == label_text).unwrap();
+        assert_eq!(item.badge.as_deref(), Some(hint));
+        app.handle(Command::MenuSelect(panel, item.action.clone()));
+        let viewport = app.panels.pipeline(panel).unwrap().nav.viewport(&app.doc);
+        assert!((viewport.width() - initial.width()).abs() < 1e-9);
+        assert!((viewport.x_of_tick(tick, cells_width) - x).abs() < 1e-6);
+        assert!(app.menu().is_none());
+    }
 }
 
 #[test]

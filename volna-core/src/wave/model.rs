@@ -883,7 +883,10 @@ pub enum MenuAction {
     AddSlice,
     AddIndependent,
     Lane(crate::marker::LaneVerb),
-    PipelineStart(usize),
+    PipelineBoundary {
+        row: usize,
+        boundary: crate::pipeline::RowBoundary,
+    },
     Tint(Option<Tint>),
     Stack(bool),
     Peak(bool),

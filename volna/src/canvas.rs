@@ -16,6 +16,7 @@ use gpui_kit::{
 use volna_core::FontRole;
 use volna_core::app::{Command, PanelLayout};
 use volna_core::geometry::{CursorIcon, Point as CPoint, Rect as CRect};
+use volna_core::pipeline::RowBoundary;
 use volna_core::scene::{Prim, TextMeasure};
 use volna_core::wave::PointerEvent;
 
@@ -1468,10 +1469,19 @@ impl PanelCanvas {
                     && button == volna_core::geometry::MouseButton::Left
                     && let Some(row) = label_row
                 {
+                    let boundary = if ev.modifiers.shift {
+                        RowBoundary::End
+                    } else {
+                        RowBoundary::Start
+                    };
                     ws.update(cx, |ws, cx| {
                         ws.dispatch_if_current(
                             generation,
-                            Command::PanToTransactionStart { panel, row },
+                            Command::PanToTransactionBoundary {
+                                panel,
+                                row,
+                                boundary,
+                            },
                             Some(window),
                             cx,
                         );

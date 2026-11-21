@@ -3287,7 +3287,7 @@ fn pipeline_label_double_click_pans_and_cell_double_click_opens_details(cx: &mut
         .unwrap();
     vcx.run_until_parked();
     vcx.update(|window, cx| window.draw(cx).clear(cx));
-    let (row, begin, label, cell) = window
+    let (row, begin, end, label, cell) = window
         .update(&mut vcx, |ws, _, _| {
             let pipeline = ws.app.panels.pipeline(panel).unwrap();
             let layout = pipeline.last_layout();
@@ -3295,11 +3295,12 @@ fn pipeline_label_double_click_pans_and_cell_double_click_opens_details(cx: &mut
             let volna_core::pipeline::Rows::Ready(set) = pipeline.rows(&ws.app.doc) else {
                 panic!("loaded pipeline")
             };
-            let begin = set.get(row).unwrap().1.begin;
+            let (_, tx) = set.get(row).unwrap();
             let y = layout.row_y(row) + layout.rows.row_px * 0.5;
             (
                 row,
-                begin,
+                tx.begin,
+                tx.end,
                 (layout.labels.left() + 20.0, y),
                 (layout.cells.left() + 40.0, y),
             )
@@ -3322,35 +3323,40 @@ fn pipeline_label_double_click_pans_and_cell_double_click_opens_details(cx: &mut
         .unwrap();
     vcx.run_until_parked();
     let at = |(x, y)| gpui_kit::point(gpui_kit::px(x), gpui_kit::px(y));
+    for (shift, tick) in [(true, end), (false, begin)] {
+        let modifiers = Modifiers {
+            shift,
+            ..Modifiers::default()
+        };
+        vcx.simulate_mouse_move(at(label), None, modifiers);
+        vcx.simulate_event(MouseDownEvent {
+            button: MouseButton::Left,
+            position: at(label),
+            modifiers,
+            click_count: 2,
+            first_mouse: false,
+        });
+        vcx.simulate_event(MouseUpEvent {
+            button: MouseButton::Left,
+            position: at(label),
+            modifiers,
+            click_count: 2,
+        });
+        vcx.run_until_parked();
+        window
+            .update(&mut vcx, |ws, _, _| {
+                let pipeline = ws.app.panels.pipeline(panel).unwrap();
+                let viewport = pipeline.nav.viewport(&ws.app.doc);
+                let cells_width = pipeline.last_layout().cells_width_f64();
+                let expected_x = if shift { cells_width - 32.0 } else { 32.0 };
+                assert_eq!(pipeline.selected_row(&ws.app.doc), Some(row));
+                assert_eq!(ws.app.panels.iter().count(), 2);
+                assert!((viewport.width() - initial.width()).abs() < 1e-6);
+                assert!((viewport.x_of_tick(tick, cells_width) - expected_x).abs() < 1e-5);
+            })
+            .unwrap();
+    }
     let modifiers = Modifiers::default();
-    vcx.simulate_mouse_move(at(label), None, modifiers);
-    vcx.simulate_event(MouseDownEvent {
-        button: MouseButton::Left,
-        position: at(label),
-        modifiers,
-        click_count: 2,
-        first_mouse: false,
-    });
-    vcx.simulate_event(MouseUpEvent {
-        button: MouseButton::Left,
-        position: at(label),
-        modifiers,
-        click_count: 2,
-    });
-    vcx.run_until_parked();
-    window
-        .update(&mut vcx, |ws, _, _| {
-            let pipeline = ws.app.panels.pipeline(panel).unwrap();
-            let viewport = pipeline.nav.viewport(&ws.app.doc);
-            assert_eq!(pipeline.selected_row(&ws.app.doc), Some(row));
-            assert_eq!(ws.app.panels.iter().count(), 2);
-            assert!((viewport.width() - initial.width()).abs() < 1e-6);
-            assert!(
-                (viewport.x_of_tick(begin, pipeline.last_layout().cells_width_f64()) - 32.0).abs()
-                    < 1e-5
-            );
-        })
-        .unwrap();
     vcx.simulate_mouse_move(at(cell), None, modifiers);
     vcx.simulate_event(MouseDownEvent {
         button: MouseButton::Left,
