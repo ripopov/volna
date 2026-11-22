@@ -850,3 +850,588 @@ fn gpu_trace_sixteen_warp_slots_label_badge_solo_and_escape(cx: &mut TestAppCont
     .unwrap();
     pump_frames(&mut vcx, 1);
 }
+
+// User scenario: an engineer opens a merged 8-warp GPU pipeline panel, reorders rows by a
+// primary-lane stage, switches unmatched policy (FallbackEnd -> FallbackStart -> Hide), tries
+// FromStage and End modes, uses Undo/Redo, splits the panel, and inspects the Order popover in
+// both dark and light themes.
+// Requirement: RowOrder sorts rows monotonically by sort key, status bar reflects active order,
+// Hide filters unmatched rows, Undo/Redo restores prior RowOrder, split clones inherit RowOrder,
+// and both themes paint cleanly with the Order popover open.
+#[gpui_kit::test]
+fn gpu_trace_stage_aware_row_ordering_popover_undo_redo_clone_and_themes(cx: &mut TestAppContext) {
+    use volna_core::pipeline::{RowOrder, RowOrderCommand, RowOrderMode, UnmatchedPolicy};
+
+    let (host, mut vcx) = open_gpu_trace(cx);
+    let panel = host
+        .update(&mut vcx, |ws, window, cx| {
+            let p0 = find_tracks_matching(ws, |path| {
+                path.contains("sm[0].simt_partition[0].warp_slot[")
+                    && path.ends_with(".Instruction")
+            });
+            let tracks: Vec<_> = p0.iter().map(|(_, t)| *t).collect();
+            ws.dispatch(Command::OpenMergedPipeline { tracks }, Some(window), cx);
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    pump_frames(&mut vcx, 3);
+
+    let (stage_name, later_stage, total_rows) = host
+        .update(&mut vcx, |ws, _, _| {
+            let p = ws.app.panels.pipeline(panel).unwrap();
+            assert_eq!(p.order, RowOrder::default());
+            assert_eq!(ws.app.status().pipeline_order, None);
+            let options = p.stage_order_options(&ws.app.doc);
+            assert!(
+                options.len() >= 3,
+                "expected at least 3 primary-lane stages in GPU trace, got {options:?}"
+            );
+            for opt in &options {
+                assert!((0.0..=1.0).contains(&opt.coverage));
+                assert!(opt.total_transactions > 0);
+            }
+            (
+                options[1].name.clone(),
+                options[2].name.clone(),
+                p.row_count(&ws.app.doc),
+            )
+        })
+        .unwrap();
+
+    // Order by a single primary-lane stage.
+    host.update(&mut vcx, |ws, window, cx| {
+        ws.dispatch(
+            Command::PipelineOrder(
+                panel,
+                RowOrderCommand::SetMode(RowOrderMode::Stages {
+                    stages: vec![stage_name.clone()],
+                }),
+            ),
+            Some(window),
+            cx,
+        );
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 2);
+
+    let unmatched = host
+        .update(&mut vcx, |ws, _, _| {
+            let p = ws.app.panels.pipeline(panel).unwrap();
+            assert_eq!(
+                p.order.mode,
+                RowOrderMode::Stages {
+                    stages: vec![stage_name.clone()]
+                }
+            );
+            let status_order = ws
+                .app
+                .status()
+                .pipeline_order
+                .expect("status bar should reflect active row order");
+            assert!(
+                status_order.contains(&stage_name),
+                "expected status order '{status_order}' to mention '{stage_name}'"
+            );
+            let Rows::Ready(set) = p.rows(&ws.app.doc) else {
+                panic!("rows should be Ready");
+            };
+            assert_eq!(set.len(), total_rows);
+            let mut prev_key = 0u64;
+            for r in 0..set.len().min(500) {
+                let meta = set
+                    .sort_meta(r)
+                    .expect("non-Start order populates sort_meta");
+                assert!(meta.sort_key >= prev_key);
+                prev_key = meta.sort_key;
+            }
+            set.unmatched_count()
+        })
+        .unwrap();
+
+    // Switch unmatched policy to Hide and verify row count shrinks by exact unmatched count.
+    host.update(&mut vcx, |ws, window, cx| {
+        ws.dispatch(
+            Command::PipelineOrder(panel, RowOrderCommand::SetUnmatched(UnmatchedPolicy::Hide)),
+            Some(window),
+            cx,
+        );
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    host.update(&mut vcx, |ws, _, _| {
+        let p = ws.app.panels.pipeline(panel).unwrap();
+        assert_eq!(p.order.unmatched, UnmatchedPolicy::Hide);
+        assert_eq!(p.row_count(&ws.app.doc), total_rows - unmatched);
+    })
+    .unwrap();
+
+    // Switch to FromStage and verify Undo/Redo round-trips cleanly.
+    host.update(&mut vcx, |ws, window, cx| {
+        ws.dispatch(
+            Command::PipelineOrder(
+                panel,
+                RowOrderCommand::SetMode(RowOrderMode::FromStage {
+                    stage: later_stage.clone(),
+                }),
+            ),
+            Some(window),
+            cx,
+        );
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    host.update(&mut vcx, |ws, window, cx| {
+        assert_eq!(
+            ws.app.panels.pipeline(panel).unwrap().order.mode,
+            RowOrderMode::FromStage {
+                stage: later_stage.clone()
+            }
+        );
+        ws.dispatch(Command::Undo, Some(window), cx);
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    host.update(&mut vcx, |ws, window, cx| {
+        assert_eq!(
+            ws.app.panels.pipeline(panel).unwrap().order.mode,
+            RowOrderMode::Stages {
+                stages: vec![stage_name.clone()]
+            }
+        );
+        ws.dispatch(Command::Redo, Some(window), cx);
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    // Open the Order popover via the real toolbar button, click "End (tx.end)" inside it,
+    // and paint in both dark and light themes before splitting.
+    vcx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    let order_btn = vcx
+        .debug_bounds("pipeline-order-btn")
+        .expect("pipeline-order-btn should be rendered in pipeline toolbar");
+    vcx.simulate_click(order_btn.center(), gpui_kit::Modifiers::default());
+    pump_frames(&mut vcx, 2);
+
+    assert!(
+        vcx.debug_bounds("pipeline-order-popover").is_some(),
+        "Order popover should open after clicking pipeline-order-btn (btn={order_btn:?})"
+    );
+    let end_btn = vcx
+        .debug_bounds("pipeline-order-end")
+        .expect("Order popover should render End (tx.end) button");
+    vcx.simulate_click(end_btn.center(), gpui_kit::Modifiers::default());
+    pump_frames(&mut vcx, 1);
+
+    host.update(&mut vcx, |ws, _, _| {
+        assert_eq!(
+            ws.app.panels.pipeline(panel).unwrap().order.mode,
+            RowOrderMode::End
+        );
+    })
+    .unwrap();
+
+    // Split panel clones the active RowOrder onto the new panel.
+    let split_panel = host
+        .update(&mut vcx, |ws, window, cx| {
+            ws.dispatch(
+                Command::Panels(volna_core::panels::PanelsCommand::Split {
+                    panel,
+                    axis: volna_core::panels::Axis::Horizontal,
+                }),
+                Some(window),
+                cx,
+            );
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    pump_frames(&mut vcx, 2);
+
+    host.update(&mut vcx, |ws, _, cx| {
+        assert_ne!(split_panel, panel);
+        assert_eq!(
+            ws.app.panels.pipeline(split_panel).unwrap().order,
+            ws.app.panels.pipeline(panel).unwrap().order
+        );
+        crate::theme::set(crate::theme::CoreTheme::volna(false), cx);
+        cx.notify();
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+}
+
+// User scenario: an engineer right-clicks directly on a stage cell in a merged pipeline panel
+// to sort rows by that stage, and also right-drags across the canvas to pan without accidentally
+// popping open the context menu.
+// Requirement: unmoved right-click opens `WaveMenuKind::PipelineCell` with stage order and
+// Solo/Isolate items; choosing "Order rows by <stage>" updates `RowOrder`; right-drag pans
+// without opening a menu.
+#[gpui_kit::test]
+fn gpu_trace_right_click_stage_cell_opens_order_and_source_context_menu(cx: &mut TestAppContext) {
+    use volna_core::pipeline::{RowOrderCommand, RowOrderMode};
+    use volna_core::wave::model::{MenuAction, WaveMenuKind};
+
+    let (host, mut vcx) = open_gpu_trace(cx);
+    let panel = host
+        .update(&mut vcx, |ws, window, cx| {
+            let p0 = find_tracks_matching(ws, |path| {
+                path.contains("sm[0].simt_partition[0].warp_slot[")
+                    && path.ends_with(".Instruction")
+            });
+            let tracks: Vec<_> = p0.iter().take(4).map(|(_, t)| *t).collect();
+            ws.dispatch(Command::OpenMergedPipeline { tracks }, Some(window), cx);
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    pump_frames(&mut vcx, 3);
+
+    // Find a visible primary-lane stage cell inside the cells viewport.
+    let (cell_pt, stage_name) = host
+        .update(&mut vcx, |ws, _, _| {
+            let p = ws.app.panels.pipeline(panel).unwrap();
+            let layout = p.last_layout();
+            let vp = p.nav.viewport(&ws.app.doc);
+            let Rows::Ready(set) = p.rows(&ws.app.doc) else {
+                panic!("rows should be Ready");
+            };
+            let primary = p.palette().primary_lane().to_owned();
+            for r in layout.row_range.clone() {
+                let Some((_, tx)) = set.get(r) else { continue };
+                let y = layout.row_y(r) + layout.rows.row_px * 0.5;
+                if y < layout.cells.top() || y >= layout.cells.bottom() {
+                    continue;
+                }
+                for st in &tx.stages {
+                    if st.lane != primary {
+                        continue;
+                    }
+                    let se = volna_core::pipeline::PipelineModel::stage_end(tx, st);
+                    if se <= st.begin {
+                        continue;
+                    }
+                    let mid_t = f64::midpoint(st.begin as f64, se as f64);
+                    if mid_t <= vp.start || mid_t >= vp.end {
+                        continue;
+                    }
+                    let x = layout.cells.left() + vp.x_of(mid_t, layout.cells_width_f64()) as f32;
+                    let pt = volna_core::geometry::point(x, y);
+                    if let Some(ctx) = p.cell_context_at(&ws.app.doc, pt)
+                        && ctx.stage_name.as_deref() == Some(st.name.as_str())
+                    {
+                        return (pt, st.name.clone());
+                    }
+                }
+            }
+            panic!("expected at least one visible primary-lane stage cell in opening viewport");
+        })
+        .unwrap();
+
+    // Right-drag (> 3px threshold) pans without opening the cell context menu.
+    host.update(&mut vcx, |ws, window, cx| {
+        let drag_end = volna_core::geometry::point(cell_pt.x + 24.0, cell_pt.y);
+        for ev in [
+            volna_core::wave::PointerEvent::Down {
+                position: cell_pt,
+                button: volna_core::geometry::MouseButton::Right,
+                modifiers: volna_core::geometry::Modifiers::default(),
+            },
+            volna_core::wave::PointerEvent::Move { position: drag_end },
+            volna_core::wave::PointerEvent::Up,
+        ] {
+            ws.dispatch(Command::Pointer(panel, ev), Some(window), cx);
+        }
+        assert!(
+            ws.app.menu().is_none(),
+            "right-drag must pan without opening context menu"
+        );
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    // Re-locate a stage cell after panning and send an unmoved right-click.
+    let (click_pt, clicked_stage) = host
+        .update(&mut vcx, |ws, _, _| {
+            let p = ws.app.panels.pipeline(panel).unwrap();
+            let layout = p.last_layout();
+            let vp = p.nav.viewport(&ws.app.doc);
+            let Rows::Ready(set) = p.rows(&ws.app.doc) else {
+                panic!("rows should be Ready");
+            };
+            let primary = p.palette().primary_lane().to_owned();
+            for r in layout.row_range.clone() {
+                let Some((_, tx)) = set.get(r) else { continue };
+                let y = layout.row_y(r) + layout.rows.row_px * 0.5;
+                if y < layout.cells.top() || y >= layout.cells.bottom() {
+                    continue;
+                }
+                for st in &tx.stages {
+                    if st.lane != primary {
+                        continue;
+                    }
+                    let se = volna_core::pipeline::PipelineModel::stage_end(tx, st);
+                    let mid_t = f64::midpoint(st.begin as f64, se as f64);
+                    if se <= st.begin || mid_t <= vp.start || mid_t >= vp.end {
+                        continue;
+                    }
+                    let x = layout.cells.left() + vp.x_of(mid_t, layout.cells_width_f64()) as f32;
+                    let pt = volna_core::geometry::point(x, y);
+                    if let Some(ctx) = p.cell_context_at(&ws.app.doc, pt)
+                        && let Some(name) = ctx.stage_name
+                    {
+                        return (pt, name);
+                    }
+                }
+            }
+            (cell_pt, stage_name)
+        })
+        .unwrap();
+
+    host.update(&mut vcx, |ws, window, cx| {
+        for ev in [
+            volna_core::wave::PointerEvent::Down {
+                position: click_pt,
+                button: volna_core::geometry::MouseButton::Right,
+                modifiers: volna_core::geometry::Modifiers::default(),
+            },
+            volna_core::wave::PointerEvent::Up,
+        ] {
+            ws.dispatch(Command::Pointer(panel, ev), Some(window), cx);
+        }
+        let menu = ws.app.menu().expect("right-click on stage cell opens menu");
+        assert_eq!(menu.kind, WaveMenuKind::PipelineCell);
+        let target_action =
+            MenuAction::PipelineOrder(RowOrderCommand::SetMode(RowOrderMode::Stages {
+                stages: vec![clicked_stage.clone()],
+            }));
+        assert!(
+            menu.items().any(|item| item.action == target_action),
+            "context menu should offer ordering by clicked stage '{clicked_stage}'"
+        );
+        assert!(
+            menu.items().any(|item| matches!(
+                item.action,
+                MenuAction::PipelineSource(PipelineSourceCommand::Isolate(_))
+            )),
+            "merged cell context menu should offer Isolate"
+        );
+        ws.dispatch(Command::MenuSelect(panel, target_action), Some(window), cx);
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    host.update(&mut vcx, |ws, _, _| {
+        assert!(ws.app.menu().is_none());
+        assert_eq!(
+            ws.app.panels.pipeline(panel).unwrap().order.mode,
+            RowOrderMode::Stages {
+                stages: vec![clicked_stage]
+            }
+        );
+    })
+    .unwrap();
+}
+
+// User scenario: an engineer opens the Stages & Order popover on a merged GPU pipeline panel,
+// toggles visibility on two primary-lane stages via the left eye icon, sees the toolbar hidden
+// badge and status bar notice update without affecting row order, splits the panel to verify
+// hidden stages carry over, tests Undo/Redo, clicks "Show all" to restore visibility, and renders
+// in both dark and light themes.
+// Requirement: Stages & Order popover exposes only primary-lane stages with separate visibility
+// toggles, toolbar displays a clear hidden-count badge whenever stages are hidden, "Show all"
+// resets visibility, Undo/Redo and split inheritance preserve StageVisibility, and both themes
+// paint cleanly.
+#[gpui_kit::test]
+fn gpu_trace_stages_and_order_visibility_toolbar_badge_show_all_undo_split_and_themes(
+    cx: &mut TestAppContext,
+) {
+    use volna_core::pipeline::RowOrder;
+
+    let (host, mut vcx) = open_gpu_trace(cx);
+    let panel = host
+        .update(&mut vcx, |ws, window, cx| {
+            let p0 = find_tracks_matching(ws, |path| {
+                path.contains("sm[0].simt_partition[0].warp_slot[")
+                    && path.ends_with(".Instruction")
+            });
+            let tracks: Vec<_> = p0.iter().take(4).map(|(_, t)| *t).collect();
+            ws.dispatch(Command::OpenMergedPipeline { tracks }, Some(window), cx);
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    pump_frames(&mut vcx, 3);
+
+    let (first_stage, second_stage, total_rows) = host
+        .update(&mut vcx, |ws, _, _| {
+            let p = ws.app.panels.pipeline(panel).unwrap();
+            assert!(p.stage_visibility.is_empty());
+            assert_eq!(ws.app.status().pipeline_order, None);
+            let options = p.stage_order_options(&ws.app.doc);
+            assert!(
+                options.len() >= 2,
+                "expected at least 2 primary-lane stages in GPU trace"
+            );
+            (
+                options[0].name.clone(),
+                options[1].name.clone(),
+                p.row_count(&ws.app.doc),
+            )
+        })
+        .unwrap();
+
+    // Initially no hidden badge appears in the toolbar.
+    vcx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        vcx.debug_bounds("pipeline-stages-hidden-badge").is_none(),
+        "toolbar hidden-count badge must not appear when all stages are visible"
+    );
+
+    // Open the Stages & Order popover via the real toolbar button.
+    let order_btn = vcx
+        .debug_bounds("pipeline-order-btn")
+        .expect("pipeline-order-btn should be rendered in pipeline toolbar");
+    vcx.simulate_click(order_btn.center(), gpui_kit::Modifiers::default());
+    pump_frames(&mut vcx, 2);
+    assert!(
+        vcx.debug_bounds("pipeline-order-popover").is_some(),
+        "Stages & Order popover should open"
+    );
+    assert!(
+        vcx.debug_bounds("pipeline-stages-show-all").is_none(),
+        "Show all button should stay hidden when no stages are hidden"
+    );
+
+    // Click the eye toggle for the first two primary-lane stages.
+    let vis_first = vcx
+        .debug_bounds("pipeline-stage-vis-0")
+        .expect("eye toggle should exist for first primary-lane stage");
+    vcx.simulate_click(vis_first.center(), gpui_kit::Modifiers::default());
+    pump_frames(&mut vcx, 2);
+
+    let vis_second = vcx
+        .debug_bounds("pipeline-stage-vis-1")
+        .expect("eye toggle should exist for second primary-lane stage");
+    vcx.simulate_click(vis_second.center(), gpui_kit::Modifiers::default());
+    pump_frames(&mut vcx, 2);
+
+    // Verify model state, unchanged row count & order, toolbar badge, status bar, and Show all.
+    host.update(&mut vcx, |ws, _, _| {
+        let p = ws.app.panels.pipeline(panel).unwrap();
+        assert_eq!(p.stage_visibility.hidden_count(), 2);
+        assert!(p.stage_visibility.is_hidden(&first_stage));
+        assert!(p.stage_visibility.is_hidden(&second_stage));
+        assert_eq!(
+            p.order,
+            RowOrder::default(),
+            "toggling stage visibility must not alter row order"
+        );
+        assert_eq!(
+            p.row_count(&ws.app.doc),
+            total_rows,
+            "hiding stages must keep all transaction rows in place"
+        );
+        let status = ws
+            .app
+            .status()
+            .pipeline_order
+            .expect("status bar should indicate hidden stages");
+        assert!(
+            status.contains('2') && status.contains("hidden"),
+            "expected status '{status}' to mention 2 hidden stages"
+        );
+    })
+    .unwrap();
+    assert!(
+        vcx.debug_bounds("pipeline-stages-hidden-badge").is_some(),
+        "toolbar must display hidden-count badge when stages are hidden"
+    );
+    assert!(
+        vcx.debug_bounds("pipeline-stages-show-all").is_some(),
+        "popover must display Show all action when stages are hidden"
+    );
+
+    // Split panel inherits hidden stages onto the cloned panel.
+    let split_panel = host
+        .update(&mut vcx, |ws, window, cx| {
+            ws.dispatch(
+                Command::Panels(volna_core::panels::PanelsCommand::Split {
+                    panel,
+                    axis: volna_core::panels::Axis::Horizontal,
+                }),
+                Some(window),
+                cx,
+            );
+            ws.app.panels.focused_id()
+        })
+        .unwrap();
+    pump_frames(&mut vcx, 2);
+
+    host.update(&mut vcx, |ws, _, _| {
+        assert_ne!(split_panel, panel);
+        assert_eq!(
+            ws.app
+                .panels
+                .pipeline(split_panel)
+                .unwrap()
+                .stage_visibility,
+            ws.app.panels.pipeline(panel).unwrap().stage_visibility
+        );
+    })
+    .unwrap();
+
+    // Paint in light theme with hidden stages and popover open, then switch back to dark.
+    host.update(&mut vcx, |_, _, cx| {
+        crate::theme::set(crate::theme::CoreTheme::volna(false), cx);
+        cx.notify();
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    // Click "Show all" in the popover to restore visibility of all stages on the original panel.
+    let show_all_btn = vcx
+        .debug_bounds("pipeline-stages-show-all")
+        .expect("Show all button should still be visible in open popover");
+    vcx.simulate_click(show_all_btn.center(), gpui_kit::Modifiers::default());
+    pump_frames(&mut vcx, 2);
+
+    host.update(&mut vcx, |ws, window, cx| {
+        let p = ws.app.panels.pipeline(panel).unwrap();
+        assert!(
+            p.stage_visibility.is_empty(),
+            "Show all should clear all hidden stages"
+        );
+        // Undo restores the 2 hidden stages; Redo clears them again.
+        ws.dispatch(Command::Undo, Some(window), cx);
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    host.update(&mut vcx, |ws, window, cx| {
+        let p = ws.app.panels.pipeline(panel).unwrap();
+        assert_eq!(p.stage_visibility.hidden_count(), 2);
+        assert!(p.stage_visibility.is_hidden(&first_stage));
+        assert!(p.stage_visibility.is_hidden(&second_stage));
+        ws.dispatch(Command::Redo, Some(window), cx);
+    })
+    .unwrap();
+    pump_frames(&mut vcx, 1);
+
+    host.update(&mut vcx, |ws, _, _| {
+        assert!(
+            ws.app
+                .panels
+                .pipeline(panel)
+                .unwrap()
+                .stage_visibility
+                .is_empty()
+        );
+    })
+    .unwrap();
+}

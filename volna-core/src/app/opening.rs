@@ -71,6 +71,8 @@ impl App {
                 PointerEvent::Down { .. } | PointerEvent::Wheel { .. } | PointerEvent::Pinch { .. },
             )
             | Command::PipelineActivity(panel, _)
+            | Command::PipelineOrder(panel, _)
+            | Command::PipelineStageVisibility(panel, _)
             | Command::PanToTransactionBoundary { panel, .. }
             | Command::SelectTransaction { panel, .. }
             | Command::ZoomToSpan(panel, ..)

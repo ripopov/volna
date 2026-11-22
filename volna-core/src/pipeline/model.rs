@@ -6,6 +6,9 @@ use std::sync::Arc;
 use web_time::Instant;
 
 use super::layout::{LABEL_W_DEFAULT, LABEL_W_MAX, LABEL_W_MIN, LayoutInput, PipelineLayout};
+use super::order::{
+    RowOrder, RowOrderCommand, RowOrderMode, StageOrderOption, detect_batch_suggestion,
+};
 use super::palette::StagePalette;
 use super::row_set::{MergedRows, RowStream};
 use super::rows::{ROW_PX_DEFAULT, ROW_PX_MAX, ROW_PX_MIN, RowView};
@@ -14,6 +17,7 @@ use super::sources::{
     FocusStyle, PipelineSource, PipelineSourceCommand, SourceBadges, SourceLoadStatus, clean_alias,
     compute_source_badges, disjoint_stage_notice,
 };
+use super::stages::{StageAnchorFilter, StageVisibility, StageVisibilityCommand, row_anchor_time};
 use super::zoom::{self, CYCLE_PX_MAX, ROW_PX_CAP, ZoomBox, ZoomPoint};
 use crate::clock::ClockKey;
 use crate::data::loaded_tracks::LoadedGenerator;
@@ -142,6 +146,16 @@ pub enum Rows<'a> {
 pub use super::row_set::RowSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PipelineCellContext {
+    pub row: usize,
+    pub source_index: usize,
+    pub stage_name: Option<String>,
+    pub is_merged: bool,
+    pub source_label: Option<super::SourceLabel>,
+    pub is_focused: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SourcesSnapshot {
     pub(crate) sources: Vec<PipelineSource>,
     pub(crate) focused_source: Option<usize>,
@@ -151,12 +165,16 @@ pub(crate) struct SourcesSnapshot {
 
 pub(crate) enum Prop {
     Sources(SourcesSnapshot),
+    Order(RowOrder),
+    StageVisibility(StageVisibility),
 }
 
 impl Prop {
     pub(crate) fn kind(&self) -> u8 {
         match self {
             Self::Sources(_) => 0,
+            Self::Order(_) => 1,
+            Self::StageVisibility(_) => 2,
         }
     }
 
@@ -171,6 +189,16 @@ impl Prop {
                         + 64
                 })
                 .sum(),
+            Self::Order(order) => match &order.mode {
+                RowOrderMode::Start | RowOrderMode::End => 32,
+                RowOrderMode::Stages { stages } => {
+                    32 + stages.iter().map(|s| s.len() + 24).sum::<usize>()
+                }
+                RowOrderMode::FromStage { stage } => 32 + stage.len() + 24,
+            },
+            Self::StageVisibility(vis) => {
+                32 + vis.hidden().iter().map(|s| s.len() + 24).sum::<usize>()
+            }
         }
     }
 }
@@ -187,6 +215,8 @@ enum VisibleStatus<'a> {
 
 pub struct PipelineModel {
     pub follow: super::FollowActivity,
+    pub order: RowOrder,
+    pub stage_visibility: StageVisibility,
     pub sources: Vec<PipelineSource>,
     pub focused_source: Option<usize>,
     pub focus_style: FocusStyle,
@@ -205,6 +235,12 @@ pub struct PipelineModel {
     next_color_slot: usize,
     sources_before: crate::history::Before<SourcesSnapshot>,
     sources_edit_label: Option<String>,
+    order_before: crate::history::Before<RowOrder>,
+    order_edit_label: Option<String>,
+    stage_visibility_before: crate::history::Before<StageVisibility>,
+    stage_visibility_edit_label: Option<String>,
+    suggested_order_stage: Option<String>,
+    suggestion_cache_key: Option<(u64, u64, u64)>,
     opening: Option<super::opening::OpeningView>,
     palette: StagePalette,
     badges: SourceBadges,
@@ -246,6 +282,8 @@ impl PipelineModel {
             focus_style: FocusStyle::default(),
             hovered_source: None,
             follow: super::FollowActivity::default(),
+            order: RowOrder::default(),
+            stage_visibility: StageVisibility::default(),
             nav,
             rows: Tween::new(RowView::default()),
             row_cap: ROW_PX_CAP,
@@ -260,6 +298,12 @@ impl PipelineModel {
             next_color_slot,
             sources_before: crate::history::Before::default(),
             sources_edit_label: None,
+            order_before: crate::history::Before::default(),
+            order_edit_label: None,
+            stage_visibility_before: crate::history::Before::default(),
+            stage_visibility_edit_label: None,
+            suggested_order_stage: None,
+            suggestion_cache_key: None,
             opening: None,
             palette: StagePalette::default(),
             badges,
@@ -496,6 +540,8 @@ impl PipelineModel {
         cloned.focused_source = self.focused_source;
         cloned.focus_style = self.focus_style;
         cloned.follow = self.follow;
+        cloned.order = self.order.clone();
+        cloned.stage_visibility = self.stage_visibility.clone();
         cloned.nav = self.nav.clone_view();
         cloned.rows = Tween::new(self.rows.target());
         cloned.row_cap = self.row_cap;
@@ -565,6 +611,22 @@ impl PipelineModel {
         }
     }
 
+    fn note_order_before(&mut self, label: impl Into<String>) {
+        let before = self.order.clone();
+        self.order_before.note(|| before);
+        if self.order_edit_label.is_none() {
+            self.order_edit_label = Some(label.into());
+        }
+    }
+
+    fn note_stage_visibility_before(&mut self, label: impl Into<String>) {
+        let before = self.stage_visibility.clone();
+        self.stage_visibility_before.note(|| before);
+        if self.stage_visibility_edit_label.is_none() {
+            self.stage_visibility_edit_label = Some(label.into());
+        }
+    }
+
     pub(crate) fn take_edits(&mut self, panel: PanelId, history: &mut crate::history::History) {
         let label = self.sources_edit_label.take();
         if let Some(before) = self.sources_before.take() {
@@ -576,6 +638,26 @@ impl PipelineModel {
                 label.or_else(|| Some("Edit pipeline sources".into())),
             );
         }
+        let order_label = self.order_edit_label.take();
+        if let Some(before) = self.order_before.take() {
+            history.record(
+                crate::history::Edit::Prop {
+                    panel,
+                    prop: crate::panels::content::Prop::Pipeline(Prop::Order(before)),
+                },
+                order_label.or_else(|| Some("Change pipeline row order".into())),
+            );
+        }
+        let vis_label = self.stage_visibility_edit_label.take();
+        if let Some(before) = self.stage_visibility_before.take() {
+            history.record(
+                crate::history::Edit::Prop {
+                    panel,
+                    prop: crate::panels::content::Prop::Pipeline(Prop::StageVisibility(before)),
+                },
+                vis_label.or_else(|| Some("Toggle pipeline stage visibility".into())),
+            );
+        }
     }
 
     pub(crate) fn matches_prop(&self, prop: &Prop) -> bool {
@@ -585,6 +667,8 @@ impl PipelineModel {
                     && self.focused_source == snap.focused_source
                     && self.focus_style == snap.focus_style
             }
+            Prop::Order(order) => self.order == *order,
+            Prop::StageVisibility(vis) => self.stage_visibility == *vis,
         }
     }
 
@@ -624,9 +708,30 @@ impl PipelineModel {
                 self.next_color_slot = next.next_color_slot;
                 self.hovered_source = None;
                 self.hover = None;
+                self.suggestion_cache_key = None;
                 self.refresh(doc);
                 self.clamp_and_follow_after_visibility_change(doc);
                 Ok(Prop::Sources(old))
+            }
+            Prop::Order(mut next) => {
+                next.normalize();
+                let old = std::mem::replace(&mut self.order, next);
+                self.hover = None;
+                self.suggestion_cache_key = None;
+                if !self.order.is_start() {
+                    self.suggested_order_stage = None;
+                }
+                self.sync_merged_cache(doc);
+                self.clamp_and_follow_after_visibility_change(doc);
+                Ok(Prop::Order(old))
+            }
+            Prop::StageVisibility(mut next) => {
+                next.normalize();
+                let old = std::mem::replace(&mut self.stage_visibility, next);
+                self.merged.clear_visible_index();
+                self.hover = None;
+                self.follow_after_stage_visibility_change(doc);
+                Ok(Prop::StageVisibility(old))
             }
         }
     }
@@ -935,6 +1040,259 @@ impl PipelineModel {
         }
     }
 
+    pub fn order_command(&mut self, doc: &Document, command: RowOrderCommand) -> bool {
+        let mut next = self.order.clone();
+        let label = match command {
+            RowOrderCommand::Set(order) => {
+                next = order;
+                "Change pipeline row order"
+            }
+            RowOrderCommand::SetMode(mode) => {
+                next.mode = mode;
+                "Change pipeline row order"
+            }
+            RowOrderCommand::ToggleStage(stage) => {
+                let mut stages: Vec<String> = match &next.mode {
+                    RowOrderMode::Start | RowOrderMode::End => Vec::new(),
+                    RowOrderMode::Stages { stages } => stages.clone(),
+                    RowOrderMode::FromStage { .. } => next.resolved_stages(&self.palette).to_vec(),
+                };
+                if let Some(pos) = stages.iter().position(|s| s == &stage) {
+                    stages.remove(pos);
+                } else {
+                    stages.push(stage);
+                }
+                next.mode = if stages.is_empty() {
+                    RowOrderMode::Start
+                } else {
+                    RowOrderMode::Stages { stages }
+                };
+                "Toggle stage in pipeline row order"
+            }
+            RowOrderCommand::SetUnmatched(policy) => {
+                next.unmatched = policy;
+                "Change unmatched row policy"
+            }
+            RowOrderCommand::SetFollowSortKey(follow) => {
+                next.follow_sort_key = follow;
+                "Toggle follow sort-stage anchor"
+            }
+            RowOrderCommand::Reset => {
+                next.mode = RowOrderMode::Start;
+                "Reset pipeline row order"
+            }
+        };
+        next.normalize();
+        if next == self.order {
+            return false;
+        }
+        let rows_changed = next.mode != self.order.mode || next.unmatched != self.order.unmatched;
+        self.note_order_before(label);
+        self.order = next;
+        self.hover = None;
+        self.suggestion_cache_key = None;
+        if !self.order.is_start() {
+            self.suggested_order_stage = None;
+        }
+        if rows_changed {
+            self.sync_merged_cache(doc);
+        }
+        self.clamp_and_follow_after_visibility_change(doc);
+        true
+    }
+
+    pub fn stage_visibility_command(
+        &mut self,
+        doc: &Document,
+        command: StageVisibilityCommand,
+    ) -> bool {
+        let mut next = self.stage_visibility.clone();
+        let (changed, label) = match command {
+            StageVisibilityCommand::Toggle(stage) => {
+                let changed = next.toggle(stage);
+                (changed, "Toggle pipeline stage visibility")
+            }
+            StageVisibilityCommand::SetHidden { stage, hidden } => {
+                let changed = next.set_hidden(stage, hidden);
+                let label = if hidden {
+                    "Hide pipeline stage"
+                } else {
+                    "Show pipeline stage"
+                };
+                (changed, label)
+            }
+            StageVisibilityCommand::ShowAll => {
+                let changed = next.show_all();
+                (changed, "Show all pipeline stages")
+            }
+        };
+        next.normalize();
+        if !changed || next == self.stage_visibility {
+            return false;
+        }
+        self.note_stage_visibility_before(label);
+        self.stage_visibility = next;
+        self.merged.clear_visible_index();
+        self.hover = None;
+        self.follow_after_stage_visibility_change(doc);
+        true
+    }
+
+    #[must_use]
+    pub(crate) fn stage_anchor_filter(&self) -> Option<StageAnchorFilter<'_>> {
+        (!self.stage_visibility.is_empty()).then(|| StageAnchorFilter {
+            visibility: &self.stage_visibility,
+            primary_lane: self.palette.primary_lane(),
+        })
+    }
+
+    fn row_anchor_time(&self, set: &RowSet<'_>, row: usize) -> Option<u64> {
+        let (_, tx) = set.get(row)?;
+        let filter = self.stage_anchor_filter();
+        let use_sort_meta =
+            !self.order.is_start() && (filter.is_none() || self.order.follow_sort_key);
+        let meta = use_sort_meta.then(|| set.sort_meta(row)).flatten();
+        Some(row_anchor_time(tx, meta, filter))
+    }
+
+    #[must_use]
+    pub fn stages_order_status_label(&self, doc: &Document) -> Option<String> {
+        let order_part = self.order.status_label(self.unmatched_row_count(doc));
+        let hidden = self.stage_visibility.hidden_count();
+        match (order_part, hidden) {
+            (None, 0) => None,
+            (Some(order), 0) => Some(order),
+            (None, n) => Some(format!(
+                "Stages: {n} {} hidden",
+                if n == 1 { "stage" } else { "stages" }
+            )),
+            (Some(order), n) => Some(format!("{order} · {n} hidden")),
+        }
+    }
+
+    #[must_use]
+    pub fn stage_order_options(&self, doc: &Document) -> Vec<StageOrderOption> {
+        let names = self.palette.names();
+        if names.is_empty() {
+            return Vec::new();
+        }
+        let primary = self.palette.primary_lane();
+        let mut counts = vec![0u64; names.len()];
+        let mut total_tx = 0u64;
+        for only_visible in [true, false] {
+            for (i, source) in self.sources.iter().enumerate() {
+                if only_visible && !self.is_source_effectively_visible(i) {
+                    continue;
+                }
+                let Some(track) = source.track.track() else {
+                    continue;
+                };
+                let Some(TrackLoadState::Ready(loaded)) = doc.track(track) else {
+                    continue;
+                };
+                for g in &loaded.generators {
+                    total_tx += g.transactions().len() as u64;
+                    if let Some(lane) = g.stage_census().lanes.iter().find(|l| l.lane == primary) {
+                        for entry in &lane.names {
+                            if let Some(rank) = self.palette.rank(&entry.name) {
+                                counts[rank] += entry.count;
+                            }
+                        }
+                    }
+                }
+            }
+            if total_tx > 0 {
+                break;
+            }
+        }
+        names
+            .iter()
+            .enumerate()
+            .map(|(rank, name)| {
+                let count = counts[rank];
+                let coverage = if total_tx > 0 {
+                    (count as f64 / total_tx as f64).min(1.0) as f32
+                } else {
+                    0.0
+                };
+                StageOrderOption {
+                    name: name.clone(),
+                    count,
+                    total_transactions: total_tx,
+                    coverage,
+                }
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn unmatched_row_count(&self, doc: &Document) -> usize {
+        match self.rows(doc) {
+            Rows::Ready(set) => set.unmatched_count(),
+            _ => 0,
+        }
+    }
+
+    #[must_use]
+    pub fn suggested_order_stage(&self) -> Option<&str> {
+        if self.order.is_start() {
+            self.suggested_order_stage.as_deref()
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub fn cell_context_at(&self, doc: &Document, p: Point) -> Option<PipelineCellContext> {
+        if !self.layout.cells.contains(p) || self.layout.is_overview() {
+            return None;
+        }
+        let (row, stage) = match self.hit_at(p, doc)? {
+            Hit::Cell { row, stage } => (row, Some(stage)),
+            Hit::Row(row) => (row, None),
+            _ => return None,
+        };
+        let Rows::Ready(set) = self.rows(doc) else {
+            return None;
+        };
+        let (source_index, tx) = set.get(row)?;
+        let stage_name = stage
+            .and_then(|idx| tx.stages.get(idx))
+            .filter(|s| s.lane == self.palette.primary_lane())
+            .map(|s| s.name.clone());
+        let is_merged = self.is_merged();
+        let source_label = is_merged
+            .then(|| self.badges.labels.get(source_index).cloned())
+            .flatten();
+        Some(PipelineCellContext {
+            row,
+            source_index,
+            stage_name,
+            is_merged,
+            source_label,
+            is_focused: self.focused_source == Some(source_index),
+        })
+    }
+
+    #[must_use]
+    pub(crate) fn pending_cell_context_click(&self) -> Option<Point> {
+        match self.drag {
+            Some(Drag::Pan {
+                button: MouseButton::Right,
+                start,
+                moved: false,
+                ..
+            }) => Some(start),
+            _ => None,
+        }
+    }
+
+    fn follow_after_stage_visibility_change(&mut self, doc: &Document) {
+        if self.laid_out() && self.follow == super::FollowActivity::Following {
+            let _ = self.follow_activity(doc);
+        }
+    }
+
     fn clamp_and_follow_after_visibility_change(&mut self, doc: &Document) {
         if !self.laid_out() {
             return;
@@ -995,7 +1353,13 @@ impl PipelineModel {
                 None => any_unavailable = true,
             }
         }
-        let matched = fp_ok && fp_idx == fp.len();
+        let resolved = self.order.resolved_stages(&self.palette);
+        let primary_lane = self.palette.primary_lane();
+        let matched = fp_ok
+            && fp_idx == fp.len()
+            && self
+                .merged
+                .order_matches(&self.order, resolved, primary_lane);
 
         if ready_gens > 0 && total_rows > 0 {
             return if matched {
@@ -1056,12 +1420,26 @@ impl PipelineModel {
             self.merged.clear();
             return;
         }
+        let resolved = self.order.resolved_stages(&self.palette);
+        let primary_lane = self.palette.primary_lane();
         match self.merged_cache_status(doc) {
             VisibleStatus::ReadyMatched => {}
-            VisibleStatus::AllHidden if self.merged.is_empty() && self.merged.matches(&[]) => {}
+            VisibleStatus::AllHidden
+                if self.merged.is_empty()
+                    && self
+                        .merged
+                        .matches(&[], &self.order, resolved, primary_lane) => {}
             _ => {
                 let streams = self.collect_visible_streams(doc);
-                self.merged.rebuild(streams, self.budget.as_ref());
+                let resolved = self.order.resolved_stages(&self.palette);
+                let primary_lane = self.palette.primary_lane();
+                self.merged.rebuild(
+                    streams,
+                    &self.order,
+                    resolved,
+                    primary_lane,
+                    self.budget.as_ref(),
+                );
             }
         }
     }
@@ -1086,6 +1464,7 @@ impl PipelineModel {
             self.palette = StagePalette::build(&all_gens);
         }
         self.disjoint_notice = disjoint_stage_notice(&self.sources, &by_source);
+        self.suggestion_cache_key = None;
         self.sync_merged_cache(doc);
     }
 
@@ -1109,12 +1488,17 @@ impl PipelineModel {
         if self.sources.is_empty() || !self.attached {
             return Rows::Unavailable;
         }
+        let resolved = self.order.resolved_stages(&self.palette);
+        let primary_lane = self.palette.primary_lane();
         match self.merged_cache_status(doc) {
             VisibleStatus::ReadyMatched => Rows::Ready(RowSet::borrowed(&self.merged)),
             VisibleStatus::ReadyNeedsRebuild => {
                 let streams = self.collect_visible_streams(doc);
                 Rows::Ready(RowSet::owned(MergedRows::build(
                     streams,
+                    &self.order,
+                    resolved,
+                    primary_lane,
                     self.budget.as_ref(),
                 )))
             }
@@ -1122,7 +1506,10 @@ impl PipelineModel {
             VisibleStatus::Failed(error) => Rows::Failed(error),
             VisibleStatus::Unresolved => Rows::Unresolved,
             VisibleStatus::AllHidden => {
-                if self.merged.matches(&[]) {
+                if self
+                    .merged
+                    .matches(&[], &self.order, resolved, primary_lane)
+                {
                     Rows::Ready(RowSet::borrowed(&self.merged))
                 } else {
                     Rows::Ready(RowSet::owned(MergedRows::default()))
@@ -1415,6 +1802,8 @@ impl PipelineModel {
                 .unwrap();
                 if s.lane != self.palette.primary_lane() {
                     write!(text, " lane {}", s.lane).unwrap();
+                } else if self.stage_visibility.is_hidden(&s.name) {
+                    text.push_str(" (hidden)");
                 }
             }
             None => write!(text, " · {}", self.span_text(doc, tx.begin, tx.end)).unwrap(),
@@ -1423,6 +1812,15 @@ impl PipelineModel {
         if !label.is_empty() {
             text.push_str(" · ");
             text.push_str(label);
+        }
+        if self.order.is_stage_based()
+            && let Some(meta) = set.sort_meta(row)
+        {
+            if !meta.matched {
+                text.push_str(" · fallback");
+            } else if stage.is_some() && stage == meta.sort_stage_index() {
+                text.push_str(" · sort key");
+            }
         }
         Some(text)
     }
@@ -1490,6 +1888,15 @@ impl PipelineModel {
             let unzoomed = self.layout.rows.unzoomed(self.layout.zoom);
             self.rows.set(unzoomed);
         }
+        if self.stage_visibility.is_empty() {
+            self.merged.clear_visible_index();
+        } else if self.layout.is_overview() {
+            self.merged.sync_visible_index(
+                &self.stage_visibility,
+                self.palette.primary_lane(),
+                self.budget.as_ref(),
+            );
+        }
         let activity = match followed {
             Some(activity) if self.rows.target() == rows_before => activity,
             _ => self.activity(doc),
@@ -1524,6 +1931,24 @@ impl PipelineModel {
             }
         }
         self.hover = self.pointer.and_then(|p| self.hit_at(p, doc));
+        if self.order.is_start() {
+            let vp = self.nav.viewport(doc);
+            let key = (vp.start.to_bits(), vp.end.to_bits(), self.merged.version());
+            if self.suggestion_cache_key != Some(key) {
+                self.suggestion_cache_key = Some(key);
+                let options = self.stage_order_options(doc);
+                self.suggested_order_stage = match self.rows(doc) {
+                    Rows::Ready(set) => {
+                        let samples = set.sample_overlapping(vp, 256);
+                        detect_batch_suggestion(&samples, &self.palette, &options)
+                    }
+                    _ => None,
+                };
+            }
+        } else {
+            self.suggested_order_stage = None;
+            self.suggestion_cache_key = None;
+        }
         &self.layout
     }
 
@@ -2000,11 +2425,11 @@ impl PipelineModel {
         let Some(row) = self.layout.navigator.row_at(y) else {
             return;
         };
-        let begin = match self.rows(doc) {
-            Rows::Ready(set) => set.get(row).map(|(_, tx)| tx.begin),
+        let anchor_time = match self.rows(doc) {
+            Rows::Ready(set) => self.row_anchor_time(&set, row),
             _ => None,
         };
-        let Some(begin) = begin else {
+        let Some(begin) = anchor_time else {
             return;
         };
         self.suspend_follow();
@@ -2034,11 +2459,25 @@ impl PipelineModel {
         let shift = match self.rows(doc) {
             Rows::Ready(set) if !set.is_empty() => {
                 let row = |top: f64| top.floor().max(0.0).min((set.len() - 1) as f64) as usize;
-                match (set.get(row(old.top)), set.get(row(rows.top))) {
-                    (Some((_, from)), Some((_, to))) => {
-                        super::navigator::follow_shift(viewport, from, to)
+                let from_idx = row(old.top);
+                let to_idx = row(rows.top);
+                if self.order.is_start() && self.stage_visibility.is_empty() {
+                    match (set.get(from_idx), set.get(to_idx)) {
+                        (Some((_, from)), Some((_, to))) => {
+                            super::navigator::follow_shift(viewport, from, to)
+                        }
+                        _ => 0.0,
                     }
-                    _ => 0.0,
+                } else {
+                    match (
+                        self.row_anchor_time(&set, from_idx),
+                        self.row_anchor_time(&set, to_idx),
+                    ) {
+                        (Some(from_key), Some(to_key)) => {
+                            (i128::from(to_key) - i128::from(from_key)) as f64
+                        }
+                        _ => 0.0,
+                    }
                 }
             }
             _ => 0.0,
@@ -2419,7 +2858,7 @@ impl PipelineModel {
                 button,
                 start: p,
                 last: p,
-                moved: button == MouseButton::Right,
+                moved: false,
             });
         }
     }

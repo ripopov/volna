@@ -120,6 +120,7 @@ pub struct LoadedGenerator {
     points: Option<crate::data::points::PointIndex>,
     depth: usize,
     median_lifetime: u64,
+    stages_exceed_owner: bool,
     stage_census: StageCensus,
     palette: crate::pipeline::palette::StagePalette,
     stage_order: Vec<Vec<usize>>,
@@ -189,9 +190,16 @@ impl LoadedGenerator {
             open.push(std::cmp::Reverse((tx.end, tx.begin == tx.end, row)));
         }
         let mut stage_census = StageCensus::default();
+        let mut stages_exceed_owner = false;
         let mut index = StageIndex::default();
         for tx in transactions {
             checkpoint().await;
+            if !stages_exceed_owner {
+                stages_exceed_owner = tx
+                    .stages
+                    .iter()
+                    .any(|s| s.begin < tx.begin || s.end.unwrap_or(tx.end) > tx.end);
+            }
             stage_census
                 .add(&tx.stages, &mut index, &mut reservation, &mut checkpoint)
                 .await?;
@@ -265,6 +273,7 @@ impl LoadedGenerator {
             points,
             depth,
             median_lifetime,
+            stages_exceed_owner,
             stage_census,
             palette,
             stage_order,
@@ -391,6 +400,11 @@ impl LoadedGenerator {
     #[must_use]
     pub fn stage_census(&self) -> &StageCensus {
         &self.stage_census
+    }
+
+    #[must_use]
+    pub(crate) fn stages_exceed_owner(&self) -> bool {
+        self.stages_exceed_owner
     }
 }
 #[derive(Clone, Debug)]

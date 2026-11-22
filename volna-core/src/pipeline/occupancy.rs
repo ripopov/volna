@@ -1,6 +1,11 @@
 //! A bounded row hierarchy over immutable records.
 
-use super::{activity::Activity, raster::PixelMap};
+use super::{
+    activity::Activity,
+    order::RowSortMeta,
+    raster::PixelMap,
+    stages::{StageAnchorFilter, activity_target_score, tx_overlaps_view},
+};
 use crate::{scene::PresenceMask, wave::viewport::Viewport};
 use std::ops::Range;
 use volna_trace::{
@@ -23,6 +28,8 @@ struct Span {
 struct Node {
     begin: u64,
     end: u64,
+    min_begin: u64,
+    max_begin: u64,
     min_end: u64,
     max_end: u64,
     union: u32,
@@ -35,6 +42,8 @@ impl Default for Node {
         Self {
             begin: u64::MAX,
             end: 0,
+            min_begin: u64::MAX,
+            max_begin: 0,
             min_end: u64::MAX,
             max_end: 0,
             union: 0,
@@ -85,8 +94,21 @@ impl RowIndex {
         records: &T,
         budget: Option<&MemoryBudget>,
     ) -> Option<Self> {
+        Self::build_filtered_sync(records, None, budget)
+    }
+
+    pub(crate) fn build_filtered_sync<T: TransactionTable + ?Sized>(
+        records: &T,
+        stage_filter: Option<StageAnchorFilter<'_>>,
+        budget: Option<&MemoryBudget>,
+    ) -> Option<Self> {
         let mut checkpoint = || std::future::ready(());
-        let mut future = std::pin::pin!(Self::build(records, budget, &mut checkpoint));
+        let mut future = std::pin::pin!(Self::build_filtered(
+            records,
+            stage_filter,
+            budget,
+            &mut checkpoint
+        ));
         match std::future::Future::poll(
             future.as_mut(),
             &mut std::task::Context::from_waker(std::task::Waker::noop()),
@@ -98,6 +120,15 @@ impl RowIndex {
 
     pub(crate) async fn build<T: TransactionTable + ?Sized, F: std::future::Future<Output = ()>>(
         records: &T,
+        budget: Option<&MemoryBudget>,
+        checkpoint: &mut impl FnMut() -> F,
+    ) -> Option<Self> {
+        Self::build_filtered(records, None, budget, checkpoint).await
+    }
+
+    async fn build_filtered<T: TransactionTable + ?Sized, F: std::future::Future<Output = ()>>(
+        records: &T,
+        stage_filter: Option<StageAnchorFilter<'_>>,
         budget: Option<&MemoryBudget>,
         checkpoint: &mut impl FnMut() -> F,
     ) -> Option<Self> {
@@ -151,10 +182,12 @@ impl RowIndex {
             for idx in start..end {
                 let tx = records.get(idx);
                 checkpoint().await;
+                node.min_begin = node.min_begin.min(tx.begin);
+                node.max_begin = node.max_begin.max(tx.begin);
                 node.min_end = node.min_end.min(tx.end);
                 node.max_end = node.max_end.max(tx.end);
                 node.aborted |= tx.status == Status::Aborted;
-                for span in geometry(tx) {
+                for span in filtered_geometry(tx, stage_filter) {
                     checkpoint().await;
                     node.begin = node.begin.min(span.begin);
                     node.end = node.end.max(span.end);
@@ -174,6 +207,8 @@ impl RowIndex {
             let mut node = Node {
                 begin: a.begin.min(b.begin),
                 end: a.end.max(b.end),
+                min_begin: a.min_begin.min(b.min_begin),
+                max_begin: a.max_begin.max(b.max_begin),
                 min_end: a.min_end.min(b.min_end),
                 max_end: a.max_end.max(b.max_end),
                 aborted: a.aborted || b.aborted,
@@ -244,15 +279,36 @@ impl RowIndex {
         map: &PixelMap,
         mask: &mut PresenceMask,
     ) {
-        self.visit_pixels(1, 0..self.leaves * BLOCK, records, offset, map, mask);
+        self.raster_filtered(records, offset, None, map, mask);
     }
 
+    pub(crate) fn raster_filtered<T: TransactionTable + ?Sized>(
+        &self,
+        records: &T,
+        offset: usize,
+        stage_filter: Option<StageAnchorFilter<'_>>,
+        map: &PixelMap,
+        mask: &mut PresenceMask,
+    ) {
+        self.visit_pixels(
+            1,
+            0..self.leaves * BLOCK,
+            records,
+            offset,
+            stage_filter,
+            map,
+            mask,
+        );
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "recursive segment tree walk")]
     fn visit_pixels<T: TransactionTable + ?Sized>(
         &self,
         i: usize,
         rows: Range<usize>,
         records: &T,
         offset: usize,
+        stage_filter: Option<StageAnchorFilter<'_>>,
         map: &PixelMap,
         mask: &mut PresenceMask,
     ) {
@@ -294,11 +350,27 @@ impl RowIndex {
             }
         }
         if i >= self.leaves {
-            raster_source_range(records, rows.start..end, offset, map, mask);
+            raster_source_range_filtered(records, rows.start..end, offset, stage_filter, map, mask);
         } else {
             let mid = usize::midpoint(rows.start, rows.end);
-            self.visit_pixels(i * 2, rows.start..mid, records, offset, map, mask);
-            self.visit_pixels(i * 2 + 1, mid..rows.end, records, offset, map, mask);
+            self.visit_pixels(
+                i * 2,
+                rows.start..mid,
+                records,
+                offset,
+                stage_filter,
+                map,
+                mask,
+            );
+            self.visit_pixels(
+                i * 2 + 1,
+                mid..rows.end,
+                records,
+                offset,
+                stage_filter,
+                map,
+                mask,
+            );
         }
     }
 
@@ -352,6 +424,7 @@ impl RowIndex {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn activity<T: TransactionTable + ?Sized>(
         &self,
         records: &T,
@@ -361,15 +434,30 @@ impl RowIndex {
         anchor: f64,
         center: f64,
     ) -> Activity {
-        self.activity_mapped(records, |i| offset + i, view, visible, anchor, center)
+        self.activity_mapped(
+            records,
+            |i| offset + i,
+            None,
+            None,
+            view,
+            visible,
+            anchor,
+            center,
+        )
     }
 
     /// Activity query over a monotonically mapped row coordinate space (e.g. a single source's
     /// stream ordinals mapped to merged panel rows via a strictly increasing reverse index).
+    /// When `sort_meta` is `Some`, targets are anchored to each row's monotonic `sort_key`;
+    /// when `stage_filter` is `Some`, hidden primary-lane stages are ignored in favor of the
+    /// first visible primary-lane stage.
+    #[expect(clippy::too_many_arguments, reason = "internal query parameters")]
     pub(crate) fn activity_mapped<T: TransactionTable + ?Sized, M: Fn(usize) -> usize>(
         &self,
         records: &T,
         row_map: M,
+        sort_meta: Option<&[RowSortMeta]>,
+        stage_filter: Option<StageAnchorFilter<'_>>,
         view: Viewport,
         visible: Range<f64>,
         anchor: f64,
@@ -378,6 +466,8 @@ impl RowIndex {
         let query = ActivityQuery {
             records,
             row_map,
+            sort_meta,
+            stage_filter,
             view,
             visible,
             anchor,
@@ -385,10 +475,77 @@ impl RowIndex {
         };
         let mut activity = Activity::default();
         self.count_activity(1, 0..self.leaves * BLOCK, &query, &mut activity);
-        let mut best = (f64::INFINITY, f64::INFINITY, usize::MAX);
+        let mut best = (u8::MAX, f64::INFINITY, f64::INFINITY, usize::MAX);
         self.nearest(1, 0..self.leaves * BLOCK, &query, &mut best);
-        activity.target = (best.2 != usize::MAX).then_some(best.2);
+        activity.target = (best.3 != usize::MAX).then_some(best.3);
         activity
+    }
+
+    pub(crate) fn visit_overlapping<T: TransactionTable + ?Sized>(
+        &self,
+        records: &T,
+        view: Viewport,
+        limit: usize,
+        visit: &mut impl FnMut(usize),
+    ) {
+        let mut visited = 0usize;
+        self.walk_overlapping(
+            1,
+            0..self.leaves * BLOCK,
+            records,
+            view,
+            limit,
+            &mut visited,
+            visit,
+        );
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "recursive segment tree walk")]
+    fn walk_overlapping<T: TransactionTable + ?Sized>(
+        &self,
+        i: usize,
+        rows: Range<usize>,
+        records: &T,
+        view: Viewport,
+        limit: usize,
+        visited: &mut usize,
+        visit: &mut impl FnMut(usize),
+    ) {
+        if *visited >= limit {
+            return;
+        }
+        let end = rows.end.min(records.len());
+        let node = self.nodes[i];
+        if rows.start >= end
+            || node.min_begin as f64 > view.end
+            || (node.max_end as f64) < view.start
+        {
+            return;
+        }
+        if i >= self.leaves {
+            for idx in rows.start..end {
+                if *visited >= limit {
+                    return;
+                }
+                let tx = records.get(idx);
+                if tx.begin as f64 <= view.end && tx.end as f64 >= view.start {
+                    visit(idx);
+                    *visited += 1;
+                }
+            }
+        } else {
+            let mid = usize::midpoint(rows.start, rows.end);
+            self.walk_overlapping(i * 2, rows.start..mid, records, view, limit, visited, visit);
+            self.walk_overlapping(
+                i * 2 + 1,
+                mid..rows.end,
+                records,
+                view,
+                limit,
+                visited,
+                visit,
+            );
+        }
     }
 
     fn count_activity<T: TransactionTable + ?Sized, M: Fn(usize) -> usize>(
@@ -402,10 +559,10 @@ impl RowIndex {
         let view = query.view;
         let visible = &query.visible;
         let end = rows.end.min(records.len());
-        if rows.start >= end
-            || records.get(rows.start).begin as f64 > view.end
-            || (self.nodes[i].max_end as f64) < view.start
-        {
+        let node = self.nodes[i];
+        let tree_lo = node.min_begin.min(node.begin) as f64;
+        let tree_hi = node.max_end.max(node.end) as f64;
+        if rows.start >= end || tree_lo > view.end || tree_hi < view.start {
             return;
         }
         let first = (query.row_map)(rows.start);
@@ -420,10 +577,7 @@ impl RowIndex {
         } else {
             3
         };
-        if zone != 3
-            && records.get(end - 1).begin as f64 <= view.end
-            && self.nodes[i].min_end as f64 >= view.start
-        {
+        if zone != 3 && node.max_begin as f64 <= view.end && node.min_end as f64 >= view.start {
             match zone {
                 0 => {
                     out.above += end - rows.start;
@@ -439,7 +593,7 @@ impl RowIndex {
         } else if i >= self.leaves {
             for idx in rows.start..end {
                 let tx = records.get(idx);
-                if tx.begin as f64 > view.end || (tx.end as f64) < view.start {
+                if !tx_overlaps_view(tx, view) {
                     continue;
                 }
                 let row = (query.row_map)(idx);
@@ -465,43 +619,56 @@ impl RowIndex {
         i: usize,
         rows: Range<usize>,
         query: &ActivityQuery<'_, T, M>,
-        best: &mut (f64, f64, usize),
+        best: &mut (u8, f64, f64, usize),
     ) {
         let records = query.records;
         let view = query.view;
         let anchor = query.anchor;
         let center = query.center;
         let end = rows.end.min(records.len());
-        if rows.start >= end
-            || records.get(rows.start).begin as f64 > view.end
-            || (self.nodes[i].max_end as f64) < view.start
-        {
+        let node = self.nodes[i];
+        let tree_lo = node.min_begin.min(node.begin) as f64;
+        let tree_hi = node.max_end.max(node.end) as f64;
+        if rows.start >= end || tree_lo > view.end || tree_hi < view.start {
             return;
         }
         let first = (query.row_map)(rows.start);
         let last_row = (query.row_map)(end - 1);
-        let distance = (records.get(rows.start).begin as f64 - anchor)
-            .max(anchor - self.nodes[i].max_end as f64)
-            .max(0.0);
+        let distance = if query.stage_filter.is_some() {
+            // Every primary-lane stage begin and fallback timestamp lies within
+            // `[min(min_begin, begin), max(max_end, end)]`, so this bounds every leaf score.
+            (tree_lo - anchor).max(anchor - tree_hi).max(0.0)
+        } else if let Some(meta) = query.sort_meta {
+            // `meta` is ordered by non-decreasing `sort_key` and `row_map` is strictly
+            // increasing, so `first`..=`last_row` tightly bounds the subtree's sort keys.
+            let min_key = meta[first].sort_key as f64;
+            let max_key = meta[last_row].sort_key as f64;
+            (min_key - anchor).max(anchor - max_key).max(0.0)
+        } else {
+            (node.min_begin as f64 - anchor)
+                .max(anchor - node.max_end as f64)
+                .max(0.0)
+        };
         let row_distance = (first as f64 + 0.5 - center)
             .max(center - (last_row as f64 + 0.5))
             .max(0.0);
-        if (distance, row_distance, first) >= *best {
+        if (0u8, distance, row_distance, first) >= *best {
             return;
         }
         if i >= self.leaves {
             for idx in rows.start..end {
                 let tx = records.get(idx);
-                if tx.begin as f64 > view.end || (tx.end as f64) < view.start {
+                if !tx_overlaps_view(tx, view) {
                     continue;
                 }
                 let row = (query.row_map)(idx);
-                let score = (
-                    (tx.begin as f64 - anchor)
-                        .max(anchor - tx.end as f64)
-                        .max(0.0),
-                    (row as f64 + 0.5 - center).abs(),
+                let score = activity_target_score(
                     row,
+                    tx,
+                    query.sort_meta.map(|meta| meta[row]),
+                    query.stage_filter,
+                    anchor,
+                    center,
                 );
                 if score < *best {
                     *best = score;
@@ -509,12 +676,23 @@ impl RowIndex {
             }
         } else {
             let mid = usize::midpoint(rows.start, rows.end);
-            let split = if mid < end {
-                (query.row_map)(mid) as f64
+            let left_first = if query.stage_filter.is_none()
+                && let Some(meta) = query.sort_meta
+            {
+                if mid < end {
+                    anchor < meta[(query.row_map)(mid)].sort_key as f64
+                } else {
+                    true
+                }
             } else {
-                (last_row + 1) as f64
+                let split = if mid < end {
+                    (query.row_map)(mid) as f64
+                } else {
+                    (last_row + 1) as f64
+                };
+                center < split
             };
-            let children = if center < split {
+            let children = if left_first {
                 [(i * 2, rows.start..mid), (i * 2 + 1, mid..rows.end)]
             } else {
                 [(i * 2 + 1, mid..rows.end), (i * 2, rows.start..mid)]
@@ -531,8 +709,14 @@ impl RowIndex {
                 node.begin = node.begin.saturating_mul(scale);
                 node.end = node.end.saturating_mul(scale);
             }
-            node.min_end = node.min_end.saturating_mul(scale);
-            node.max_end = node.max_end.saturating_mul(scale);
+            if node.min_begin <= node.max_begin {
+                node.min_begin = node.min_begin.saturating_mul(scale);
+                node.max_begin = node.max_begin.saturating_mul(scale);
+            }
+            if node.min_end <= node.max_end {
+                node.min_end = node.min_end.saturating_mul(scale);
+                node.max_end = node.max_end.saturating_mul(scale);
+            }
         }
         for span in &mut self.spans {
             span.begin = span.begin.saturating_mul(scale);
@@ -544,15 +728,21 @@ impl RowIndex {
 struct ActivityQuery<'a, T: TransactionTable + ?Sized, M: Fn(usize) -> usize> {
     records: &'a T,
     row_map: M,
+    sort_meta: Option<&'a [RowSortMeta]>,
+    stage_filter: Option<StageAnchorFilter<'a>>,
     view: Viewport,
     visible: Range<f64>,
     anchor: f64,
     center: f64,
 }
 
-fn geometry(tx: &Transaction) -> impl Iterator<Item = Span> + '_ {
+fn filtered_geometry<'a>(
+    tx: &'a Transaction,
+    stage_filter: Option<StageAnchorFilter<'a>>,
+) -> impl Iterator<Item = Span> + 'a {
     tx.stages
         .iter()
+        .filter(move |s| stage_filter.is_none_or(|f| !f.is_stage_hidden(s)))
         .map(|s| Span {
             begin: s.begin,
             end: s.end.unwrap_or(tx.end).max(s.begin),
@@ -589,13 +779,24 @@ pub(crate) fn raster_source<T: TransactionTable + ?Sized>(
     map: &PixelMap,
     mask: &mut PresenceMask,
 ) {
-    raster_source_range(records, 0..records.len(), offset, map, mask);
+    raster_source_range_filtered(records, 0..records.len(), offset, None, map, mask);
 }
 
-fn raster_source_range<T: TransactionTable + ?Sized>(
+pub(crate) fn raster_source_filtered<T: TransactionTable + ?Sized>(
+    records: &T,
+    offset: usize,
+    stage_filter: Option<StageAnchorFilter<'_>>,
+    map: &PixelMap,
+    mask: &mut PresenceMask,
+) {
+    raster_source_range_filtered(records, 0..records.len(), offset, stage_filter, map, mask);
+}
+
+fn raster_source_range_filtered<T: TransactionTable + ?Sized>(
     records: &T,
     range: Range<usize>,
     offset: usize,
+    stage_filter: Option<StageAnchorFilter<'_>>,
     map: &PixelMap,
     mask: &mut PresenceMask,
 ) {
@@ -607,7 +808,7 @@ fn raster_source_range<T: TransactionTable + ?Sized>(
             continue;
         };
         let tx = records.get(row);
-        for span in geometry(tx) {
+        for span in filtered_geometry(tx, stage_filter) {
             if let Some(x) = map.x.interval(span.begin, span.end) {
                 mask.fill(x, y.clone());
             }
@@ -889,6 +1090,69 @@ mod tests {
         assert_eq!(actual, oracle(&records, 0, &map));
         drop(index);
         assert_eq!(budget.used(), 0);
+    }
+
+    #[test]
+    fn all_hidden_activity_query_retains_logarithmic_nearest_pruning() {
+        use super::super::stages::{StageAnchorFilter, StageVisibility};
+        use std::cell::Cell;
+
+        struct CountingTable<'a> {
+            records: &'a [Transaction],
+            reads: Cell<usize>,
+        }
+        impl TransactionTable for CountingTable<'_> {
+            fn len(&self) -> usize {
+                self.records.len()
+            }
+            fn get(&self, index: usize) -> &Transaction {
+                self.reads.set(self.reads.get() + 1);
+                &self.records[index]
+            }
+        }
+
+        let records: Vec<_> = (0..10_000u64)
+            .map(|row| {
+                tx(
+                    row,
+                    row * 10,
+                    row * 10 + 8,
+                    &[(row * 10, Some(row * 10 + 8))],
+                )
+            })
+            .collect();
+        let index = build(&records, None).unwrap();
+        let mut vis = StageVisibility::default();
+        vis.toggle("stage".into());
+        let filter = Some(StageAnchorFilter {
+            visibility: &vis,
+            primary_lane: "0",
+        });
+
+        let table = CountingTable {
+            records: &records,
+            reads: Cell::new(0),
+        };
+        let view = Viewport {
+            start: 0.0,
+            end: 100_000.0,
+        };
+        let act = index.activity_mapped(
+            &table,
+            |i| i,
+            None,
+            filter,
+            view,
+            4990.0..5010.0,
+            50_000.0,
+            5000.0,
+        );
+        assert_eq!(act.target, Some(5000));
+        assert!(
+            table.reads.get() < 512,
+            "all-hidden activity query must prune subtrees instead of scanning all 10,000 rows (reads={})",
+            table.reads.get()
+        );
     }
 
     #[test]

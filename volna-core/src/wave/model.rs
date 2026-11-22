@@ -887,6 +887,8 @@ pub enum MenuAction {
         row: usize,
         boundary: crate::pipeline::RowBoundary,
     },
+    PipelineOrder(crate::pipeline::RowOrderCommand),
+    PipelineSource(crate::pipeline::PipelineSourceCommand),
     Tint(Option<Tint>),
     Stack(bool),
     Peak(bool),
@@ -968,6 +970,7 @@ pub enum WaveMenuKind {
     Ruler,
     Lane,
     PipelineLabel,
+    PipelineCell,
 }
 
 #[derive(Clone, Debug)]

@@ -88,7 +88,6 @@ impl Scene {
     }
     pub(crate) fn presence(&mut self, rect: Rect, mask: PresenceMask, color: Color) {
         const RUN_LIMIT: usize = 4096;
-        let color = color.with_alpha(1.0);
         let mut runs = Vec::new();
         runs.extend(mask.runs().take(RUN_LIMIT + 1));
         if runs.len() > RUN_LIMIT {

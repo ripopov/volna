@@ -121,6 +121,16 @@ impl StagePalette {
     }
 
     #[must_use]
+    pub fn rank(&self, name: &str) -> Option<usize> {
+        self.by_name.get(name).copied()
+    }
+
+    #[must_use]
+    pub fn names_from<'a>(&'a self, name: &'a str) -> Option<&'a [String]> {
+        self.by_name.get(name).map(|&rank| &self.names[rank..])
+    }
+
+    #[must_use]
     pub fn names(&self) -> &[String] {
         &self.names
     }

@@ -254,6 +254,8 @@ pub enum Command {
         tracks: Vec<Traced<TrackRef>>,
     },
     PipelineSources(PanelId, crate::pipeline::PipelineSourceCommand),
+    PipelineOrder(PanelId, crate::pipeline::RowOrderCommand),
+    PipelineStageVisibility(PanelId, crate::pipeline::StageVisibilityCommand),
     OpenTable {
         selected: Vec<Traced<Member>>,
         clicked: Option<Traced<Member>>,
@@ -409,6 +411,7 @@ pub struct Status {
     pub sidebar_notice: Option<String>,
     pub workspace_notice: Option<String>,
     pub panel: Option<String>,
+    pub pipeline_order: Option<String>,
     pub hover: Option<String>,
     pub file: Option<String>,
     pub time_range: Option<String>,
@@ -1351,8 +1354,20 @@ impl App {
                     self.changed();
                     return;
                 }
+                let pipeline_context_click = if matches!(ev, PointerEvent::Up) {
+                    self.panels
+                        .pipeline(id)
+                        .and_then(crate::pipeline::PipelineModel::pending_cell_context_click)
+                } else {
+                    None
+                };
                 if let Some(panel) = self.panels.get_mut(id)
                     && panel.pointer(&mut self.doc, ev, now)
+                {
+                    self.changed();
+                }
+                if let Some(position) = pipeline_context_click
+                    && self.pipeline_cell_menu(id, position)
                 {
                     self.changed();
                 }
@@ -1384,6 +1399,12 @@ impl App {
             Command::AddToPipeline { panel, tracks } => self.add_to_pipeline(panel, tracks),
             Command::PipelineSources(panel, command) => {
                 self.pipeline_source_command(panel, command);
+            }
+            Command::PipelineOrder(panel, command) => {
+                self.pipeline_order_command(panel, command);
+            }
+            Command::PipelineStageVisibility(panel, command) => {
+                self.pipeline_stage_visibility_command(panel, command);
             }
             Command::OpenTable { selected, clicked } => self.open_table(&selected, clicked),
             Command::OpenTableFromPanel { panel, row } => self.open_table_from_panel(panel, row),
@@ -1578,6 +1599,24 @@ impl App {
                         pipeline.pan_to_row_boundary(&mut self.doc, row, boundary, now);
                     }
                     self.changed();
+                }
+            }
+            Command::MenuSelect(
+                panel,
+                action @ (MenuAction::PipelineOrder(_) | MenuAction::PipelineSource(_)),
+            ) => {
+                let valid = self.transient_menu.as_ref().is_some_and(|(owner, menu)| {
+                    *owner == panel
+                        && menu.kind == WaveMenuKind::PipelineCell
+                        && menu.items().any(|item| item.action == action)
+                });
+                if valid {
+                    self.transient_menu = None;
+                    match action {
+                        MenuAction::PipelineOrder(cmd) => self.pipeline_order_command(panel, cmd),
+                        MenuAction::PipelineSource(cmd) => self.pipeline_source_command(panel, cmd),
+                        _ => unreachable!(),
+                    }
                 }
             }
             Command::MenuSelect(panel, action) => {
@@ -2539,6 +2578,40 @@ impl App {
                 self.changed();
             }
             Ok(false) | Err(_) => {}
+        }
+    }
+
+    fn pipeline_order_command(
+        &mut self,
+        panel: PanelId,
+        command: crate::pipeline::RowOrderCommand,
+    ) {
+        let changed = {
+            let Self { panels, doc, .. } = self;
+            let Some(pipeline) = panels.pipeline_mut(panel) else {
+                return;
+            };
+            pipeline.order_command(doc, command)
+        };
+        if changed {
+            self.changed();
+        }
+    }
+
+    fn pipeline_stage_visibility_command(
+        &mut self,
+        panel: PanelId,
+        command: crate::pipeline::StageVisibilityCommand,
+    ) {
+        let changed = {
+            let Self { panels, doc, .. } = self;
+            let Some(pipeline) = panels.pipeline_mut(panel) else {
+                return;
+            };
+            pipeline.stage_visibility_command(doc, command)
+        };
+        if changed {
+            self.changed();
         }
     }
 
@@ -3752,6 +3825,79 @@ impl App {
         true
     }
 
+    fn pipeline_cell_menu(&mut self, panel: PanelId, position: Point) -> bool {
+        use crate::pipeline::{PipelineSourceCommand, RowOrderCommand, RowOrderMode};
+        let Some((ctx, current_mode)) = self.panels.pipeline(panel).and_then(|pipeline| {
+            let ctx = pipeline.cell_context_at(&self.doc, position)?;
+            Some((ctx, pipeline.order.mode.clone()))
+        }) else {
+            return false;
+        };
+        if let Some(pipeline) = self.panels.pipeline_mut(panel) {
+            pipeline.select_row(&mut self.doc, panel, ctx.row);
+        }
+        let mut entries = Vec::new();
+        if let Some(stage) = &ctx.stage_name {
+            let single_selected = matches!(&current_mode, RowOrderMode::Stages { stages } if stages.len() == 1 && stages[0] == *stage);
+            let from_selected =
+                matches!(&current_mode, RowOrderMode::FromStage { stage: s } if s == stage);
+            entries.push(MenuEntry::Item(MenuItem::choice(
+                MenuAction::PipelineOrder(RowOrderCommand::SetMode(RowOrderMode::Stages {
+                    stages: vec![stage.clone()],
+                })),
+                &format!("Order rows by \"{stage}\""),
+                single_selected,
+            )));
+            entries.push(MenuEntry::Item(MenuItem::choice(
+                MenuAction::PipelineOrder(RowOrderCommand::SetMode(RowOrderMode::FromStage {
+                    stage: stage.clone(),
+                })),
+                &format!("Order from \"{stage}\" onward ({stage}+)"),
+                from_selected,
+            )));
+            entries.push(MenuEntry::Separator);
+        }
+        entries.push(MenuEntry::Item(MenuItem::choice(
+            MenuAction::PipelineOrder(RowOrderCommand::SetMode(RowOrderMode::Start)),
+            "Order by Start (tx.begin)",
+            matches!(current_mode, RowOrderMode::Start),
+        )));
+        entries.push(MenuEntry::Item(MenuItem::choice(
+            MenuAction::PipelineOrder(RowOrderCommand::SetMode(RowOrderMode::End)),
+            "Order by End (tx.end)",
+            matches!(current_mode, RowOrderMode::End),
+        )));
+        if ctx.is_merged
+            && let Some(lbl) = &ctx.source_label
+        {
+            entries.push(MenuEntry::Separator);
+            let solo_label = if ctx.is_focused {
+                format!("Clear Solo ({})", lbl.badge)
+            } else {
+                format!("Solo {} [{}]", lbl.distinguishing, lbl.badge)
+            };
+            entries.push(MenuEntry::Item(MenuItem::plain(
+                MenuAction::PipelineSource(PipelineSourceCommand::ToggleFocus(ctx.source_index)),
+                &solo_label,
+            )));
+            entries.push(MenuEntry::Item(MenuItem::plain(
+                MenuAction::PipelineSource(PipelineSourceCommand::Isolate(ctx.source_index)),
+                &format!("Isolate {} [{}]", lbl.distinguishing, lbl.badge),
+            )));
+        }
+        self.transient_menus += 1;
+        self.transient_menu = Some((
+            panel,
+            WaveMenu {
+                kind: WaveMenuKind::PipelineCell,
+                row: self.transient_menus,
+                position,
+                entries,
+            },
+        ));
+        true
+    }
+
     fn lane_verb(&mut self, panel: PanelId, verb: LaneVerb, now: Instant) {
         let find = |doc: &Document, id| doc.markers().iter().find(|m| m.id == id).cloned();
         match verb {
@@ -3909,6 +4055,7 @@ impl App {
                 PanelKind::Waves(w) => (&w.nav, f64::from(w.wave_width)),
                 PanelKind::Pipeline(p) => {
                     s.hover = p.hover_text(&self.doc);
+                    s.pipeline_order = p.stages_order_status_label(&self.doc);
                     (&p.nav, p.last_layout().cells_width_f64())
                 }
                 PanelKind::Table(table) => (&table.nav, f64::from(table.layout.body.width())),

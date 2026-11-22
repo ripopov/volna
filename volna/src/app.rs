@@ -2240,7 +2240,12 @@ impl Workspace {
         }
         let mut position = group();
         let compact_flat = compact && t.islands.is_none();
-        let has_position = status.cursor.is_some() || (!compact_flat && status.markers.is_some());
+        let has_position = status.cursor.is_some()
+            || status.pipeline_order.is_some()
+            || (!compact_flat && status.markers.is_some());
+        if let Some(order) = status.pipeline_order {
+            position = position.child(mono(order, colors.icon_accent));
+        }
         if let Some(c) = status.cursor {
             position = position.child(
                 div()

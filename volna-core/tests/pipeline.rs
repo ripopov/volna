@@ -5978,3 +5978,674 @@ fn revealing_a_selection_when_a_table_first_appears_requests_a_redraw() {
         "the frontend must be notified to redraw the revealed row"
     );
 }
+
+// User scenario: an engineer hides `F` (and then hides all primary stages `F`, `D`, `X`) in a
+// pipeline panel with normal, flushed, and overlay stages, checking both dark and light themes.
+// Requirement: hidden primary-lane stages stay in layout at heavily dimmed opacity with no cell
+// text label and no sort-stage emphasis tick, while visible primary stages and overlay stages keep
+// full appearance; when all stages of a transaction are hidden, its row stays in place dimmed.
+#[test]
+fn hidden_primary_stages_render_heavily_dimmed_without_labels_and_keep_rows_in_place() {
+    use volna_core::pipeline::{
+        RowOrderCommand, RowOrderMode, StageVisibilityCommand,
+        stages::{HIDDEN_STAGE_EDGE_ALPHA, HIDDEN_STAGE_FILL_ALPHA},
+    };
+
+    let session = fixture(10);
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let panel = app.panels.focused_id();
+    complete_pending(&mut app);
+
+    // Zoom in so every cell (`F`, `D`, `X`) is wide enough to render its text label.
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport {
+            start: -0.5,
+            end: 6.5,
+        });
+    app.handle(Command::PipelineOrder(
+        panel,
+        RowOrderCommand::SetMode(RowOrderMode::Stages {
+            stages: vec!["F".into()],
+        }),
+    ));
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 1200.0, 420.0);
+    for dark in [true, false] {
+        let theme = Theme::volna(dark);
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::ShowAll,
+        ));
+        app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
+        let baseline = app.render_panel(panel, &theme, &mut MonoMeasure);
+        assert!(
+            baseline.texts().any(|t| t == "F"),
+            "baseline frame should draw text label for stage F"
+        );
+        assert!(
+            baseline.texts().any(|t| t == "D"),
+            "baseline frame should draw text label for stage D"
+        );
+        assert!(
+            baseline.texts().any(|t| t == "X"),
+            "baseline frame should draw text label for stage X"
+        );
+
+        let f_style = app
+            .panels
+            .pipeline(panel)
+            .unwrap()
+            .palette()
+            .style("F", &theme);
+        let d_style = app
+            .panels
+            .pipeline(panel)
+            .unwrap()
+            .palette()
+            .style("D", &theme);
+
+        // Hide primary-lane stage `F`.
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::Toggle("F".into()),
+        ));
+        app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
+        assert_eq!(app.panels.pipeline(panel).unwrap().row_count(&app.doc), 10);
+        let cells = app.panels.pipeline(panel).unwrap().last_layout().cells;
+        let hidden_f = app.render_panel(panel, &theme, &mut MonoMeasure);
+
+        // Row count is preserved, cell text for `F` disappears, and `D`/`X` labels remain.
+        assert!(
+            !hidden_f.texts().any(|t| t == "F"),
+            "hidden stage F must not render cell text labels"
+        );
+        assert!(
+            hidden_f.texts().any(|t| t == "D") && hidden_f.texts().any(|t| t == "X"),
+            "visible stages D and X must retain their cell text labels"
+        );
+
+        // `F` stage quads still exist in layout, painted with heavily dimmed fill and border alpha.
+        let dimmed_f_quads: Vec<_> = hidden_f
+            .prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Quad {
+                    fill, border_color, ..
+                } if (fill.h - f_style.fill.h).abs() < 1e-3
+                    && (fill.a - f_style.fill.a * HIDDEN_STAGE_FILL_ALPHA).abs() < 1e-3
+                    && (border_color.a - f_style.edge.a * HIDDEN_STAGE_EDGE_ALPHA).abs() < 1e-3 =>
+                {
+                    Some((*fill, *border_color))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !dimmed_f_quads.is_empty(),
+            "hidden stage F must still paint heavily dimmed quads in place"
+        );
+
+        // Visible stage `D` remains at full opacity.
+        let full_d_quads = hidden_f
+            .prims
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p,
+                    Prim::Quad { fill, .. }
+                        if (fill.h - d_style.fill.h).abs() < 1e-3
+                            && (fill.a - d_style.fill.a).abs() < 1e-3
+                )
+            })
+            .count();
+        assert!(
+            full_d_quads > 0,
+            "visible stage D must stay at full opacity"
+        );
+
+        // Sort-stage accent tick on hidden stage `F` must be suppressed.
+        let has_sort_tick = hidden_f.prims.iter().any(|p| {
+            matches!(
+                p,
+                Prim::Quad {
+                    rect,
+                    fill,
+                    border_width,
+                    ..
+                } if *fill == theme.border_focused
+                    && *border_width == 0.0
+                    && cells.contains(rect.origin)
+                    && rect.width() <= 4.0
+                    && rect.height() > 4.0
+            )
+        });
+        assert!(
+            !has_sort_tick,
+            "hidden stage F must not display a sort-stage emphasis tick"
+        );
+
+        // Hide remaining primary stages (`D`, `X`) so ALL stages of every transaction are hidden.
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::Toggle("D".into()),
+        ));
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::Toggle("X".into()),
+        ));
+        app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
+        assert_eq!(app.panels.pipeline(panel).unwrap().row_count(&app.doc), 10);
+        let all_hidden = app.render_panel(panel, &theme, &mut MonoMeasure);
+        for stage in ["F", "D", "X"] {
+            assert!(
+                !all_hidden.texts().any(|t| t == stage),
+                "all-hidden frame must not render label for {stage}"
+            );
+        }
+        // Row labels stay visible in place even when all stages are hidden.
+        assert!(
+            all_hidden.texts().any(|t| t.contains("op0")),
+            "row label must stay visible when all stages of the transaction are hidden"
+        );
+    }
+}
+
+// User scenario: transactions share a batched `fetch` timestamp (t=0) while their next stage
+// `issue` starts at staggered timestamps (t=100, 120, 140, ...). The engineer hides `fetch`,
+// scrolls rows, clicks the navigator, and enables `FollowActivity`, then hides all stages.
+// Requirement: scrolling, navigator jumps, and `FollowActivity` ignore hidden `fetch` and anchor
+// on `issue.begin` (the first visible stage), falling back cleanly to `tx.begin` when all stages
+// are hidden.
+#[test]
+fn scrolling_and_follow_activity_anchor_on_first_visible_stage_when_earlier_stages_are_hidden() {
+    use volna_core::pipeline::{FollowActivity, StageVisibilityCommand};
+    use vtr::{Status, Value};
+
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = 0;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
+    let cpu = w
+        .scope_with(
+            vtr::SourceOptions::new("cpu", None),
+            vtr::ScopeType::Core,
+            "",
+        )
+        .unwrap();
+    let insn = w
+        .transactions::<()>(
+            vtr::SourceOptions::new("instruction", Some(cpu)),
+            "PIPELINE",
+        )
+        .unwrap();
+    let lane0 = w.intern("0").unwrap();
+    let label = w.intern("vtr.label").unwrap();
+    let fetch = w.intern("fetch").unwrap();
+    let issue = w.intern("issue").unwrap();
+    let exec = w.intern("exec").unwrap();
+
+    // 20 transactions all fetched at t=0, diverging at `issue` = 100 + i*20, `exec` = issue + 10.
+    for i in 0..20u64 {
+        let tx = w.begin_at(insn, 0, &(), None).unwrap();
+        let caption = format!("op{i}");
+        w.attribute(tx.owner(), label, Value::Text(caption))
+            .unwrap();
+        let iss = 100 + i * 20;
+        w.embedded_stage(tx.owner(), 0, fetch, lane0, Some(iss), vec![])
+            .unwrap();
+        w.embedded_stage(tx.owner(), iss, issue, lane0, Some(iss + 10), vec![])
+            .unwrap();
+        w.embedded_stage(tx.owner(), iss + 10, exec, lane0, Some(iss + 18), vec![])
+            .unwrap();
+        w.end_at(tx, iss + 18, Status::Ok).unwrap();
+    }
+    w.advance_time(600).unwrap();
+    w.close().unwrap();
+
+    let session = OpenSpec::Path(file.path().into()).open().unwrap();
+    let track = generator_track(session.as_ref(), &["cpu"]);
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let panel = app.panels.focused_id();
+    complete_pending(&mut app);
+
+    let theme = Theme::volna(true);
+    let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 260.0);
+    app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
+
+    // Hide `fetch` so `issue` (100 + i*20) is the first visible stage on every row.
+    app.handle(Command::PipelineStageVisibility(
+        panel,
+        StageVisibilityCommand::Toggle("fetch".into()),
+    ));
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport {
+            start: 80.0,
+            end: 180.0,
+        });
+    app.panels.pipeline_mut(panel).unwrap().rows.set(RowView {
+        top: 0.0,
+        row_px: 24.0,
+    });
+    app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
+
+    // Vertical scroll by +3 rows: row 0 has issue=100, row 3 has issue=160 -> viewport shifts +60
+    // (NOT 0, even though both rows have tx.begin == 0!).
+    let vp_before = app.doc.shared.viewport.target();
+    app.panels
+        .pipeline_mut(panel)
+        .unwrap()
+        .scroll_rows(&mut app.doc, 3.0, Instant::now());
+    let vp_after = app.doc.shared.viewport.target();
+    assert!(
+        ((vp_after.start - vp_before.start) - 60.0).abs() < 1e-6,
+        "scrolling 3 rows with fetch hidden should shift by issue delta (+60), got {}",
+        vp_after.start - vp_before.start
+    );
+
+    // Enable FollowActivity and center viewport around t=340 (row 12 has issue=100+12*20=340).
+    app.panels.pipeline_mut(panel).unwrap().follow = FollowActivity::Following;
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport {
+            start: 300.0,
+            end: 380.0,
+        });
+    app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
+    let activity = app.panels.pipeline(panel).unwrap().activity(&app.doc);
+    assert_eq!(
+        activity.target,
+        Some(12),
+        "FollowActivity must target row 12 whose first visible stage starts at 340"
+    );
+
+    // Hide `issue` and `exec` too so ALL stages are hidden: scrolling falls back cleanly to
+    // tx.begin (0 -> 0 => shift 0) and FollowActivity still resolves without panicking.
+    app.handle(Command::PipelineStageVisibility(
+        panel,
+        StageVisibilityCommand::Toggle("issue".into()),
+    ));
+    app.handle(Command::PipelineStageVisibility(
+        panel,
+        StageVisibilityCommand::Toggle("exec".into()),
+    ));
+    app.panels.pipeline_mut(panel).unwrap().rows.set(RowView {
+        top: 0.0,
+        row_px: 24.0,
+    });
+    app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
+    let vp_all_hidden_before = app.doc.shared.viewport.target();
+    app.panels
+        .pipeline_mut(panel)
+        .unwrap()
+        .scroll_rows(&mut app.doc, 3.0, Instant::now());
+    let vp_all_hidden_after = app.doc.shared.viewport.target();
+    assert!(
+        (vp_all_hidden_after.start - vp_all_hidden_before.start).abs() < 1e-6,
+        "when all stages are hidden, scrolling must fall back cleanly to tx.begin"
+    );
+    assert!(
+        app.panels
+            .pipeline(panel)
+            .unwrap()
+            .activity(&app.doc)
+            .target
+            .is_some(),
+        "FollowActivity must still resolve a fallback target when all stages are hidden"
+    );
+
+    // Manual scrolling preservation: with FollowActivity Off or Suspended, toggling stage
+    // visibility and Undo/Redo must preserve rows.top without recentering the viewport.
+    app.handle(Command::PipelineStageVisibility(
+        panel,
+        StageVisibilityCommand::ShowAll,
+    ));
+    for follow_mode in [FollowActivity::Off, FollowActivity::Suspended] {
+        app.panels.pipeline_mut(panel).unwrap().follow = follow_mode;
+        app.doc
+            .shared
+            .viewport
+            .set(volna_core::wave::viewport::Viewport {
+                start: 300.0,
+                end: 380.0,
+            });
+        app.panels.pipeline_mut(panel).unwrap().rows.set(RowView {
+            top: 0.0,
+            row_px: 24.0,
+        });
+        app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
+        let top_before = app.panels.pipeline(panel).unwrap().rows.target().top;
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::Toggle("fetch".into()),
+        ));
+        assert!(
+            (app.panels.pipeline(panel).unwrap().rows.target().top - top_before).abs() < 1e-6,
+            "hiding stage with follow={follow_mode:?} must preserve manual scroll position"
+        );
+        app.handle(Command::Undo);
+        assert!(
+            (app.panels.pipeline(panel).unwrap().rows.target().top - top_before).abs() < 1e-6,
+            "undoing stage visibility with follow={follow_mode:?} must preserve manual scroll"
+        );
+        app.handle(Command::Redo);
+        assert!(
+            (app.panels.pipeline(panel).unwrap().rows.target().top - top_before).abs() < 1e-6,
+            "redoing stage visibility with follow={follow_mode:?} must preserve manual scroll"
+        );
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::ShowAll,
+        ));
+    }
+
+    // All-hidden fallback under stage-ordered mode: when rows are sorted by `issue` and EVERY
+    // stage (`fetch`, `issue`, `exec`) is hidden, scrolling and navigator jumps must fall back to
+    // `tx.begin` (0), NOT reuse the hidden `issue.begin` sort timestamp!
+    use volna_core::pipeline::{RowOrderCommand, RowOrderMode};
+    app.handle(Command::PipelineOrder(
+        panel,
+        RowOrderCommand::SetMode(RowOrderMode::Stages {
+            stages: vec!["issue".into()],
+        }),
+    ));
+    for st in ["fetch", "issue", "exec"] {
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::Toggle(st.into()),
+        ));
+    }
+    app.panels.pipeline_mut(panel).unwrap().follow = FollowActivity::Off;
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport {
+            start: 80.0,
+            end: 180.0,
+        });
+    app.panels.pipeline_mut(panel).unwrap().rows.set(RowView {
+        top: 0.0,
+        row_px: 24.0,
+    });
+    app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
+    let vp_stage_ordered_before = app.doc.shared.viewport.target();
+    app.panels
+        .pipeline_mut(panel)
+        .unwrap()
+        .scroll_rows(&mut app.doc, 3.0, Instant::now());
+    let vp_stage_ordered_after = app.doc.shared.viewport.target();
+    assert!(
+        (vp_stage_ordered_after.start - vp_stage_ordered_before.start).abs() < 1e-6,
+        "all-hidden scroll under stage order must fall back to tx.begin (shift 0), got {}",
+        vp_stage_ordered_after.start - vp_stage_ordered_before.start
+    );
+}
+
+// User scenario: an engineer right-clicks an overlay-lane stage (`stl` on lane `"1"`) in a
+// pipeline panel.
+// Requirement: cell context menus stay scoped to primary-lane stages and do not offer
+// "Order rows by" / "Order from onward" for overlay-only stages.
+#[test]
+fn right_click_overlay_stage_omits_primary_stage_order_actions() {
+    use volna_core::wave::model::{MenuAction, WaveMenuKind};
+
+    let session = fixture(10);
+    let track = generator_track(session.as_ref(), &["cpu", "thread0"]);
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let panel = app.panels.focused_id();
+    complete_pending(&mut app);
+
+    let theme = Theme::one_dark();
+    let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 320.0);
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport {
+            start: 0.0,
+            end: 5.0,
+        });
+    app.panels.pipeline_mut(panel).unwrap().rows.set(RowView {
+        top: 0.0,
+        row_px: 32.0,
+    });
+    app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
+
+    // Row 0 has overlay stage `stl` on lane "1" spanning [1, 3) in the bottom half of the row.
+    let layout = app.panels.pipeline(panel).unwrap().last_layout().clone();
+    let x = layout.cells.left()
+        + app
+            .doc
+            .shared
+            .viewport
+            .value
+            .x_of(2.0, layout.cells_width_f64()) as f32;
+    let y = layout.row_y(0) + layout.rows.row_px * 0.78;
+    let pt = point(x, y);
+    let ctx = app
+        .panels
+        .pipeline(panel)
+        .unwrap()
+        .cell_context_at(&app.doc, pt)
+        .expect("overlay click still resolves row context");
+    assert_eq!(
+        ctx.stage_name, None,
+        "overlay-lane stage must not populate primary-lane stage_name"
+    );
+
+    for ev in [
+        PointerEvent::Down {
+            position: pt,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+        PointerEvent::Up,
+    ] {
+        app.handle(Command::Pointer(panel, ev));
+    }
+    let menu = app.menu().expect("right-click opens pipeline cell menu");
+    assert_eq!(menu.kind, WaveMenuKind::PipelineCell);
+    assert!(
+        !menu.items().any(|item| matches!(
+            item.action,
+            MenuAction::PipelineOrder(volna_core::pipeline::RowOrderCommand::SetMode(
+                volna_core::pipeline::RowOrderMode::FromStage { .. }
+                    | volna_core::pipeline::RowOrderMode::Stages { .. }
+            ))
+        )),
+        "overlay-only cell menu must not offer stage or FromStage order actions"
+    );
+}
+
+// User scenario: an engineer hides a long early stage (`fetch`, spanning 0..100) while keeping
+// `exec` (100..120) visible, zooms out into overview mode (`row_px < OVERVIEW_PX`) in dark and
+// light themes, then hides all stages.
+// Requirement: overview renders two presence layers — a heavily dimmed ghost covering hidden
+// stages and a full-brightness foreground covering only visible stages; hidden-only x-regions
+// never paint in bright foreground color; hiding all stages leaves only the dimmed ghost.
+#[test]
+fn zoomed_out_overview_renders_dimmed_ghost_and_bright_visible_stages() {
+    use volna_core::pipeline::{StageVisibilityCommand, stages::HIDDEN_STAGE_OVERVIEW_ALPHA};
+    use vtr::{Status, Value};
+
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut w_options = vtr::WriterOptions::default();
+    w_options.metadata.timescale = 0;
+    let mut w = vtr::Writer::create_with(file.path(), w_options).unwrap();
+    let cpu = w
+        .scope_with(
+            vtr::SourceOptions::new("cpu", None),
+            vtr::ScopeType::Core,
+            "",
+        )
+        .unwrap();
+    let insn = w
+        .transactions::<()>(
+            vtr::SourceOptions::new("instruction", Some(cpu)),
+            "PIPELINE",
+        )
+        .unwrap();
+    let lane0 = w.intern("0").unwrap();
+    let label = w.intern("vtr.label").unwrap();
+    let fetch = w.intern("fetch").unwrap();
+    let exec = w.intern("exec").unwrap();
+
+    for i in 0..40u64 {
+        let tx = w.begin_at(insn, 0, &(), None).unwrap();
+        w.attribute(tx.owner(), label, Value::Text(format!("op{i}")))
+            .unwrap();
+        w.embedded_stage(tx.owner(), 0, fetch, lane0, Some(100), vec![])
+            .unwrap();
+        w.embedded_stage(tx.owner(), 100, exec, lane0, Some(120), vec![])
+            .unwrap();
+        w.end_at(tx, 120, Status::Ok).unwrap();
+    }
+    w.advance_time(140).unwrap();
+    w.close().unwrap();
+
+    let session = OpenSpec::Path(file.path().into()).open().unwrap();
+    let track = generator_track(session.as_ref(), &["cpu"]);
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::OpenPipeline { track: a(track) });
+    let panel = app.panels.focused_id();
+    complete_pending(&mut app);
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 1000.0, 300.0);
+    app.doc
+        .shared
+        .viewport
+        .set(volna_core::wave::viewport::Viewport {
+            start: 0.0,
+            end: 140.0,
+        });
+    app.panels.pipeline_mut(panel).unwrap().rows.set(RowView {
+        top: 0.0,
+        row_px: 1.0,
+    });
+
+    for dark in [true, false] {
+        let theme = Theme::volna(dark);
+        let ghost_alpha = theme.editor.text.a * HIDDEN_STAGE_OVERVIEW_ALPHA;
+
+        // Hide `fetch` (0..100), keeping `exec` (100..120) visible.
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::ShowAll,
+        ));
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::Toggle("fetch".into()),
+        ));
+        app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
+        let layout = app.panels.pipeline(panel).unwrap().last_layout().clone();
+        assert!(layout.is_overview(), "row_px=1.0 must enter overview mode");
+        let split_x = layout.cells.left()
+            + app
+                .doc
+                .shared
+                .viewport
+                .value
+                .x_of(95.0, layout.cells_width_f64()) as f32;
+        let exec_x = layout.cells.left()
+            + app
+                .doc
+                .shared
+                .viewport
+                .value
+                .x_of(110.0, layout.cells_width_f64()) as f32;
+
+        let scene = app.render_panel(panel, &theme, &mut MonoMeasure);
+        let ghost_in_fetch = scene.prims.iter().any(|p| {
+            matches!(
+                p,
+                Prim::Quad { rect, fill, .. }
+                    if (fill.a - ghost_alpha).abs() < 1e-3
+                        && layout.cells.contains(rect.origin)
+                        && rect.left() < split_x
+            )
+        });
+        assert!(
+            ghost_in_fetch,
+            "hidden fetch region must render in dimmed ghost color"
+        );
+
+        let bright_in_fetch = scene.prims.iter().any(|p| {
+            matches!(
+                p,
+                Prim::Quad { rect, fill, .. }
+                    if *fill == theme.editor.text
+                        && layout.cells.contains(rect.origin)
+                        && rect.left() < split_x
+            )
+        });
+        assert!(
+            !bright_in_fetch,
+            "hidden fetch region must not render in bright foreground color"
+        );
+
+        let bright_in_exec = scene.prims.iter().any(|p| {
+            matches!(
+                p,
+                Prim::Quad { rect, fill, .. }
+                    if *fill == theme.editor.text
+                        && layout.cells.contains(rect.origin)
+                        && rect.left() <= exec_x
+                        && rect.right() >= exec_x
+            )
+        });
+        assert!(
+            bright_in_exec,
+            "visible exec region must render in full-brightness foreground color"
+        );
+
+        // Hide `exec` as well (all stages hidden): only dimmed ghost renders, zero bright pixels.
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::Toggle("exec".into()),
+        ));
+        app.layout_panel(panel, bounds, &theme, 1.0, &mut MonoMeasure)
+            .unwrap();
+        let all_hidden = app.render_panel(panel, &theme, &mut MonoMeasure);
+        let any_ghost = all_hidden.prims.iter().any(|p| {
+            matches!(
+                p,
+                Prim::Quad { rect, fill, .. }
+                    if (fill.a - ghost_alpha).abs() < 1e-3 && layout.cells.contains(rect.origin)
+            )
+        });
+        let any_bright = all_hidden.prims.iter().any(|p| {
+            matches!(
+                p,
+                Prim::Quad { rect, fill, .. }
+                    if *fill == theme.editor.text && layout.cells.contains(rect.origin)
+            )
+        });
+        assert!(any_ghost, "all-hidden overview must retain dimmed ghost");
+        assert!(
+            !any_bright,
+            "all-hidden overview must not paint bright foreground pixels"
+        );
+    }
+}

@@ -13,6 +13,10 @@ use crate::wave::overlay::{self, TextPainter, TimeColumn};
 use volna_trace::data::transactions::Status;
 
 use super::model::{Drag, Hit, PipelineModel, Rows};
+use super::stages::{
+    HIDDEN_STAGE_EDGE_ALPHA, HIDDEN_STAGE_FILL_ALPHA, HIDDEN_STAGE_HATCH_ALPHA,
+    HIDDEN_STAGE_OVERVIEW_ALPHA,
+};
 
 const EDGE_MIN_PX: f32 = 6.0;
 const TEXT_MIN_PX: f32 = 10.0;
@@ -149,14 +153,28 @@ pub fn paint(
             let map =
                 super::raster::PixelMap::new(cells, viewport, layout.rows, layout.device_scale);
             if layout.is_overview() {
-                let mask = set.presence(&map);
-                p.scene
-                    .clipped(cells, |scene| scene.presence(map.rect, mask, t.editor.text));
+                if let Some(filter) = model.stage_anchor_filter() {
+                    let ghost = set.presence(&map);
+                    let visible = set.visible_presence(&map, filter);
+                    let ghost_color = t
+                        .editor
+                        .text
+                        .with_alpha(t.editor.text.a * HIDDEN_STAGE_OVERVIEW_ALPHA);
+                    p.scene.clipped(cells, |scene| {
+                        scene.presence(map.rect, ghost, ghost_color);
+                        scene.presence(map.rect, visible, t.editor.text);
+                    });
+                } else {
+                    let mask = set.presence(&map);
+                    p.scene
+                        .clipped(cells, |scene| scene.presence(map.rect, mask, t.editor.text));
+                }
             } else {
                 let border = row_px >= EDGE_MIN_PX;
                 let palette = model.palette();
                 let primary = palette.primary_lane();
                 let merged = model.is_merged();
+                let stage_ordered = model.order.is_stage_based();
                 let band_base = t.editor.text.with_alpha(0.28);
                 let band_edge_base = t.editor.text.with_alpha(0.5);
                 let mut cell_texts = Vec::new();
@@ -171,6 +189,14 @@ pub fn paint(
                     let dim_alpha = if dimmed { 0.18 } else { 1.0 };
                     let band = band_base.with_alpha(band_base.a * dim_alpha);
                     let band_edge = band_edge_base.with_alpha(band_edge_base.a * dim_alpha);
+                    let sort_stage_idx = if stage_ordered {
+                        set.sort_meta(r)
+                            .filter(|m| m.matched)
+                            .and_then(super::order::RowSortMeta::sort_stage_index)
+                    } else {
+                        None
+                    };
+                    let mut sort_tick: Option<Rect> = None;
                     if tx.status == Status::Aborted {
                         p.scene.clipped(cells, |scene| {
                             scene.fill(
@@ -190,7 +216,8 @@ pub fn paint(
                     }
                     let mut last_right: Option<f32> = None;
                     let bands = super::stage_layout::stage_bands(tx, primary);
-                    for (stage, stage_band) in tx.stages.iter().zip(bands) {
+                    for (stage_idx, (stage, stage_band)) in tx.stages.iter().zip(bands).enumerate()
+                    {
                         let sb = stage.begin;
                         let se = PipelineModel::stage_end(tx, stage);
                         let visible = if sb == se {
@@ -217,9 +244,29 @@ pub fn paint(
                                     scene.fill(Rect::from_xywh(xa, ya, xb - xa, 1.0), band_edge);
                                 }
                             });
+                            if sort_stage_idx == Some(stage_idx) && !dimmed && border {
+                                let tick_w = z(2.0).max(1.5);
+                                sort_tick = Some(Rect::from_xywh(
+                                    snap(xa) - tick_w * 0.5,
+                                    (ya - 1.0).max(y),
+                                    tick_w,
+                                    (rect.height() + 2.0).min(row_px),
+                                ));
+                            }
                             continue;
                         }
                         let style = palette.style(&stage.name, t);
+                        let stage_hidden = model.stage_visibility.is_hidden(&stage.name);
+                        let stage_fill_alpha = if stage_hidden {
+                            HIDDEN_STAGE_FILL_ALPHA * dim_alpha
+                        } else {
+                            dim_alpha
+                        };
+                        let stage_edge_alpha = if stage_hidden {
+                            HIDDEN_STAGE_EDGE_ALPHA * dim_alpha
+                        } else {
+                            dim_alpha
+                        };
                         let band_height = row_px / stage_band.count as f32;
                         let band_y = y + band_height * stage_band.index as f32;
                         let band_pad = if stage_band.count == 1 {
@@ -244,9 +291,14 @@ pub fn paint(
                             } else {
                                 style.edge
                             };
-                            let ink = ink.with_alpha(ink.a * dim_alpha);
+                            let border_ink = ink.with_alpha(ink.a * stage_edge_alpha);
+                            let hatch_alpha = if stage_hidden {
+                                HIDDEN_STAGE_HATCH_ALPHA * dim_alpha
+                            } else {
+                                0.55 * dim_alpha
+                            };
                             p.scene.clipped(cells, |scene| {
-                                scene.quad(rect, Color::TRANSPARENT, 0.0, 1.0, ink);
+                                scene.quad(rect, Color::TRANSPARENT, 0.0, 1.0, border_ink);
                                 // Keep strokes that straddle the viewport edge in the hatch path.
                                 let left = rect.left().max(cells.left() - 1.0);
                                 let right = rect.right().min(cells.right() + 1.0);
@@ -257,13 +309,13 @@ pub fn paint(
                                     hatch,
                                     cells.left(),
                                     z(HOLLOW_HATCH_PX).max(2.0),
-                                    ink.with_alpha(0.55 * dim_alpha),
+                                    ink.with_alpha(hatch_alpha),
                                 );
                             });
                         } else {
-                            let fill_c = style.fill.with_alpha(style.fill.a * dim_alpha);
+                            let fill_c = style.fill.with_alpha(style.fill.a * stage_fill_alpha);
                             let (border_w, border_c) = if border && xb - xa >= 3.0 {
-                                (1.0, style.edge.with_alpha(style.edge.a * dim_alpha))
+                                (1.0, style.edge.with_alpha(style.edge.a * stage_edge_alpha))
                             } else {
                                 (0.0, Color::TRANSPARENT)
                             };
@@ -271,10 +323,20 @@ pub fn paint(
                                 scene.quad(rect, fill_c, 0.0, border_w, border_c);
                             });
                         }
+                        if sort_stage_idx == Some(stage_idx) && !dimmed && !stage_hidden && border {
+                            let tick_w = z(2.0).max(1.5);
+                            sort_tick = Some(Rect::from_xywh(
+                                snap(xa) - tick_w * 0.5,
+                                (rect.top() - 1.0).max(y),
+                                tick_w,
+                                (rect.height() + 2.0).min(row_px),
+                            ));
+                        }
                         last_right = Some(last_right.map_or(xb, |r: f32| r.max(xb)));
                         let label_left = xa.max(cells.left());
                         let label_right = xb.min(cells.right());
                         if !dimmed
+                            && !stage_hidden
                             && band_height >= TEXT_MIN_PX
                             && let Some((label, w)) = fitting_stage_label(
                                 &mut p,
@@ -328,6 +390,11 @@ pub fn paint(
                         let tick =
                             Rect::from_xywh(xl, y + pad, tick_w, (row_px - 2.0 * pad).max(1.0));
                         p.scene.clipped(cells, |scene| scene.fill(tick, accent));
+                    }
+                    // Subtle accent tick on the matched sort-stage left edge when ordered by stage.
+                    if let Some(tick) = sort_tick {
+                        p.scene
+                            .clipped(cells, |scene| scene.fill(tick, t.border_focused));
                     }
                     if tx.status == Status::Open
                         && !dimmed
@@ -605,6 +672,14 @@ pub fn paint(
                 Rows::Ready(_) if all_hidden => (
                     "All sources hidden".into(),
                     "Use Show All or toggle a source chip to display transactions".into(),
+                    false,
+                ),
+                Rows::Ready(set) if set.unmatched_count() > 0 => (
+                    "All rows hidden by row order".into(),
+                    format!(
+                        "{} unmatched rows hidden · switch to Fallback or reset order to Start",
+                        set.unmatched_count()
+                    ),
                     false,
                 ),
                 Rows::Ready(_) => (

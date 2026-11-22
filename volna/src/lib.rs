@@ -21,6 +21,7 @@ mod native_windows;
 #[cfg(not(target_family = "wasm"))]
 pub mod native_workspace;
 mod palette;
+mod pipeline_order;
 mod pipeline_sources;
 mod settings_json;
 mod settings_panel;

@@ -11,20 +11,26 @@ pub use navigator::{NavigatorCommand, NavigatorSettings};
 pub use plot::{OccupancyCommand, OccupancySettings};
 pub(crate) mod occupancy;
 mod opening;
+pub mod order;
 pub use opening::ViewportSize;
+pub use order::{
+    RowOrder, RowOrderCommand, RowOrderMode, RowSortMeta, StageOrderOption, UnmatchedPolicy,
+};
 pub mod paint;
 pub mod palette;
 mod raster;
 mod row_set;
 mod selection;
 mod stage_layout;
+pub mod stages;
 pub use selection::ZoomSelection;
+pub use stages::{StageVisibility, StageVisibilityCommand};
 pub mod rows;
 pub mod sources;
 pub mod zoom;
 
 pub use layout::PipelineLayout;
-pub use model::{Hit, PipelineModel, RowBoundary, Rows, TrackSource};
+pub use model::{Hit, PipelineCellContext, PipelineModel, RowBoundary, Rows, TrackSource};
 pub use palette::{StagePalette, StageStyle, StageSwatch};
 pub use rows::RowView;
 pub use sources::{

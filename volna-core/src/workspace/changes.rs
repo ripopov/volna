@@ -42,6 +42,8 @@ struct TableStamp {
 #[derive(PartialEq)]
 struct PipelineStamp {
     follow: crate::pipeline::FollowActivity,
+    order: crate::pipeline::RowOrder,
+    stage_visibility: crate::pipeline::StageVisibility,
     sources: Vec<crate::pipeline::PipelineSource>,
     focused_source: Option<usize>,
     focus_style: crate::pipeline::FocusStyle,
@@ -112,6 +114,8 @@ impl Stamp {
             Command::Pointer(id, _)
             | Command::Table(id, _)
             | Command::PipelineActivity(id, _)
+            | Command::PipelineOrder(id, _)
+            | Command::PipelineStageVisibility(id, _)
             | Command::PipelineNavigator(id, _)
             | Command::PipelineOccupancy(id, _)
             | Command::PipelineSources(id, _)
@@ -171,6 +175,8 @@ impl Stamp {
             }),
             pipeline: app.panels.pipeline(panel).map(|p| PipelineStamp {
                 follow: p.follow,
+                order: p.order.clone(),
+                stage_visibility: p.stage_visibility.clone(),
                 sources: p.sources.clone(),
                 focused_source: p.focused_source,
                 focus_style: p.focus_style,

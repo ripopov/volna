@@ -1091,6 +1091,7 @@ fn rename_panel(
 pub(crate) struct CanvasPanelView {
     derived_signal: Option<Entity<crate::derived::DerivedEditor>>,
     pub(crate) pipeline_sources: Option<Entity<crate::pipeline_sources::PipelineSourcesView>>,
+    pub(crate) pipeline_order: Option<Entity<crate::pipeline_order::PipelineOrderView>>,
     pub(crate) table_columns: Option<Entity<crate::table_columns::ColumnPicker>>,
     pub(crate) table_filters: Option<Entity<crate::table_filters::FilterRow>>,
     pub(crate) table_copy: Option<gpui_kit::Task<()>>,
@@ -1123,6 +1124,7 @@ impl CanvasPanelView {
         Self {
             derived_signal: None,
             pipeline_sources: None,
+            pipeline_order: None,
             ws,
             id,
             generation,
@@ -1280,19 +1282,32 @@ impl Panel for CanvasPanelView {
                 );
             }
         }
-        if let Some((follow, activity, navigator_visible, occupancy_visible, source_count)) =
-            self.ws.upgrade().and_then(|owner| {
-                let ws = owner.read(cx);
-                let pipeline = ws.app.panels.pipeline(self.id)?;
-                Some((
-                    pipeline.follow,
-                    pipeline.activity(&ws.app.doc),
-                    pipeline.navigator.visible,
-                    pipeline.occupancy.visible,
-                    pipeline.sources.len(),
-                ))
-            })
-        {
+        if let Some((
+            follow,
+            activity,
+            navigator_visible,
+            occupancy_visible,
+            source_count,
+            order_label,
+            order_is_custom,
+            hidden_stage_count,
+            suggested_stage,
+        )) = self.ws.upgrade().and_then(|owner| {
+            let ws = owner.read(cx);
+            let pipeline = ws.app.panels.pipeline(self.id)?;
+            Some((
+                pipeline.follow,
+                pipeline.activity(&ws.app.doc),
+                pipeline.navigator.visible,
+                pipeline.occupancy.visible,
+                pipeline.sources.len(),
+                pipeline.order.short_label(),
+                !pipeline.order.is_start(),
+                pipeline.stage_visibility.hidden_count(),
+                pipeline.suggested_order_stage().map(str::to_owned),
+            ))
+        }) {
+            use crate::ui::{Icon as VolnaIcon, IconName as VolnaIconName};
             use volna_core::pipeline::{ActivityCommand, FollowActivity};
             let generation = self.generation;
             let panel = self.id;
@@ -1300,8 +1315,105 @@ impl Panel for CanvasPanelView {
                 .pipeline_sources
                 .as_ref()
                 .is_some_and(|view| view.read(cx).is_drawer_open());
+            let order_open = self
+                .pipeline_order
+                .as_ref()
+                .is_some_and(|view| view.read(cx).is_open());
+            let order_tooltip = if hidden_stage_count > 0 {
+                let stage_word = if hidden_stage_count == 1 {
+                    "stage"
+                } else {
+                    "stages"
+                };
+                format!(
+                    "Stages & Order · {hidden_stage_count} {stage_word} hidden · Order: {order_label} · Click to show/hide stages or order rows"
+                )
+            } else if let Some(stage) = &suggested_stage {
+                format!(
+                    "Stages & Order · Order: Start · Batched fetches detected — try ordering by \"{stage}\""
+                )
+            } else {
+                format!(
+                    "Stages & Order · Order: {order_label} · Click to show/hide stages or order rows"
+                )
+            };
+            let t = *theme(cx);
+            let mut order_btn = Button::new("pipeline-order-btn")
+                .debug_selector(|| "pipeline-order-btn".into())
+                .ghost()
+                .small()
+                .selected(order_is_custom || hidden_stage_count > 0 || order_open)
+                .tooltip(order_tooltip)
+                .on_click(cx.listener(|view, ev: &gpui_kit::ClickEvent, window, cx| {
+                    let entity = view
+                        .pipeline_order
+                        .get_or_insert_with(|| {
+                            cx.new(|cx| {
+                                crate::pipeline_order::PipelineOrderView::new(
+                                    view.ws.clone(),
+                                    view.id,
+                                    view.generation,
+                                    cx,
+                                )
+                            })
+                        })
+                        .clone();
+                    let pos = ev.position();
+                    entity.update(cx, |order_view, cx| {
+                        order_view.toggle_at(pos, window, cx);
+                    });
+                    cx.notify();
+                }));
+            let base_label = if order_is_custom {
+                format!("Stages & Order · {order_label}")
+            } else {
+                "Stages & Order".into()
+            };
+            if hidden_stage_count > 0 || (suggested_stage.is_some() && !order_is_custom) {
+                let mut content = div().flex().items_center().gap(t.px(5.0));
+                if suggested_stage.is_some() && !order_is_custom && hidden_stage_count == 0 {
+                    content = content.child(
+                        div()
+                            .debug_selector(|| "pipeline-order-suggest-dot".into())
+                            .size(t.px(6.0))
+                            .rounded_full()
+                            .bg(t.panel.icon_accent),
+                    );
+                }
+                content = content.child(gpui_kit::SharedString::from(base_label));
+                if hidden_stage_count > 0 {
+                    content = content.child(
+                        div()
+                            .debug_selector(|| "pipeline-stages-hidden-badge".into())
+                            .flex()
+                            .items_center()
+                            .gap(t.px(3.0))
+                            .px(t.px(4.0))
+                            .py(t.px(1.0))
+                            .rounded(t.px(3.0))
+                            .border_1()
+                            .border_color(t.border_focused.opacity(0.55))
+                            .bg(t.selection.bg)
+                            .font_family(t.mono_font)
+                            .text_size(px(t.ui_size_small * 0.88))
+                            .text_color(t.panel.icon_accent)
+                            .child(
+                                VolnaIcon::new(VolnaIconName::EyeOff)
+                                    .size(t.px(11.0))
+                                    .color(t.panel.icon_accent),
+                            )
+                            .child(gpui_kit::SharedString::from(format!(
+                                "{hidden_stage_count} hidden"
+                            ))),
+                    );
+                }
+                order_btn = order_btn.child(content);
+            } else {
+                order_btn = order_btn.label(base_label);
+            }
+            buttons.insert(0, order_btn);
             buttons.insert(
-                0,
+                1,
                 Button::new("pipeline-sources-btn")
                     .debug_selector(|| "pipeline-sources-btn".into())
                     .label(if source_count > 1 {
@@ -1619,6 +1731,18 @@ impl Render for CanvasPanelView {
         } else if !is_pipeline {
             self.pipeline_sources = None;
         }
+        if is_pipeline && self.pipeline_order.is_none() {
+            self.pipeline_order = Some(cx.new(|cx| {
+                crate::pipeline_order::PipelineOrderView::new(
+                    self.ws.clone(),
+                    self.id,
+                    self.generation,
+                    cx,
+                )
+            }));
+        } else if !is_pipeline {
+            self.pipeline_order = None;
+        }
         div()
             .id(("wave-panel", self.id.0))
             .size_full()
@@ -1643,6 +1767,7 @@ impl Render for CanvasPanelView {
                     crate::canvas::PanelCanvas::new(ws, self.id, self.generation).waves(waves),
                 ))
             })
+            .when_some(self.pipeline_order.clone(), gpui_kit::ParentElement::child)
             .when_some(self.derived_signal.clone(), gpui_kit::ParentElement::child)
             .into_any_element()
     }
