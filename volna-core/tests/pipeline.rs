@@ -3235,6 +3235,133 @@ fn flushed_and_open_rows_are_told_apart_by_colour() {
 }
 
 #[test]
+fn neighboring_pipeline_rows_use_their_own_clocks_or_the_shared_time_scale() {
+    use volna_core::geometry::snap;
+    use volna_core::wave::viewport::Viewport;
+    use vtr::SourceOptions;
+
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let fast = writer.clock(SourceOptions::new("fast", None)).unwrap();
+    let slow = writer.clock(SourceOptions::new("slow", None)).unwrap();
+    writer.clock_run(fast, 1, 7).unwrap();
+    writer.clock_run(slow, 3, 13).unwrap();
+    let execute = writer.intern("Execute").unwrap();
+    let lane = writer.intern("0").unwrap();
+    let tracks = [("a", Some(fast)), ("b", None), ("c", Some(slow))]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, clock))| {
+            let track = writer
+                .transactions::<()>(SourceOptions::new(name, None), "TX")
+                .unwrap();
+            if let Some(clock) = clock {
+                writer.associate_clock(track, clock).unwrap();
+            }
+            let tx = writer.begin_at(track, i as u64, &(), None).unwrap();
+            writer
+                .embedded_stage(tx.owner(), 8, execute, lane, Some(92), vec![])
+                .unwrap();
+            writer.end_at(tx, 99, vtr::Status::Ok).unwrap();
+            a(TrackRef(track.id()))
+        })
+        .collect();
+    writer.advance_time(100).unwrap();
+    writer.close().unwrap();
+
+    let mut app = App::new();
+    app.set_session(OpenSpec::Path(file.path().into()).open().unwrap());
+    app.handle(Command::OpenMergedPipeline { tracks });
+    complete_pending(&mut app);
+    let panel = app.panels.focused_id();
+    let theme = Theme::one_dark();
+    frame(&mut app, panel, &theme);
+    let viewport = Viewport {
+        start: 0.0,
+        end: 100.0,
+    };
+    app.doc.shared.viewport.set(viewport);
+    app.panels
+        .pipeline_mut(panel)
+        .unwrap()
+        .rows
+        .set(RowView::default());
+    frame(&mut app, panel, &theme);
+
+    let layout = app.panels.pipeline(panel).unwrap().last_layout();
+    let lines = |y: f32, colors: &[volna_core::Color]| -> Vec<f32> {
+        app.scene()
+            .prims
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::Quad { rect, fill, .. }
+                    if colors.contains(fill)
+                        && rect.width() == 1.0
+                        && rect.top() <= y
+                        && y < rect.bottom()
+                        && rect.left() >= layout.cells.left()
+                        && rect.left() < layout.cells.right() =>
+                {
+                    Some(rect.left())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let time_ticks = lines(
+        layout.header.bottom() - 3.0,
+        &[theme.panel.text_placeholder],
+    );
+    assert!(time_ticks.len() >= 2);
+    let clock_ticks = |start: usize, period| {
+        (start..100)
+            .step_by(period)
+            .map(|tick| {
+                snap(
+                    layout.cells.left()
+                        + viewport.x_of(tick as f64, layout.cells_width_f64()) as f32,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let colors = [
+        theme.wave_tick,
+        theme.wave_tick.with_alpha(theme.wave_tick.a * 0.5),
+    ];
+    for (row, expected) in [clock_ticks(1, 7), time_ticks, clock_ticks(3, 13)]
+        .into_iter()
+        .enumerate()
+    {
+        assert_eq!(
+            lines(layout.row_y(row) + layout.rows.row_px * 0.5, &colors),
+            expected,
+            "row {row}"
+        );
+
+        // Sample the stage away from its label and borders.
+        let y = layout.row_y(row) + layout.rows.row_px * 0.35;
+        let surface = |x| {
+            app.scene().prims.iter().rev().find_map(|prim| match prim {
+                Prim::Quad { rect, fill, .. } if fill.a > 0.0 && rect.contains(point(x, y)) => {
+                    Some(*fill)
+                }
+                _ => None,
+            })
+        };
+        for x in expected.iter().copied().filter(|&x| {
+            let relative = (x - layout.cells.left()) / layout.cells.width();
+            (0.15..0.85).contains(&relative)
+        }) {
+            assert_eq!(
+                surface(x + 0.5) != surface(x + 2.5),
+                row != 1,
+                "stage on row {row} at {x}"
+            );
+        }
+    }
+}
+
+#[test]
 fn panning_a_merged_pipeline_keeps_long_flushed_stages_hatched_and_outlined() {
     use volna_core::wave::viewport::Viewport;
 

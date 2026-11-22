@@ -18,6 +18,7 @@ use super::stages::{
     HIDDEN_STAGE_OVERVIEW_ALPHA,
 };
 
+const STAGE_TICK_ALPHA: f32 = 0.13;
 const EDGE_MIN_PX: f32 = 6.0;
 const TEXT_MIN_PX: f32 = 10.0;
 const LABEL_MIN_PX: f32 = 7.0;
@@ -70,6 +71,76 @@ fn arrow_head(from: Point, to: Point, size: f32) -> [[Point; 2]; 2] {
     ]
 }
 
+fn stage_ticks(scene: &mut crate::scene::Scene, rect: Rect, xs: &[f32], ink: Color) {
+    let first = xs.partition_point(|&x| x < rect.left() + 1.0);
+    for &x in xs[first..].iter().take_while(|&&x| x + 1.0 < rect.right()) {
+        scene.fill(Rect::from_xywh(x, rect.top(), 1.0, rect.height()), ink);
+    }
+}
+
+fn row_grids(
+    model: &PipelineModel,
+    clock_ticks: &[Option<Vec<f32>>],
+    set: &super::model::RowSet<'_>,
+    p: &mut TextPainter<'_>,
+    column: &TimeColumn,
+    ticks: &[crate::wave::timeline::Tick],
+) {
+    let layout = model.last_layout();
+    let range = layout.row_range.clone();
+    if range.is_empty() {
+        return;
+    }
+    let cells = column.area;
+    let top = layout.row_y(range.start).max(cells.top());
+    let bottom = layout.row_y(range.end).min(cells.bottom());
+    let mut paint_band = |top: f32, bottom: f32, source: usize| {
+        let band = TimeColumn {
+            area: Rect::from_xywh(cells.left(), top, cells.width(), bottom - top),
+            ..*column
+        };
+        if let Some(xs) = &clock_ticks[source] {
+            overlay::cycle_grid_lines(p, band.area, xs);
+        } else {
+            overlay::grid(p, &band, ticks);
+        }
+    };
+    if clock_ticks.len() == 1 {
+        paint_band(top, bottom, 0);
+        return;
+    }
+
+    let mut band = None;
+    let mut visit = |row, y| {
+        if let Some((source, _)) = set.get(row) {
+            match band {
+                Some((previous, _)) if previous == source => return,
+                Some((previous, start)) => paint_band(start, y, previous),
+                None => {}
+            }
+            band = Some((source, y));
+        }
+    };
+    let pixel = (1.0 / layout.device_scale) as f32;
+    if layout.rows.row_px < pixel {
+        // Several transactions share one screen pixel. Sample its center to bound
+        // overview painting by the viewport height.
+        for i in 0..((bottom - top) / pixel).ceil() as usize {
+            let y = top + i as f32 * pixel;
+            if let Some(row) = layout.row_at(y.midpoint((y + pixel).min(bottom))) {
+                visit(row, y);
+            }
+        }
+    } else {
+        for row in range {
+            visit(row, layout.row_y(row).max(top));
+        }
+    }
+    if let Some((source, start)) = band {
+        paint_band(start, bottom, source);
+    }
+}
+
 pub fn paint(
     model: &PipelineModel,
     doc: &Document,
@@ -109,15 +180,22 @@ pub fn paint(
     p.scene.fill(labels, t.panel.bg);
     p.scene.fill(header, t.panel.bg);
     let (tick_list, unit) = column.ticks(base, t.zoom);
-    overlay::grid(&mut p, &column, &tick_list);
-    if let Some(clock) = clocks.rulers(&doc.clocks).first() {
-        overlay::cycle_grid(&mut p, &column, clock);
-    }
-
     let rows = model.rows(doc);
+    let clock_ticks: Vec<_> = model
+        .sources
+        .iter()
+        .map(|source| {
+            source
+                .track
+                .track()
+                .and_then(|track| doc.clocks.linked(track))
+                .map(|clock| overlay::cycle_positions(&column, clock, t.zoom))
+        })
+        .collect();
     if let Rows::Ready(set) = &rows
         && doc.is_loaded()
     {
+        row_grids(model, &clock_ticks, set, &mut p, &column, &tick_list);
         let inside = overlay::outside_time(&mut p, &column, doc.limits());
         let first = layout.row_y(0).clamp(cells.top(), cells.bottom());
         let last = layout.row_y(set.len()).clamp(cells.top(), cells.bottom());
@@ -187,6 +265,7 @@ pub fn paint(
                     let row_rect = Rect::new(point(cells.left(), y), size(cells.width(), row_px));
                     let dimmed = model.is_source_dimmed(source_index);
                     let dim_alpha = if dimmed { 0.18 } else { 1.0 };
+                    let ticks = clock_ticks[source_index].as_deref().unwrap_or_default();
                     let band = band_base.with_alpha(band_base.a * dim_alpha);
                     let band_edge = band_edge_base.with_alpha(band_edge_base.a * dim_alpha);
                     let sort_stage_idx = if stage_ordered {
@@ -240,6 +319,12 @@ pub fn paint(
                             let rect = Rect::from_xywh(xa, ya, xb - xa, band_y.end - ya);
                             p.scene.clipped(cells, |scene| {
                                 scene.fill(rect, band);
+                                stage_ticks(
+                                    scene,
+                                    rect,
+                                    ticks,
+                                    t.editor.text.with_alpha(STAGE_TICK_ALPHA * dim_alpha),
+                                );
                                 if border {
                                     scene.fill(Rect::from_xywh(xa, ya, xb - xa, 1.0), band_edge);
                                 }
@@ -311,6 +396,12 @@ pub fn paint(
                                     z(HOLLOW_HATCH_PX).max(2.0),
                                     ink.with_alpha(hatch_alpha),
                                 );
+                                stage_ticks(
+                                    scene,
+                                    rect,
+                                    ticks,
+                                    ink.with_alpha(STAGE_TICK_ALPHA * stage_edge_alpha),
+                                );
                             });
                         } else {
                             let fill_c = style.fill.with_alpha(style.fill.a * stage_fill_alpha);
@@ -321,6 +412,12 @@ pub fn paint(
                             };
                             p.scene.clipped(cells, |scene| {
                                 scene.quad(rect, fill_c, 0.0, border_w, border_c);
+                                stage_ticks(
+                                    scene,
+                                    rect,
+                                    ticks,
+                                    style.text.with_alpha(STAGE_TICK_ALPHA * stage_fill_alpha),
+                                );
                             });
                         }
                         if sort_stage_idx == Some(stage_idx) && !dimmed && !stage_hidden && border {

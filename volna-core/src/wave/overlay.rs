@@ -834,10 +834,14 @@ const CYCLE_GRID_PX: f64 = 8.0;
 const CYCLE_GRID_MAX: usize = 2000;
 
 pub fn cycle_grid(p: &mut TextPainter<'_>, column: &TimeColumn, clock: &Clock) {
+    let xs = cycle_positions(column, clock, p.theme.zoom);
+    cycle_grid_lines(p, column.area, &xs);
+}
+
+pub(crate) fn cycle_positions(column: &TimeColumn, clock: &Clock, zoom: f32) -> Vec<f32> {
     let Some(timeline) = clock.timeline() else {
-        return;
+        return Vec::new();
     };
-    let area = column.area;
     let width = column.width_f64();
     let ppu = column.viewport.px_per_unit(width);
     let (lo, hi) = (column.viewport.start.max(0.0), column.viewport.end.max(0.0));
@@ -848,7 +852,7 @@ pub fn cycle_grid(p: &mut TextPainter<'_>, column: &TimeColumn, clock: &Clock) {
         if s.period == 0
             || (s.end as f64) < lo
             || (s.begin as f64) > hi
-            || (s.period as f64) * ppu < CYCLE_GRID_PX * f64::from(p.theme.zoom)
+            || (s.period as f64) * ppu < CYCLE_GRID_PX * f64::from(zoom)
         {
             continue;
         }
@@ -864,9 +868,13 @@ pub fn cycle_grid(p: &mut TextPainter<'_>, column: &TimeColumn, clock: &Clock) {
             xs.push(column.x_of((s.begin + k * s.period) as f64));
         }
     }
+    xs
+}
+
+pub(crate) fn cycle_grid_lines(p: &mut TextPainter<'_>, area: Rect, xs: &[f32]) {
     let color = p.theme.wave_tick.with_alpha(p.theme.wave_tick.a * 0.5);
     p.scene.clipped(area, |scene| {
-        for x in xs {
+        for &x in xs {
             scene.fill(
                 Rect::new(point(x, area.top()), size(1.0, area.height())),
                 color,
