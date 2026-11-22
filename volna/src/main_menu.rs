@@ -163,6 +163,19 @@ impl Workspace {
             cx,
         );
     }
+
+    pub(super) fn toggle_bottom_dock(
+        &mut self,
+        _: &ToggleBottomDock,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch(
+            Command::Panels(PanelsCommand::ToggleBottomDock),
+            Some(window),
+            cx,
+        );
+    }
 }
 
 #[derive(Clone)]

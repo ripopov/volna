@@ -22,7 +22,7 @@ use volna_trace::data::source::Lookup;
 pub use crate::trace::SavedTrace as Trace;
 
 pub const FORMAT: &str = "volna-workspace";
-pub const VERSION: u32 = 22;
+pub const VERSION: u32 = 23;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_ROWS: usize = 100_000;
 

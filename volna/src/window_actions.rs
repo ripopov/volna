@@ -40,6 +40,7 @@ impl Workspace {
                 owner.clone(),
                 Self::toggle_right_sidebar,
             ))
+            .on_action(workspace_listener(owner.clone(), Self::toggle_bottom_dock))
             .on_action(workspace_listener(owner.clone(), Self::open_file))
             .on_action(workspace_listener(owner.clone(), Self::add_trace))
             .on_action(workspace_listener(

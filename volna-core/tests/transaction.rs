@@ -901,7 +901,6 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         TransactionCommand::Pin(true),
         TransactionCommand::Radix("payload.pc".into()),
         TransactionCommand::Collapse(SectionKey::Events, true),
-        TransactionCommand::CursorHeight(286.0),
     ] {
         app.handle(Command::Transaction(pinned, command));
     }
@@ -917,7 +916,6 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         .clone();
     assert_eq!(entry["record"]["id"], load.0);
     assert_eq!(entry["radix"]["payload.pc"], "hex");
-    assert_eq!(entry["cursor_height"], 286.0);
 
     let mut restored = App::new();
     restored.set_session(session.clone());
@@ -944,85 +942,12 @@ fn the_workspace_restores_a_pinned_record_and_the_reader_choices() {
         "0x80000060"
     );
     assert!(v.events.collapsed);
-    assert_eq!(
-        restored
-            .panels
-            .transaction(pinned)
-            .unwrap()
-            .prefs()
-            .cursor_height,
-        286.0
-    );
-    assert_eq!(
-        restored
-            .panels
-            .transaction(free)
-            .unwrap()
-            .prefs()
-            .cursor_height,
-        volna_core::transaction::view::DEFAULT_CURSOR_HEIGHT
-    );
     assert_eq!(view(&restored, free).identity.id, add);
     for id in [load, add] {
         select(&mut restored, pipeline, insn, id.0);
         assert_eq!(view(&restored, free).identity.id, id);
         assert_eq!(view(&restored, pinned).identity.id, load);
     }
-}
-
-#[test]
-fn cursor_split_validates_sizes_and_only_marks_changed_preferences_for_autosave() {
-    use volna_core::transaction::view::{
-        DEFAULT_CURSOR_HEIGHT, MAX_CURSOR_HEIGHT, MIN_CURSOR_HEIGHT,
-    };
-    use volna_core::workspace::persistence::Persistence;
-    let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
-    let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
-    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
-    let panel = show(&mut app, pipeline, insn, load.0);
-    app.configure_persistence(Persistence::Auto);
-    let initial = app.workspace.scheduler.revision();
-    for height in [
-        f32::NAN,
-        f32::INFINITY,
-        f32::NEG_INFINITY,
-        DEFAULT_CURSOR_HEIGHT,
-    ] {
-        app.handle(Command::Transaction(
-            panel,
-            TransactionCommand::CursorHeight(height),
-        ));
-        assert_eq!(
-            app.panels.transaction(panel).unwrap().prefs().cursor_height,
-            DEFAULT_CURSOR_HEIGHT
-        );
-        assert_eq!(app.workspace.scheduler.revision(), initial);
-    }
-    app.handle(Command::Transaction(
-        panel,
-        TransactionCommand::CursorHeight(-100.0),
-    ));
-    assert_eq!(
-        app.panels.transaction(panel).unwrap().prefs().cursor_height,
-        MIN_CURSOR_HEIGHT
-    );
-    assert_eq!(app.workspace.scheduler.revision(), initial + 1);
-    app.handle(Command::Transaction(
-        panel,
-        TransactionCommand::CursorHeight(10_000.0),
-    ));
-    assert_eq!(
-        app.panels.transaction(panel).unwrap().prefs().cursor_height,
-        MAX_CURSOR_HEIGHT
-    );
-    assert_eq!(app.workspace.scheduler.revision(), initial + 2);
-    app.handle(Command::Transaction(
-        panel,
-        TransactionCommand::CursorHeight(10_000.0),
-    ));
-    assert_eq!(app.workspace.scheduler.revision(), initial + 2);
-    assert_eq!(view(&app, panel).identity.id, load);
-    assert_eq!(app.doc.selection().unwrap().id, load);
 }
 
 #[test]
@@ -2150,5 +2075,262 @@ fn attribute_actions_reject_a_removed_recording_when_its_trace_letter_is_reused(
             .copy_attribute(&app.doc, &pc.id)
             .unwrap(),
         "9"
+    );
+}
+
+/// User scenario: splitting Waves, opening the Bottom Dock for the first time,
+/// and pressing Undo cleanly removes the created At Cursor panel without breaking
+/// the layout journal or clearing undo history.
+#[test]
+fn opening_bottom_dock_for_the_first_time_undoes_cleanly() {
+    use volna_core::panels::{Axis, PanelsCommand};
+
+    let session = example("pipeline_showcase.vtr");
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::AddToWaves(vec![a(
+        volna_trace::data::Member::Generator(0),
+    )]));
+    let waves = app.panels.focused_id();
+    app.handle(Command::Panels(PanelsCommand::Split {
+        panel: waves,
+        axis: Axis::Horizontal,
+    }));
+    assert_eq!(app.panels.len(), 2);
+
+    app.handle(Command::Panels(PanelsCommand::ToggleBottomDock));
+    assert!(app.panels.layout().bottom.as_ref().is_some_and(|d| d.open));
+    assert_eq!(app.panels.len(), 3);
+    assert!(app.can_undo());
+
+    app.handle(Command::Undo);
+    assert!(app.panels.layout().bottom.is_none());
+    assert_eq!(app.panels.len(), 2);
+    assert!(app.can_undo());
+    app.panels.validate().unwrap();
+}
+
+/// User scenario: Show in Waves moves the Waves panel's time viewport so an offscreen
+/// record becomes visible, and Show in Table updates an unlinked table to the requested record.
+#[test]
+fn show_in_waves_moves_viewport_and_show_in_table_updates_unlinked_table() {
+    use volna_core::nav::LinkDim;
+    use volna_core::panels::PanelsCommand;
+    use volna_core::wave::viewport::Viewport;
+    use vtr::Recorder;
+
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let track_id = writer
+        .transactions::<()>(vtr::SourceOptions::new("dma", None), "PIPELINE")
+        .unwrap();
+    let first = writer.begin_at(track_id, 10, &(), None).unwrap();
+    writer.end_at(first, 90, vtr::Status::Ok).unwrap();
+    let second = writer.begin_at(track_id, 110, &(), None).unwrap();
+    writer.end_at(second, 190, vtr::Status::Ok).unwrap();
+    writer.advance_time(1500).unwrap();
+    writer.close().unwrap();
+
+    let session = volna_trace::session::OpenSpec::Path(file.path().into())
+        .open()
+        .unwrap();
+    let tr_raw = session.tracks()[0].id;
+    let tr = a(tr_raw);
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::AddToWaves(vec![a(
+        volna_trace::data::Member::Generator(0),
+    )]));
+    complete_pending(&mut app);
+    let waves = app.panels.focused_id();
+
+    // Select first record (10..90), open Record Details, then pan Waves viewport far away (1000..1200).
+    let details = show(&mut app, waves, tr_raw, first.id());
+    app.doc.shared.viewport.set(Viewport {
+        start: 1000.0,
+        end: 1200.0,
+    });
+    app.handle(Command::RevealWaveTransaction { panel: details });
+    let vp = app.doc.shared.viewport.target();
+    assert!(
+        vp.start <= 10.0 && vp.end >= 90.0,
+        "Show in Waves must move viewport to cover 10..90, got {vp:?}"
+    );
+
+    // Open Table for the track, unlink its transaction link, then jump Record Details to second record.
+    app.handle(Command::RevealTableTransaction { panel: details });
+    complete_pending(&mut app);
+    let table = app.panels.table_for_track(tr).unwrap();
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: table,
+        dim: LinkDim::Transaction,
+    }));
+    assert!(
+        !app.panels
+            .get(table)
+            .unwrap()
+            .kind
+            .table()
+            .unwrap()
+            .nav
+            .link
+            .transaction
+    );
+    app.handle(Command::Transaction(
+        details,
+        TransactionCommand::Jump {
+            track: tr,
+            id: TransactionRef(second.id()),
+        },
+    ));
+    app.handle(Command::RevealTableTransaction { panel: details });
+    let table_model = app.panels.get(table).unwrap().kind.table().unwrap();
+    assert_eq!(
+        table_model.nav.selection(&app.doc).map(|s| s.id),
+        Some(TransactionRef(second.id())),
+        "Show in Table must update unlinked table selection"
+    );
+}
+
+/// User scenario: At Cursor and Record Details stay consistent even when transaction
+/// linking or cursor linking is disabled on the source Pipeline panel.
+#[test]
+fn at_cursor_and_record_details_agree_when_source_panel_is_unlinked() {
+    use volna_core::nav::LinkDim;
+    use volna_core::panels::PanelsCommand;
+
+    let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
+    let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let load = labelled(session.as_ref(), insn, "80000060: lw   a1, 0(a2)");
+    let begin = app
+        .doc
+        .resident_generator(a(insn))
+        .unwrap()
+        .transaction(load)
+        .unwrap()
+        .begin;
+
+    // Disable transaction linking and cursor linking on Pipeline.
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: pipeline,
+        dim: LinkDim::Transaction,
+    }));
+    app.handle(Command::Panels(PanelsCommand::ToggleLink {
+        panel: pipeline,
+        dim: LinkDim::Cursor,
+    }));
+    app.doc.select(None);
+    app.doc.shared.cursor = Some(begin + 50);
+
+    // Select record in unlinked Pipeline, open Record Details and Bottom Dock.
+    app.handle(Command::SelectTransaction {
+        panel: pipeline,
+        track: a(insn),
+        id: load,
+        cursor: Some(begin + 2),
+    });
+    app.handle(Command::ShowTransaction { from: pipeline });
+    let details = app.panels.focused_id();
+    app.handle(Command::Panels(PanelsCommand::ToggleBottomDock));
+    complete_pending(&mut app);
+
+    // At Cursor must see the track and cursor even though transaction linking is off.
+    let before = app.cursor_records_panel().ready().unwrap();
+    assert_eq!(before.time, begin + 2);
+
+    // Clicking Begin in Record Details must move the unlinked Pipeline's cursor so At Cursor agrees.
+    app.handle(Command::Transaction(
+        details,
+        TransactionCommand::Cursor(begin),
+    ));
+    let after = app.cursor_records_panel().ready().unwrap();
+    assert_eq!(after.time, begin);
+}
+
+/// User scenario: a 500-stage record covers the full [begin, end] lifetime in its lifeline
+/// within `VIEW_BYTES`, and Balanced mode aligns the cursor and event ticks with stage edges.
+#[test]
+fn large_lifeline_covers_full_range_and_balanced_aligns_cursor_and_events() {
+    use volna_core::transaction::{LifelineScale, TransactionCommand};
+    use vtr::Recorder;
+
+    // 1. 500-stage record: lifeline must cover all the way to the end of the record (5000).
+    let file = tempfile::Builder::new().suffix(".vtr").tempfile().unwrap();
+    let mut writer = vtr::Writer::create(file.path()).unwrap();
+    let track_id = writer
+        .transactions::<()>(vtr::SourceOptions::new("many", None), "PIPELINE")
+        .unwrap();
+    let sname = writer.intern("step").unwrap();
+    let owner = writer.begin_at(track_id, 0, &(), None).unwrap();
+    for i in 0..500u64 {
+        writer
+            .embedded_stage(owner.owner(), i * 10, sname, 0, Some((i + 1) * 10), vec![])
+            .unwrap();
+    }
+    writer.end_at(owner, 5000, vtr::Status::Ok).unwrap();
+
+    // 2. Two-stage asymmetric record (0..10 and 10..1000) with an event at t=10.
+    let short_name = writer.intern("init").unwrap();
+    let long_name = writer.intern("compute").unwrap();
+    let evt_name = writer.intern("handoff").unwrap();
+    let asym = writer.begin_at(track_id, 0, &(), None).unwrap();
+    writer
+        .embedded_stage(asym.owner(), 0, short_name, 0, Some(10), vec![])
+        .unwrap();
+    writer
+        .embedded_stage(asym.owner(), 10, long_name, 0, Some(1000), vec![])
+        .unwrap();
+    writer
+        .embedded_event(asym.owner(), 10, evt_name, vec![])
+        .unwrap();
+    writer.end_at(asym, 1000, vtr::Status::Ok).unwrap();
+    writer.close().unwrap();
+
+    let session = volna_trace::session::OpenSpec::Path(file.path().into())
+        .open()
+        .unwrap();
+    let tr_raw = session.tracks()[0].id;
+    let tr = a(tr_raw);
+    let mut app = App::new();
+    app.set_session(session);
+    app.handle(Command::AddToWaves(vec![a(
+        volna_trace::data::Member::Generator(0),
+    )]));
+    complete_pending(&mut app);
+    let waves = app.panels.focused_id();
+
+    // Verify 500-stage lifeline reaches the end of the record (end == 5000).
+    let details = show(&mut app, waves, tr_raw, owner.id());
+    let v500 = view(&app, details);
+    assert_eq!(v500.lifeline[0].cells.first().unwrap().begin, 0);
+    assert_eq!(v500.lifeline[0].cells.last().unwrap().end, 5000);
+
+    // Switch to asymmetric two-stage record in Balanced mode with cursor at t=10.
+    app.handle(Command::Transaction(
+        details,
+        TransactionCommand::Jump {
+            track: tr,
+            id: TransactionRef(asym.id()),
+        },
+    ));
+    app.handle(Command::Transaction(
+        details,
+        TransactionCommand::LifelineScale(LifelineScale::Balanced),
+    ));
+    app.handle(Command::Transaction(
+        details,
+        TransactionCommand::Cursor(10),
+    ));
+    let v_bal = view(&app, details);
+    let second_start = v_bal.lifeline[0].cells[1].start;
+    let cursor_pos = v_bal.cursor.unwrap();
+    let event_pos = v_bal.event_ticks[0].at;
+    assert!(
+        (cursor_pos - second_start).abs() < 1e-5,
+        "Balanced cursor ({cursor_pos}) must align with second stage start ({second_start})"
+    );
+    assert!(
+        (event_pos - second_start).abs() < 1e-5,
+        "Balanced event tick ({event_pos}) must align with second stage start ({second_start})"
     );
 }

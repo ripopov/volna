@@ -9,7 +9,7 @@ use web_time::Instant;
 use super::attributes::{AttributeId, AttributeOwner, NAVIGATION_BYTES};
 use super::group::{GROUP_BYTES, GroupQuery, GroupView};
 use super::parents::{ParentTrace, ParentTraceState};
-use super::view::{SectionKey, TxView, VIEW_BYTES, ViewPrefs};
+use super::view::{LifelineScale, SectionKey, TxView, VIEW_BYTES, ViewPrefs};
 use crate::data::loaded_tracks::LoadedGenerator;
 use crate::data::text::{COPY_BYTES, Radix};
 use crate::document::{Document, TrackLoadState, TxSelection};
@@ -58,12 +58,6 @@ pub enum TxPanelState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransactionCommand {
-    CursorHeight(f32),
-    CursorSelect {
-        track: Traced<TrackRef>,
-        id: TransactionRef,
-        time: u64,
-    },
     Jump {
         track: Traced<TrackRef>,
         id: TransactionRef,
@@ -74,6 +68,10 @@ pub enum TransactionCommand {
     Cursor(u64),
     SelectStage(TransactionRef),
     FitLifetime,
+    LifelineScale(LifelineScale),
+    StagesGrouped(bool),
+    StagesShowAll(bool),
+    AttributesGrouped(bool),
     Radix(String),
     Collapse(SectionKey, bool),
     Filter(String),
@@ -94,6 +92,7 @@ pub struct TransactionModel {
     history: Vec<ShownRecord>,
     cursor: usize,
     pinned: bool,
+    last_external_origin: Option<crate::panels::PanelId>,
     prefs: ViewPrefs,
     selected_stage: Option<TransactionRef>,
     pin_before: Before<(bool, Option<ShownRecord>)>,
@@ -123,6 +122,7 @@ impl TransactionModel {
             history: Vec::new(),
             cursor: 0,
             pinned: false,
+            last_external_origin: None,
             selected_stage: None,
             pin_before: Before::default(),
             radix_before: Before::default(),
@@ -147,10 +147,20 @@ impl TransactionModel {
         clone.prefs = self.prefs.clone();
         clone.selected_stage = self.selected_stage;
         clone.pinned = self.pinned;
+        clone.last_external_origin = self.last_external_origin;
         if let Some(shown) = self.shown() {
             clone.history = vec![shown.clone()];
         }
         clone
+    }
+
+    #[must_use]
+    pub fn external_origin(&self) -> Option<crate::panels::PanelId> {
+        self.last_external_origin
+    }
+
+    pub(crate) fn set_external_origin(&mut self, origin: crate::panels::PanelId) {
+        self.last_external_origin = Some(origin);
     }
 
     #[must_use]
@@ -343,10 +353,6 @@ impl TransactionModel {
         };
     }
 
-    pub(crate) fn cursor_records_enabled(&self) -> bool {
-        self.attached && self.refused.is_none()
-    }
-
     #[must_use]
     pub fn is_attached(&self) -> bool {
         self.attached
@@ -419,6 +425,7 @@ impl TransactionModel {
         }
         self.parents.clear(doc);
         self.selected_stage = None;
+        self.prefs.stages_show_all = false;
         self.prefs.attributes = super::attributes::AttributePrefs::default();
         self.group_query = GroupQuery::default();
         *self.group_cache.get_mut() = None;
@@ -442,10 +449,12 @@ impl TransactionModel {
         self.parents.clear(doc);
         self.cursor = cursor;
         self.selected_stage = None;
+        self.prefs.stages_show_all = false;
         self.prefs.attributes = super::attributes::AttributePrefs::default();
         self.group_query = GroupQuery::default();
         *self.group_cache.get_mut() = None;
-        if let Some(selection) = self.shown().and_then(|shown| shown.selection(panel)) {
+        let origin = self.last_external_origin.unwrap_or(panel);
+        if let Some(selection) = self.shown().and_then(|shown| shown.selection(origin)) {
             doc.select_range(Some(selection), self.shown().and_then(|s| s.range));
         }
         true
@@ -563,51 +572,6 @@ impl TransactionModel {
         now: Instant,
     ) -> bool {
         match command {
-            TransactionCommand::CursorHeight(height) => {
-                if !height.is_finite() {
-                    return false;
-                }
-                let height = height.clamp(
-                    super::view::MIN_CURSOR_HEIGHT,
-                    super::view::MAX_CURSOR_HEIGHT,
-                );
-                let changed = self.prefs.cursor_height != height;
-                self.prefs.cursor_height = height;
-                changed
-            }
-            TransactionCommand::CursorSelect { track, id, time } => {
-                let Some(generator) = doc.resident_generator(track) else {
-                    return false;
-                };
-                let Some(ordinal) = generator.transaction_ordinal(id) else {
-                    return false;
-                };
-                if !matches!(doc.transaction_index(track), Some(crate::analysis::AnalysisLoad::Ready(index)) if index.active_rank(time, ordinal).is_some())
-                {
-                    return false;
-                }
-                let Some(path) = track_path(doc, track) else {
-                    return false;
-                };
-                self.show(
-                    doc,
-                    ShownRecord {
-                        track: TrackSource::Resolved { track, path },
-                        id,
-                        range: None,
-                    },
-                );
-                let record_cursor = doc.record_cursor().filter(|cursor| cursor.track == track);
-                doc.select(Some(TxSelection {
-                    track,
-                    id,
-                    origin: panel,
-                }));
-                if let Some(cursor) = record_cursor {
-                    doc.set_record_cursor(cursor);
-                }
-                true
-            }
             TransactionCommand::TraceParents => {
                 if !self.attached
                     || self.refused.is_some()
@@ -677,14 +641,8 @@ impl TransactionModel {
                 }
                 doc.shared.cursor = Some(record.begin);
                 self.history[self.cursor].id = id;
-                doc.select_range(
-                    Some(TxSelection {
-                        track,
-                        id,
-                        origin: panel,
-                    }),
-                    Some(range),
-                );
+                let origin = self.last_external_origin.unwrap_or(panel);
+                doc.select_range(Some(TxSelection { track, id, origin }), Some(range));
                 true
             }
             TransactionCommand::FitGroup => {
@@ -713,11 +671,8 @@ impl TransactionModel {
                         range: None,
                     },
                 );
-                doc.select(Some(TxSelection {
-                    track,
-                    id,
-                    origin: panel,
-                }));
+                let origin = self.last_external_origin.unwrap_or(panel);
+                doc.select(Some(TxSelection { track, id, origin }));
                 changed
             }
             TransactionCommand::Back => {
@@ -772,6 +727,26 @@ impl TransactionModel {
                 let animation = doc.navigation.animation;
                 doc.shared.viewport.animate_to(target, now, animation);
                 true
+            }
+            TransactionCommand::LifelineScale(scale) => {
+                let changed = self.prefs.lifeline_scale != scale;
+                self.prefs.lifeline_scale = scale;
+                changed
+            }
+            TransactionCommand::StagesGrouped(grouped) => {
+                let changed = self.prefs.stages_grouped != grouped;
+                self.prefs.stages_grouped = grouped;
+                changed
+            }
+            TransactionCommand::StagesShowAll(show_all) => {
+                let changed = self.prefs.stages_show_all != show_all;
+                self.prefs.stages_show_all = show_all;
+                changed
+            }
+            TransactionCommand::AttributesGrouped(grouped) => {
+                let changed = self.prefs.attributes_grouped != grouped;
+                self.prefs.attributes_grouped = grouped;
+                changed
             }
             TransactionCommand::Radix(key) => {
                 let radix = &self.prefs.radix;

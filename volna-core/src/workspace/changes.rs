@@ -31,7 +31,7 @@ pub(crate) struct Stamp {
     wave_revisions: Vec<(PanelId, u64)>,
     pipeline: Option<PipelineStamp>,
     table: Option<TableStamp>,
-    transactions: Vec<(PanelId, Option<crate::transaction::ShownRecord>, f32)>,
+    transactions: Vec<(PanelId, Option<crate::transaction::ShownRecord>)>,
 }
 #[derive(PartialEq)]
 struct TableStamp {
@@ -208,7 +208,7 @@ impl Stamp {
                 .iter()
                 .filter_map(|p| {
                     let model = p.kind.transaction()?;
-                    Some((p.id, model.shown().cloned(), model.prefs().cursor_height))
+                    Some((p.id, model.shown().cloned()))
                 })
                 .collect(),
         })

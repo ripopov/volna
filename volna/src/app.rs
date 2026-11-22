@@ -56,6 +56,7 @@ actions!(
     [
         OpenMainMenu,
         ToggleRightSidebar,
+        ToggleBottomDock,
         OpenFile,
         AddTrace,
         OpenWorkspace,

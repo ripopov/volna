@@ -901,8 +901,13 @@ fn transaction_links_support_header_history_and_browser_shortcuts(cx: &mut TestA
                 .unwrap();
             assert_eq!(navigation(&mut vcx), (instruction.0, true, false));
             vcx.update(|window, cx| window.draw(cx).clear(cx));
+            let back_bounds = vcx.debug_bounds("tx-back").unwrap();
+            let forward_bounds = vcx.debug_bounds("tx-forward").unwrap();
             let follows = vcx.debug_bounds("tx-follows").unwrap();
-            assert!(follows.bottom() <= vcx.debug_bounds("tx-back").unwrap().top());
+            let pin_bounds = vcx.debug_bounds("tx-pin").unwrap();
+            assert!(back_bounds.right() <= forward_bounds.left());
+            assert!(forward_bounds.right() <= follows.left());
+            assert!(follows.right() <= pin_bounds.left());
             click(&mut vcx, "tx-back");
             assert_eq!(navigation(&mut vcx), (request.0, false, true));
             click(&mut vcx, "tx-back");
@@ -7216,7 +7221,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
             let area = ws.dock.as_ref().unwrap().read(cx).area.clone();
             area.update(cx, |area, cx| {
                 area.set_dock(
-                    DockPlacement::Bottom,
+                    DockPlacement::Left,
                     gpui_kit::base::dock::DockLayout::h_split(),
                     window,
                     cx,
@@ -7236,7 +7241,7 @@ fn check_dock_interactions(cx: &mut TestAppContext, island_theme: Option<&'stati
                     .read(cx)
                     .area
                     .read(cx)
-                    .has_dock(DockPlacement::Bottom)
+                    .has_dock(DockPlacement::Left)
             );
         })
         .unwrap();

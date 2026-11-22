@@ -74,7 +74,7 @@ impl Windows {
     pub fn handle_for(&self, panel: PanelId, panels: &Panels) -> Option<AnyWindowHandle> {
         match panels.layout().placement(panel)? {
             Placement::Window(id) => self.auxiliary.get(&id).map(|window| window.handle),
-            Placement::Center | Placement::Right => Some(self.main),
+            Placement::Center | Placement::Right | Placement::Bottom => Some(self.main),
         }
     }
 

@@ -636,8 +636,7 @@ fn overflow_controls_scroll_resize_reveal_and_restore_without_repacking() {
         waves,
         point(x, layout.row_y(0) + layout.row_height(0) - 3.0),
     );
-    let details = app.panels.first_free_transaction().unwrap();
-    let query = app.cursor_records(details).ready().unwrap();
+    let query = app.cursor_records_panel().ready().unwrap();
     let visible = app.panels.waves(waves).unwrap().items()[0]
         .lane()
         .unwrap()
@@ -1191,7 +1190,6 @@ fn a_failed_record_is_red_in_bars_and_values() {
 #[test]
 fn cursor_records_keep_the_waveforms_local_cursor_when_selecting_from_the_list() {
     use volna_core::document::RecordCursor;
-    use volna_core::transaction::TransactionCommand;
     let (mut app, _, waves, tracks) = with_lanes(&[CPU0]);
     let tx = app
         .doc
@@ -1211,20 +1209,18 @@ fn cursor_records_keep_the_waveforms_local_cursor_when_selecting_from_the_list()
             origin: waves,
         });
     }
-    app.handle(Command::ShowTransaction { from: waves });
-    let details = app.panels.focused_id();
-    let query = app.cursor_records(details).ready().unwrap();
+    app.handle(Command::Panels(
+        volna_core::panels::PanelsCommand::ToggleBottomDock,
+    ));
+    let query = app.cursor_records_panel().ready().unwrap();
     assert_eq!(query.time, time);
     assert!(query.count > 0);
-    app.handle(Command::Transaction(
-        details,
-        TransactionCommand::CursorSelect {
-            track: a(tracks[0]),
-            id: tx.id,
-            time,
-        },
-    ));
-    assert_eq!(app.cursor_records(details).ready().unwrap().time, time);
+    app.handle(Command::CursorSelect {
+        track: a(tracks[0]),
+        id: tx.id,
+        time,
+    });
+    assert_eq!(app.cursor_records_panel().ready().unwrap().time, time);
     assert_eq!(app.doc.shared.cursor, Some(time + 1000));
     app.handle(Command::Panels(volna_core::panels::PanelsCommand::Focus(
         waves,
@@ -1237,7 +1233,7 @@ fn cursor_records_keep_the_waveforms_local_cursor_when_selecting_from_the_list()
         id: tx.id,
         cursor: Some(time + 2),
     });
-    assert_eq!(app.cursor_records(details).ready().unwrap().time, time + 2);
+    assert_eq!(app.cursor_records_panel().ready().unwrap().time, time + 2);
 }
 
 #[test]

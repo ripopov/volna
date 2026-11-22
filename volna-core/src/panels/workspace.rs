@@ -74,6 +74,12 @@ impl Panel {
             PanelKind::Pipeline(p) => crate::pipeline::workspace::save(p, id, title),
             PanelKind::Table(t) => crate::table::workspace::save(t, id, title),
             PanelKind::Transaction(t) => crate::transaction::workspace::save(t, id, title),
+            PanelKind::CursorRecords => Ok(serde_json::value::to_raw_value(&PanelHeader {
+                id,
+                kind: "cursor".into(),
+                version: 1,
+                title,
+            })?),
             PanelKind::Unsupported(raw) => Ok(raw.clone()),
             PanelKind::Start => Ok(serde_json::value::to_raw_value(&PanelHeader {
                 id,
@@ -99,6 +105,11 @@ impl Panel {
             ("transaction", crate::transaction::workspace::VERSION) => {
                 crate::transaction::workspace::restore(raw, ctx)
             }
+            ("cursor", 1) => Ok(Self {
+                id: header.id,
+                title: crate::history::Journaled::new(header.title),
+                kind: PanelKind::CursorRecords,
+            }),
             ("start", 1) => Ok(Self {
                 id: header.id,
                 title: crate::history::Journaled::new(header.title),

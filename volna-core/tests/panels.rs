@@ -643,6 +643,7 @@ fn moving_the_start_panel_to_the_sidebar_is_rejected_without_changing_the_layout
             width: 420.0,
             open: true,
         }),
+        bottom: None,
     };
     assert!(panels.set_layout(proposal, revision).is_err());
     assert_eq!(panels.layout(), &before);

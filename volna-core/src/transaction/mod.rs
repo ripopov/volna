@@ -13,8 +13,8 @@ pub use model::{
 };
 pub use parents::{ParentNode, ParentTrace, ParentTraceState};
 pub use view::{
-    EventRow, EventTick, Identity, LaneCell, LaneRow, RefRole, RefRow, Section, SectionKey,
-    StageDetails, StageRow, Timing, TxView, ViewPrefs, view,
+    EventRow, EventTick, Identity, LaneCell, LaneRow, LifelineScale, RefRole, RefRow, Section,
+    SectionKey, StageDetails, StageRow, Timing, TxView, ViewPrefs, view,
 };
 
 pub(crate) mod workspace;

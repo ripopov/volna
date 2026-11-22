@@ -11,6 +11,7 @@ use super::{Axis, Layout, MAX_PANELS, PanelId};
 pub enum Placement {
     Center,
     Right,
+    Bottom,
     Window(WindowId),
 }
 
@@ -29,9 +30,19 @@ pub struct SideDock {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct BottomDock {
+    pub layout: Layout,
+    /// Height in design pixels, independent of interface zoom.
+    pub height: f32,
+    pub open: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DockLayout {
     pub center: Option<Layout>,
     pub right: Option<SideDock>,
+    pub bottom: Option<BottomDock>,
     pub windows: BTreeMap<WindowId, Layout>,
 }
 
@@ -40,6 +51,7 @@ impl From<Layout> for DockLayout {
         Self {
             center: Some(center),
             right: None,
+            bottom: None,
             windows: BTreeMap::new(),
         }
     }
@@ -55,6 +67,7 @@ impl DockLayout {
         self.center
             .iter()
             .chain(self.right.iter().map(|dock| &dock.layout))
+            .chain(self.bottom.iter().map(|dock| &dock.layout))
             .chain(self.windows.values())
     }
 
@@ -62,6 +75,7 @@ impl DockLayout {
         self.center
             .iter_mut()
             .chain(self.right.iter_mut().map(|dock| &mut dock.layout))
+            .chain(self.bottom.iter_mut().map(|dock| &mut dock.layout))
             .chain(self.windows.values_mut())
     }
 
@@ -74,6 +88,12 @@ impl DockLayout {
             .iter()
             .chain(
                 self.right
+                    .iter()
+                    .filter(|dock| dock.open)
+                    .map(|dock| &dock.layout),
+            )
+            .chain(
+                self.bottom
                     .iter()
                     .filter(|dock| dock.open)
                     .map(|dock| &dock.layout),
@@ -97,6 +117,12 @@ impl DockLayout {
             .is_some_and(|dock| dock.layout.active_for(id).is_some())
         {
             Some(Placement::Right)
+        } else if self
+            .bottom
+            .as_ref()
+            .is_some_and(|dock| dock.layout.active_for(id).is_some())
+        {
+            Some(Placement::Bottom)
         } else {
             self.windows.iter().find_map(|(&window, tree)| {
                 tree.active_for(id)
@@ -135,6 +161,12 @@ impl DockLayout {
                 "invalid right dock width"
             );
         }
+        if let Some(dock) = &self.bottom {
+            ensure!(
+                dock.height.is_finite() && dock.height > 0.0,
+                "invalid bottom dock height"
+            );
+        }
         Ok(())
     }
 
@@ -152,6 +184,10 @@ impl DockLayout {
                 self.right.as_ref().map(|dock| &dock.layout),
                 other.right.as_ref().map(|dock| &dock.layout),
             )
+            && same(
+                self.bottom.as_ref().map(|dock| &dock.layout),
+                other.bottom.as_ref().map(|dock| &dock.layout),
+            )
             && self.windows.len() == other.windows.len()
             && self.windows.iter().all(|(id, tree)| {
                 other
@@ -166,8 +202,10 @@ impl DockLayout {
     }
 
     pub(crate) fn activate(&mut self, id: PanelId) -> bool {
-        if self.placement(id) == Some(Placement::Right) {
-            self.right.as_mut().unwrap().open = true;
+        match self.placement(id) {
+            Some(Placement::Right) => self.right.as_mut().unwrap().open = true,
+            Some(Placement::Bottom) => self.bottom.as_mut().unwrap().open = true,
+            _ => {}
         }
         self.trees_mut().any(|tree| tree.activate(id))
     }
@@ -196,12 +234,22 @@ impl DockLayout {
                 ..dock
             })
         });
+        self.bottom = self.bottom.and_then(|dock| {
+            Some(BottomDock {
+                layout: dock.layout.normalized()?,
+                ..dock
+            })
+        });
         self.windows = self
             .windows
             .into_iter()
             .filter_map(|(id, tree)| Some((id, tree.normalized()?)))
             .collect();
-        (self.center.is_some() || self.right.is_some() || !self.windows.is_empty()).then_some(self)
+        (self.center.is_some()
+            || self.right.is_some()
+            || self.bottom.is_some()
+            || !self.windows.is_empty())
+        .then_some(self)
     }
 
     pub(crate) fn insert(&mut self, id: PanelId, placement: Placement) {
@@ -211,6 +259,15 @@ impl DockLayout {
                 let dock = self.right.get_or_insert_with(|| SideDock {
                     layout: Layout::single(id),
                     width: 420.0,
+                    open: true,
+                });
+                dock.open = true;
+                &mut dock.layout
+            }
+            Placement::Bottom => {
+                let dock = self.bottom.get_or_insert_with(|| BottomDock {
+                    layout: Layout::single(id),
+                    height: 220.0,
                     open: true,
                 });
                 dock.open = true;
@@ -238,11 +295,13 @@ impl DockLayout {
             None => Self {
                 center: self.center.clone(),
                 right: self.right.clone(),
+                bottom: self.bottom.clone(),
                 windows: BTreeMap::new(),
             },
             Some(id) => Self {
                 center: self.windows.get(&id).cloned(),
                 right: None,
+                bottom: None,
                 windows: BTreeMap::new(),
             },
         }
@@ -261,8 +320,8 @@ impl DockLayout {
         let mut layout = self.clone();
         if let Some(id) = window {
             ensure!(
-                local.right.is_none(),
-                "auxiliary windows have no sidebar dock"
+                local.right.is_none() && local.bottom.is_none(),
+                "auxiliary windows have no sidebar or bottom dock"
             );
             if let Some(tree) = local.center {
                 layout.windows.insert(id, tree);
@@ -272,6 +331,7 @@ impl DockLayout {
         } else {
             layout.center = local.center;
             layout.right = local.right;
+            layout.bottom = local.bottom;
         }
         Ok(layout)
     }

@@ -20,9 +20,13 @@ use volna_trace::data::transactions::{
 };
 
 pub const VIEW_BYTES: usize = 128 * 1024;
-pub const DEFAULT_CURSOR_HEIGHT: f32 = 198.0;
-pub const MIN_CURSOR_HEIGHT: f32 = 96.0;
-pub const MAX_CURSOR_HEIGHT: f32 = 1200.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LifelineScale {
+    #[default]
+    Linear,
+    Balanced,
+}
 
 fn clock_time(clock: Option<&Clock>, time: u64) -> Option<String> {
     let clock = clock?;
@@ -134,8 +138,11 @@ impl SectionKey {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewPrefs {
-    pub cursor_height: f32,
     pub detail_items: usize,
+    pub lifeline_scale: LifelineScale,
+    pub stages_grouped: bool,
+    pub stages_show_all: bool,
+    pub attributes_grouped: bool,
     pub radix: BTreeMap<String, Radix>,
     pub collapsed: BTreeSet<SectionKey>,
     pub filter: String,
@@ -145,8 +152,11 @@ pub struct ViewPrefs {
 impl Default for ViewPrefs {
     fn default() -> Self {
         Self {
-            cursor_height: DEFAULT_CURSOR_HEIGHT,
             detail_items: 20,
+            lifeline_scale: LifelineScale::Linear,
+            stages_grouped: false,
+            stages_show_all: false,
+            attributes_grouped: true,
             radix: BTreeMap::new(),
             collapsed: BTreeSet::new(),
             filter: String::new(),
@@ -214,10 +224,15 @@ pub struct LaneCell {
     pub name: String,
     pub begin: u64,
     pub end: u64,
+    pub duration: u64,
+    pub offset_text: String,
+    pub duration_text: String,
+    pub share: f32,
     pub start: f32,
     pub width: f32,
     pub swatch: StageSwatch,
     pub stage: Option<usize>,
+    pub stage_id: Option<TransactionRef>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,6 +254,7 @@ pub struct StageRow {
     pub duration: u64,
     pub share: f32,
     pub swatch: StageSwatch,
+    pub offset_text: String,
     pub begin_text: String,
     pub end_text: String,
     pub duration_text: String,
@@ -391,12 +407,27 @@ pub fn view(
 
     let span = duration.max(1) as f64;
     let fraction = |t: u64| ((t.saturating_sub(tx.begin) as f64) / span).clamp(0.0, 1.0) as f32;
-    let (lifeline, event_ticks) = lifeline(tx, palette, &fraction, limit, &mut budget);
-    let cursor = doc
+    let lifeline_cap = budget.remaining / 3;
+    let mut lifeline_budget = Budget::new(lifeline_cap);
+    let cursor_time = doc
         .shared
         .cursor
-        .filter(|c| (tx.begin..=tx.end.max(tx.begin)).contains(c))
-        .map(fraction);
+        .filter(|c| (tx.begin..=tx.end.max(tx.begin)).contains(c));
+    let (lifeline, event_ticks, cursor) = lifeline(
+        tx,
+        palette,
+        &fraction,
+        &elapsed,
+        LifelineParams {
+            lifetime: duration,
+            scale: prefs.lifeline_scale,
+            cursor_time,
+        },
+        &mut lifeline_budget,
+    );
+    let lifeline_used = lifeline_cap.saturating_sub(lifeline_budget.remaining);
+    budget.remaining = budget.remaining.saturating_sub(lifeline_used);
+    budget.truncated |= lifeline_budget.truncated;
 
     let source = if point_kind == Some(crate::data::points::PointKind::Log) {
         [
@@ -419,11 +450,16 @@ pub fn view(
         Vec::new()
     };
     let attributes = attributes(tx, owner, prefs, point_kind, &mut budget);
+    let stage_limit = if prefs.stages_show_all || prefs.stages_grouped {
+        usize::MAX
+    } else {
+        limit
+    };
     let mut stages = stages(
         tx,
         palette,
         generator.stage_order(identity.ordinal),
-        limit,
+        stage_limit,
         duration,
         (&time, &elapsed),
         &mut budget,
@@ -603,66 +639,203 @@ fn kind_name(kind: SpanKind) -> Option<&'static str> {
     }
 }
 
+const MAX_LIFELINE_CELLS: usize = 128;
+
+fn map_balanced(cells: &[LaneCell], t: u64, fallback: &impl Fn(u64) -> f32) -> f32 {
+    let Some(first) = cells.first() else {
+        return fallback(t);
+    };
+    if t <= first.begin {
+        return first.start;
+    }
+    for cell in cells {
+        if t <= cell.end {
+            if t <= cell.begin {
+                return cell.start;
+            }
+            let local = ((t.saturating_sub(cell.begin) as f64) / cell.duration.max(1) as f64)
+                .clamp(0.0, 1.0) as f32;
+            return (cell.start + local * cell.width).clamp(0.0, 1.0);
+        }
+    }
+    let last = cells.last().unwrap();
+    (last.start + last.width).clamp(0.0, 1.0)
+}
+
+struct LifelineParams {
+    lifetime: u64,
+    scale: LifelineScale,
+    cursor_time: Option<u64>,
+}
+
 fn lifeline(
     tx: &Transaction,
     palette: &StagePalette,
     fraction: &impl Fn(u64) -> f32,
-    limit: usize,
+    elapsed: &impl Fn(u64, u64) -> String,
+    params: LifelineParams,
     budget: &mut Budget,
-) -> (Vec<LaneRow>, Vec<EventTick>) {
+) -> (Vec<LaneRow>, Vec<EventTick>, Option<f32>) {
+    let LifelineParams {
+        lifetime,
+        scale,
+        cursor_time,
+    } = params;
     let primary = palette.primary_lane();
-    let mut lanes: Vec<LaneRow> = Vec::new();
-    for (index, stage) in tx.stages.iter().enumerate().take(limit) {
-        let row = if let Some(row) = lanes.iter().position(|l| {
-            l.cells
-                .first()
-                .and_then(|c| c.stage)
-                .is_some_and(|i| tx.stages[i].lane == stage.lane)
-        }) {
-            row
+    let mut lane_counts: Vec<(&str, bool, usize)> = Vec::new();
+    for stage in &tx.stages {
+        if let Some((_, _, count)) = lane_counts
+            .iter_mut()
+            .find(|(lane, _, _)| *lane == stage.lane)
+        {
+            *count += 1;
         } else {
-            if !budget.slot(&mut lanes) {
-                break;
-            }
-            let row = lanes.len();
-            lanes.push(LaneRow {
-                lane: budget.text(&stage.lane),
-                primary: stage.lane == primary,
-                cells: Vec::new(),
-            });
-            row
-        };
-        if !budget.slot(&mut lanes[row].cells) {
+            lane_counts.push((&stage.lane, stage.lane == primary, 1));
+        }
+    }
+    lane_counts.sort_unstable_by_key(|(_, is_primary, _)| !*is_primary);
+
+    let mut lanes: Vec<LaneRow> = Vec::new();
+    for (lane_name, is_primary, total_stages) in lane_counts {
+        if !budget.slot(&mut lanes) {
             break;
         }
-        let end = crate::pipeline::PipelineModel::stage_end(tx, stage);
-        let start = fraction(stage.begin);
-        lanes[row].cells.push(LaneCell {
-            name: budget.text(&stage.name),
-            begin: stage.begin,
-            end,
-            start,
-            width: (fraction(end) - start).max(0.0),
-            swatch: if stage.lane == primary {
-                palette.swatch(&stage.name)
-            } else {
-                StageSwatch::Fallback
-            },
-            stage: Some(index),
+        let mut cells = Vec::new();
+        let lane_iter = tx
+            .stages
+            .iter()
+            .enumerate()
+            .filter(|(_, stage)| stage.lane == lane_name);
+        if total_stages <= MAX_LIFELINE_CELLS {
+            for (index, stage) in lane_iter {
+                if !budget.slot(&mut cells) {
+                    break;
+                }
+                let end = crate::pipeline::PipelineModel::stage_end(tx, stage);
+                let stage_duration = end.saturating_sub(stage.begin);
+                let share = if lifetime == 0 {
+                    1.0
+                } else {
+                    (stage_duration as f64 / lifetime as f64).clamp(0.0, 1.0) as f32
+                };
+                let start = fraction(stage.begin);
+                cells.push(LaneCell {
+                    name: budget.text(&stage.name),
+                    begin: stage.begin,
+                    end,
+                    duration: stage_duration,
+                    offset_text: budget.text(&format!("+{}", elapsed(tx.begin, stage.begin))),
+                    duration_text: budget.text(&elapsed(stage.begin, end)),
+                    share,
+                    start,
+                    width: (fraction(end) - start).max(0.0),
+                    swatch: if is_primary {
+                        palette.swatch(&stage.name)
+                    } else {
+                        StageSwatch::Fallback
+                    },
+                    stage: Some(index),
+                    stage_id: Some(stage.id),
+                });
+            }
+        } else {
+            // Stream large stage lists into MAX_LIFELINE_CELLS contiguous bins
+            // with O(1) scratch memory so the full [begin, end] lifetime stays visible.
+            let mut bin: usize = 0;
+            let mut bin_hi = total_stages / MAX_LIFELINE_CELLS;
+            let mut pos = 0usize;
+            let mut bin_begin = 0u64;
+            let mut bin_end = 0u64;
+            let mut bin_count = 0usize;
+            let mut dominant_idx = 0usize;
+            let mut dominant_dur = 0u64;
+            for (index, stage) in lane_iter {
+                let end = crate::pipeline::PipelineModel::stage_end(tx, stage);
+                let dur = end.saturating_sub(stage.begin);
+                if bin_count == 0 {
+                    bin_begin = stage.begin;
+                    bin_end = end;
+                    dominant_idx = index;
+                    dominant_dur = dur;
+                } else {
+                    bin_begin = bin_begin.min(stage.begin);
+                    bin_end = bin_end.max(end);
+                    if dur > dominant_dur {
+                        dominant_idx = index;
+                        dominant_dur = dur;
+                    }
+                }
+                bin_count += 1;
+                pos += 1;
+                if pos == bin_hi {
+                    if budget.slot(&mut cells) {
+                        let dominant = &tx.stages[dominant_idx];
+                        let bin_duration = bin_end.saturating_sub(bin_begin);
+                        let share = if lifetime == 0 {
+                            1.0
+                        } else {
+                            (bin_duration as f64 / lifetime as f64).clamp(0.0, 1.0) as f32
+                        };
+                        let start = fraction(bin_begin);
+                        let label = if bin_count > 1 {
+                            format!("{} (×{bin_count})", dominant.name)
+                        } else {
+                            dominant.name.clone()
+                        };
+                        cells.push(LaneCell {
+                            name: budget.text(&label),
+                            begin: bin_begin,
+                            end: bin_end,
+                            duration: bin_duration,
+                            offset_text: budget.text(&format!("+{}", elapsed(tx.begin, bin_begin))),
+                            duration_text: budget.text(&elapsed(bin_begin, bin_end)),
+                            share,
+                            start,
+                            width: (fraction(bin_end) - start).max(0.0),
+                            swatch: if is_primary {
+                                palette.swatch(&dominant.name)
+                            } else {
+                                StageSwatch::Fallback
+                            },
+                            stage: Some(dominant_idx),
+                            stage_id: Some(dominant.id),
+                        });
+                    }
+                    bin += 1;
+                    let prev_hi = bin_hi;
+                    bin_hi = (bin + 1) * total_stages / MAX_LIFELINE_CELLS;
+                    while bin < MAX_LIFELINE_CELLS && bin_hi <= prev_hi {
+                        bin += 1;
+                        bin_hi = (bin + 1) * total_stages / MAX_LIFELINE_CELLS;
+                    }
+                    bin_count = 0;
+                }
+            }
+        }
+        lanes.push(LaneRow {
+            lane: budget.text(lane_name),
+            primary: is_primary,
+            cells,
         });
     }
-    lanes.sort_unstable_by_key(|lane| !lane.primary);
+
     if tx.stages.is_empty() && budget.slot(&mut lanes) {
         let mut cells = Vec::new();
         if budget.slot(&mut cells) {
+            let duration_text = budget.text(&elapsed(tx.begin, tx.end));
             cells.push(LaneCell {
                 name: String::new(),
                 begin: tx.begin,
                 end: tx.end,
+                duration: lifetime,
+                offset_text: budget.text("+0"),
+                duration_text,
+                share: 1.0,
                 start: 0.0,
                 width: 1.0,
                 swatch: StageSwatch::Fallback,
                 stage: None,
+                stage_id: None,
             });
         }
         lanes.push(LaneRow {
@@ -671,18 +844,55 @@ fn lifeline(
             cells,
         });
     }
+
+    if scale == LifelineScale::Balanced
+        && let Some((primary_lane, secondary_lanes)) = lanes.split_first_mut()
+        && !primary_lane.cells.is_empty()
+    {
+        let weights: Vec<f64> = primary_lane
+            .cells
+            .iter()
+            .map(|cell| ((cell.duration as f64) + 1.0).ln().max(0.5))
+            .collect();
+        let total: f64 = weights.iter().sum::<f64>().max(f64::EPSILON);
+        let mut pos = 0.0_f64;
+        for (cell, weight) in primary_lane.cells.iter_mut().zip(weights) {
+            let w = weight / total;
+            cell.start = pos as f32;
+            cell.width = w as f32;
+            pos += w;
+        }
+        for lane in secondary_lanes {
+            for cell in &mut lane.cells {
+                let s = map_balanced(&primary_lane.cells, cell.begin, fraction);
+                let e = map_balanced(&primary_lane.cells, cell.end, fraction);
+                cell.start = s;
+                cell.width = (e - s).max(0.0);
+            }
+        }
+    }
+
+    let map_time = |t: u64| match scale {
+        LifelineScale::Linear => fraction(t),
+        LifelineScale::Balanced => lanes.first().map_or_else(
+            || fraction(t),
+            |lane| map_balanced(&lane.cells, t, fraction),
+        ),
+    };
+
     let mut ticks = Vec::new();
-    for event in tx.events.iter().take(limit) {
+    for event in &tx.events {
         if !budget.slot(&mut ticks) {
             break;
         }
         ticks.push(EventTick {
             name: budget.text(&event.name),
             time: event.time,
-            at: fraction(event.time),
+            at: map_time(event.time),
         });
     }
-    (lanes, ticks)
+    let cursor = cursor_time.map(map_time);
+    (lanes, ticks, cursor)
 }
 
 fn attributes(
@@ -750,6 +960,7 @@ fn stages(
             } else {
                 StageSwatch::Fallback
             },
+            offset_text: budget.text(&format!("+{}", elapsed(tx.begin, stage.begin))),
             begin_text: budget.text(&time(stage.begin)),
             end_text: budget.text(&match stage.end {
                 Some(end) => time(end),

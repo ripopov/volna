@@ -169,6 +169,7 @@ command_definitions! {
     ToggleTransactionLink => ("Follow shared transaction", "Follow Shared Transaction", Panel, actions::ToggleTransactionLink, |s| (s.timed(), s.link().is_some_and(|l| l.transaction))),
     ClosePanel => ("Close panel", "Close Panel", Panel, actions::ClosePanel, |_| (true, false)),
     ToggleSidebar => ("Show left sidebar", "Toggle Sidebar", Global, actions::ToggleSidebar, |s| (true, s.app.sidebar_visible)),
+    ToggleBottomDock => ("Show bottom dock", "Toggle Bottom Dock", Global, actions::ToggleBottomDock, |s| (true, s.app.panels.layout().bottom.as_ref().is_some_and(|dock| dock.open))),
     ToggleRightSidebar => ("Show right sidebar", "Show right sidebar", Global, actions::ToggleRightSidebar, |s| (true, s.app.panels.layout().right.as_ref().is_some_and(|dock| dock.open))),
     ZoomIn => ("Zoom in", "Zoom In", Panel, actions::ZoomIn, |s| (s.timeline(), false)),
     ZoomOut => ("Zoom out", "Zoom Out", Panel, actions::ZoomOut, |s| (s.timeline(), false)),
@@ -299,7 +300,7 @@ pub(crate) fn menu(app: &CoreApp) -> Vec<Entry> {
         item(Id::ClosePanel),
     ]);
 
-    let mut view = vec![item(Id::ToggleSidebar)];
+    let mut view = vec![item(Id::ToggleSidebar), item(Id::ToggleBottomDock)];
     if app.panels.layout().right.is_some() {
         view.push(item(Id::ToggleRightSidebar));
     }

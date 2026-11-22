@@ -77,6 +77,8 @@ impl App {
             | Command::SelectTransaction { panel, .. }
             | Command::ZoomToSpan(panel, ..)
             | Command::RevealTransaction { panel }
+            | Command::RevealWaveTransaction { panel }
+            | Command::RevealTableTransaction { panel }
             | Command::Transaction(
                 panel,
                 TransactionCommand::FitLifetime | TransactionCommand::Cursor(_),

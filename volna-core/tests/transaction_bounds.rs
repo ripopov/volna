@@ -203,7 +203,7 @@ fn catalog_paths_are_admitted_before_projection() {
     assert!(view.truncated_bytes);
 }
 #[test]
-fn item_limit_also_bounds_lifeline_and_ticks() {
+fn lifeline_and_ticks_stay_within_view_budget() {
     let mut tx = record();
     for i in 0..10_000 {
         tx.stages.push(TransactionStage {
@@ -224,8 +224,9 @@ fn item_limit_also_bounds_lifeline_and_ticks() {
         });
     }
     let (view, peak) = project(tx, "generator".into(), 2);
-    assert!(view.lifeline.iter().map(|l| l.cells.len()).sum::<usize>() <= 2);
-    assert!(view.event_ticks.len() <= 2);
+    // Lifeline renders past detail_items (bounded by VIEW_BYTES, not item limit).
+    assert!(view.lifeline.iter().map(|l| l.cells.len()).sum::<usize>() > 2);
+    assert_eq!(view.stages.rows.len(), 2);
     assert_eq!(view.stages.total, 10_000);
     assert_eq!(view.events.total, 10_000);
     assert!(peak <= VIEW_BYTES, "projection allocated {peak} bytes");

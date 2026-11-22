@@ -150,6 +150,32 @@ impl Workspace {
                     this.dispatch(Command::ToggleSidebar, Some(w), cx);
                 })),
             )
+            .child(
+                icon_button(
+                    "toggle-bottom-dock",
+                    IconName::PanelBottom,
+                    t.bar,
+                    t.bar_hover,
+                    cx,
+                )
+                .selected(
+                    self.app
+                        .panels
+                        .layout()
+                        .bottom
+                        .as_ref()
+                        .is_some_and(|dock| dock.open),
+                )
+                .tooltip("Toggle bottom dock")
+                .debug_selector(|| "toggle-bottom-dock".into())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.dispatch(
+                        Command::Panels(volna_core::panels::PanelsCommand::ToggleBottomDock),
+                        Some(window),
+                        cx,
+                    );
+                })),
+            )
             .when_some(self.app.panels.layout().right.as_ref(), |el, dock| {
                 el.child(
                     icon_button(
@@ -322,6 +348,13 @@ impl Workspace {
             }
         };
         let sidebar = self.app.sidebar_visible;
+        let bottom = self
+            .app
+            .panels
+            .layout()
+            .bottom
+            .as_ref()
+            .is_some_and(|dock| dock.open);
         let right = self
             .app
             .panels
@@ -338,11 +371,20 @@ impl Workspace {
                 );
             }
             if !layout.navigation {
-                menu = menu.separator().item(
-                    PopupMenuItem::new("Show sidebar")
-                        .checked(sidebar)
-                        .on_click(run(Command::ToggleSidebar)),
-                );
+                menu = menu
+                    .separator()
+                    .item(
+                        PopupMenuItem::new("Show sidebar")
+                            .checked(sidebar)
+                            .on_click(run(Command::ToggleSidebar)),
+                    )
+                    .item(
+                        PopupMenuItem::new("Show bottom dock")
+                            .checked(bottom)
+                            .on_click(run(Command::Panels(
+                                volna_core::panels::PanelsCommand::ToggleBottomDock,
+                            ))),
+                    );
                 if let Some(open) = right {
                     menu = menu.item(
                         PopupMenuItem::new("Show right sidebar")

@@ -117,6 +117,7 @@ impl Command {
             "saveWorkspaceAs" => return Some(Self::RequestSaveWorkspaceAs),
             "toggleSidebar" => return Some(Self::ToggleSidebar),
             "toggleRightSidebar" => return Some(Self::Panels(PanelsCommand::ToggleRightDock)),
+            "toggleBottomDock" => return Some(Self::Panels(PanelsCommand::ToggleBottomDock)),
             "zoomIn" => Action::ZoomIn,
             "zoomOut" => Action::ZoomOut,
             "zoomFit" => Action::ZoomFit,
@@ -279,6 +280,14 @@ pub enum Command {
     },
     RevealWaveTransaction {
         panel: PanelId,
+    },
+    RevealTableTransaction {
+        panel: PanelId,
+    },
+    CursorSelect {
+        track: Traced<TrackRef>,
+        id: TransactionRef,
+        time: u64,
     },
     ShowAttributeColumn {
         from: PanelId,
@@ -1165,6 +1174,22 @@ impl App {
                 })
                 .map(|_| ()),
             PanelsCommand::ToggleRightDock => self.panels.toggle_right_dock().map(|_| ()),
+            PanelsCommand::ToggleBottomDock => {
+                if self.panels.layout().bottom.is_some() {
+                    self.panels.toggle_bottom_dock().map(|_| ())
+                } else {
+                    self.restructure(Some("Show bottom dock".into()), |panels| {
+                        Ok((
+                            panels.open_in(
+                                PanelKind::CursorRecords,
+                                crate::panels::Placement::Bottom,
+                            )?,
+                            Vec::new(),
+                        ))
+                    })
+                    .map(|_| ())
+                }
+            }
             PanelsCommand::Focus(id) => self.panels.focus(id).map(|_| ()),
             PanelsCommand::FocusNext => self.panels.focus_next(false).map(|_| ()),
             PanelsCommand::FocusPrev => self.panels.focus_next(true).map(|_| ()),
@@ -1215,11 +1240,7 @@ impl App {
         let selection = (self.doc.selection(), self.doc.selection_range());
         let reveal_selection = matches!(
             command,
-            Command::SelectTransaction { .. }
-                | Command::Transaction(
-                    _,
-                    crate::transaction::TransactionCommand::CursorSelect { .. }
-                )
+            Command::SelectTransaction { .. } | Command::CursorSelect { .. }
         );
         let restored_history = matches!(command, Command::Undo | Command::Redo);
         let reveal_origin = match &command {
@@ -1454,7 +1475,9 @@ impl App {
                     self.changed();
                 }
             }
-            Command::RevealWaveTransaction { panel } => self.reveal_wave_transaction(panel),
+            Command::RevealWaveTransaction { panel } => self.reveal_wave_transaction(panel, now),
+            Command::RevealTableTransaction { panel } => self.reveal_table_transaction(panel),
+            Command::CursorSelect { track, id, time } => self.cursor_select(track, id, time),
             Command::ShowAttributeColumn { from, key } => {
                 self.show_attribute_column(from, key, now);
             }
@@ -1471,10 +1494,29 @@ impl App {
             }
             Command::Clocks(command) => self.clock_command(command),
             Command::Transaction(panel, command) => {
+                let updates_cursor = matches!(
+                    command,
+                    TransactionCommand::Cursor(_)
+                        | TransactionCommand::SelectStage(_)
+                        | TransactionCommand::GroupSelect(_)
+                );
                 let Self { panels, doc, .. } = self;
-                if let Some(model) = panels.transaction_mut(panel)
-                    && model.command(doc, panel, command, now)
-                {
+                let (changed, origin) = if let Some(model) = panels.transaction_mut(panel) {
+                    (
+                        model.command(doc, panel, command, now),
+                        model.external_origin(),
+                    )
+                } else {
+                    (false, None)
+                };
+                if changed {
+                    if updates_cursor
+                        && let Some(origin) = origin
+                        && let Some(nav) = panels.get_mut(origin).and_then(|p| p.kind.nav_mut())
+                        && !nav.link.cursor
+                    {
+                        nav.set_cursor(doc, doc.shared.cursor);
+                    }
                     self.changed();
                 }
             }
@@ -1858,8 +1900,20 @@ impl App {
     }
 
     pub(crate) fn sync_selection(&mut self) {
+        let external_origin = self
+            .doc
+            .selection()
+            .map(|selection| selection.origin)
+            .filter(|&origin| {
+                self.panels
+                    .get(origin)
+                    .is_some_and(|panel| panel.kind.transaction().is_none())
+            });
         let Self { panels, doc, .. } = self;
         for (_, model) in panels.transactions_mut() {
+            if let Some(origin) = external_origin {
+                model.set_external_origin(origin);
+            }
             model.follow_selection(doc);
         }
         let Self { panels, doc, .. } = self;
@@ -1937,11 +1991,15 @@ impl App {
         }) {
             Ok(panel) => {
                 if let Some(selection) = selection {
-                    self.panels.transaction_mut(panel).unwrap().follow_record(
-                        &mut self.doc,
-                        selection,
-                        range,
-                    );
+                    let is_external = self
+                        .panels
+                        .get(selection.origin)
+                        .is_some_and(|p| p.kind.transaction().is_none());
+                    let model = self.panels.transaction_mut(panel).unwrap();
+                    if is_external {
+                        model.set_external_origin(selection.origin);
+                    }
+                    model.follow_record(&mut self.doc, selection, range);
                 }
                 self.changed();
             }
@@ -1953,51 +2011,47 @@ impl App {
     }
 
     #[must_use]
-    fn cursor_record_context(
-        &self,
-        panel: PanelId,
-    ) -> Option<(Traced<TrackRef>, u64, Option<TransactionRef>)> {
-        let model = self.panels.transaction(panel)?;
-        if !model.cursor_records_enabled() {
-            return None;
-        }
-        let shown = model
-            .shown()
-            .and_then(|shown| Some((shown.track.track()?, shown.id)));
-        let context = self
-            .doc
-            .record_cursor()
-            .or_else(|| {
-                self.doc.selection().map(|s| crate::document::RecordCursor {
-                    track: s.track,
-                    origin: s.origin,
+    fn cursor_panel_context(&self) -> Option<(Traced<TrackRef>, u64, Option<TransactionRef>)> {
+        let selection = self.doc.selection().or_else(|| {
+            self.panels
+                .focused()
+                .kind
+                .nav()
+                .and_then(|nav| nav.selection(&self.doc))
+                .or_else(|| {
+                    self.panels.iter().find_map(|p| {
+                        let model = p.kind.transaction()?;
+                        let shown = model.shown()?;
+                        let track = shown.track.track()?;
+                        Some(crate::document::TxSelection {
+                            track,
+                            id: shown.id,
+                            origin: model.external_origin().unwrap_or(p.id),
+                        })
+                    })
                 })
+        });
+        let context = self.doc.record_cursor().or_else(|| {
+            selection.map(|s| crate::document::RecordCursor {
+                track: s.track,
+                origin: s.origin,
             })
-            .or_else(|| {
-                shown.map(|(track, _)| crate::document::RecordCursor {
-                    track,
-                    origin: self.panels.waves_for_track(track).unwrap_or(panel),
-                })
-            })?;
-        let track = if model.pinned() {
-            shown?.0
-        } else {
-            context.track
-        };
+        })?;
         let time = self
             .panels
             .get(context.origin)
             .and_then(|panel| panel.kind.nav())
             .and_then(|nav| nav.cursor(&self.doc))
             .or(self.doc.shared.cursor)?;
-        Some((track, time, shown.filter(|s| s.0 == track).map(|s| s.1)))
+        let selected = selection.filter(|s| s.track == context.track).map(|s| s.id);
+        Some((context.track, time, selected))
     }
 
     #[must_use]
-    pub fn cursor_records(&self, panel: PanelId) -> crate::transaction::cursor::CursorRecordsState {
+    pub fn cursor_records_panel(&self) -> crate::transaction::cursor::CursorRecordsState {
         use crate::analysis::AnalysisLoad;
         use crate::transaction::cursor::{CursorRecords, CursorRecordsState};
-        let Some((track, time, selected)) = self.cursor_record_context(panel) else {
+        let Some((track, time, selected)) = self.cursor_panel_context() else {
             return CursorRecordsState::Hidden;
         };
         let Some(source) = self.doc.resident_generator(track) else {
@@ -2009,7 +2063,8 @@ impl App {
         match self.doc.transaction_index(track) {
             Some(AnalysisLoad::Ready(index)) => {
                 let rows = self
-                    .transaction_wave_panel(panel)
+                    .panels
+                    .waves_for_track(track)
                     .and_then(|waves| self.panels.waves(waves))
                     .and_then(|waves| {
                         waves
@@ -2029,6 +2084,35 @@ impl App {
         }
     }
 
+    fn cursor_select(&mut self, track: Traced<TrackRef>, id: TransactionRef, time: u64) {
+        let Some(generator) = self.doc.resident_generator(track) else {
+            return;
+        };
+        let Some(ordinal) = generator.transaction_ordinal(id) else {
+            return;
+        };
+        if !matches!(
+            self.doc.transaction_index(track),
+            Some(crate::analysis::AnalysisLoad::Ready(index)) if index.active_rank(time, ordinal).is_some()
+        ) {
+            return;
+        }
+        let record_cursor = self
+            .doc
+            .record_cursor()
+            .filter(|cursor| cursor.track == track);
+        let origin = record_cursor
+            .map(|cursor| cursor.origin)
+            .or_else(|| self.panels.waves_for_track(track))
+            .unwrap_or_else(|| self.panels.focused_id());
+        self.doc
+            .select(Some(crate::document::TxSelection { track, id, origin }));
+        if let Some(cursor) = record_cursor {
+            self.doc.set_record_cursor(cursor);
+        }
+        self.sync_selection();
+    }
+
     pub(crate) fn sync_transaction_analysis(&mut self) {
         let mut wanted = std::collections::HashMap::new();
         for waves in self.panels.iter().filter_map(|panel| panel.kind.waves()) {
@@ -2043,19 +2127,14 @@ impl App {
                 }
             }
         }
-        for panel in self
-            .panels
-            .iter()
-            .filter(|panel| panel.kind.transaction().is_some())
+        if self.panels.has_cursor_records()
+            && let Some((track, _, _)) = self.cursor_panel_context()
+            && let Some(source) = self
+                .doc
+                .resident_generator(track)
+                .filter(|source| source.points().is_none())
         {
-            if let Some((track, _, _)) = self.cursor_record_context(panel.id)
-                && let Some(source) = self
-                    .doc
-                    .resident_generator(track)
-                    .filter(|source| source.points().is_none())
-            {
-                wanted.insert(track, source);
-            }
+            wanted.insert(track, source);
         }
         let mut occupancy = std::collections::HashMap::new();
         for (track, source) in &wanted {
@@ -2114,7 +2193,7 @@ impl App {
             .or_else(|| self.panels.waves_for_track(track))
     }
 
-    fn reveal_wave_transaction(&mut self, panel: PanelId) {
+    fn reveal_wave_transaction(&mut self, panel: PanelId, now: Instant) {
         let Some(shown) = self
             .panels
             .transaction(panel)
@@ -2126,13 +2205,37 @@ impl App {
         let Some(track) = shown.track.track() else {
             return;
         };
-        let target = self.transaction_wave_panel(panel);
-        if let Some(target) = target
-            && let Some(waves) = self.panels.waves_mut(target)
-            && waves.reveal_transaction(&self.doc, track, shown.id)
-        {
-            self.changed();
+        let target = if let Some(existing) = self.transaction_wave_panel(panel) {
+            existing
+        } else {
+            let member = self.doc.hierarchy(track.trace).and_then(|h| {
+                h.generators()
+                    .iter()
+                    .position(|g| g.track == track.item)
+                    .map(|ix| Traced::new(track.trace, Member::Generator(ix)))
+            });
+            let Some(member) = member else {
+                return;
+            };
+            self.add_to_waves(&[member]);
+            let Some(created) = self.panels.waves_for_track(track) else {
+                return;
+            };
+            created
+        };
+        self.panel_command(PanelsCommand::Focus(target));
+        let lifetime = self.doc.resident_generator(track).and_then(|generator| {
+            let tx = generator.transaction(shown.id)?;
+            Some((tx.begin, tx.end))
+        });
+        let Self { panels, doc, .. } = self;
+        if let Some(waves) = panels.waves_mut(target) {
+            waves.reveal_transaction(doc, track, shown.id);
+            if let Some((begin, end)) = lifetime {
+                waves.nav.reveal_record(doc, begin, end, now);
+            }
         }
+        self.changed();
     }
 
     fn reveal_transaction(&mut self, panel: PanelId, now: Instant) {
@@ -2146,15 +2249,66 @@ impl App {
         let Some(track) = shown.track.track() else {
             return;
         };
-        let target = self.panels.pipeline_showing(&self.doc, track, shown.id);
-        let Some(target) = target else {
-            self.open_pipeline(track);
-            return;
-        };
+        let target =
+            if let Some(existing) = self.panels.pipeline_showing(&self.doc, track, shown.id) {
+                existing
+            } else {
+                self.open_pipeline(track);
+                let Some(created) = self
+                    .panels
+                    .pipeline_showing(&self.doc, track, shown.id)
+                    .or_else(|| self.panels.pipeline_for_track(track))
+                else {
+                    return;
+                };
+                created
+            };
         self.panel_command(PanelsCommand::Focus(target));
         let Self { panels, doc, .. } = self;
         if let Some(pipeline) = panels.pipeline_mut(target) {
             pipeline.reveal_record(doc, track, shown.id, now);
+        }
+        self.changed();
+    }
+
+    fn reveal_table_transaction(&mut self, panel: PanelId) {
+        let Some(shown) = self
+            .panels
+            .transaction(panel)
+            .and_then(|model| model.shown().cloned())
+        else {
+            return;
+        };
+        let Some(track) = shown.track.track() else {
+            return;
+        };
+        let target = if let Some(existing) = self.panels.table_for_track(track) {
+            self.panel_command(PanelsCommand::Focus(existing));
+            existing
+        } else {
+            let source = crate::table::TableSource::Generator(shown.track.clone());
+            let beside = self.panels.center_target(panel).unwrap_or(panel);
+            self.open_table_source(source, beside);
+            let Some(created) = self.panels.table_for_track(track) else {
+                return;
+            };
+            created
+        };
+        let origin = self
+            .panels
+            .transaction(panel)
+            .and_then(TransactionModel::external_origin)
+            .unwrap_or(target);
+        let selection = Some(crate::document::TxSelection {
+            track,
+            id: shown.id,
+            origin,
+        });
+        let Self { panels, doc, .. } = self;
+        if let Some(table) = panels.get_mut(target).and_then(|p| p.kind.table_mut()) {
+            table.nav.select(doc, selection);
+            table.follow_selection(doc);
+            table.reveal_selection(doc);
         }
         self.changed();
     }

@@ -4,83 +4,148 @@ use super::*;
 use volna_core::transaction::attributes::{AttributeId, AttributeTree};
 use volna_core::transaction::{AttrRow, StageDetails};
 
+struct AttrRowRender<'a> {
+    short_key: Option<&'a str>,
+    prefix: &'a str,
+    index: usize,
+    filtering: bool,
+}
+
 impl TransactionPanelView {
     pub(super) fn attributes(
         &mut self,
         t: &crate::theme::Theme,
         view: &TxView,
+        grouped: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tree = &view.attributes;
-        let mut section = Self::attribute_section(
-            t,
-            tree,
-            if view.point_kind.is_some() {
-                "Arguments"
-            } else {
-                "Attributes"
-            },
-            cx,
-        );
+        let has_dotted = tree.rows.iter().any(|row| {
+            row.depth == 0
+                && row
+                    .key
+                    .strip_prefix("attributes.")
+                    .unwrap_or(&row.key)
+                    .contains('.')
+        });
+        let has_branches = tree.has_branches();
+        let heading = Section::<()> {
+            key: tree.key,
+            total: tree.total,
+            matched: tree.total,
+            collapsed: tree.collapsed,
+            rows: Vec::new(),
+        };
+        let title = if view.point_kind.is_some() {
+            "Arguments"
+        } else {
+            "Attributes"
+        };
+        let mut header_row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_1()
+            .pr_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Self::named_heading(t, &heading, title, cx)),
+            );
+        if !tree.collapsed && has_dotted {
+            header_row = header_row.child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_0p5()
+                    .child(
+                        Button::new("tx-attr-grouped")
+                            .debug_selector(|| "tx-attr-grouped".into())
+                            .label("Grouped")
+                            .ghost()
+                            .small()
+                            .selected(grouped)
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.dispatch(
+                                    TransactionCommand::AttributesGrouped(true),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(
+                        Button::new("tx-attr-raw")
+                            .debug_selector(|| "tx-attr-raw".into())
+                            .label("Raw")
+                            .ghost()
+                            .small()
+                            .selected(!grouped)
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.dispatch(
+                                    TransactionCommand::AttributesGrouped(false),
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    ),
+            );
+        }
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .min_w_0()
+            .border_t_1()
+            .border_color(t.border_variant)
+            .child(header_row);
         if !tree.collapsed {
-            section = section
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .px_3()
-                        .pb_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(Input::new(&self.filter).small()),
+            let mut filter_bar = div().flex().items_center().gap_1().px_3().pb_2().child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.filter).small()),
+            );
+            if has_branches {
+                filter_bar = filter_bar
+                    .child(
+                        action_button(
+                            "tx-expand-all",
+                            gpui_kit::component::Icon::empty().path(IconName::ChevronsRight.path()),
+                            cx,
                         )
-                        .child(
-                            action_button(
-                                "tx-expand-all",
-                                gpui_kit::component::Icon::empty()
-                                    .path(IconName::ChevronsRight.path()),
-                                cx,
-                            )
-                            .accessibility_label("Expand all attributes")
-                            .tooltip("Expand all attributes")
-                            .ghost()
-                            .disabled(tree.filtering)
-                            .on_click(cx.listener(
-                                |view, _, window, cx| {
-                                    view.dispatch(
-                                        TransactionCommand::ExpandAttributes(true),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
+                        .debug_selector(|| "tx-expand-all".into())
+                        .accessibility_label("Expand all attributes")
+                        .tooltip("Expand all attributes")
+                        .ghost()
+                        .disabled(tree.filtering)
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.dispatch(TransactionCommand::ExpandAttributes(true), window, cx);
+                        })),
+                    )
+                    .child(
+                        action_button(
+                            "tx-collapse-all",
+                            gpui_kit::component::Icon::empty().path(IconName::ChevronsLeft.path()),
+                            cx,
                         )
-                        .child(
-                            action_button(
-                                "tx-collapse-all",
-                                gpui_kit::component::Icon::empty()
-                                    .path(IconName::ChevronsLeft.path()),
-                                cx,
-                            )
-                            .accessibility_label("Collapse all attributes")
-                            .tooltip("Collapse all attributes")
-                            .ghost()
-                            .disabled(tree.filtering)
-                            .on_click(cx.listener(
-                                |view, _, window, cx| {
-                                    view.dispatch(
-                                        TransactionCommand::ExpandAttributes(false),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        ),
-                )
-                .child(self.attribute_tree(t, tree, "tx-attr", cx));
+                        .debug_selector(|| "tx-collapse-all".into())
+                        .accessibility_label("Collapse all attributes")
+                        .tooltip("Collapse all attributes")
+                        .ghost()
+                        .disabled(tree.filtering)
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.dispatch(TransactionCommand::ExpandAttributes(false), window, cx);
+                        })),
+                    );
+            }
+            section = section.child(filter_bar).child(self.attribute_tree(
+                t,
+                tree,
+                "tx-attr",
+                grouped && has_dotted,
+                cx,
+            ));
         }
         section.into_any_element()
     }
@@ -124,7 +189,7 @@ impl TransactionPanelView {
                         .py_1()
                         .font_family(t.mono_font),
                 )
-                .child(self.attribute_tree(t, tree, "tx-stage-attr", cx));
+                .child(self.attribute_tree(t, tree, "tx-stage-attr", false, cx));
         }
         section.into_any_element()
     }
@@ -134,7 +199,10 @@ impl TransactionPanelView {
         t: &crate::theme::Theme,
         section: &Section<EventRow>,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Option<AnyElement> {
+        if section.total == 0 {
+            return None;
+        }
         let mut element = div()
             .flex()
             .flex_col()
@@ -174,6 +242,7 @@ impl TransactionPanelView {
                         t,
                         &event.attributes,
                         "tx-event-attr",
+                        false,
                         cx,
                     ));
                 }
@@ -182,7 +251,7 @@ impl TransactionPanelView {
                 element = element.child(note);
             }
         }
-        element.into_any_element()
+        Some(element.into_any_element())
     }
 
     fn attribute_tree(
@@ -190,6 +259,7 @@ impl TransactionPanelView {
         t: &crate::theme::Theme,
         tree: &AttributeTree,
         prefix: &str,
+        grouped: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut element = div()
@@ -200,21 +270,95 @@ impl TransactionPanelView {
             .pb_1()
             .role(gpui_kit::accesskit::Role::Tree)
             .aria_label("Recorded attributes");
-        for (index, row) in tree.rows.iter().enumerate() {
-            let focus = self
-                .attribute_focus
-                .entry(row.id.clone())
-                .or_insert_with(|| cx.focus_handle().tab_stop(true))
-                .clone();
-            element = element.child(Self::attribute_row(
-                t,
-                row,
-                prefix,
-                index,
-                &focus,
-                tree.filtering,
-                cx,
-            ));
+        let use_groups = grouped && !tree.filtering && prefix == "tx-attr";
+        if use_groups {
+            struct NamespaceGroup<'a> {
+                name: Option<String>,
+                rows: Vec<(usize, &'a AttrRow, Option<&'a str>)>,
+            }
+            // Preserve original index per row while grouping root dotted namespaces
+            // cleanly without nested card borders.
+            let mut groups: Vec<NamespaceGroup<'_>> = Vec::new();
+            let mut current_ns: Option<String> = None;
+            for (index, row) in tree.rows.iter().enumerate() {
+                let (ns, short_key) = if row.depth == 0 {
+                    let trimmed = row.key.strip_prefix("attributes.").unwrap_or(&row.key);
+                    if let Some((head, tail)) = trimmed.split_once('.') {
+                        current_ns = Some(head.to_owned());
+                        (Some(head.to_owned()), Some(tail))
+                    } else {
+                        current_ns = None;
+                        (None, None)
+                    }
+                } else {
+                    (current_ns.clone(), None)
+                };
+                if let Some(group) = groups.iter_mut().find(|g| g.name == ns) {
+                    group.rows.push((index, row, short_key));
+                } else {
+                    groups.push(NamespaceGroup {
+                        name: ns,
+                        rows: vec![(index, row, short_key)],
+                    });
+                }
+            }
+            for group in groups {
+                if let Some(ns_name) = group.name {
+                    element = element.child(
+                        div()
+                            .debug_selector({
+                                let name = ns_name.clone();
+                                move || format!("tx-attr-ns-{name}")
+                            })
+                            .px_3()
+                            .pt_1p5()
+                            .pb_0p5()
+                            .text_size(px(t.ui_size_small))
+                            .font_weight(gpui_kit::FontWeight::MEDIUM)
+                            .text_color(t.panel.text_muted)
+                            .child(SharedString::from(ns_name)),
+                    );
+                }
+                for (index, row, short_key) in group.rows {
+                    let focus = self
+                        .attribute_focus
+                        .entry(row.id.clone())
+                        .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                        .clone();
+                    element = element.child(Self::attribute_row(
+                        t,
+                        row,
+                        AttrRowRender {
+                            short_key,
+                            prefix,
+                            index,
+                            filtering: tree.filtering,
+                        },
+                        &focus,
+                        cx,
+                    ));
+                }
+            }
+        } else {
+            for (index, row) in tree.rows.iter().enumerate() {
+                let focus = self
+                    .attribute_focus
+                    .entry(row.id.clone())
+                    .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                    .clone();
+                element = element.child(Self::attribute_row(
+                    t,
+                    row,
+                    AttrRowRender {
+                        short_key: None,
+                        prefix,
+                        index,
+                        filtering: tree.filtering,
+                    },
+                    &focus,
+                    cx,
+                ));
+            }
         }
         if tree.rows.is_empty() {
             element = element.child(div().px_3().py_2().text_color(t.panel.text_muted).child(
@@ -350,35 +494,38 @@ impl TransactionPanelView {
     fn attribute_row(
         t: &crate::theme::Theme,
         row: &AttrRow,
-        prefix: &str,
-        index: usize,
+        render: AttrRowRender<'_>,
         focus: &FocusHandle,
-        filtering: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let AttrRowRender {
+            short_key,
+            prefix,
+            index,
+            filtering,
+        } = render;
         let branch = row.children > 0;
         let key_selector = format!("{prefix}-key-{index}");
         let value_selector = format!("{prefix}-{index}");
+        let radix_selector = format!("{prefix}-radix-{index}");
         let id = row.id.clone();
         let click_id = id.clone();
         let key_id = id.clone();
         let click_radix = id.clone();
+        let pill_radix = id.clone();
         let expanded = row.expanded;
         let numeric = row.radix.is_some();
         let click_focus = focus.clone();
-        let key = detail_text(
-            cx,
-            SharedString::from(key_selector.clone()),
-            row.key.clone(),
-        )
-        .debug_selector(move || key_selector)
-        .flex_1()
-        .text_color(if branch {
-            t.panel.text
-        } else {
-            t.panel.text_muted
-        });
-        let value = div()
+        let display_key = short_key.unwrap_or(&row.key).to_owned();
+        let key = detail_text(cx, SharedString::from(key_selector.clone()), display_key)
+            .debug_selector(move || key_selector)
+            .flex_1()
+            .text_color(if branch {
+                t.panel.text
+            } else {
+                t.panel.text_muted
+            });
+        let value_text = div()
             .id(SharedString::from(value_selector.clone()))
             .debug_selector(move || value_selector)
             .flex_1()
@@ -402,6 +549,50 @@ impl TransactionPanelView {
                         .text_color(t.panel.text_muted)
                         .text_size(px(t.ui_size_small))
                         .child("Preview · Copy value for full content"),
+                )
+            });
+        let value = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .child(value_text)
+            .when_some(row.radix, |el, radix| {
+                let label = radix.name().to_ascii_uppercase();
+                let tip = format!(
+                    "Format: {label} (click for {})",
+                    radix.next().name().to_ascii_uppercase()
+                );
+                let pill_focus = focus.clone();
+                el.child(
+                    div()
+                        .id(SharedString::from(radix_selector.clone()))
+                        .debug_selector(move || radix_selector)
+                        .flex_none()
+                        .px_1()
+                        .py_0p5()
+                        .rounded_sm()
+                        .border_1()
+                        .border_color(t.border_variant)
+                        .bg(t.badge.bg)
+                        .font_family(t.mono_font)
+                        .text_size(px((t.ui_size_small - 1.0).max(9.0)))
+                        .text_color(t.badge.text)
+                        .cursor_pointer()
+                        .hover(|style| style.bg(t.hover.bg))
+                        .tooltip_show_delay(crate::ui::tooltip::delay(cx))
+                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            window.focus(&pill_focus, cx);
+                            view.dispatch(
+                                TransactionCommand::AttributeRadix(pill_radix.clone()),
+                                window,
+                                cx,
+                            );
+                            cx.stop_propagation();
+                        }))
+                        .child(SharedString::from(label)),
                 )
             });
         let owner = cx.entity().downgrade();

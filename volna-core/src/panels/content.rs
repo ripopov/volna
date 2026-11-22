@@ -74,7 +74,7 @@ impl PanelKind {
                 result
             }
             Self::Transaction(t) => t.attach(doc),
-            Self::Start | Self::Settings | Self::Unsupported(_) => Ok(()),
+            Self::CursorRecords | Self::Start | Self::Settings | Self::Unsupported(_) => Ok(()),
         }
     }
 
@@ -84,7 +84,7 @@ impl PanelKind {
             Self::Pipeline(p) => p.detach(doc),
             Self::Table(t) => t.park(doc),
             Self::Transaction(t) => t.park(doc),
-            Self::Start | Self::Settings | Self::Unsupported(_) => {}
+            Self::CursorRecords | Self::Start | Self::Settings | Self::Unsupported(_) => {}
         }
     }
 

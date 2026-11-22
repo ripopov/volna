@@ -1,8 +1,7 @@
 //! The Transaction panel: everything recorded about one selected record.
 
 mod attributes;
-mod cursor;
-mod split;
+mod lifeline;
 
 use std::collections::{HashMap, HashSet};
 
@@ -25,18 +24,19 @@ use gpui_kit::{
 use volna_core::Command;
 use volna_core::data::points::PointKind;
 use volna_core::panels::{PanelId, PanelsCommand};
+use volna_core::trace::Traced;
 use volna_core::transaction::attributes::AttributeId;
 use volna_core::transaction::{
-    EventRow, ParentTraceState, RefRole, RefRow, Section, StageRow, TransactionCommand,
-    TxPanelState, TxView,
+    EventRow, LifelineScale, ParentTraceState, RefRole, RefRow, Section, StageRow,
+    TransactionCommand, TxPanelState, TxView,
 };
-use volna_trace::data::transactions::TransactionRef;
+use volna_trace::data::transactions::{TrackRef, TransactionRef};
 
 use crate::app::Workspace;
 use crate::theme::{ThemePx, hsla, theme};
 use crate::ui::{Icon, IconName, action_button};
 
-const LANE_PX: f32 = 18.0;
+const LANE_PX: f32 = 20.0;
 const PARENT_ROW_PX: f32 = 88.0;
 
 actions!(transaction, [Back, Forward]);
@@ -63,11 +63,29 @@ pub(crate) struct TransactionPanelView {
     synced_filter: String,
     group_filter: Entity<InputState>,
     synced_group_filter: String,
-    cursor_list: cursor::CursorList,
-    cursor_split: Entity<split::RecordSplit>,
+    hovered_stage: Option<usize>,
+    shown_record: Option<(Traced<TrackRef>, TransactionRef)>,
+    expanded_stage_groups: HashSet<(String, String)>,
     stage_focus: HashMap<TransactionRef, FocusHandle>,
     attribute_focus: HashMap<AttributeId, FocusHandle>,
     _subscriptions: Vec<Subscription>,
+}
+
+fn external_origin_panel(
+    app: &volna_core::App,
+    self_id: PanelId,
+) -> Option<&volna_core::panels::Panel> {
+    let live_external = |id: PanelId| {
+        (id != self_id)
+            .then(|| app.panels.get(id))
+            .flatten()
+            .filter(|panel| panel.kind.transaction().is_none())
+    };
+    app.panels
+        .transaction(self_id)
+        .and_then(volna_core::transaction::TransactionModel::external_origin)
+        .and_then(live_external)
+        .or_else(|| app.doc.selection().and_then(|s| live_external(s.origin)))
 }
 
 impl TransactionPanelView {
@@ -111,8 +129,9 @@ impl TransactionPanelView {
             synced_filter: String::new(),
             group_filter,
             synced_group_filter: String::new(),
-            cursor_list: cursor::CursorList::default(),
-            cursor_split: cx.new(split::RecordSplit::new),
+            hovered_stage: None,
+            shown_record: None,
+            expanded_stage_groups: HashSet::new(),
             stage_focus: HashMap::new(),
             attribute_focus: HashMap::new(),
             _subscriptions: vec![subscription, group_subscription],
@@ -202,24 +221,8 @@ impl Panel for TransactionPanelView {
         crate::dock::panel_menu(menu, &self.ws, self.id, self.generation, cx)
     }
 
-    fn toolbar_buttons(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<Vec<Button>> {
-        use gpui_kit::assets::IconName as KitIcon;
-        let owner = self.ws.upgrade()?;
-        let model = owner.read(cx).app.panels.transaction(self.id)?;
-        let pinned = model.pinned();
-        Some(vec![
-            action_button("tx-pin", KitIcon::Pin, cx)
-                .ghost()
-                .selected(pinned)
-                .tooltip(if pinned {
-                    "Pinned: this panel keeps its record"
-                } else {
-                    "Pin this record; the next one opens another panel"
-                })
-                .on_click(cx.listener(move |view, _, window, cx| {
-                    view.dispatch(TransactionCommand::Pin(!pinned), window, cx);
-                })),
-        ])
+    fn toolbar_buttons(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<Vec<Button>> {
+        None
     }
 }
 
@@ -247,39 +250,31 @@ impl Render for TransactionPanelView {
         let Some(owner) = self.ws.upgrade() else {
             return div().into_any_element();
         };
-        let (state, follows, revealable, back, forward) = {
+        let (state, follows, pinned, back, forward, prefs) = {
             let ws = owner.read(cx);
             let Some(model) = ws.app.panels.transaction(self.id) else {
                 return div().into_any_element();
             };
-            let follows = if model.pinned() {
-                Some("pinned".to_owned())
+            let pinned = model.pinned();
+            let follows = if pinned {
+                "Pinned".to_owned()
             } else {
-                ws.app
-                    .doc
-                    .selection()
-                    .and_then(|selection| ws.app.panels.get(selection.origin))
-                    .map(|panel| format!("follows {}", panel.title()))
+                match external_origin_panel(&ws.app, self.id) {
+                    Some(panel) => format!("follows {}", panel.title()),
+                    None => "Follows selection".to_owned(),
+                }
             };
-            let revealable = model
-                .shown()
-                .and_then(|shown| Some((shown.track.track()?, shown.id)))
-                .map(|(track, id)| {
-                    ws.app
-                        .panels
-                        .pipeline_showing(&ws.app.doc, track, id)
-                        .is_some()
-                });
             (
                 model.state(&ws.app.doc),
                 follows,
-                revealable,
+                pinned,
                 model.can_go_back(),
                 model.can_go_forward(),
+                model.prefs().clone(),
             )
         };
         let body = match state {
-            TxPanelState::Ready(view) => self.render_view(*view, revealable, window, cx),
+            TxPanelState::Ready(view) => self.render_view(*view, &prefs, window, cx),
             TxPanelState::Empty => notice(
                 &t,
                 "No record selected",
@@ -294,28 +289,20 @@ impl Render for TransactionPanelView {
             TxPanelState::Failed(error) => notice(&t, "Cannot load the record", &error),
             TxPanelState::Refused(error) => notice(&t, "Not admitted", &error),
         };
-        let body = self.render_cursor_split(body, cx);
-        let follows = follows.map(|text| {
-            div()
-                .debug_selector(|| "tx-follows".into())
-                .min_w_0()
-                .truncate()
-                .px_3()
-                .py_1()
-                .text_size(px(t.ui_size_small))
-                .text_color(t.panel.text_muted)
-                .child(SharedString::from(text))
-        });
-        let navigation = div()
+        let header = div()
+            .debug_selector(|| "tx-header".into())
             .flex()
+            .flex_none()
             .items_center()
             .gap_1()
-            .px_3()
-            .py_1()
+            .h(t.px(34.0))
+            .px_2()
+            .border_b_1()
+            .border_color(t.border_variant)
             .child(
                 action_button("tx-back", gpui_kit::assets::IconName::ChevronLeft, cx)
                     .debug_selector(|| "tx-back".into())
-                    .label("Back")
+                    .accessibility_label("Back")
                     .ghost()
                     .tooltip(BACK_TOOLTIP)
                     .disabled(!back)
@@ -327,7 +314,7 @@ impl Render for TransactionPanelView {
             .child(
                 action_button("tx-forward", gpui_kit::assets::IconName::ChevronRight, cx)
                     .debug_selector(|| "tx-forward".into())
-                    .label("Forward")
+                    .accessibility_label("Forward")
                     .ghost()
                     .tooltip(FORWARD_TOOLTIP)
                     .disabled(!forward)
@@ -335,16 +322,32 @@ impl Render for TransactionPanelView {
                         window.focus(&view.focus, cx);
                         view.dispatch(TransactionCommand::Forward, window, cx);
                     })),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "tx-follows".into())
+                    .flex_1()
+                    .min_w_0()
+                    .px_1()
+                    .truncate()
+                    .text_size(px(t.ui_size_small))
+                    .text_color(t.panel.text_muted)
+                    .child(SharedString::from(follows)),
+            )
+            .child(
+                action_button("tx-pin", gpui_kit::assets::IconName::Pin, cx)
+                    .debug_selector(|| "tx-pin".into())
+                    .ghost()
+                    .selected(pinned)
+                    .tooltip(if pinned {
+                        "Pinned: this panel keeps its record"
+                    } else {
+                        "Pin this record; the next one opens another panel"
+                    })
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.dispatch(TransactionCommand::Pin(!pinned), window, cx);
+                    })),
             );
-        let header = div()
-            .debug_selector(|| "tx-header".into())
-            .flex()
-            .flex_col()
-            .flex_none()
-            .border_b_1()
-            .border_color(t.border_variant)
-            .children(follows)
-            .child(navigation);
         div()
             .id(("transaction-panel", self.id.0))
             .size_full()
@@ -372,17 +375,11 @@ impl Render for TransactionPanelView {
                         view.copy(cx);
                         cx.stop_propagation();
                     } else if key == "escape" {
-                        if let Some(origin) = view
-                            .ws
-                            .upgrade()
-                            .and_then(|ws| ws.read(cx).app.doc.selection())
-                            .map(|selection| selection.origin)
-                        {
+                        if let Some(origin) = view.ws.upgrade().and_then(|ws| {
+                            external_origin_panel(&ws.read(cx).app, view.id).map(|panel| panel.id)
+                        }) {
                             view.panels(PanelsCommand::Focus(origin), window, cx);
                         }
-                        cx.stop_propagation();
-                    } else if view.focus.is_focused(window) && (key == "up" || key == "down") {
-                        view.move_cursor_record(if key == "up" { -1 } else { 1 }, window, cx);
                         cx.stop_propagation();
                     }
                 }),
@@ -397,10 +394,16 @@ impl TransactionPanelView {
     fn render_view(
         &mut self,
         view: TxView,
-        revealable: Option<bool>,
+        prefs: &volna_core::transaction::ViewPrefs,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let current_record = Some((view.identity.track, view.identity.id));
+        if self.shown_record != current_record {
+            self.shown_record = current_record;
+            self.expanded_stage_groups.clear();
+            self.hovered_stage = None;
+        }
         let visible: HashSet<_> = view
             .attributes
             .rows
@@ -510,81 +513,144 @@ impl TransactionPanelView {
         }
 
         let timing = &view.timing;
-        let mut tiles = div().flex().min_w_0().gap_2();
-        for (label, text, command) in [
-            (
-                "Begin",
+        let timing_module = if view.point_kind.is_some() {
+            div().flex().min_w_0().gap_2().child(Self::tile(
+                &t,
+                "Timestamp",
                 timing.begin_text.clone(),
+                "Move cursor to timestamp",
                 Some(TransactionCommand::Cursor(timing.begin)),
-            ),
-            (
-                "End",
-                timing.end_text.clone(),
-                timing.end.map(TransactionCommand::Cursor),
-            ),
-            (
-                "Duration",
-                timing.duration_text.clone(),
-                Some(TransactionCommand::FitLifetime),
-            ),
-        ] {
-            if view.point_kind.is_none() || label == "Begin" {
-                tiles = tiles.child(Self::tile(
+                cx,
+            ))
+        } else {
+            let mut module = div()
+                .debug_selector(|| "tx-timing-module".into())
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_2()
+                .rounded(t.px(6.0))
+                .border_1()
+                .border_color(t.border_variant)
+                .bg(t.islands.map_or(t.panel.bg, |i| i.heading));
+            let range_row = div()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .min_w_0()
+                        .child(Self::inline_time(
+                            &t,
+                            "Begin",
+                            timing.begin_text.clone(),
+                            "Move cursor to begin",
+                            Some(TransactionCommand::Cursor(timing.begin)),
+                            cx,
+                        ))
+                        .child(
+                            div()
+                                .text_size(px(t.ui_size_small))
+                                .text_color(muted)
+                                .child("→"),
+                        )
+                        .child(Self::inline_time(
+                            &t,
+                            "End",
+                            timing.end_text.clone(),
+                            "Move cursor to end",
+                            timing.end.map(TransactionCommand::Cursor),
+                            cx,
+                        )),
+                )
+                .child(Self::inline_time(
                     &t,
-                    if view.point_kind.is_some() {
-                        "Timestamp"
-                    } else {
-                        label
-                    },
-                    text,
-                    command,
+                    "Duration",
+                    timing.duration_text.clone(),
+                    "Fit lifetime in viewport",
+                    Some(TransactionCommand::FitLifetime),
                     cx,
                 ));
-            }
-        }
-
-        let mut actions = div().flex().items_center().gap_1().flex_wrap();
-        let in_waves = self.ws.upgrade().is_some_and(|ws| {
-            ws.read(cx)
-                .app
-                .panels
-                .waves_for_track(identity.track)
-                .is_some()
-        });
-        let reveal_label = match revealable {
-            Some(true) => "Reveal in Pipeline",
-            _ => "Open in Pipeline",
+            module =
+                module
+                    .child(range_row)
+                    .child(self.lifeline(&t, &view, prefs.lifeline_scale, cx));
+            module
         };
+
+        let mut actions = div()
+            .debug_selector(|| "tx-actions".into())
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_1()
+            .flex_wrap();
         actions = actions
             .when(view.point_kind.is_none(), |actions| {
-                actions
-                    .child(
-                        Button::new("tx-reveal-selected")
-                            .label("Reveal in Waves")
-                            .ghost()
-                            .small()
-                            .disabled(!in_waves)
-                            .tooltip("Show this transaction’s sub-row in waveforms")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.send(
-                                    Command::RevealWaveTransaction { panel: view.id },
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    )
-                    .child(
-                        action_button(
-                            "tx-reveal",
-                            gpui_kit::component::Icon::empty().path(IconName::Locate.path()),
-                            cx,
+                actions.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(t.ui_size_small))
+                                .text_color(muted)
+                                .pr_0p5()
+                                .child("Show in:"),
                         )
-                        .label(reveal_label)
-                        .ghost()
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.send(Command::RevealTransaction { panel: view.id }, window, cx);
-                        })),
-                    )
+                        .child(
+                            Button::new("tx-reveal-selected")
+                                .debug_selector(|| "tx-reveal-selected".into())
+                                .label("Waves")
+                                .ghost()
+                                .small()
+                                .tooltip("Focus or open this record in Waveforms")
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.send(
+                                        Command::RevealWaveTransaction { panel: view.id },
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new("tx-reveal")
+                                .debug_selector(|| "tx-reveal".into())
+                                .label("Pipeline")
+                                .ghost()
+                                .small()
+                                .tooltip("Focus or open this record in Pipeline")
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.send(
+                                        Command::RevealTransaction { panel: view.id },
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new("tx-reveal-table")
+                                .debug_selector(|| "tx-reveal-table".into())
+                                .label("Table")
+                                .ghost()
+                                .small()
+                                .tooltip("Focus or open this record in Table")
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.send(
+                                        Command::RevealTableTransaction { panel: view.id },
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
             })
             .when(view.point_kind.is_some(), |actions| {
                 actions.child(
@@ -600,7 +666,8 @@ impl TransactionPanelView {
             })
             .child(
                 Button::new("tx-copy")
-                    .label("Copy")
+                    .debug_selector(|| "tx-copy".into())
+                    .label("Copy TSV")
                     .ghost()
                     .small()
                     .tooltip("Copy the complete record as TSV")
@@ -628,14 +695,11 @@ impl TransactionPanelView {
                             || identity.parent.is_some(),
                         |body| body.child(point_metadata),
                     )
-                    .child(tiles)
-                    .when(view.point_kind.is_none(), |body| {
-                        body.child(Self::lifeline(&t, &view, cx))
-                    })
+                    .child(timing_module)
                     .child(actions),
             );
 
-        body = body.child(self.attributes(&t, &view, cx));
+        body = body.child(self.attributes(&t, &view, prefs.attributes_grouped, cx));
         if !view.source.is_empty() {
             let mut source = div()
                 .flex()
@@ -671,11 +735,13 @@ impl TransactionPanelView {
             body = body.child(source);
         }
         if view.point_kind.is_none() {
-            body = body.child(self.stages(&t, &view.stages, cx));
+            body = body.child(self.stages(&t, &view.stages, prefs, cx));
             if let Some(stage) = &view.stage_details {
                 body = body.child(self.stage_attributes(&t, stage, cx));
             }
-            body = body.child(self.events(&t, &view.events, cx));
+            if let Some(events) = self.events(&t, &view.events, cx) {
+                body = body.child(events);
+            }
         }
         body = body.child(Self::related(&t, &view.related, cx));
         body = body.child(self.parents(&t, cx));
@@ -1107,143 +1173,6 @@ impl TransactionPanelView {
             .collect()
     }
 
-    fn tile(
-        t: &crate::theme::Theme,
-        label: &'static str,
-        text: String,
-        command: Option<TransactionCommand>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let tile = div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap_0p5()
-            .px_2()
-            .py_1()
-            .rounded(t.px(4.))
-            .bg(t.islands.map_or(t.panel.bg, |i| i.heading))
-            .border_1()
-            .border_color(t.border_variant)
-            .child(
-                div()
-                    .text_size(px(t.ui_size_small))
-                    .text_color(t.panel.text_muted)
-                    .child(label),
-            )
-            .child(
-                detail_text(cx, format!("tx-time-value-{label}"), text).font_family(t.mono_font),
-            );
-        match command {
-            Some(command) => tile
-                .id(SharedString::from(format!("tx-time-{label}")))
-                .debug_selector(move || format!("tx-time-{label}"))
-                .tab_stop(true)
-                .cursor_pointer()
-                .hover(|style| style.bg(t.hover.bg))
-                .focus_visible(|style| style.border_color(t.border_focused))
-                .when(label == "Duration", |tile| {
-                    tile.tooltip_show_delay(crate::ui::tooltip::delay(cx))
-                        .tooltip(|window, cx| Tooltip::new("Fit lifetime").build(window, cx))
-                })
-                .on_key_down({
-                    let command = command.clone();
-                    cx.listener(move |view, event: &gpui_kit::KeyDownEvent, window, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            view.dispatch(command.clone(), window, cx);
-                            cx.stop_propagation();
-                        }
-                    })
-                })
-                .on_click(cx.listener(move |view, _, window, cx| {
-                    view.dispatch(command.clone(), window, cx);
-                }))
-                .into_any_element(),
-            None => tile.into_any_element(),
-        }
-    }
-
-    fn lifeline(t: &crate::theme::Theme, view: &TxView, cx: &mut Context<Self>) -> AnyElement {
-        let mut lanes = div().flex().flex_col().gap_0p5().relative();
-        for (index, lane) in view.lifeline.iter().enumerate() {
-            let mut row = div()
-                .relative()
-                .w_full()
-                .h(t.px(LANE_PX))
-                .bg(t.panel.bg)
-                .rounded_sm();
-            for (cell_ix, cell) in lane.cells.iter().enumerate() {
-                let begin = cell.begin;
-                let style = crate::theme::core_theme(cx).swatch(cell.swatch);
-                row = row.child(
-                    div()
-                        .id(SharedString::from(format!("tx-cell-{index}-{cell_ix}")))
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left(relative(cell.start))
-                        .w(relative(cell.width.max(0.004)))
-                        .bg(hsla(style.fill))
-                        .border_1()
-                        .border_color(hsla(style.edge))
-                        .cursor_pointer()
-                        .overflow_hidden()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(t.ui_size_small))
-                        .text_color(hsla(style.text))
-                        .font_family(t.mono_font)
-                        .tooltip_show_delay(crate::ui::tooltip::delay(cx))
-                        .tooltip({
-                            let name = cell.name.clone();
-                            move |w, cx| Tooltip::new(name.clone()).build(w, cx)
-                        })
-                        .child(
-                            div()
-                                .min_w_0()
-                                .text_ellipsis()
-                                .child(SharedString::from(cell.name.clone())),
-                        )
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            view.dispatch(TransactionCommand::Cursor(begin), window, cx);
-                        })),
-                );
-            }
-            lanes = lanes.child(row);
-        }
-        for (index, tick) in view.event_ticks.iter().enumerate() {
-            let time = tick.time;
-            lanes = lanes.child(
-                div()
-                    .id(("tx-event-tick", index))
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(relative(tick.at))
-                    .w(t.px(2.0))
-                    .bg(t.wave_event_coalesced)
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.dispatch(TransactionCommand::Cursor(time), window, cx);
-                    })),
-            );
-        }
-        if let Some(at) = view.cursor {
-            lanes = lanes.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(relative(at))
-                    .w(px(1.0))
-                    .bg(t.wave_cursor),
-            );
-        }
-        lanes.into_any_element()
-    }
-
     fn heading<T>(
         t: &crate::theme::Theme,
         section: &Section<T>,
@@ -1323,33 +1252,11 @@ impl TransactionPanelView {
         })
     }
 
-    fn section<T>(
-        t: &crate::theme::Theme,
-        section: &Section<T>,
-        cx: &mut Context<Self>,
-        row: impl Fn(&crate::theme::Theme, usize, &T, &mut Context<Self>) -> AnyElement,
-    ) -> AnyElement {
-        let mut element = div()
-            .flex()
-            .flex_col()
-            .border_t_1()
-            .border_color(t.border_variant)
-            .child(Self::heading(t, section, cx));
-        if !section.collapsed {
-            for (index, entry) in section.rows.iter().enumerate() {
-                element = element.child(row(t, index, entry, cx));
-            }
-            if let Some(note) = Self::cut_note(t, section) {
-                element = element.child(note);
-            }
-        }
-        element.into_any_element()
-    }
-
     fn stages(
         &mut self,
         t: &crate::theme::Theme,
         section: &Section<StageRow>,
+        prefs: &volna_core::transaction::ViewPrefs,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let visible_ids: HashSet<_> = section.rows.iter().map(|row| row.id).collect();
@@ -1359,9 +1266,270 @@ impl TransactionPanelView {
                 .entry(row.id)
                 .or_insert_with(|| cx.focus_handle().tab_stop(true));
         }
-        Self::section(t, section, cx, |t, index, row, cx| {
-            stage_row(t, index, row, &self.stage_focus[&row.id], cx)
-        })
+        let mut header_row = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_1()
+            .pr_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Self::heading(t, section, cx)),
+            );
+        if !section.collapsed && section.total > 1 {
+            header_row = header_row.child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_0p5()
+                    .child(
+                        Button::new("tx-stages-all")
+                            .debug_selector(|| "tx-stages-all".into())
+                            .label("All")
+                            .ghost()
+                            .small()
+                            .selected(!prefs.stages_grouped)
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.dispatch(TransactionCommand::StagesGrouped(false), window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("tx-stages-grouped")
+                            .debug_selector(|| "tx-stages-grouped".into())
+                            .label("Grouped")
+                            .ghost()
+                            .small()
+                            .selected(prefs.stages_grouped)
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.dispatch(TransactionCommand::StagesGrouped(true), window, cx);
+                            })),
+                    ),
+            );
+        }
+        let mut element = div()
+            .flex()
+            .flex_col()
+            .border_t_1()
+            .border_color(t.border_variant)
+            .child(header_row);
+        if section.collapsed {
+            return element.into_any_element();
+        }
+        if prefs.stages_grouped {
+            struct StageGroup<'a> {
+                lane: String,
+                name: String,
+                instances: Vec<(usize, &'a StageRow)>,
+            }
+            let mut groups: Vec<StageGroup<'_>> = Vec::new();
+            for (index, row) in section.rows.iter().enumerate() {
+                if let Some(group) = groups
+                    .iter_mut()
+                    .find(|g| g.lane == row.lane && g.name == row.name)
+                {
+                    group.instances.push((index, row));
+                } else {
+                    groups.push(StageGroup {
+                        lane: row.lane.clone(),
+                        name: row.name.clone(),
+                        instances: vec![(index, row)],
+                    });
+                }
+            }
+            for (group_ix, group) in groups.into_iter().enumerate() {
+                let StageGroup {
+                    lane,
+                    name,
+                    instances,
+                } = group;
+                let key = (lane.clone(), name.clone());
+                let expanded = self.expanded_stage_groups.contains(&key);
+                let first = instances[0].1;
+                let style = crate::theme::core_theme(cx).swatch(first.swatch);
+                let count = instances.len();
+                let total_share: f32 = instances.iter().map(|(_, r)| r.share).sum::<f32>().min(1.0);
+                let total_pct = (total_share * 100.0).clamp(0.0, 100.0);
+                let total_label = if count == 1 {
+                    first.duration_text.clone()
+                } else if total_pct < 0.1 {
+                    "<0.1%".to_owned()
+                } else {
+                    format!("{total_pct:.1}%")
+                };
+                let toggle_key = key;
+                let single_id = (count == 1).then_some(first.id);
+                element = element.child(
+                    div()
+                        .id(("tx-stage-group", group_ix))
+                        .debug_selector(move || format!("tx-stage-group-{group_ix}"))
+                        .w_full()
+                        .h(t.px(28.0))
+                        .flex_none()
+                        .px_3()
+                        .py_1()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(t.hover.bg))
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            if let Some(id) = single_id {
+                                view.dispatch(TransactionCommand::SelectStage(id), window, cx);
+                            } else {
+                                if !view.expanded_stage_groups.remove(&toggle_key) {
+                                    view.expanded_stage_groups.insert(toggle_key.clone());
+                                }
+                                cx.notify();
+                            }
+                        }))
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().w(t.px(12.0)).flex_none().when(count > 1, |el| {
+                                    el.child(
+                                        Icon::new(if expanded {
+                                            IconName::ChevronDown
+                                        } else {
+                                            IconName::ChevronRight
+                                        })
+                                        .size(t.px(12.0))
+                                        .color(t.panel.icon_muted),
+                                    )
+                                }))
+                                .child(
+                                    div()
+                                        .w(t.px(10.0))
+                                        .h(t.px(10.0))
+                                        .flex_none()
+                                        .rounded_sm()
+                                        .bg(hsla(style.fill)),
+                                )
+                                .child(
+                                    div()
+                                        .w(relative(0.38))
+                                        .min_w_0()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .font_family(t.mono_font)
+                                        .child(
+                                            detail_text(
+                                                cx,
+                                                format!("tx-stage-group-name-{group_ix}"),
+                                                name,
+                                            )
+                                            .flex_1(),
+                                        )
+                                        .when(count > 1, |el| {
+                                            el.child(tag(t, &format!("×{count}")))
+                                        })
+                                        .when(!first.primary, |el| el.child(tag(t, &lane))),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .h(t.px(4.0))
+                                        .rounded_sm()
+                                        .bg(t.panel.bg)
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .w(relative(total_share.max(0.01)))
+                                                .rounded_sm()
+                                                .bg(hsla(style.fill)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .w(t.px(72.0))
+                                        .flex_none()
+                                        .font_family(t.mono_font)
+                                        .text_size(px(t.ui_size_small))
+                                        .text_color(t.panel.text_muted)
+                                        .text_ellipsis()
+                                        .child(SharedString::from(total_label)),
+                                ),
+                        ),
+                );
+                if expanded && count > 1 {
+                    for (index, row) in instances {
+                        let id = row.id;
+                        element = element.child(
+                            div()
+                                .id(("tx-stage-inst", index))
+                                .debug_selector(move || format!("tx-stage-inst-{}", id.0))
+                                .w_full()
+                                .h(t.px(24.0))
+                                .flex_none()
+                                .pl(t.px(32.0))
+                                .pr_3()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .cursor_pointer()
+                                .when(row.selected, |el| el.bg(t.selection.bg))
+                                .when(!row.selected, |el| el.hover(|s| s.bg(t.hover.bg)))
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.dispatch(TransactionCommand::SelectStage(id), window, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .font_family(t.mono_font)
+                                        .text_size(px(t.ui_size_small))
+                                        .text_color(t.panel.text_muted)
+                                        .child(SharedString::from(row.offset_text.clone())),
+                                )
+                                .child(
+                                    div()
+                                        .font_family(t.mono_font)
+                                        .text_size(px(t.ui_size_small))
+                                        .text_color(t.editor.text)
+                                        .child(SharedString::from(row.duration_text.clone())),
+                                ),
+                        );
+                    }
+                }
+            }
+        } else {
+            for (index, row) in section.rows.iter().enumerate() {
+                element = element.child(stage_row(t, index, row, &self.stage_focus[&row.id], cx));
+            }
+            if section.cut() {
+                element = element.child(
+                    div().px_3().py_1().child(
+                        Button::new("tx-stages-show-all")
+                            .debug_selector(|| "tx-stages-show-all".into())
+                            .label(format!("Show all {} stages", section.matched))
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.dispatch(TransactionCommand::StagesShowAll(true), window, cx);
+                            })),
+                    ),
+                );
+            } else if prefs.stages_show_all && section.total > prefs.detail_items {
+                element = element.child(
+                    div().px_3().py_1().child(
+                        Button::new("tx-stages-show-fewer")
+                            .debug_selector(|| "tx-stages-show-fewer".into())
+                            .label("Show fewer")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.dispatch(TransactionCommand::StagesShowAll(false), window, cx);
+                            })),
+                    ),
+                );
+            }
+        }
+        element.into_any_element()
     }
 
     fn related(
@@ -1414,7 +1582,12 @@ impl TransactionPanelView {
         let subtitle = match (&row.label, row.loaded) {
             (Some(label), _) => label.clone(),
             (None, true) => "(no label)".into(),
-            (None, false) => "not loaded · loads on demand".into(),
+            (None, false) => "Unloaded track".into(),
+        };
+        let action_label = if row.loaded {
+            "Inspect ›"
+        } else {
+            "Load ›"
         };
         div()
             .id(("tx-ref", index))
@@ -1478,7 +1651,21 @@ impl TransactionPanelView {
                         )
                     }),
             )
-            .child(div().text_color(t.panel.text_muted).child("›"))
+            .child(
+                div()
+                    .flex_none()
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .text_size(px(t.ui_size_small))
+                    .text_color(if row.loaded {
+                        t.panel.text_muted
+                    } else {
+                        t.badge.text
+                    })
+                    .when(!row.loaded, |el| el.bg(t.badge.bg))
+                    .child(action_label),
+            )
             .into_any_element()
     }
 }

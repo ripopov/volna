@@ -3,7 +3,7 @@
 pub(crate) mod content;
 mod dock;
 mod layout;
-pub use dock::{DockLayout, Placement, SideDock, WindowId};
+pub use dock::{BottomDock, DockLayout, Placement, SideDock, WindowId};
 mod timeline;
 pub(crate) mod workspace;
 pub use layout::{Axis, Layout, MAX_LAYOUT_DEPTH, MAX_PANELS};
@@ -32,6 +32,7 @@ pub enum PanelsCommand {
         placement: Placement,
     },
     ToggleRightDock,
+    ToggleBottomDock,
     Split {
         panel: PanelId,
         axis: Axis,
@@ -65,6 +66,7 @@ pub enum PanelKind {
     Pipeline(Box<PipelineModel>),
     Table(Box<TableModel>),
     Transaction(Box<TransactionModel>),
+    CursorRecords,
     Start,
     Settings,
     Unsupported(Box<serde_json::value::RawValue>),
@@ -132,6 +134,11 @@ impl PanelKind {
     }
 
     #[must_use]
+    pub fn is_cursor_records(&self) -> bool {
+        matches!(self, Self::CursorRecords)
+    }
+
+    #[must_use]
     pub fn is_settings(&self) -> bool {
         matches!(self, Self::Settings)
     }
@@ -185,7 +192,11 @@ impl PanelKind {
                 traces.all(|t| t == first).then_some(first)
             }
             Self::Transaction(m) => m.shown().map(|r| r.track.trace()),
-            Self::Waves(_) | Self::Start | Self::Settings | Self::Unsupported(_) => None,
+            Self::Waves(_)
+            | Self::CursorRecords
+            | Self::Start
+            | Self::Settings
+            | Self::Unsupported(_) => None,
         }
     }
 
@@ -197,7 +208,11 @@ impl PanelKind {
             Self::Transaction(m) => {
                 m.pinned() && m.shown().is_some_and(|r| r.track.trace() == trace)
             }
-            Self::Waves(_) | Self::Start | Self::Settings | Self::Unsupported(_) => false,
+            Self::Waves(_)
+            | Self::CursorRecords
+            | Self::Start
+            | Self::Settings
+            | Self::Unsupported(_) => false,
         }
     }
 
@@ -310,6 +325,7 @@ impl Panel {
                     Some(shown) => format!("Record details{number} · #{}", shown.id.0),
                     None => format!("Record details{number}"),
                 },
+                PanelKind::CursorRecords => "At cursor".into(),
                 PanelKind::Start => "Start".into(),
                 PanelKind::Settings => "Settings".into(),
                 PanelKind::Unsupported(_) => format!("Unsupported panel {}", self.id.0),
@@ -359,7 +375,10 @@ impl Panel {
             PanelKind::Table(t) => t.take_edits(id, history),
             PanelKind::Transaction(t) => t.take_edits(id, history),
             PanelKind::Pipeline(p) => p.take_edits(id, history),
-            PanelKind::Start | PanelKind::Settings | PanelKind::Unsupported(_) => {}
+            PanelKind::CursorRecords
+            | PanelKind::Start
+            | PanelKind::Settings
+            | PanelKind::Unsupported(_) => {}
         }
     }
 
@@ -699,6 +718,28 @@ impl Panels {
     }
 
     #[must_use]
+    pub fn table_for_track(
+        &self,
+        track: crate::trace::Traced<volna_trace::data::transactions::TrackRef>,
+    ) -> Option<PanelId> {
+        self.layout.panels().into_iter().find(|id| {
+            self.panels[id].kind.table().is_some_and(|table| {
+                matches!(
+                    &table.source,
+                    crate::table::TableSource::Generator(source) if source.track() == Some(track)
+                )
+            })
+        })
+    }
+
+    #[must_use]
+    pub fn has_cursor_records(&self) -> bool {
+        self.panels
+            .values()
+            .any(|panel| panel.kind.is_cursor_records())
+    }
+
+    #[must_use]
     pub fn get(&self, id: PanelId) -> Option<&Panel> {
         self.panels.get(&id)
     }
@@ -798,6 +839,7 @@ impl Panels {
         layout = layout.normalized().unwrap_or(DockLayout {
             center: None,
             right: None,
+            bottom: None,
             windows: BTreeMap::new(),
         });
         layout.insert(id, placement);
@@ -813,6 +855,17 @@ impl Panels {
         let mut layout = self.layout.clone();
         layout.right.as_mut().unwrap().open = !dock.open;
         self.set_layout(layout, self.revision)
+    }
+
+    pub fn toggle_bottom_dock(&mut self) -> Result<bool> {
+        if let Some(dock) = self.layout.bottom.as_ref() {
+            let mut layout = self.layout.clone();
+            layout.bottom.as_mut().unwrap().open = !dock.open;
+            self.set_layout(layout, self.revision)
+        } else {
+            self.open_in(PanelKind::CursorRecords, Placement::Bottom)?;
+            Ok(true)
+        }
     }
 
     pub fn move_to_new_window(&mut self, id: PanelId) -> Result<bool> {
@@ -875,6 +928,7 @@ impl Panels {
         let tree = match placement {
             Placement::Center => self.layout.center.as_ref(),
             Placement::Right => self.layout.right.as_ref().map(|dock| &dock.layout),
+            Placement::Bottom => self.layout.bottom.as_ref().map(|dock| &dock.layout),
             Placement::Window(window) => self.layout.windows.get(&window),
         }?;
         tree.active_for(preferred)
@@ -1016,6 +1070,7 @@ impl Panels {
             layout = layout.normalized().unwrap_or(DockLayout {
                 center: None,
                 right: None,
+                bottom: None,
                 windows: BTreeMap::new(),
             });
             layout.insert(new, Placement::Center);
@@ -1129,12 +1184,25 @@ impl Panels {
                     width: self.layout.right.as_ref().unwrap().width,
                     open: true,
                 }),
+                bottom: None,
+                windows: BTreeMap::new(),
+            }
+        } else if placement == Placement::Bottom {
+            DockLayout {
+                center: start.map(Layout::single),
+                right: None,
+                bottom: Some(BottomDock {
+                    layout: kept,
+                    height: self.layout.bottom.as_ref().unwrap().height,
+                    open: true,
+                }),
                 windows: BTreeMap::new(),
             }
         } else if let Placement::Window(window) = placement {
             DockLayout {
                 center: start.map(Layout::single),
                 right: None,
+                bottom: None,
                 windows: BTreeMap::from([(window, kept)]),
             }
         } else {

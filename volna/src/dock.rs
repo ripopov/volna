@@ -25,11 +25,12 @@ use gpui_kit::{
     px,
 };
 use volna_core::panels::{
-    Axis, DockLayout, Layout, PanelId, PanelsCommand, Placement, SideDock, WindowId,
+    Axis, BottomDock, DockLayout, Layout, PanelId, PanelsCommand, Placement, SideDock, WindowId,
 };
 use volna_core::{App as CoreApp, Command};
 
 use crate::app::Workspace;
+use crate::cursor_panel::CursorRecordsPanelView;
 use crate::settings_panel::SettingsPanelView;
 use crate::start_panel::StartPanelView;
 use crate::theme::{ThemePx, theme};
@@ -39,6 +40,7 @@ use crate::ui::action_button;
 pub(crate) enum PanelView {
     Canvas(Entity<CanvasPanelView>),
     Transaction(Entity<TransactionPanelView>),
+    CursorRecords(Entity<CursorRecordsPanelView>),
     Start(Entity<StartPanelView>),
     Settings(Entity<SettingsPanelView>),
 }
@@ -48,6 +50,7 @@ impl PanelView {
         match self {
             Self::Canvas(view) => panel_handle(view.clone()),
             Self::Transaction(view) => panel_handle(view.clone()),
+            Self::CursorRecords(view) => panel_handle(view.clone()),
             Self::Start(view) => panel_handle(view.clone()),
             Self::Settings(view) => panel_handle(view.clone()),
         }
@@ -56,6 +59,7 @@ impl PanelView {
         match self {
             Self::Canvas(view) => view.read(cx).focus.clone(),
             Self::Transaction(view) => view.read(cx).focus.clone(),
+            Self::CursorRecords(view) => view.read(cx).focus.clone(),
             Self::Start(view) => view.read(cx).focus_handle(cx),
             Self::Settings(view) => view.read(cx).focus_handle(cx),
         }
@@ -64,6 +68,7 @@ impl PanelView {
         match self {
             Self::Canvas(view) => view.entity_id(),
             Self::Transaction(view) => view.entity_id(),
+            Self::CursorRecords(view) => view.entity_id(),
             Self::Start(view) => view.entity_id(),
             Self::Settings(view) => view.entity_id(),
         }
@@ -112,6 +117,7 @@ pub(crate) fn tab_title(
                 PanelKind::Pipeline(_) => (IconName::ChartNoAxesGantt, t.markers[0].stroke),
                 PanelKind::Table(_) => (IconName::TableColumns, t.panel.icon_accent),
                 PanelKind::Transaction(_) => (IconName::TableDetails, t.tx_relation_out),
+                PanelKind::CursorRecords => (IconName::ListTree, t.panel.icon_accent),
                 PanelKind::Settings => (IconName::Settings, t.panel.icon_muted),
                 PanelKind::Start | PanelKind::Unsupported(_) => {
                     (IconName::Layers, t.panel.icon_muted)
@@ -238,11 +244,13 @@ pub(crate) struct DockHost {
     pub area: Entity<base::DockArea>,
     views: BTreeMap<PanelId, PanelView>,
     hide_tab_bar: Rc<Cell<bool>>,
+    reconciling: Rc<Cell<bool>>,
     revision: Option<u64>,
     installed: Option<DockLayout>,
     echo: Option<DockLayout>,
     zoom: f32,
     right_width: Option<f32>,
+    bottom_height: Option<f32>,
     generation: u64,
 }
 
@@ -254,6 +262,7 @@ impl DockHost {
         cx: &mut Context<Self>,
     ) -> Self {
         let hide_tab_bar = Rc::new(Cell::new(true));
+        let reconciling = Rc::new(Cell::new(false));
         let mut skin_handle = None;
         let area = cx.new(|cx| {
             let skin = DockSkin::new(cx);
@@ -285,7 +294,7 @@ impl DockHost {
             .detach();
         }
         cx.subscribe(&area, |host, area, event, cx| {
-            if !matches!(event, base::DockEvent::LayoutChanged) {
+            if host.reconciling.get() || !matches!(event, base::DockEvent::LayoutChanged) {
                 return;
             }
             let snapshot = area.read(cx).dump(cx);
@@ -293,9 +302,13 @@ impl DockHost {
                 .right_dock
                 .as_ref()
                 .map(|dock| f32::from(dock.size()));
+            let measured_height = snapshot
+                .bottom_dock
+                .as_ref()
+                .map(|dock| f32::from(dock.size()));
             let mut candidate = from_area(&snapshot, host.zoom);
             // Clamping to a narrow window must not overwrite the preferred
-            // width when an unrelated tab or focus event arrives.
+            // size when an unrelated tab or focus event arrives.
             if measured_width == host.right_width
                 && let Ok(layout) = &mut candidate
                 && let (Some(right), Some(previous)) = (
@@ -307,11 +320,23 @@ impl DockHost {
             {
                 right.width = previous.width;
             }
+            if measured_height == host.bottom_height
+                && let Ok(layout) = &mut candidate
+                && let (Some(bottom), Some(previous)) = (
+                    &mut layout.bottom,
+                    host.installed
+                        .as_ref()
+                        .and_then(|layout| layout.bottom.as_ref()),
+                )
+            {
+                bottom.height = previous.height;
+            }
             match candidate {
                 Ok(layout) if host.echo.as_ref() == Some(&layout) => {}
                 Ok(layout) => {
                     let revision = host.revision.unwrap_or(0);
                     host.right_width = measured_width;
+                    host.bottom_height = measured_height;
                     host.installed = Some(layout.clone());
                     host.echo = Some(layout.clone());
                     let owner = host.owner.clone();
@@ -365,11 +390,13 @@ impl DockHost {
             area,
             views: BTreeMap::new(),
             hide_tab_bar,
+            reconciling,
             revision: None,
             installed: None,
             echo: None,
             zoom: 1.0,
             right_width: None,
+            bottom_height: None,
             generation: 0,
         }
     }
@@ -423,6 +450,16 @@ impl DockHost {
                             cx,
                         )
                     }))
+                } else if panel.kind.is_cursor_records() {
+                    PanelView::CursorRecords(cx.new(|cx| {
+                        CursorRecordsPanelView::new(
+                            ws.clone(),
+                            panel.id,
+                            app.doc.generation(),
+                            window,
+                            cx,
+                        )
+                    }))
                 } else if panel.kind.is_start() {
                     PanelView::Start(cx.new(|cx| {
                         StartPanelView::new(ws.clone(), panel.id, app.doc.generation(), window, cx)
@@ -452,6 +489,7 @@ impl DockHost {
         let zoom = crate::theme::theme(cx).zoom;
         let bounds = self.area.read(cx).bounds();
         let available = f32::from(bounds.size.width);
+        let available_h = f32::from(bounds.size.height);
         let right_width = layout.right.as_ref().map(|dock| {
             if self.window.is_none() && crate::theme::compact_workspace(window, cx) {
                 return f32::from(window.viewport_size().width);
@@ -465,11 +503,22 @@ impl DockHost {
                 .min((available - center_min).max(100.0))
                 .max(100.0)
         });
+        let bottom_height = layout.bottom.as_ref().map(|dock| {
+            let center_min = if layout.center.is_some() {
+                (available_h * 0.4).min(160.0 * zoom)
+            } else {
+                0.0
+            };
+            (dock.height * zoom)
+                .min((available_h - center_min).max(96.0))
+                .max(96.0)
+        });
         if self.installed.as_ref() != Some(layout)
             || self.zoom != zoom
             || self.right_width != right_width
+            || self.bottom_height != bottom_height
         {
-            if (app.panels.len() > 1 || layout.right.is_some())
+            if (app.panels.len() > 1 || layout.right.is_some() || layout.bottom.is_some())
                 && (bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0))
             {
                 window.on_next_frame(move |_, cx| cx.notify(render_owner));
@@ -480,12 +529,15 @@ impl DockHost {
                     installed.center == layout.center
                         && installed.right.as_ref().map(|dock| &dock.layout)
                             == layout.right.as_ref().map(|dock| &dock.layout)
+                        && installed.bottom.as_ref().map(|dock| &dock.layout)
+                            == layout.bottom.as_ref().map(|dock| &dock.layout)
                 });
             if same_trees {
-                // Width and visibility belong to the dock, not its pane tree.
+                // Size and visibility belong to the dock, not its pane tree.
                 // Keep Kit's tab groups and split widgets alive for these edits.
-                if let Some(dock) = &layout.right {
-                    self.area.update(cx, |area, cx| {
+                self.reconciling.set(true);
+                self.area.update(cx, |area, cx| {
+                    if let Some(dock) = &layout.right {
                         area.set_dock_size(
                             base::DockPlacement::Right,
                             px(right_width.unwrap()),
@@ -495,44 +547,67 @@ impl DockHost {
                         if area.is_dock_open(base::DockPlacement::Right) != dock.open {
                             area.toggle_dock(base::DockPlacement::Right, window, cx);
                         }
-                    });
-                }
+                    }
+                    if let Some(dock) = &layout.bottom {
+                        area.set_dock_size(
+                            base::DockPlacement::Bottom,
+                            px(bottom_height.unwrap()),
+                            window,
+                            cx,
+                        );
+                        if area.is_dock_open(base::DockPlacement::Bottom) != dock.open {
+                            area.toggle_dock(base::DockPlacement::Bottom, window, cx);
+                        }
+                    }
+                });
+                self.reconciling.set(false);
             } else {
-                let occupied = layout
+                let occupied_w = layout
                     .right
                     .as_ref()
                     .filter(|dock| dock.open)
                     .and(right_width)
                     .unwrap_or(0.0);
-                let center =
-                    layout
-                        .center
-                        .as_ref()
-                        .map_or_else(base::DockLayout::h_split, |tree| {
-                            to_dock(
-                                tree,
-                                &self.views,
-                                (f32::from(bounds.size.width) - occupied).max(1.0),
-                                f32::from(bounds.size.height),
-                                cx,
-                            )
-                        });
+                let occupied_h = layout
+                    .bottom
+                    .as_ref()
+                    .filter(|dock| dock.open)
+                    .and(bottom_height)
+                    .unwrap_or(0.0);
+                let center_w = (available - occupied_w).max(1.0);
+                let center_h = (available_h - occupied_h).max(1.0);
+                let center = layout
+                    .center
+                    .as_ref()
+                    .map_or_else(base::DockLayout::h_split, |tree| {
+                        to_dock(tree, &self.views, center_w, center_h, cx)
+                    });
                 let right = layout.right.as_ref().map(|dock| {
                     to_dock(
                         &dock.layout,
                         &self.views,
                         right_width.unwrap(),
-                        f32::from(bounds.size.height),
+                        available_h,
                         cx,
                     )
                 });
+                let bottom = layout.bottom.as_ref().map(|dock| {
+                    to_dock(
+                        &dock.layout,
+                        &self.views,
+                        center_w,
+                        bottom_height.unwrap(),
+                        cx,
+                    )
+                });
+                self.reconciling.set(true);
                 self.area.update(cx, |area, cx| {
-                    // Remove the outgoing region before installing either tree: a
-                    // moved panel must never belong to both regions during reconcile.
+                    // Remove outgoing regions before installing trees: a moved
+                    // panel must never belong to two regions during reconcile.
                     area.remove_dock(base::DockPlacement::Right, window, cx);
-                    // Unsupported regions can only arrive in a rejected proposal.
-                    area.remove_dock(base::DockPlacement::Left, window, cx);
                     area.remove_dock(base::DockPlacement::Bottom, window, cx);
+                    // Unsupported left dock can only arrive in a rejected proposal.
+                    area.remove_dock(base::DockPlacement::Left, window, cx);
                     area.set_center(center, window, cx);
                     if let (Some(tree), Some(dock)) = (right, &layout.right) {
                         area.set_dock(base::DockPlacement::Right, tree, window, cx);
@@ -546,15 +621,34 @@ impl DockHost {
                             area.toggle_dock(base::DockPlacement::Right, window, cx);
                         }
                     }
+                    if let (Some(tree), Some(dock)) = (bottom, &layout.bottom) {
+                        area.set_dock(base::DockPlacement::Bottom, tree, window, cx);
+                        area.set_dock_size(
+                            base::DockPlacement::Bottom,
+                            px(bottom_height.unwrap()),
+                            window,
+                            cx,
+                        );
+                        if !dock.open {
+                            area.toggle_dock(base::DockPlacement::Bottom, window, cx);
+                        }
+                    }
                 });
+                self.reconciling.set(false);
             }
             self.zoom = zoom;
             self.right_width = right_width;
+            self.bottom_height = bottom_height;
             self.echo = from_area(&self.area.read(cx).dump(cx), zoom).ok();
             if let (Some(echo), Some(preferred)) = (&mut self.echo, &layout.right)
                 && let Some(right) = &mut echo.right
             {
                 right.width = preferred.width;
+            }
+            if let (Some(echo), Some(preferred)) = (&mut self.echo, &layout.bottom)
+                && let Some(bottom) = &mut echo.bottom
+            {
+                bottom.height = preferred.height;
             }
             self.installed = Some(layout.clone());
         }
@@ -597,10 +691,7 @@ impl DockHost {
 }
 
 fn from_area(state: &base::DockAreaState, zoom: f32) -> Result<DockLayout> {
-    ensure!(
-        state.left_dock.is_none() && state.bottom_dock.is_none(),
-        "unsupported dock region"
-    );
+    ensure!(state.left_dock.is_none(), "unsupported dock region");
     let empty = |state: &base::PanelState| {
         !matches!(state.info, base::PanelInfo::Panel(_)) && state.children.is_empty()
     };
@@ -619,6 +710,18 @@ fn from_area(state: &base::DockAreaState, zoom: f32) -> Result<DockLayout> {
                 Ok(SideDock {
                     layout: from_dock(dock.panel())?,
                     width: f32::from(dock.size()) / zoom,
+                    open: dock.open(),
+                })
+            })
+            .transpose()?,
+        bottom: state
+            .bottom_dock
+            .as_ref()
+            .filter(|dock| !empty(dock.panel()))
+            .map(|dock| -> Result<BottomDock> {
+                Ok(BottomDock {
+                    layout: from_dock(dock.panel())?,
+                    height: f32::from(dock.size()) / zoom,
                     open: dock.open(),
                 })
             })
@@ -669,25 +772,38 @@ fn placement_menu(
         }
         menu
     };
-    let (label, destination) = if placement == Some(Placement::Right) {
-        ("Move to center", Placement::Center)
-    } else {
-        ("Move to right sidebar", Placement::Right)
+    let mut menu = menu;
+    let destinations: &[(&str, Placement)] = match placement {
+        Some(Placement::Right) => &[
+            ("Move to center", Placement::Center),
+            ("Move to bottom dock", Placement::Bottom),
+        ],
+        Some(Placement::Bottom) => &[
+            ("Move to center", Placement::Center),
+            ("Move to right sidebar", Placement::Right),
+        ],
+        _ => &[
+            ("Move to right sidebar", Placement::Right),
+            ("Move to bottom dock", Placement::Bottom),
+        ],
     };
-    let ws = ws.clone();
-    menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-        drop(ws.update(cx, |ws, cx| {
-            ws.dispatch_if_current(
-                generation,
-                Command::Panels(PanelsCommand::Move {
-                    panel: id,
-                    placement: destination,
-                }),
-                Some(window),
-                cx,
-            );
+    for &(label, destination) in destinations {
+        let ws = ws.clone();
+        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+            drop(ws.update(cx, |ws, cx| {
+                ws.dispatch_if_current(
+                    generation,
+                    Command::Panels(PanelsCommand::Move {
+                        panel: id,
+                        placement: destination,
+                    }),
+                    Some(window),
+                    cx,
+                );
+            }));
         }));
-    }))
+    }
+    menu
 }
 
 pub(crate) fn panel_menu(
@@ -876,9 +992,11 @@ pub(crate) fn close_menu(
     generation: u64,
     cx: &App,
 ) -> PopupMenu {
-    let in_sidebar = ws
+    let placement = ws
         .upgrade()
-        .is_some_and(|ws| ws.read(cx).app.panels.layout().placement(id) == Some(Placement::Right));
+        .and_then(|ws| ws.read(cx).app.panels.layout().placement(id));
+    let in_sidebar = placement == Some(Placement::Right);
+    let in_bottom = placement == Some(Placement::Bottom);
     if in_sidebar {
         let ws = ws.clone();
         menu = menu.item(
@@ -899,9 +1017,29 @@ pub(crate) fn close_menu(
             }),
         );
     }
+    if in_bottom {
+        let ws = ws.clone();
+        menu = menu.item(
+            PopupMenuItem::new("Hide bottom dock").on_click(move |_, window, cx| {
+                drop(ws.update(cx, |ws, cx| {
+                    let layout = ws.app.panels.layout();
+                    if layout.placement(id) == Some(Placement::Bottom)
+                        && layout.bottom.as_ref().is_some_and(|dock| dock.open)
+                    {
+                        ws.dispatch_if_current(
+                            generation,
+                            Command::Panels(PanelsCommand::ToggleBottomDock),
+                            Some(window),
+                            cx,
+                        );
+                    }
+                }));
+            }),
+        );
+    }
     let ws = ws.clone();
     menu.item(
-        PopupMenuItem::new(if in_sidebar {
+        PopupMenuItem::new(if in_sidebar || in_bottom {
             "Close tab"
         } else {
             "Close panel"
@@ -1004,6 +1142,7 @@ fn panel_id(state: &base::PanelState) -> Result<PanelId> {
                 | "volna.pipeline"
                 | "volna.table"
                 | "volna.transaction"
+                | "volna.cursor"
                 | "volna.start"
                 | "volna.settings"
         ),

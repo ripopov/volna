@@ -252,6 +252,11 @@ pub struct AttributeTree {
 
 impl AttributeTree {
     #[must_use]
+    pub fn has_branches(&self) -> bool {
+        self.rows.iter().any(|row| row.children > 0)
+    }
+
+    #[must_use]
     pub fn has_previous(&self) -> bool {
         self.previous.is_some()
     }
