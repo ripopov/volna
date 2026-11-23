@@ -311,6 +311,7 @@ pub struct Workspace {
     main_menu: main_menu::MainMenu,
     pub(crate) status_menu: Option<HostedMenu>,
     pub(crate) trace_rename: Option<crate::traces::TraceRename>,
+    pub(crate) trace_chip_bounds: crate::traces::TraceChipBounds,
     pub(crate) on_waves: Option<(OnWavesKey, std::rc::Rc<OnWaves>)>,
     pub(crate) frame_view: crate::frame_stats::FrameView,
     wave_menu: Option<HostedWaveMenu>,
@@ -750,6 +751,7 @@ impl Workspace {
             wave_menu: None,
             rename: None,
             trace_rename: None,
+            trace_chip_bounds: crate::traces::TraceChipBounds::default(),
             on_waves: None,
             canvas: HashMap::new(),
             #[cfg(not(target_family = "wasm"))]

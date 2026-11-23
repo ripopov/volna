@@ -219,10 +219,19 @@ fn compact_trace_reveal_and_wave_tools_focus_the_visible_region(cx: &mut TestApp
         view.run_until_parked();
         view.update(gpui_kit::test::TestWindowExt::render_frame);
         let chip = view.debug_bounds("trace-chip-A").unwrap();
-        view.simulate_click(
-            point(chip.left() + px(9.), chip.center().y),
-            Default::default(),
-        );
+        view.simulate_click(chip.center(), Default::default());
+        view.run_until_parked();
+        view.update(|window, cx| {
+            window.render_frame(cx);
+            let mut menu = window.within("popup-menu");
+            let reveal_ix = (0..10)
+                .find(|&ix| {
+                    menu.try_find(ix)
+                        .is_some_and(|item| item.label() == Some("Reveal in Scopes"))
+                })
+                .expect("Reveal in Scopes menu item");
+            menu.click(reveal_ix, cx);
+        });
         view.run_until_parked();
         view.update(gpui_kit::test::TestWindowExt::render_frame);
         let tree = view.debug_bounds("scope-tree").unwrap();
@@ -5219,16 +5228,15 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
         })
         .unwrap();
     let copy_path =
-        |vcx: &mut VisualTestContext, trace: char, path: &std::path::Path, dropdown: bool| {
+        |vcx: &mut VisualTestContext, trace: char, path: &std::path::Path, left_click: bool| {
             let path = path.canonicalize().unwrap();
-            let selector = match (trace, dropdown) {
-                ('A', true) => "trace-menu-A",
-                ('A', false) => "trace-chip-A",
-                ('B', true) => "trace-menu-B",
+            let selector = match trace {
+                'A' => "trace-chip-A",
+                'B' => "trace-chip-B",
                 _ => unreachable!(),
             };
             let bounds = vcx.debug_bounds(selector).unwrap();
-            if dropdown {
+            if left_click {
                 vcx.simulate_click(bounds.center(), Modifiers::default());
             } else {
                 vcx.simulate_mouse_down(
@@ -5255,12 +5263,14 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
                 use gpui_kit::test::TestWindowExt;
                 window.render_frame(cx);
                 let mut menu = window.within("popup-menu");
-                assert_eq!(
-                    menu.find(0usize).label(),
-                    Some(format!("Copy path: {}", path.display()).as_str())
-                );
+                let copy_ix = (0..10)
+                    .find(|&ix| {
+                        menu.try_find(ix)
+                            .is_some_and(|item| item.label() == Some("Copy File Path"))
+                    })
+                    .expect("Copy File Path menu item");
                 cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("old".into()));
-                menu.click(0usize, cx);
+                menu.click(copy_ix, cx);
                 assert_eq!(
                     cx.read_from_clipboard().unwrap().text().unwrap(),
                     path.to_str().unwrap()
@@ -5272,11 +5282,25 @@ fn trace_chips_and_rows_show_every_open_trace(cx: &mut TestAppContext) {
                 .unwrap();
         };
     copy_path(&mut vcx, 'B', &b, true);
+    copy_path(&mut vcx, 'A', &a, false);
     assert!(vcx.debug_bounds("trace-chip-A").is_some());
     let chip = vcx.debug_bounds("trace-chip-B").expect("B's chip");
     assert!(vcx.debug_bounds("trace-row-A").is_some());
     assert!(vcx.debug_bounds("trace-row-B").is_some());
     vcx.simulate_click(chip.center(), Modifiers::default());
+    draw(&mut vcx);
+    vcx.update(|window, cx| {
+        use gpui_kit::test::TestWindowExt;
+        window.render_frame(cx);
+        let mut menu = window.within("popup-menu");
+        let reveal_ix = (0..10)
+            .find(|&ix| {
+                menu.try_find(ix)
+                    .is_some_and(|item| item.label() == Some("Reveal in Scopes"))
+            })
+            .expect("Reveal in Scopes menu item");
+        menu.click(reveal_ix, cx);
+    });
     draw(&mut vcx);
     window
         .update(&mut vcx, |ws, window, cx| {
@@ -9004,4 +9028,173 @@ fn table_mouse_and_keyboard_selection_copy_only_selected_rows(cx: &mut TestAppCo
             })
             .unwrap();
     }
+}
+
+#[gpui_kit::test]
+fn trace_chip_click_opens_bounded_details_panel_and_avoids_rename_overlap(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, VisualTestContext, test::TestWindowExt as _};
+
+    init(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir
+        .path()
+        .join("workspace/output/runs/vtr-instruction-ownership-lte");
+    std::fs::create_dir_all(&nested).unwrap();
+    let trace_path = nested.join("trace.vcd");
+    std::fs::write(
+        &trace_path,
+        "$timescale 1ns $end\n$scope module top $end\n$var wire 1 ! clk $end\n$upscope $end\n$enddefinitions $end\n#0\n0!\n#10\n1!\n",
+    )
+    .unwrap();
+
+    let root = RootWindow::new(cx);
+    let mut vcx = VisualTestContext::from_window(root.root.into(), cx);
+    root.update(&mut vcx, |ws, _, cx| {
+        ws.open_path(trace_path.clone(), cx);
+    })
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        vcx.run_until_parked();
+        if root
+            .update(&mut vcx, |ws, _, _| {
+                ws.app
+                    .trace_chips()
+                    .first()
+                    .is_some_and(|chip| !chip.loading)
+            })
+            .unwrap()
+        {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "trace did not load");
+        std::thread::yield_now();
+    }
+    vcx.update(gpui_kit::test::TestWindowExt::render_frame);
+
+    let chip = vcx.debug_bounds("trace-chip-A").expect("trace chip A");
+    vcx.simulate_click(chip.center(), Modifiers::default());
+    vcx.run_until_parked();
+
+    let mut rename_ix = None;
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let popup_bounds = window.find("popup-menu").bounds();
+        assert!(
+            popup_bounds.size.width <= px(316.0),
+            "long trace path should not overflow the details panel: {:?}",
+            popup_bounds.size
+        );
+        assert!(
+            popup_bounds.top() >= chip.bottom(),
+            "details panel should anchor below the trace chip: popup={popup_bounds:?} chip={chip:?}"
+        );
+        let mut menu = window.within("popup-menu");
+        let labels: Vec<String> = (0..12)
+            .filter_map(|ix| {
+                menu.try_find(ix)
+                    .and_then(|item| item.label().map(str::to_owned))
+            })
+            .collect();
+        assert!(labels.iter().any(|l| l == "Copy File Path"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "Reveal in Scopes"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "Rename Trace"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "Close Trace"), "{labels:?}");
+        assert!(
+            !labels.iter().any(|l| l == "Close Trace A"),
+            "single-trace mode should not expose internal trace letter: {labels:?}"
+        );
+        rename_ix = (0..12).find(|&ix| {
+            menu.try_find(ix)
+                .is_some_and(|item| item.label() == Some("Rename Trace"))
+        });
+        menu.click(rename_ix.unwrap(), cx);
+    });
+    vcx.run_until_parked();
+    vcx.update(gpui_kit::test::TestWindowExt::render_frame);
+
+    root.update(&mut vcx, |ws, _, _| {
+        assert!(
+            ws.status_menu.is_none(),
+            "starting rename should close menu"
+        );
+        assert!(ws.trace_rename.is_some(), "inline rename should be active");
+    })
+    .unwrap();
+
+    // Clicking outside without editing should close rename mode without pinning a custom name.
+    vcx.simulate_click(
+        point(chip.right() + px(80.0), chip.bottom() + px(80.0)),
+        Modifiers::default(),
+    );
+    vcx.run_until_parked();
+    vcx.update(gpui_kit::test::TestWindowExt::render_frame);
+
+    root.update(&mut vcx, |ws, window, cx| {
+        let trace_chip = ws.app.trace_chip(TraceId::A).unwrap();
+        assert!(
+            ws.trace_rename.is_none(),
+            "clicking outside should close inline rename"
+        );
+        assert!(
+            !trace_chip.renamed,
+            "unchanged blur should not pin an explicit trace name"
+        );
+        ws.start_trace_rename(TraceId::A, window, cx);
+    })
+    .unwrap();
+    vcx.run_until_parked();
+
+    // Typing a new name and opening the menu should commit first so the menu shows the new state.
+    vcx.simulate_keystrokes(&format!("{SELECT_ALL} backspace"));
+    vcx.simulate_input("gpu-run");
+    vcx.run_until_parked();
+
+    root.update(&mut vcx, |ws, window, cx| {
+        assert!(ws.trace_rename.is_some());
+        ws.open_trace_menu(TraceId::A, point(px(100.0), px(40.0)), window, cx);
+        assert!(
+            ws.trace_rename.is_none(),
+            "opening trace menu should finish active inline rename"
+        );
+        let trace_chip = ws.app.trace_chip(TraceId::A).unwrap();
+        assert_eq!(trace_chip.name, "gpu-run");
+        assert!(trace_chip.renamed);
+        assert!(ws.status_menu.is_some());
+    })
+    .unwrap();
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let menu = window.within("popup-menu");
+        let has_use_file_name = (0..12).any(|ix| {
+            menu.try_find(ix)
+                .is_some_and(|item| item.label() == Some("Use File Name"))
+        });
+        assert!(
+            has_use_file_name,
+            "menu opened during first rename should immediately offer Use File Name"
+        );
+    });
+
+    // Editing the name and clicking outside should commit the updated name.
+    root.update(&mut vcx, |ws, window, cx| {
+        ws.start_trace_rename(TraceId::A, window, cx);
+    })
+    .unwrap();
+    vcx.run_until_parked();
+    vcx.simulate_keystrokes(&format!("{SELECT_ALL} backspace"));
+    vcx.simulate_input("gpu-run-2");
+    vcx.run_until_parked();
+    vcx.simulate_click(
+        point(chip.right() + px(80.0), chip.bottom() + px(80.0)),
+        Modifiers::default(),
+    );
+    vcx.run_until_parked();
+    vcx.update(gpui_kit::test::TestWindowExt::render_frame);
+    root.update(&mut vcx, |ws, _, _| {
+        assert!(ws.trace_rename.is_none());
+        assert_eq!(ws.app.trace_chip(TraceId::A).unwrap().name, "gpu-run-2");
+    })
+    .unwrap();
 }
