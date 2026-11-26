@@ -1691,11 +1691,19 @@ impl PipelineModel {
         boundary: RowBoundary,
         now: Instant,
     ) -> bool {
-        let lifetime = match self.rows(doc) {
-            Rows::Ready(set) => set.get(row).map(|(_, tx)| (tx.begin, tx.end)),
+        let filter = self.stage_anchor_filter();
+        let tick = match self.rows(doc) {
+            Rows::Ready(set) => set.get(row).map(|(_, tx)| match boundary {
+                RowBoundary::Start => filter
+                    .and_then(|f| f.first_visible_stage_begin(tx))
+                    .unwrap_or(tx.begin),
+                RowBoundary::End => filter
+                    .and_then(|f| f.last_visible_stage_end(tx))
+                    .unwrap_or(tx.end),
+            }),
             _ => None,
         };
-        let Some((begin, end)) = lifetime else {
+        let Some(tick) = tick else {
             return false;
         };
         let width_px = self.cells_w();
@@ -1704,8 +1712,8 @@ impl PipelineModel {
         let width = target.width();
         let margin = width * margin_px / width_px;
         target.start = match boundary {
-            RowBoundary::Start => begin as f64 - margin,
-            RowBoundary::End => end as f64 + margin - width,
+            RowBoundary::Start => tick as f64 - margin,
+            RowBoundary::End => tick as f64 + margin - width,
         };
         target.end = target.start + width;
         target.clamp_preserving_width(doc.limits());

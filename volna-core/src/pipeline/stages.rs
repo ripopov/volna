@@ -124,6 +124,16 @@ impl StageAnchorFilter<'_> {
             .map(|s| s.begin)
             .min()
     }
+
+    /// End timestamp of the latest visible (non-hidden) `primary_lane` stage in `tx`.
+    #[must_use]
+    pub(crate) fn last_visible_stage_end(self, tx: &Transaction) -> Option<u64> {
+        tx.stages
+            .iter()
+            .filter(|s| s.lane == self.primary_lane && !self.visibility.is_hidden(&s.name))
+            .map(|s| s.end.unwrap_or(tx.end).max(s.begin))
+            .max()
+    }
 }
 
 /// Returns whether `tx` overlaps `view` through either its owner lifetime `[tx.begin, tx.end]`

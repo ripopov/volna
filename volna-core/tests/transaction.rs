@@ -380,6 +380,119 @@ fn pipeline_label_can_reveal_either_transaction_boundary_without_changing_scale(
 }
 
 #[test]
+fn pipeline_label_boundary_jump_skips_hidden_stages() {
+    use volna_core::pipeline::{RowBoundary, StageVisibilityCommand};
+
+    let (mut app, session, panel) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
+    let instruction = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
+    let add = labelled(session.as_ref(), instruction, "80000008: add  a3, a1, a0");
+    let (row, tx_begin, tx_end, primary_stages) = {
+        let pipeline = app.panels.pipeline(panel).unwrap();
+        let primary_lane = pipeline.palette().primary_lane().to_string();
+        let Rows::Ready(set) = pipeline.rows(&app.doc) else {
+            panic!("not loaded")
+        };
+        let row = set
+            .row_of(volna_core::trace::TraceId::A, instruction, add)
+            .unwrap();
+        let (_, tx) = set.get(row).unwrap();
+        let mut stages: Vec<(String, u64, u64)> = tx
+            .stages
+            .iter()
+            .filter(|s| s.lane == primary_lane)
+            .map(|s| (s.name.clone(), s.begin, s.end.unwrap_or(tx.end).max(s.begin)))
+            .collect();
+        stages.sort_by_key(|(_, begin, _)| *begin);
+        assert!(stages.len() >= 3, "expected at least 3 primary stages");
+        (row, tx.begin, tx.end, stages)
+    };
+
+    let initial = Viewport {
+        start: 20.0,
+        end: 60.0,
+    };
+    app.doc.navigation.animation = volna_core::settings::Animation::Off;
+    let cells_width = app
+        .panels
+        .pipeline(panel)
+        .unwrap()
+        .last_layout()
+        .cells_width_f64();
+
+    // Hide the first stage: jumping to Start lands on the second stage's begin.
+    let first_stage = primary_stages[0].0.clone();
+    let second_stage_begin = primary_stages[1].1;
+    assert_ne!(second_stage_begin, tx_begin);
+    app.handle(Command::PipelineStageVisibility(
+        panel,
+        StageVisibilityCommand::Toggle(first_stage),
+    ));
+    app.panels
+        .pipeline_mut(panel)
+        .unwrap()
+        .nav
+        .viewport_state_mut(&mut app.doc)
+        .set(initial);
+    app.handle(Command::PanToTransactionBoundary {
+        panel,
+        row,
+        boundary: RowBoundary::Start,
+    });
+    let viewport = app.panels.pipeline(panel).unwrap().nav.viewport(&app.doc);
+    assert!((viewport.x_of_tick(second_stage_begin, cells_width) - 32.0).abs() < 1e-6);
+
+    // Hide the last stage: jumping to End lands on the penultimate stage's end.
+    let last_stage = primary_stages.last().unwrap().0.clone();
+    let penultimate_end = primary_stages[primary_stages.len() - 2].2;
+    assert_ne!(penultimate_end, tx_end);
+    app.handle(Command::PipelineStageVisibility(
+        panel,
+        StageVisibilityCommand::Toggle(last_stage),
+    ));
+    app.panels
+        .pipeline_mut(panel)
+        .unwrap()
+        .nav
+        .viewport_state_mut(&mut app.doc)
+        .set(initial);
+    app.handle(Command::PanToTransactionBoundary {
+        panel,
+        row,
+        boundary: RowBoundary::End,
+    });
+    let viewport = app.panels.pipeline(panel).unwrap().nav.viewport(&app.doc);
+    assert!(
+        (viewport.x_of_tick(penultimate_end, cells_width) - (cells_width - 32.0)).abs() < 1e-6
+    );
+
+    // Hide all remaining stages of this transaction: falls back to tx.begin / tx.end.
+    for (name, _, _) in &primary_stages[1..primary_stages.len() - 1] {
+        app.handle(Command::PipelineStageVisibility(
+            panel,
+            StageVisibilityCommand::Toggle(name.clone()),
+        ));
+    }
+    for (boundary, tick, x) in [
+        (RowBoundary::Start, tx_begin, 32.0),
+        (RowBoundary::End, tx_end, cells_width - 32.0),
+    ] {
+        app.panels
+            .pipeline_mut(panel)
+            .unwrap()
+            .nav
+            .viewport_state_mut(&mut app.doc)
+            .set(initial);
+        app.handle(Command::PanToTransactionBoundary {
+            panel,
+            row,
+            boundary,
+        });
+        let viewport = app.panels.pipeline(panel).unwrap().nav.viewport(&app.doc);
+        assert!((viewport.x_of_tick(tick, cells_width) - x).abs() < 1e-6);
+    }
+}
+
+#[test]
 fn a_click_selects_the_row_enter_shows_it_and_every_reader_follows() {
     let (mut app, session, pipeline) = with_pipeline("pipeline_showcase.vtr", "soc.cpu0.pipeline");
     let insn = track(session.as_ref(), "soc.cpu0.pipeline.instruction");
