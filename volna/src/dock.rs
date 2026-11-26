@@ -246,6 +246,7 @@ pub(crate) struct DockHost {
     hide_tab_bar: Rc<Cell<bool>>,
     reconciling: Rc<Cell<bool>>,
     revision: Option<u64>,
+    installed_revision: Option<u64>,
     installed: Option<DockLayout>,
     echo: Option<DockLayout>,
     zoom: f32,
@@ -309,7 +310,7 @@ impl DockHost {
             let mut candidate = from_area(&snapshot, host.zoom);
             // Clamping to a narrow window must not overwrite the preferred
             // size when an unrelated tab or focus event arrives.
-            if measured_width == host.right_width
+            if px_matches(measured_width, host.right_width)
                 && let Ok(layout) = &mut candidate
                 && let (Some(right), Some(previous)) = (
                     &mut layout.right,
@@ -320,7 +321,7 @@ impl DockHost {
             {
                 right.width = previous.width;
             }
-            if measured_height == host.bottom_height
+            if px_matches(measured_height, host.bottom_height)
                 && let Ok(layout) = &mut candidate
                 && let (Some(bottom), Some(previous)) = (
                     &mut layout.bottom,
@@ -332,49 +333,79 @@ impl DockHost {
                 bottom.height = previous.height;
             }
             match candidate {
-                Ok(layout) if host.echo.as_ref() == Some(&layout) => {}
+                Ok(layout)
+                    if host
+                        .echo
+                        .as_ref()
+                        .is_some_and(|echo| dock_layout_echo_matches(echo, &layout)) => {}
                 Ok(layout) => {
                     let revision = host.revision.unwrap_or(0);
                     host.right_width = measured_width;
                     host.bottom_height = measured_height;
-                    host.installed = Some(layout.clone());
                     host.echo = Some(layout.clone());
                     let owner = host.owner.clone();
                     let window_id = host.window;
                     let weak = cx.weak_entity();
                     cx.defer(move |cx| {
-                        let result = owner.update(cx, |ws, cx| {
-                            match ws.app.panels.layout().with_window(window_id, layout) {
-                                Ok(layout) => {
+                        let applied = owner.update(cx, |ws, cx| {
+                            let before = ws.app.panels.revision();
+                            match ws
+                                .app
+                                .panels
+                                .layout()
+                                .with_window(window_id, layout.clone())
+                            {
+                                Ok(proposed) => {
                                     ws.dispatch(
                                         Command::Panels(PanelsCommand::SetLayout {
-                                            layout,
+                                            layout: proposed,
                                             from_revision: revision,
                                         }),
                                         None,
                                         cx,
                                     );
-                                    true
+                                    let after = ws.app.panels.revision();
+                                    let current = ws.app.panels.layout().for_window(window_id);
+                                    if after != before
+                                        || (before == revision
+                                            && dock_layout_echo_matches(&current, &layout))
+                                    {
+                                        Some((after, current))
+                                    } else {
+                                        None
+                                    }
                                 }
                                 Err(error) => {
                                     log::warn!("invalid window layout: {error:#}");
-                                    false
+                                    None
                                 }
                             }
                         });
-                        if matches!(result, Ok(false)) {
-                            drop(weak.update(cx, |host, cx| {
-                                host.installed = None;
-                                if let Some(owner) = host.render_owner {
-                                    App::notify(cx, owner);
-                                }
-                            }));
+                        match applied {
+                            Ok(Some((after, local))) => {
+                                drop(weak.update(cx, |host, _| {
+                                    host.revision = Some(after);
+                                    host.installed_revision = Some(after);
+                                    host.installed = Some(local);
+                                }));
+                            }
+                            Ok(None) => {
+                                drop(weak.update(cx, |host, cx| {
+                                    host.installed_revision = None;
+                                    host.installed = None;
+                                    if let Some(owner) = host.render_owner {
+                                        App::notify(cx, owner);
+                                    }
+                                }));
+                            }
+                            Err(_) => {}
                         }
                     });
                 }
                 Err(e) => {
                     log::warn!("invalid dock layout: {e:#}");
                     // A rejected widget proposal must not remain on screen.
+                    host.installed_revision = None;
                     host.installed = None;
                     if let Some(owner) = host.render_owner {
                         App::notify(cx, owner);
@@ -392,6 +423,7 @@ impl DockHost {
             hide_tab_bar,
             reconciling,
             revision: None,
+            installed_revision: None,
             installed: None,
             echo: None,
             zoom: 1.0,
@@ -422,6 +454,7 @@ impl DockHost {
         if self.generation != app.doc.generation() {
             self.views
                 .retain(|_, view| matches!(view, PanelView::Settings(_)));
+            self.installed_revision = None;
             self.installed = None;
             self.echo = None;
             self.revision = None;
@@ -513,25 +546,27 @@ impl DockHost {
                 .min((available_h - center_min).max(96.0))
                 .max(96.0)
         });
-        if self.installed.as_ref() != Some(layout)
-            || self.zoom != zoom
-            || self.right_width != right_width
-            || self.bottom_height != bottom_height
-        {
+        let core_revision = app.panels.revision();
+        let revision_changed = self.installed_revision != Some(core_revision);
+        let zoom_changed = self.zoom.to_bits() != zoom.to_bits();
+        let dock_size_changed = !px_matches(self.right_width, right_width)
+            || !px_matches(self.bottom_height, bottom_height);
+        if revision_changed || zoom_changed || dock_size_changed {
             if (app.panels.len() > 1 || layout.right.is_some() || layout.bottom.is_some())
                 && (bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0))
             {
                 window.on_next_frame(move |_, cx| cx.notify(render_owner));
                 return;
             }
-            let same_trees = self.zoom == zoom
-                && self.installed.as_ref().is_some_and(|installed| {
-                    installed.center == layout.center
-                        && installed.right.as_ref().map(|dock| &dock.layout)
-                            == layout.right.as_ref().map(|dock| &dock.layout)
-                        && installed.bottom.as_ref().map(|dock| &dock.layout)
-                            == layout.bottom.as_ref().map(|dock| &dock.layout)
-                });
+            let same_trees = !zoom_changed
+                && (!revision_changed
+                    || self.installed.as_ref().is_some_and(|installed| {
+                        installed.center == layout.center
+                            && installed.right.as_ref().map(|dock| &dock.layout)
+                                == layout.right.as_ref().map(|dock| &dock.layout)
+                            && installed.bottom.as_ref().map(|dock| &dock.layout)
+                                == layout.bottom.as_ref().map(|dock| &dock.layout)
+                    }));
             if same_trees {
                 // Size and visibility belong to the dock, not its pane tree.
                 // Keep Kit's tab groups and split widgets alive for these edits.
@@ -650,12 +685,13 @@ impl DockHost {
             {
                 bottom.height = preferred.height;
             }
+            self.installed_revision = Some(core_revision);
             self.installed = Some(layout.clone());
         }
-        if self.revision != Some(app.panels.revision()) {
+        if self.revision != Some(core_revision) {
             self.area.update(cx, |_, cx| cx.notify());
         }
-        self.revision = Some(app.panels.revision());
+        self.revision = Some(core_revision);
     }
 
     pub fn focus(&self, panel: PanelId, cx: &App) -> Option<FocusHandle> {
@@ -688,6 +724,88 @@ impl DockHost {
             cx.notify(id);
         }
     }
+}
+
+fn px_matches(a: Option<f32>, b: Option<f32>) -> bool {
+    const PX_EPS: f32 = 0.5;
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => (a - b).abs() <= PX_EPS,
+        _ => false,
+    }
+}
+
+// Suppress spurious `DockEvent::LayoutChanged` echoes that GPUI emits after
+// `set_center`/`set_dock` lays out the same tree with sub-pixel rounding, so
+// they do not record bogus undo entries in `volna-core`.
+fn tree_echo_matches(a: &Layout, b: &Layout) -> bool {
+    const SHARE_EPS: f32 = 1e-4;
+    match (a, b) {
+        (
+            Layout::Tabs {
+                tabs: ta,
+                active: aa,
+            },
+            Layout::Tabs {
+                tabs: tb,
+                active: ab,
+            },
+        ) => ta == tb && aa == ab,
+        (
+            Layout::Split {
+                split: sa,
+                sizes: sza,
+                children: ca,
+            },
+            Layout::Split {
+                split: sb,
+                sizes: szb,
+                children: cb,
+            },
+        ) => {
+            sa == sb
+                && sza.len() == szb.len()
+                && ca.len() == cb.len()
+                && sza.iter().zip(szb).all(|(x, y)| (x - y).abs() <= SHARE_EPS)
+                && ca.iter().zip(cb).all(|(x, y)| tree_echo_matches(x, y))
+        }
+        _ => false,
+    }
+}
+
+fn opt_tree_echo_matches(a: Option<&Layout>, b: Option<&Layout>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => tree_echo_matches(a, b),
+        _ => false,
+    }
+}
+
+fn dock_layout_echo_matches(a: &DockLayout, b: &DockLayout) -> bool {
+    opt_tree_echo_matches(a.center.as_ref(), b.center.as_ref())
+        && match (&a.right, &b.right) {
+            (None, None) => true,
+            (Some(ra), Some(rb)) => {
+                ra.open == rb.open
+                    && px_matches(Some(ra.width), Some(rb.width))
+                    && tree_echo_matches(&ra.layout, &rb.layout)
+            }
+            _ => false,
+        }
+        && match (&a.bottom, &b.bottom) {
+            (None, None) => true,
+            (Some(ba), Some(bb)) => {
+                ba.open == bb.open
+                    && px_matches(Some(ba.height), Some(bb.height))
+                    && tree_echo_matches(&ba.layout, &bb.layout)
+            }
+            _ => false,
+        }
+        && a.windows.len() == b.windows.len()
+        && a.windows
+            .iter()
+            .zip(&b.windows)
+            .all(|((ka, va), (kb, vb))| ka == kb && tree_echo_matches(va, vb))
 }
 
 fn from_area(state: &base::DockAreaState, zoom: f32) -> Result<DockLayout> {
@@ -1111,7 +1229,7 @@ fn from_dock(state: &base::PanelState) -> Result<Layout> {
                 children.len() >= 2 && sizes.len() == children.len(),
                 "invalid split"
             );
-            let total: f32 = sizes.iter().map(|p| f32::from(*p)).sum();
+            let total: f64 = sizes.iter().map(|p| f64::from(f32::from(*p))).sum();
             ensure!(total.is_finite() && total > 0.0, "invalid sizes");
             Ok(Layout::Split {
                 split: if *axis == 0 {
@@ -1119,7 +1237,10 @@ fn from_dock(state: &base::PanelState) -> Result<Layout> {
                 } else {
                     Axis::Vertical
                 },
-                sizes: sizes.iter().map(|p| f32::from(*p) / total).collect(),
+                sizes: sizes
+                    .iter()
+                    .map(|p| (f64::from(f32::from(*p)) / total) as f32)
+                    .collect(),
                 children,
             })
         }
@@ -1994,12 +2115,10 @@ impl base::DockAreaRenderer for DockRenderer {
         Rc::new(TabRenderer {
             skin: self.skin.tab_group_renderer(),
             hide_tab_bar: self.hide_tab_bar.clone(),
-            tabs: crate::dock_tabs::Tabs::default(),
         })
     }
 }
 struct TabRenderer {
-    tabs: crate::dock_tabs::Tabs,
     skin: Rc<dyn base::TabGroupRenderer>,
     hide_tab_bar: Rc<Cell<bool>>,
 }
@@ -2038,7 +2157,7 @@ impl base::TabGroupRenderer for TabRenderer {
         if self.hide_tab_bar.get() {
             Empty.into_any_element()
         } else if crate::theme::theme(cx).compact_chrome {
-            self.tabs.render(group, w, cx)
+            crate::dock_tabs::render(group, w, cx)
         } else {
             self.skin.render_tab_bar(group, w, cx)
         }

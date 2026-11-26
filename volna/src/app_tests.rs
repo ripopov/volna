@@ -9198,3 +9198,127 @@ fn trace_chip_click_opens_bounded_details_panel_and_avoids_rename_overlap(cx: &m
     })
     .unwrap();
 }
+
+// Scenario: a user arranges three panels in a nested 2/3 : 1/3 split and
+// `DockArea` emits `LayoutChanged` (as after drag-and-drop).
+// Requirement: float-normalization differences between `DockArea` and core
+// must not trigger a rebuild loop; tab headers stay unstacked and panel
+// toolbar buttons remain clickable.
+#[gpui_kit::test]
+fn nested_split_with_thirds_stays_stable_and_toolbar_buttons_remain_clickable(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{Modifiers, VisualTestContext, base::dock as base, test::TestWindowExt};
+    use volna_core::panels::{Axis, DockLayout, Layout, PanelsCommand};
+
+    init(cx);
+    let root = RootWindow::new(cx);
+    let mut vcx = VisualTestContext::from_window(root.root.into(), cx);
+
+    let (p1, p2, p3) = root
+        .update(&mut vcx, |ws, window, cx| {
+            ws.set_session(Arc::new(ProceduralTrace::new(100)), cx);
+            ws.dispatch(Command::AddVars(a_all([0])), Some(window), cx);
+            let p1 = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::Panels(PanelsCommand::NewTab { group_of: p1 }),
+                Some(window),
+                cx,
+            );
+            let p2 = ws.app.panels.focused_id();
+            ws.dispatch(
+                Command::Panels(PanelsCommand::NewTab { group_of: p1 }),
+                Some(window),
+                cx,
+            );
+            let p3 = ws.app.panels.focused_id();
+            let from_revision = ws.app.panels.revision();
+            let layout = DockLayout {
+                center: Some(Layout::Split {
+                    split: Axis::Horizontal,
+                    sizes: vec![2.0 / 3.0, 1.0 / 3.0],
+                    children: vec![
+                        Layout::single(p1),
+                        Layout::Split {
+                            split: Axis::Vertical,
+                            sizes: vec![0.5, 0.5],
+                            children: vec![Layout::single(p2), Layout::single(p3)],
+                        },
+                    ],
+                }),
+                right: None,
+                bottom: None,
+                windows: Default::default(),
+            };
+            ws.dispatch(
+                Command::Panels(PanelsCommand::SetLayout {
+                    layout,
+                    from_revision,
+                }),
+                Some(window),
+                cx,
+            );
+            (p1, p2, p3)
+        })
+        .unwrap();
+    vcx.run_until_parked();
+    for _ in 0..3 {
+        vcx.update(TestWindowExt::render_frame);
+        vcx.run_until_parked();
+    }
+
+    // Simulate `DockArea` emitting `LayoutChanged` with its measured pixel sizes.
+    root.update(&mut vcx, |ws, _, cx| {
+        let area = ws.dock.as_ref().unwrap().read(cx).area.clone();
+        area.update(cx, |_, cx| cx.emit(base::DockEvent::LayoutChanged));
+    })
+    .unwrap();
+    vcx.run_until_parked();
+    for _ in 0..5 {
+        vcx.update(TestWindowExt::render_frame);
+        vcx.run_until_parked();
+    }
+
+    let rev_after_settle = root
+        .update(&mut vcx, |ws, _, _| {
+            assert_eq!(ws.app.panels.len(), 3);
+            assert!(ws.app.panels.layout().placement(p1).is_some());
+            assert!(ws.app.panels.layout().placement(p2).is_some());
+            assert!(ws.app.panels.layout().placement(p3).is_some());
+            ws.app.panels.revision()
+        })
+        .unwrap();
+
+    // Subsequent frames must not churn revisions or rebuild the dock.
+    for _ in 0..5 {
+        vcx.update(TestWindowExt::render_frame);
+        vcx.run_until_parked();
+    }
+    let rev_later = root
+        .update(&mut vcx, |ws, _, _| ws.app.panels.revision())
+        .unwrap();
+    assert_eq!(
+        rev_later, rev_after_settle,
+        "dock layout should stay stable without rebuild churn"
+    );
+
+    // Click a `+` (new-tab) toolbar button on a nested panel and verify it creates a new tab.
+    let new_tab = vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("dock-toolbar").is_none(),
+            "wide nested panels should not be stuck in the stacked toolbar layout"
+        );
+        window.within("dock-header-6").find("new-tab").bounds()
+    });
+    vcx.simulate_click(new_tab.center(), Modifiers::default());
+    vcx.run_until_parked();
+    root.update(&mut vcx, |ws, _, _| {
+        assert_eq!(
+            ws.app.panels.len(),
+            4,
+            "clicking the panel + toolbar button should open a new tab"
+        );
+    })
+    .unwrap();
+}

@@ -6811,8 +6811,8 @@ fn waveform_transaction_context_menu_opens_selected_transaction_in_table_and_pip
         let layout = model.last_layout();
         let (top, _) = layout.entry_span(0).unwrap();
         let vp = model.viewport(&app.doc);
-        let mid_t = (tx.begin + tx.end) / 2;
-        let x = layout.waves.left() + vp.x_of(mid_t as f64, layout.waves.width() as f64) as f32;
+        let mid_t = u64::midpoint(tx.begin, tx.end);
+        let x = layout.waves.left() + vp.x_of(mid_t as f64, f64::from(layout.waves.width())) as f32;
         (tx.id, x, top + 6.0)
     };
     let click = point(tx_mid_x, row_mid_y);
@@ -6916,9 +6916,14 @@ fn pipeline_label_context_menu_opens_transaction_in_waveform_and_table() {
     // Right-click on the first row's label in the pipeline view.
     let (target_id, label_click) = {
         let model = app.panels.pipeline(pipeline).unwrap();
-        let (_, id) = model.row_transaction(&app.doc, 0).expect("row 0 transaction");
+        let (_, id) = model
+            .row_transaction(&app.doc, 0)
+            .expect("row 0 transaction");
         let layout = model.last_layout();
-        (id, point(layout.labels.left() + 20.0, layout.labels.top() + 10.0))
+        (
+            id,
+            point(layout.labels.left() + 20.0, layout.labels.top() + 10.0),
+        )
     };
 
     app.handle(Command::Pointer(
@@ -6929,10 +6934,7 @@ fn pipeline_label_context_menu_opens_transaction_in_waveform_and_table() {
             modifiers: Modifiers::default(),
         },
     ));
-    let menu = app
-        .menu()
-        .expect("pipeline label menu should open")
-        .clone();
+    let menu = app.menu().expect("pipeline label menu should open").clone();
     assert_eq!(menu.kind, WaveMenuKind::PipelineLabel);
     let open_waves = menu
         .items()
