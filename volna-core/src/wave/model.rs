@@ -813,6 +813,20 @@ enum EdgeSource<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PanClick {
+    Measure(Point),
+    TransactionMenu { panel: PanelId, position: Point },
+}
+
+impl PanClick {
+    fn position(self) -> Point {
+        match self {
+            Self::Measure(p) | Self::TransactionMenu { position: p, .. } => p,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
     Cursor,
     ZoomRange {
@@ -822,7 +836,7 @@ pub enum Drag {
     Marker(crate::marker::MarkerDrag),
     Pan {
         last_x: f32,
-        click: Option<Point>,
+        click: Option<PanClick>,
     },
     NamesSplit,
     ScopesSplit,
@@ -889,6 +903,11 @@ pub enum MenuAction {
     },
     PipelineOrder(crate::pipeline::RowOrderCommand),
     PipelineSource(crate::pipeline::PipelineSourceCommand),
+    OpenTransaction {
+        track: Traced<TrackRef>,
+        id: volna_trace::data::transactions::TransactionRef,
+        target: TransactionTarget,
+    },
     Tint(Option<Tint>),
     Stack(bool),
     Peak(bool),
@@ -898,6 +917,13 @@ pub enum MenuAction {
     OverlayHidden(bool),
     IsolateOverlay,
     ShowAllOverlay,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransactionTarget {
+    Waves,
+    Table,
+    Pipeline,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -967,6 +993,7 @@ impl MenuItem {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WaveMenuKind {
     Signal,
+    Transaction,
     Ruler,
     Lane,
     PipelineLabel,
@@ -1762,7 +1789,7 @@ impl WaveModel {
         self.revision += 1;
     }
 
-    fn entry_under(&self, layout: &WaveLayout, y: f32) -> Option<usize> {
+    pub(super) fn entry_under(&self, layout: &WaveLayout, y: f32) -> Option<usize> {
         layout.entry_at(y).filter(|&row| row < self.items.len())
     }
 
@@ -2854,6 +2881,7 @@ impl WaveModel {
                 | MenuAction::EditFormula
                 | MenuAction::OpenTable
                 | MenuAction::OpenPipeline(_)
+                | MenuAction::OpenTransaction { .. }
                 | MenuAction::CopyValues
                 | MenuAction::CopyPaths
                 | MenuAction::CopySignals
@@ -3683,7 +3711,7 @@ impl WaveModel {
         true
     }
 
-    fn lane_pick(
+    pub(super) fn lane_pick(
         &self,
         doc: &Document,
         row: usize,
@@ -3851,7 +3879,12 @@ impl WaveModel {
                 }) = self.drag
                 {
                     self.drag = None;
-                    self.measure_from(doc, click);
+                    match click {
+                        PanClick::Measure(p) => self.measure_from(doc, p),
+                        PanClick::TransactionMenu { panel, position } => {
+                            self.open_transaction_menu(doc, panel, position);
+                        }
+                    }
                 } else if let Some(Drag::Rows {
                     gap,
                     depth,
@@ -4039,7 +4072,7 @@ impl WaveModel {
         if in_waves_x && button == MouseButton::Middle {
             self.drag = Some(Drag::Pan {
                 last_x: p.x,
-                click: Some(p),
+                click: Some(PanClick::Measure(p)),
             });
             return;
         }
@@ -4163,9 +4196,12 @@ impl WaveModel {
                     }
                 }
                 MouseButton::Middle | MouseButton::Right => {
+                    let click = (button == MouseButton::Right
+                        && row.is_some_and(|r| self.items[r].lane().is_some()))
+                    .then_some(PanClick::TransactionMenu { panel, position: p });
                     self.drag = Some(Drag::Pan {
                         last_x: p.x,
-                        click: None,
+                        click,
                     });
                 }
             }
@@ -4293,10 +4329,11 @@ impl WaveModel {
                 true
             }
             Some(Drag::Pan { last_x, click }) => {
-                if let Some(c) = click
-                    && (p.x - c.x).hypot(p.y - c.y) <= CLICK_SLOP_PX * layout.zoom
-                {
-                    return false;
+                if let Some(c) = click {
+                    let origin = c.position();
+                    if (p.x - origin.x).hypot(p.y - origin.y) <= CLICK_SLOP_PX * layout.zoom {
+                        return false;
+                    }
                 }
                 let dx = last_x - p.x;
                 self.drag = Some(Drag::Pan {

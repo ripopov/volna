@@ -3,13 +3,25 @@
 use super::analog::{AnalogDraw, AnalogRange};
 use super::format::shared;
 use super::model::{
-    GroupStyle, MenuAction, MenuEntry, MenuItem, WaveMenu, WaveMenuKind, WaveModel,
+    GroupStyle, MenuAction, MenuEntry, MenuItem, TransactionTarget, WaveMenu, WaveMenuKind,
+    WaveModel,
 };
-use crate::document::Document;
+use crate::document::{Document, TxSelection};
 use crate::geometry::{Modifiers, Point};
+use crate::panels::PanelId;
+use crate::trace::Traced;
+use volna_trace::data::transactions::TrackRef;
 
 fn command(action: MenuAction, label: &str) -> MenuEntry {
     MenuEntry::Item(MenuItem::plain(action, label))
+}
+
+fn can_open_pipeline(doc: &Document, track: Traced<TrackRef>) -> bool {
+    !doc.clocks.is_clock_track(track)
+        && doc.session(track.trace).is_some_and(|session| {
+            session.capabilities().transactions
+                && session.tracks().iter().any(|t| t.id == track.item)
+        })
 }
 
 impl WaveModel {
@@ -22,6 +34,54 @@ impl WaveModel {
                         || (s.source.signal().is_some() && s.numeric_kind().is_some())
                 })
             })
+    }
+
+    pub fn open_transaction_menu(
+        &mut self,
+        doc: &mut Document,
+        panel: PanelId,
+        position: Point,
+    ) {
+        let layout = self.last_layout().clone();
+        let Some(row) = self.entry_under(&layout, position.y) else {
+            return;
+        };
+        let Some((track, id, range)) = self.lane_pick(doc, row, position) else {
+            return;
+        };
+        self.nav.select_range(
+            doc,
+            Some(TxSelection {
+                track,
+                id,
+                origin: panel,
+            }),
+            range,
+        );
+        let mut entries = vec![command(
+            MenuAction::OpenTransaction {
+                track,
+                id,
+                target: TransactionTarget::Table,
+            },
+            "Open in table",
+        )];
+        if can_open_pipeline(doc, track) {
+            entries.push(command(
+                MenuAction::OpenTransaction {
+                    track,
+                    id,
+                    target: TransactionTarget::Pipeline,
+                },
+                "Open in Pipeline view",
+            ));
+        }
+        self.menu = Some(WaveMenu {
+            kind: WaveMenuKind::Transaction,
+            row,
+            position,
+            entries,
+        });
     }
 
     pub fn open_signal_menu(&mut self, doc: &Document, row: usize, position: Point) {
@@ -210,13 +270,7 @@ impl WaveModel {
             },
         ));
         if let Some(lane) = self.items()[row].lane() {
-            if let Some(track) = lane.track().filter(|&track| {
-                !doc.clocks.is_clock_track(track)
-                    && doc.session(track.trace).is_some_and(|session| {
-                        session.capabilities().transactions
-                            && session.tracks().iter().any(|t| t.id == track.item)
-                    })
-            }) {
+            if let Some(track) = lane.track().filter(|&track| can_open_pipeline(doc, track)) {
                 entries.push(command(
                     MenuAction::OpenPipeline(track),
                     "Open in Pipeline view",

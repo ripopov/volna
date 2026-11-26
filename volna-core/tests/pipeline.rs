@@ -6776,3 +6776,241 @@ fn zoomed_out_overview_renders_dimmed_ghost_and_bright_visible_stages() {
         );
     }
 }
+
+#[test]
+fn waveform_transaction_context_menu_opens_selected_transaction_in_table_and_pipeline() {
+    use volna_core::wave::model::{MenuAction, TransactionTarget, WaveMenuKind};
+
+    let session = fixture(10);
+    let mut app = App::new();
+    app.set_session(session.clone());
+    let track = a(generator_track(session.as_ref(), &["cpu", "thread0"]));
+    let member = a(Member::Generator(
+        session
+            .hierarchy()
+            .scope(scope(session.as_ref(), &["cpu", "thread0"]))
+            .generators
+            .iter()
+            .next()
+            .unwrap(),
+    ));
+    app.handle(Command::AddToWaves(vec![member]));
+    let waves = app.panels.focused_id();
+    complete_pending(&mut app);
+
+    let bounds = Rect::new(point(0.0, 0.0), volna_core::geometry::size(900.0, 320.0));
+    let theme = Theme::one_dark();
+    app.layout_panel(waves, bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
+
+    // Pick a point inside the first transaction on the lane.
+    let (target_id, tx_mid_x, row_mid_y) = {
+        let generator = app.doc.resident_generator(track).unwrap();
+        let tx = generator.transactions().first().expect("first transaction");
+        let model = app.panels.waves(waves).unwrap();
+        let layout = model.last_layout();
+        let (top, _) = layout.entry_span(0).unwrap();
+        let vp = model.viewport(&app.doc);
+        let mid_t = (tx.begin + tx.end) / 2;
+        let x = layout.waves.left() + vp.x_of(mid_t as f64, layout.waves.width() as f64) as f32;
+        (tx.id, x, top + 6.0)
+    };
+    let click = point(tx_mid_x, row_mid_y);
+
+    // Unmoved right-click on the transaction opens WaveMenuKind::Transaction.
+    app.handle(Command::Pointer(
+        waves,
+        PointerEvent::Down {
+            position: click,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    app.handle(Command::Pointer(waves, PointerEvent::Up));
+
+    let menu = app
+        .panels
+        .waves(waves)
+        .unwrap()
+        .menu
+        .as_ref()
+        .expect("transaction context menu should open")
+        .clone();
+    assert_eq!(menu.kind, WaveMenuKind::Transaction);
+    let open_table = menu
+        .items()
+        .find(|item| item.label == "Open in table")
+        .expect("Open in table item")
+        .action
+        .clone();
+    let open_pipeline = menu
+        .items()
+        .find(|item| item.label == "Open in Pipeline view")
+        .expect("Open in Pipeline view item")
+        .action
+        .clone();
+    assert_eq!(
+        open_table,
+        MenuAction::OpenTransaction {
+            track,
+            id: target_id,
+            target: TransactionTarget::Table,
+        }
+    );
+    assert_eq!(
+        open_pipeline,
+        MenuAction::OpenTransaction {
+            track,
+            id: target_id,
+            target: TransactionTarget::Pipeline,
+        }
+    );
+
+    // Selecting "Open in table" opens/focuses the table with the clicked transaction selected.
+    app.handle(Command::MenuSelect(waves, open_table));
+    complete_pending(&mut app);
+    let table_panel = app.panels.focused_id();
+    assert_eq!(app.panels.table_for_track(track), Some(table_panel));
+    assert_eq!(
+        app.doc.selection().map(|s| (s.track, s.id)),
+        Some((track, target_id))
+    );
+
+    // Right-click again and select "Open in Pipeline view".
+    app.handle(Command::Pointer(
+        waves,
+        PointerEvent::Down {
+            position: click,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    app.handle(Command::Pointer(waves, PointerEvent::Up));
+    app.handle(Command::MenuSelect(waves, open_pipeline));
+    complete_pending(&mut app);
+    let pipeline_panel = app.panels.focused_id();
+    assert_eq!(app.panels.pipeline_for_track(track), Some(pipeline_panel));
+    assert_eq!(
+        app.doc.selection().map(|s| (s.track, s.id)),
+        Some((track, target_id))
+    );
+}
+
+#[test]
+fn pipeline_label_context_menu_opens_transaction_in_waveform_and_table() {
+    use volna_core::wave::model::{MenuAction, TransactionTarget, WaveMenuKind};
+
+    let session = fixture(10);
+    let mut app = App::new();
+    app.set_session(session.clone());
+    let track = a(generator_track(session.as_ref(), &["cpu", "thread0"]));
+    app.handle(Command::OpenPipeline { track });
+    let pipeline = app.panels.focused_id();
+    complete_pending(&mut app);
+
+    let bounds = Rect::new(point(0.0, 0.0), volna_core::geometry::size(900.0, 320.0));
+    let theme = Theme::one_dark();
+    app.layout_panel(pipeline, bounds, &theme, 1.0, &mut MonoMeasure)
+        .unwrap();
+
+    // Right-click on the first row's label in the pipeline view.
+    let (target_id, label_click) = {
+        let model = app.panels.pipeline(pipeline).unwrap();
+        let (_, id) = model.row_transaction(&app.doc, 0).expect("row 0 transaction");
+        let layout = model.last_layout();
+        (id, point(layout.labels.left() + 20.0, layout.labels.top() + 10.0))
+    };
+
+    app.handle(Command::Pointer(
+        pipeline,
+        PointerEvent::Down {
+            position: label_click,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    let menu = app
+        .menu()
+        .expect("pipeline label menu should open")
+        .clone();
+    assert_eq!(menu.kind, WaveMenuKind::PipelineLabel);
+    let open_waves = menu
+        .items()
+        .find(|item| item.label == "Open in waveform")
+        .expect("Open in waveform item")
+        .action
+        .clone();
+    let open_table = menu
+        .items()
+        .find(|item| item.label == "Open in table")
+        .expect("Open in table item")
+        .action
+        .clone();
+    assert_eq!(
+        open_waves,
+        MenuAction::OpenTransaction {
+            track,
+            id: target_id,
+            target: TransactionTarget::Waves,
+        }
+    );
+    assert_eq!(
+        open_table,
+        MenuAction::OpenTransaction {
+            track,
+            id: target_id,
+            target: TransactionTarget::Table,
+        }
+    );
+
+    // Track is not yet in any waveform panel: selecting "Open in waveform" loads it and focuses it.
+    assert_eq!(app.panels.waves_for_track(track), None);
+    app.handle(Command::MenuSelect(pipeline, open_waves.clone()));
+    complete_pending(&mut app);
+    let waves_panel = app.panels.focused_id();
+    assert_eq!(app.panels.waves_for_track(track), Some(waves_panel));
+    assert_eq!(
+        app.doc.selection().map(|s| (s.track, s.id)),
+        Some((track, target_id))
+    );
+
+    // Opening in waveform again reuses the existing waveform panel without duplicating the track.
+    app.handle(Command::Pointer(
+        pipeline,
+        PointerEvent::Down {
+            position: label_click,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    app.handle(Command::MenuSelect(pipeline, open_waves));
+    assert_eq!(app.panels.focused_id(), waves_panel);
+    assert_eq!(
+        app.panels
+            .waves(waves_panel)
+            .unwrap()
+            .items()
+            .iter()
+            .filter(|e| e.row.lane_track() == Some(track))
+            .count(),
+        1
+    );
+
+    // Selecting "Open in table" opens/focuses the table with the transaction selected.
+    app.handle(Command::Pointer(
+        pipeline,
+        PointerEvent::Down {
+            position: label_click,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+    ));
+    app.handle(Command::MenuSelect(pipeline, open_table));
+    complete_pending(&mut app);
+    let table_panel = app.panels.focused_id();
+    assert_eq!(app.panels.table_for_track(track), Some(table_panel));
+    assert_eq!(
+        app.doc.selection().map(|s| (s.track, s.id)),
+        Some((track, target_id))
+    );
+}

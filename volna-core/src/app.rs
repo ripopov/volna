@@ -1661,6 +1661,44 @@ impl App {
                     }
                 }
             }
+            Command::MenuSelect(
+                panel,
+                action @ MenuAction::OpenTransaction { track, id, target },
+            ) => {
+                let from_transient = self.transient_menu.as_ref().is_some_and(|(owner, menu)| {
+                    *owner == panel
+                        && menu.kind == WaveMenuKind::PipelineLabel
+                        && menu.items().any(|item| item.action == action)
+                });
+                let from_waves = !from_transient
+                    && self
+                        .panels
+                        .waves(panel)
+                        .and_then(|waves| waves.menu.as_ref())
+                        .is_some_and(|menu| {
+                            menu.kind == WaveMenuKind::Transaction
+                                && menu.items().any(|item| item.action == action)
+                        });
+                if !from_transient && !from_waves {
+                    return;
+                }
+                if from_transient {
+                    self.transient_menu = None;
+                } else if let Some(waves) = self.panels.waves_mut(panel) {
+                    waves.menu_dismiss();
+                }
+                match target {
+                    crate::wave::model::TransactionTarget::Waves => {
+                        self.reveal_transaction_in_waves(track, id, None, now);
+                    }
+                    crate::wave::model::TransactionTarget::Table => {
+                        self.reveal_transaction_in_table(track, id, None, panel, Some(panel));
+                    }
+                    crate::wave::model::TransactionTarget::Pipeline => {
+                        self.reveal_transaction_in_pipeline(track, id, now);
+                    }
+                }
+            }
             Command::MenuSelect(panel, action) => {
                 if let MenuAction::OpenPipeline(track) = action {
                     let valid = self
@@ -2193,19 +2231,29 @@ impl App {
             .or_else(|| self.panels.waves_for_track(track))
     }
 
-    fn reveal_wave_transaction(&mut self, panel: PanelId, now: Instant) {
-        let Some(shown) = self
-            .panels
-            .transaction(panel)
-            .and_then(|model| model.shown())
-            .cloned()
-        else {
-            return;
-        };
-        let Some(track) = shown.track.track() else {
-            return;
-        };
-        let target = if let Some(existing) = self.transaction_wave_panel(panel) {
+    fn track_source(&self, track: Traced<TrackRef>) -> Option<crate::pipeline::TrackSource> {
+        let declaration = self
+            .doc
+            .session(track.trace)?
+            .tracks()
+            .iter()
+            .find(|t| t.id == track.item)?;
+        Some(crate::pipeline::TrackSource::Resolved {
+            track,
+            path: declaration.path.clone(),
+        })
+    }
+
+    fn reveal_transaction_in_waves(
+        &mut self,
+        track: Traced<TrackRef>,
+        id: TransactionRef,
+        preferred_waves: Option<PanelId>,
+        now: Instant,
+    ) {
+        let target = if let Some(existing) =
+            preferred_waves.or_else(|| self.panels.waves_for_track(track))
+        {
             existing
         } else {
             let member = self.doc.hierarchy(track.trace).and_then(|h| {
@@ -2225,17 +2273,97 @@ impl App {
         };
         self.panel_command(PanelsCommand::Focus(target));
         let lifetime = self.doc.resident_generator(track).and_then(|generator| {
-            let tx = generator.transaction(shown.id)?;
+            let tx = generator.transaction(id)?;
             Some((tx.begin, tx.end))
         });
         let Self { panels, doc, .. } = self;
         if let Some(waves) = panels.waves_mut(target) {
-            waves.reveal_transaction(doc, track, shown.id);
+            waves.reveal_transaction(doc, track, id);
             if let Some((begin, end)) = lifetime {
                 waves.nav.reveal_record(doc, begin, end, now);
             }
         }
         self.changed();
+    }
+
+    fn reveal_transaction_in_pipeline(
+        &mut self,
+        track: Traced<TrackRef>,
+        id: TransactionRef,
+        now: Instant,
+    ) {
+        let target = if let Some(existing) = self.panels.pipeline_showing(&self.doc, track, id) {
+            existing
+        } else {
+            self.open_pipeline(track);
+            let Some(created) = self
+                .panels
+                .pipeline_showing(&self.doc, track, id)
+                .or_else(|| self.panels.pipeline_for_track(track))
+            else {
+                return;
+            };
+            created
+        };
+        self.panel_command(PanelsCommand::Focus(target));
+        let Self { panels, doc, .. } = self;
+        if let Some(pipeline) = panels.pipeline_mut(target) {
+            pipeline.reveal_record(doc, track, id, now);
+        }
+        self.changed();
+    }
+
+    fn reveal_transaction_in_table(
+        &mut self,
+        track: Traced<TrackRef>,
+        id: TransactionRef,
+        track_source: Option<crate::pipeline::TrackSource>,
+        source_panel: PanelId,
+        origin: Option<PanelId>,
+    ) {
+        let target = if let Some(existing) = self.panels.table_for_track(track) {
+            self.panel_command(PanelsCommand::Focus(existing));
+            existing
+        } else {
+            let Some(track_source) = track_source.or_else(|| self.track_source(track)) else {
+                return;
+            };
+            let source = crate::table::TableSource::Generator(track_source);
+            let beside = self.panels.center_target(source_panel).unwrap_or(source_panel);
+            self.open_table_source(source, beside);
+            let Some(created) = self.panels.table_for_track(track) else {
+                return;
+            };
+            created
+        };
+        let selection = Some(crate::document::TxSelection {
+            track,
+            id,
+            origin: origin.unwrap_or(target),
+        });
+        let Self { panels, doc, .. } = self;
+        if let Some(table) = panels.get_mut(target).and_then(|p| p.kind.table_mut()) {
+            table.nav.select(doc, selection);
+            table.follow_selection(doc);
+            table.reveal_selection(doc);
+        }
+        self.changed();
+    }
+
+    fn reveal_wave_transaction(&mut self, panel: PanelId, now: Instant) {
+        let Some(shown) = self
+            .panels
+            .transaction(panel)
+            .and_then(|model| model.shown())
+            .cloned()
+        else {
+            return;
+        };
+        let Some(track) = shown.track.track() else {
+            return;
+        };
+        let preferred = self.transaction_wave_panel(panel);
+        self.reveal_transaction_in_waves(track, shown.id, preferred, now);
     }
 
     fn reveal_transaction(&mut self, panel: PanelId, now: Instant) {
@@ -2249,26 +2377,7 @@ impl App {
         let Some(track) = shown.track.track() else {
             return;
         };
-        let target =
-            if let Some(existing) = self.panels.pipeline_showing(&self.doc, track, shown.id) {
-                existing
-            } else {
-                self.open_pipeline(track);
-                let Some(created) = self
-                    .panels
-                    .pipeline_showing(&self.doc, track, shown.id)
-                    .or_else(|| self.panels.pipeline_for_track(track))
-                else {
-                    return;
-                };
-                created
-            };
-        self.panel_command(PanelsCommand::Focus(target));
-        let Self { panels, doc, .. } = self;
-        if let Some(pipeline) = panels.pipeline_mut(target) {
-            pipeline.reveal_record(doc, track, shown.id, now);
-        }
-        self.changed();
+        self.reveal_transaction_in_pipeline(track, shown.id, now);
     }
 
     fn reveal_table_transaction(&mut self, panel: PanelId) {
@@ -2282,35 +2391,11 @@ impl App {
         let Some(track) = shown.track.track() else {
             return;
         };
-        let target = if let Some(existing) = self.panels.table_for_track(track) {
-            self.panel_command(PanelsCommand::Focus(existing));
-            existing
-        } else {
-            let source = crate::table::TableSource::Generator(shown.track.clone());
-            let beside = self.panels.center_target(panel).unwrap_or(panel);
-            self.open_table_source(source, beside);
-            let Some(created) = self.panels.table_for_track(track) else {
-                return;
-            };
-            created
-        };
         let origin = self
             .panels
             .transaction(panel)
-            .and_then(TransactionModel::external_origin)
-            .unwrap_or(target);
-        let selection = Some(crate::document::TxSelection {
-            track,
-            id: shown.id,
-            origin,
-        });
-        let Self { panels, doc, .. } = self;
-        if let Some(table) = panels.get_mut(target).and_then(|p| p.kind.table_mut()) {
-            table.nav.select(doc, selection);
-            table.follow_selection(doc);
-            table.reveal_selection(doc);
-        }
-        self.changed();
+            .and_then(TransactionModel::external_origin);
+        self.reveal_transaction_in_table(track, shown.id, Some(shown.track), panel, origin);
     }
 
     fn resident_histories(&self) -> crate::wave::model::Resident {
@@ -3952,8 +4037,43 @@ impl App {
         else {
             return false;
         };
+        let tx = self
+            .panels
+            .pipeline(panel)
+            .and_then(|pipeline| pipeline.row_transaction(&self.doc, row));
         if let Some(pipeline) = self.panels.pipeline_mut(panel) {
             pipeline.select_row(&mut self.doc, panel, row);
+        }
+        let mut entries: Vec<MenuEntry> = [
+            (RowBoundary::Start, "Go to start", "double-click"),
+            (RowBoundary::End, "Go to end", "Shift + double-click"),
+        ]
+        .into_iter()
+        .map(|(boundary, label, badge)| {
+            MenuEntry::Item(MenuItem {
+                badge: Some(badge.into()),
+                ..MenuItem::plain(MenuAction::PipelineBoundary { row, boundary }, label)
+            })
+        })
+        .collect();
+        if let Some((track, id)) = tx {
+            entries.push(MenuEntry::Separator);
+            entries.push(MenuEntry::Item(MenuItem::plain(
+                MenuAction::OpenTransaction {
+                    track,
+                    id,
+                    target: crate::wave::model::TransactionTarget::Waves,
+                },
+                "Open in waveform",
+            )));
+            entries.push(MenuEntry::Item(MenuItem::plain(
+                MenuAction::OpenTransaction {
+                    track,
+                    id,
+                    target: crate::wave::model::TransactionTarget::Table,
+                },
+                "Open in table",
+            )));
         }
         self.transient_menus += 1;
         self.transient_menu = Some((
@@ -3962,18 +4082,7 @@ impl App {
                 kind: WaveMenuKind::PipelineLabel,
                 row: self.transient_menus,
                 position,
-                entries: [
-                    (RowBoundary::Start, "Go to start", "double-click"),
-                    (RowBoundary::End, "Go to end", "Shift + double-click"),
-                ]
-                .into_iter()
-                .map(|(boundary, label, badge)| {
-                    MenuEntry::Item(MenuItem {
-                        badge: Some(badge.into()),
-                        ..MenuItem::plain(MenuAction::PipelineBoundary { row, boundary }, label)
-                    })
-                })
-                .collect(),
+                entries,
             },
         ));
         true

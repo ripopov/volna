@@ -1592,22 +1592,31 @@ impl PipelineModel {
         }
     }
 
+    pub fn row_transaction(
+        &self,
+        doc: &Document,
+        row: usize,
+    ) -> Option<(Traced<TrackRef>, volna_trace::data::transactions::TransactionRef)> {
+        let Rows::Ready(set) = self.rows(doc) else {
+            return None;
+        };
+        let (_, trace, tx) = set.get_with_trace(row)?;
+        Some((Traced::new(trace, tx.generator), tx.id))
+    }
+
     pub fn select_row(&mut self, doc: &mut Document, panel: PanelId, row: usize) -> bool {
-        let selection = {
-            let Rows::Ready(set) = self.rows(doc) else {
-                return false;
-            };
-            let Some((_, trace, tx)) = set.get_with_trace(row) else {
-                return false;
-            };
-            TxSelection {
-                track: Traced::new(trace, tx.generator),
-                id: tx.id,
-                origin: panel,
-            }
+        let Some((track, id)) = self.row_transaction(doc, row) else {
+            return false;
         };
         self.nav.clear_ruler_selection();
-        self.nav.select(doc, Some(selection))
+        self.nav.select(
+            doc,
+            Some(TxSelection {
+                track,
+                id,
+                origin: panel,
+            }),
+        )
     }
 
     pub fn move_selection(
