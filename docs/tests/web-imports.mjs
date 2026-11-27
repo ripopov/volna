@@ -124,7 +124,7 @@ try {
     workspace.timeline_dividers = [];
     workspace.sidebar.expanded = [];
     workspace.sidebar.selected_scope = null;
-    if (kind === 'pipeline') panel.track = path;
+    if (kind === 'pipeline') panel.sources = [{ track: path }];
     else panel.rows = [{ type: 'signal', shape: 'Bit', signal: path, format: 'bit' }];
     await command('openWorkspace');
     await page.getByLabel('Open a Volna workspace').setInputFiles({
