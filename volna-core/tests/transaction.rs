@@ -400,7 +400,13 @@ fn pipeline_label_boundary_jump_skips_hidden_stages() {
             .stages
             .iter()
             .filter(|s| s.lane == primary_lane)
-            .map(|s| (s.name.clone(), s.begin, s.end.unwrap_or(tx.end).max(s.begin)))
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    s.begin,
+                    s.end.unwrap_or(tx.end).max(s.begin),
+                )
+            })
             .collect();
         stages.sort_by_key(|(_, begin, _)| *begin);
         assert!(stages.len() >= 3, "expected at least 3 primary stages");
@@ -461,9 +467,7 @@ fn pipeline_label_boundary_jump_skips_hidden_stages() {
         boundary: RowBoundary::End,
     });
     let viewport = app.panels.pipeline(panel).unwrap().nav.viewport(&app.doc);
-    assert!(
-        (viewport.x_of_tick(penultimate_end, cells_width) - (cells_width - 32.0)).abs() < 1e-6
-    );
+    assert!((viewport.x_of_tick(penultimate_end, cells_width) - (cells_width - 32.0)).abs() < 1e-6);
 
     // Hide all remaining stages of this transaction: falls back to tx.begin / tx.end.
     for (name, _, _) in &primary_stages[1..primary_stages.len() - 1] {

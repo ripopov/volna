@@ -200,6 +200,7 @@ pub(crate) fn tab_title(
             title.on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 drop(ws.update(cx, |ws, cx| {
                     if generation != ws.app.doc.generation() {
+                        cx.stop_propagation();
                         return;
                     }
                     ws.dispatch(Command::Panels(PanelsCommand::Focus(id)), Some(window), cx);
@@ -1485,6 +1486,10 @@ impl Panel for CanvasPanelView {
             action_button("new-tab", IconName::Plus, cx)
                 .ghost()
                 .tooltip("New waveform tab")
+                .debug_selector({
+                    let id = self.id.0;
+                    move || format!("new-tab-{id}")
+                })
                 .on_click(cx.listener(|view, _, window, cx| {
                     view.dispatch(PanelsCommand::NewTab { group_of: view.id }, window, cx);
                 })),

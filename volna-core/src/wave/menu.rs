@@ -36,12 +36,7 @@ impl WaveModel {
             })
     }
 
-    pub fn open_transaction_menu(
-        &mut self,
-        doc: &mut Document,
-        panel: PanelId,
-        position: Point,
-    ) {
+    pub fn open_transaction_menu(&mut self, doc: &mut Document, panel: PanelId, position: Point) {
         let layout = self.last_layout().clone();
         let Some(row) = self.entry_under(&layout, position.y) else {
             return;

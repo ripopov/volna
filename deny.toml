@@ -16,7 +16,7 @@ ignore = [
 ]
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "CC0-1.0", "0BSD", "MPL-2.0"]
+allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "CC0-1.0", "0BSD", "MPL-2.0", "NCSA"]
 
 [bans]
 # Platform and GUI dependencies currently require parallel major versions.

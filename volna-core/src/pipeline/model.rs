@@ -1596,7 +1596,10 @@ impl PipelineModel {
         &self,
         doc: &Document,
         row: usize,
-    ) -> Option<(Traced<TrackRef>, volna_trace::data::transactions::TransactionRef)> {
+    ) -> Option<(
+        Traced<TrackRef>,
+        volna_trace::data::transactions::TransactionRef,
+    )> {
         let Rows::Ready(set) = self.rows(doc) else {
             return None;
         };

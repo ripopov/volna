@@ -3,7 +3,7 @@
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use gpui_kit::assets::IconName;
-use gpui_kit::base::{ElementExt as _, Tab, Tabs as TabList, dock as base};
+use gpui_kit::base::{ElementExt as _, Tabs as TabList, dock as base};
 use gpui_kit::component::{
     button::ButtonVariants,
     dock::{ClosePanel, PanelHandle, ToggleZoom},
@@ -94,8 +94,11 @@ pub(crate) fn render(
                 Some(handle) => handle.title(window, cx),
                 None => div().child(panel.panel_name(cx)).into_any_element(),
             };
-            Tab::new(ix)
-                .set_position(position + 1, tab_count)
+            div()
+                .id(ix)
+                .flex()
+                .items_center()
+                .cursor_pointer()
                 .h(if t.islands.is_some() {
                     t.px(26.)
                 } else {
@@ -140,7 +143,6 @@ pub(crate) fn render(
                 })
                 .relative()
                 .child(title)
-                .selected(active)
                 .border_0()
                 .map(|tab| match t.islands {
                     Some(_) => tab.rounded(t.px(4.)),

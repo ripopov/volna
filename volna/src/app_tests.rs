@@ -2867,7 +2867,7 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
             .unwrap(),
         "the popup is hosted"
     );
-    vcx.simulate_keystrokes("down down down right");
+    vcx.simulate_keystrokes("down down right");
     vcx.run_until_parked();
     vcx.simulate_keystrokes("down enter");
     vcx.run_until_parked();
@@ -2902,7 +2902,7 @@ fn signal_menu_height_submenu_and_row_height_actions(cx: &mut TestAppContext) {
     ] {
         vcx.simulate_keystrokes("shift-f10");
         vcx.run_until_parked();
-        vcx.simulate_keystrokes("down down down right");
+        vcx.simulate_keystrokes("down down right");
         vcx.run_until_parked();
         vcx.simulate_keystrokes(keys);
         vcx.run_until_parked();
@@ -3524,7 +3524,7 @@ fn analog_key_and_format_popup_sections(cx: &mut TestAppContext) {
         })
         .unwrap();
     vcx.run_until_parked();
-    vcx.simulate_keystrokes("down down down right");
+    vcx.simulate_keystrokes("down down right");
     vcx.run_until_parked();
     vcx.simulate_keystrokes("down down enter");
     vcx.run_until_parked();
@@ -3659,7 +3659,7 @@ fn signal_format_menu_fits_narrow_windows_in_both_themes(cx: &mut TestAppContext
                 .unwrap();
             vcx.run_until_parked();
             vcx.update(|window, cx| window.draw(cx).clear(cx));
-            vcx.simulate_keystrokes("down down down");
+            vcx.simulate_keystrokes("down down");
             vcx.run_until_parked();
             vcx.update(|window, cx| window.draw(cx).clear(cx));
             let choice = vcx.debug_bounds("waveform-steps").unwrap();
@@ -9303,14 +9303,16 @@ fn nested_split_with_thirds_stays_stable_and_toolbar_buttons_remain_clickable(
     );
 
     // Click a `+` (new-tab) toolbar button on a nested panel and verify it creates a new tab.
-    let new_tab = vcx.update(|window, cx| {
+    vcx.update(|window, cx| {
         window.render_frame(cx);
         assert!(
             window.try_find("dock-toolbar").is_none(),
             "wide nested panels should not be stuck in the stacked toolbar layout"
         );
-        window.within("dock-header-6").find("new-tab").bounds()
     });
+    let new_tab = vcx
+        .debug_bounds(format!("new-tab-{}", p3.0).leak())
+        .unwrap();
     vcx.simulate_click(new_tab.center(), Modifiers::default());
     vcx.run_until_parked();
     root.update(&mut vcx, |ws, _, _| {

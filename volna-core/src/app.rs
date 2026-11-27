@@ -2329,7 +2329,10 @@ impl App {
                 return;
             };
             let source = crate::table::TableSource::Generator(track_source);
-            let beside = self.panels.center_target(source_panel).unwrap_or(source_panel);
+            let beside = self
+                .panels
+                .center_target(source_panel)
+                .unwrap_or(source_panel);
             self.open_table_source(source, beside);
             let Some(created) = self.panels.table_for_track(track) else {
                 return;

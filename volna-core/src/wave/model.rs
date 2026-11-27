@@ -4199,10 +4199,7 @@ impl WaveModel {
                     let click = (button == MouseButton::Right
                         && row.is_some_and(|r| self.items[r].lane().is_some()))
                     .then_some(PanClick::TransactionMenu { panel, position: p });
-                    self.drag = Some(Drag::Pan {
-                        last_x: p.x,
-                        click,
-                    });
+                    self.drag = Some(Drag::Pan { last_x: p.x, click });
                 }
             }
             return;
