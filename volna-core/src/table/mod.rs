@@ -14,6 +14,7 @@ pub mod sort;
 pub mod source;
 pub mod statistics;
 
+pub use format::{BitState, CellBitmask};
 pub use layout::{ColumnRect, RowViewport, TableLayout};
 pub use model::{
     AccessibleRow, PreparedCell, PreparedRow, PreparedWindow, RowIdentity, RowNavigation,

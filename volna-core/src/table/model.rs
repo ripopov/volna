@@ -7,7 +7,7 @@ use web_time::Instant;
 
 use super::columns::{CellValue, ColumnSet, TransactionColumn, TransactionColumns};
 use super::copy::{CopyColumn, CopyRequest};
-use super::format::{self, FormatChoice, TableFormats};
+use super::format::{self, CellBitmask, FormatChoice, TableFormats};
 use super::layout::{
     CELL_PADDING, ColumnHeader, HEADER_HEIGHT, MAX_COLUMN_WIDTH, MAX_PREPARED_ROWS, ROW_HEIGHT,
     RowViewport, TableLayout,
@@ -15,7 +15,7 @@ use super::layout::{
 use super::selection::{RowOrder, RowSelection, SelectionMode};
 use super::source::{Rows, TableSource};
 use crate::data::loaded_tracks::LoadedGenerator;
-use crate::data::translator::{Translated, Translator, Translators};
+use crate::data::translator::{TableCellStyle, Translated, Translator, Translators};
 use crate::document::{Document, TrackLoadState};
 use crate::geometry::{MouseButton, Point, Rect};
 use crate::nav::{Link, NavState};
@@ -43,6 +43,7 @@ pub enum RowIdentity {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedCell {
     pub text: String,
+    pub bitmask: Option<CellBitmask>,
     pub changed: bool,
     pub missing: bool,
 }
@@ -1536,8 +1537,17 @@ impl TableModel {
                     example
                         .and_then(|i| generator.transactions().get(i))
                         .map(|tx| {
-                            self.transaction_cell(tx, column, 48, Some(translator.as_ref()))
-                                .text
+                            let value = self
+                                .transaction_column(column)
+                                .expect("transaction column")
+                                .value(tx);
+                            self.formats.preview_cell(
+                                &self.translators,
+                                value,
+                                column,
+                                translator.as_ref(),
+                                48,
+                            )
                         })
                 }
                 Rows::Signals { histories, .. } => {
@@ -1547,8 +1557,11 @@ impl TableModel {
                         .and_then(|i| self.row_time(i))
                         .or_else(|| self.row_time(self.viewport.top));
                     time.and_then(|t| history.index_at(t)).map(|i| {
-                        format::translate(translator.as_ref(), &history.value_view(Some(i)), 48)
-                            .text
+                        TableFormats::preview_signal(
+                            translator.as_ref(),
+                            &history.value_view(Some(i)),
+                            48,
+                        )
                     })
                 }
                 Rows::None => None,
@@ -1653,9 +1666,22 @@ impl TableModel {
             ))
             .min(self.len())
             .min(self.viewport.top.saturating_add(MAX_PREPARED_ROWS));
-        for ordinal in self.viewport.top..end {
-            if let Some(text) = self.cell_text(ordinal, source_index, FIT_PREVIEW_BYTES) {
-                width = width.max(measure.text_width(&text, FontRole::Mono, theme.mono_size));
+        if self
+            .column_translator(source_index)
+            .is_some_and(|t| t.table_cell_style() == TableCellStyle::Bitmask)
+            && let Some(volna_trace::data::SignalShape::Vector { width: bits }) =
+                self.column_shape(source_index)
+        {
+            width = width.max(super::paint::bitmask_fit_width(
+                bits as usize,
+                theme,
+                measure,
+            ));
+        } else {
+            for ordinal in self.viewport.top..end {
+                if let Some(text) = self.cell_text(ordinal, source_index, FIT_PREVIEW_BYTES) {
+                    width = width.max(measure.text_width(&text, FontRole::Mono, theme.mono_size));
+                }
             }
         }
         Some(
@@ -2243,7 +2269,11 @@ impl TableModel {
             let Some(row) = self.prepare_row(ordinal, &mut signal_hints) else {
                 continue;
             };
-            window.bytes += row.cells.iter().map(|c| c.text.len()).sum::<usize>();
+            window.bytes += row
+                .cells
+                .iter()
+                .map(|c| c.text.len() + c.bitmask.as_ref().map_or(0, CellBitmask::bytes))
+                .sum::<usize>();
             if window.bytes > PANEL_BYTES as usize {
                 break;
             }
@@ -2266,17 +2296,15 @@ impl TableModel {
                             .transaction_column(column.source_index)
                             .expect("transaction column")
                             .value(tx);
+                        let formatted = self.formats.prepare_cell(
+                            &self.translators,
+                            value,
+                            column.source_index,
+                            column.preview_bytes,
+                        );
                         PreparedCell {
-                            text: self
-                                .formats
-                                .format_cell(
-                                    &self.translators,
-                                    value,
-                                    column.source_index,
-                                    column.preview_bytes,
-                                    None,
-                                )
-                                .text,
+                            text: formatted.text,
+                            bitmask: formatted.bitmask,
                             changed: false,
                             missing: matches!(value, CellValue::Missing),
                         }
@@ -2306,6 +2334,7 @@ impl TableModel {
                     if column.source_index == 0 {
                         cells.push(PreparedCell {
                             text: row_time.to_string(),
+                            bitmask: None,
                             changed: false,
                             missing: false,
                         });
@@ -2321,18 +2350,16 @@ impl TableModel {
                     *hint = sample;
                     let missing = sample.is_none();
                     let changed = sample.is_some_and(|i| history.time(i) == row_time);
-                    let text = self
-                        .formats
-                        .format_signal(
-                            &self.translators,
-                            column.source_index,
-                            history.as_ref(),
-                            sample,
-                            column.preview_bytes,
-                        )
-                        .text;
+                    let formatted = self.formats.prepare_signal(
+                        &self.translators,
+                        column.source_index,
+                        history.as_ref(),
+                        sample,
+                        column.preview_bytes,
+                    );
                     cells.push(PreparedCell {
-                        text,
+                        text: formatted.text,
+                        bitmask: formatted.bitmask,
                         changed,
                         missing,
                     });
@@ -3317,6 +3344,199 @@ mod tests {
         assert_eq!(model.window.rows[0].cells[2].text, "-1");
         model.active = Some(RowIdentity::SignalTime(7));
         assert_eq!(model.copy_tsv().unwrap(), "Time\ta\tb\n7\t1.5\t-1");
+    }
+
+    #[test]
+    fn bitmask_format_paints_aligned_bits_preserves_copy_and_fits_width() {
+        let mut t0 = transaction(1, 10, "v_add_f32");
+        t0.attributes.push(TransactionAttribute {
+            key: "exec_mask".into(),
+            value: AttributeValue::U64(0xffff_ffff_ffff_fffe),
+        });
+        let mut t1 = transaction(2, 20, "s_cbranch_execz");
+        t1.attributes.push(TransactionAttribute {
+            key: "exec_mask".into(),
+            value: AttributeValue::U64(0x0003_fff0),
+        });
+        let mut model = generator_model(vec![t0, t1]);
+        model.edit_columns(|c| {
+            c.toggle_transaction(TransactionColumn::Attribute("exec_mask".into()))
+        });
+        let col = (0..model.columns.len())
+            .find(|&i| model.column_title(i) == "exec_mask")
+            .unwrap();
+        let choices = model.column_formats(col).unwrap();
+        assert!(
+            choices
+                .iter()
+                .any(|c| c.translator.as_deref() == Some("bitmask") && c.preview == "63/64")
+        );
+
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        let now = Instant::now();
+        assert!(model.command(
+            &mut doc,
+            panel,
+            TableCommand::ColumnFormat {
+                source_index: col,
+                translator: Some("bitmask".into()),
+            },
+            now,
+        ));
+        assert_eq!(model.column_translator(col).unwrap().badge(), "mask");
+
+        let theme = Theme::one_dark();
+        let mut measure = crate::scene::MonoMeasure;
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 1400.0, 400.0),
+            &theme,
+            &mut measure,
+        );
+        let fitted = model.column_fit_width(col, &theme, &mut measure).unwrap();
+        let mask_min = crate::table::paint::bitmask_width(64, 64, theme.zoom) + 16.0;
+        assert!(fitted >= mask_min, "fitted width {fitted} < {mask_min}");
+        assert!(model.resize_column(col, fitted));
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 1400.0, 400.0),
+            &theme,
+            &mut measure,
+        );
+
+        let slot = model
+            .layout
+            .columns
+            .iter()
+            .position(|c| c.source_index == col)
+            .unwrap();
+        let col_rect = model.layout.columns[slot].rect;
+
+        let mut scene = crate::scene::Scene::default();
+        let mut text_cache = crate::scene::TextCache::default();
+        crate::table::paint::paint(&model, &theme, &mut text_cache, &mut measure, &mut scene);
+
+        let row0_y = model.layout.body.top();
+        let row1_y = row0_y + model.layout.row_height;
+        let row_quads = |row_y: f32| -> Vec<(f32, crate::color::Color)> {
+            scene
+                .prims
+                .iter()
+                .filter_map(|p| match *p {
+                    crate::scene::Prim::Quad { rect, fill, .. }
+                        if rect.left() >= col_rect.left()
+                            && rect.right() <= col_rect.right()
+                            && rect.top() >= row_y
+                            && rect.bottom() <= row_y + model.layout.row_height
+                            && rect.width() < 10.0 =>
+                    {
+                        Some((rect.left(), fill))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let r0 = row_quads(row0_y);
+        let r1 = row_quads(row1_y);
+        assert_eq!(r0.len(), 64);
+        assert_eq!(r1.len(), 64);
+        for (a, b) in r0.iter().zip(r1.iter()) {
+            assert_eq!(a.0, b.0, "bit columns must align vertically across rows");
+        }
+        // Row 0 (0xfffffffffffffffe): MSB=1, LSB=0.
+        assert_eq!(r0[0].1, theme.wave_signal);
+        assert_ne!(r0[63].1, theme.wave_signal);
+        // Row 1 (0x3fff0): MSB=0, bit 4 (index 59 from MSB)=1, LSB (index 63)=0.
+        assert_ne!(r1[0].1, theme.wave_signal);
+        assert_eq!(r1[59].1, theme.wave_signal);
+        assert_ne!(r1[63].1, theme.wave_signal);
+
+        // Copying still exports lossless hex values.
+        model.command(&mut doc, panel, TableCommand::SelectAll, now);
+        let tsv = model.copy_tsv().unwrap();
+        assert!(tsv.contains("0xfffffffffffffffe"));
+        assert!(tsv.contains("0x3fff0"));
+    }
+
+    #[test]
+    fn bitmask_format_distinguishes_four_state_logic_in_signal_tables() {
+        let mut model = signal_model(MemoryBudget::new(16 * 1024 * 1024));
+        let history = Arc::new(VecHistory {
+            shape: SignalShape::Vector { width: 8 },
+            times: vec![10],
+            values: vec![WaveValue::Bits("10xz-h01".into())],
+            initial: WaveValue::Unavailable,
+        }) as Arc<dyn SignalHistory>;
+        let other = Arc::new(VecHistory {
+            shape: SignalShape::Vector { width: 8 },
+            times: vec![10],
+            values: vec![WaveValue::Bits("00000000".into())],
+            initial: WaveValue::Unavailable,
+        }) as Arc<dyn SignalHistory>;
+        model.build_signal_rows(vec![history, other]).unwrap();
+        model.state = TableState::Ready;
+        let theme = Theme::one_dark();
+        let mut measure = crate::scene::MonoMeasure;
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 800.0, 240.0),
+            &theme,
+            &mut measure,
+        );
+
+        let choices = model.column_formats(1).unwrap();
+        assert!(
+            choices
+                .iter()
+                .any(|c| c.translator.as_deref() == Some("bitmask") && c.preview == "2/8 · x/z")
+        );
+
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        assert!(model.command(
+            &mut doc,
+            panel,
+            TableCommand::ColumnFormat {
+                source_index: 1,
+                translator: Some("bitmask".into()),
+            },
+            Instant::now(),
+        ));
+        model.layout(
+            Rect::from_xywh(0.0, 0.0, 800.0, 240.0),
+            &theme,
+            &mut measure,
+        );
+
+        let col_rect = model.layout.columns[1].rect;
+        let row_y = model.layout.body.top();
+        let mut scene = crate::scene::Scene::default();
+        let mut text_cache = crate::scene::TextCache::default();
+        crate::table::paint::paint(&model, &theme, &mut text_cache, &mut measure, &mut scene);
+
+        let colors: Vec<_> = scene
+            .prims
+            .iter()
+            .filter_map(|p| match *p {
+                crate::scene::Prim::Quad { rect, fill, .. }
+                    if rect.left() >= col_rect.left()
+                        && rect.right() <= col_rect.right()
+                        && rect.top() >= row_y
+                        && rect.bottom() <= row_y + model.layout.row_height
+                        && rect.width() < 10.0 =>
+                {
+                    Some(fill)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 8);
+        assert_eq!(colors[0], theme.wave_signal);
+        assert_eq!(colors[1], theme.editor.text.with_alpha(0.14));
+        assert_eq!(colors[2], theme.wave_undef);
+        assert_eq!(colors[3], theme.wave_highimp);
+        assert_eq!(colors[4], theme.wave_dontcare);
+        assert_eq!(colors[5], theme.wave_weak);
+        assert_eq!(colors[6], theme.editor.text.with_alpha(0.14));
+        assert_eq!(colors[7], theme.wave_signal);
     }
 
     #[test]

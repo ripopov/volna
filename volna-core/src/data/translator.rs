@@ -68,6 +68,12 @@ pub enum DigitalStyle {
     Labels,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TableCellStyle {
+    Text,
+    Bitmask,
+}
+
 pub trait Translator: Send + Sync {
     fn id(&self) -> &'static str;
     fn name(&self) -> &'static str;
@@ -76,6 +82,10 @@ pub trait Translator: Send + Sync {
     /// Choose level traces or value labels for single-bit waveforms.
     fn digital_style(&self) -> DigitalStyle {
         DigitalStyle::Labels
+    }
+    /// Choose text or visual bitmask rendering in table cells.
+    fn table_cell_style(&self) -> TableCellStyle {
+        TableCellStyle::Text
     }
     /// Format within a UTF-8 byte budget without materializing an unbounded input.
     fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated;
@@ -220,6 +230,7 @@ impl Translators {
         t.register(Arc::new(BitTranslator));
         t.register(Arc::new(HexTranslator));
         t.register(Arc::new(BinaryTranslator));
+        t.register(Arc::new(BitmaskTranslator));
         t.register(Arc::new(UnsignedTranslator));
         t.register(Arc::new(SignedTranslator));
         t.register(Arc::new(FloatTranslator));
@@ -361,6 +372,37 @@ impl Translator for BinaryTranslator {
     }
     fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
         raw_bits(value, limit)
+    }
+}
+
+struct BitmaskTranslator;
+impl Translator for BitmaskTranslator {
+    fn translate_label(&self, value: &ValueView<'_>, width: usize) -> Translated {
+        HexTranslator.translate_label(value, width)
+    }
+    fn prefix(&self) -> &'static str {
+        "0x"
+    }
+    fn id(&self) -> &'static str {
+        "bitmask"
+    }
+    fn numeric_kind(&self) -> Option<NumericKind> {
+        Some(NumericKind::Unsigned)
+    }
+    fn table_cell_style(&self) -> TableCellStyle {
+        TableCellStyle::Bitmask
+    }
+    fn name(&self) -> &'static str {
+        "Bitmask"
+    }
+    fn badge(&self) -> &'static str {
+        "mask"
+    }
+    fn applies(&self, shape: SignalShape) -> bool {
+        matches!(shape, SignalShape::Vector { .. })
+    }
+    fn translate_view(&self, value: &ValueView<'_>, limit: usize) -> Translated {
+        HexTranslator.translate_view(value, limit)
     }
 }
 

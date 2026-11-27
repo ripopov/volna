@@ -69,7 +69,12 @@ impl RowSource {
         shape: SignalShape,
         projected: bool,
     ) -> Vec<Arc<dyn Translator>> {
-        let mut formats = doc.translators.applicable(shape);
+        let mut formats: Vec<_> = doc
+            .translators
+            .applicable(shape)
+            .into_iter()
+            .filter(|t| t.table_cell_style() == crate::data::translator::TableCellStyle::Text)
+            .collect();
         if !projected
             && let Some(var) = self.var()
             && let Some(translator) = doc.enum_translator(var)

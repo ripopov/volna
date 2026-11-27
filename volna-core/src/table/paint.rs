@@ -1,5 +1,6 @@
 //! Paint the bounded prepared window.
 
+use super::format::{BitState, CellBitmask, MAX_BITMASK_BITS};
 use super::layout::CELL_PADDING;
 use super::model::{RowIdentity, TableModel};
 use crate::color::Color;
@@ -7,6 +8,105 @@ use crate::geometry::{Rect, point};
 use crate::icons::IconName;
 use crate::scene::{FontRole, Scene, TextCache, TextMeasure};
 use crate::theme::Theme;
+
+const BIT_WIDTH: f32 = 3.0;
+const BIT_HEIGHT: f32 = 12.0;
+const BIT_GAP: f32 = 1.0;
+const NIBBLE_EXTRA_GAP: f32 = 2.0;
+const BYTE_EXTRA_GAP: f32 = 4.0;
+const BIT_RADIUS: f32 = 1.0;
+const ELLIPSIS_GAP: f32 = 2.0;
+
+/// Pixel width of a rendered bitmask strip (excluding cell horizontal padding).
+#[must_use]
+pub(super) fn bitmask_width(shown: usize, total_width: usize, zoom: f32) -> f32 {
+    if shown == 0 {
+        return 0.0;
+    }
+    let mut width = shown as f32 * BIT_WIDTH * zoom;
+    for i in 0..shown.saturating_sub(1) {
+        width += bit_gap(i, total_width, zoom);
+    }
+    width
+}
+
+/// Content width needed to auto-fit a bitmask column of `total_width` bits.
+#[must_use]
+pub(super) fn bitmask_fit_width(
+    total_width: usize,
+    theme: &Theme,
+    measure: &mut dyn TextMeasure,
+) -> f32 {
+    let shown = total_width.min(MAX_BITMASK_BITS);
+    let mut width = bitmask_width(shown, total_width, theme.zoom);
+    if total_width > shown {
+        width +=
+            ELLIPSIS_GAP * theme.zoom + measure.text_width("…", FontRole::Mono, theme.mono_size);
+    }
+    width
+}
+
+fn bit_gap(index: usize, total_width: usize, zoom: f32) -> f32 {
+    let bit_index = total_width.saturating_sub(1).saturating_sub(index);
+    let extra = if bit_index.is_multiple_of(8) {
+        BYTE_EXTRA_GAP
+    } else if bit_index.is_multiple_of(4) {
+        NIBBLE_EXTRA_GAP
+    } else {
+        0.0
+    };
+    (BIT_GAP + extra) * zoom
+}
+
+fn bit_color(state: BitState, theme: &Theme) -> Color {
+    match state {
+        BitState::One => theme.wave_signal,
+        BitState::Zero => theme.editor.text.with_alpha(0.14),
+        BitState::Undef => theme.wave_undef,
+        BitState::HighImp => theme.wave_highimp,
+        BitState::DontCare => theme.wave_dontcare,
+        BitState::Weak => theme.wave_weak,
+    }
+}
+
+fn paint_bitmask(scene: &mut Scene, rect: Rect, bitmask: &CellBitmask, pad: f32, theme: &Theme) {
+    let z = theme.zoom;
+    let bit_w = BIT_WIDTH * z;
+    let bit_h = (BIT_HEIGHT * z).min((rect.height() - 4.0 * z).max(2.0 * z));
+    let bit_y = rect.top() + (rect.height() - bit_h) * 0.5;
+    let radius = BIT_RADIUS * z;
+    let shown = bitmask.bits.len();
+
+    scene.clipped(rect, |scene| {
+        let mut x = rect.left() + pad;
+        for (i, &state) in bitmask.bits.iter().enumerate() {
+            if x >= rect.right() {
+                break;
+            }
+            scene.quad(
+                Rect::from_xywh(x, bit_y, bit_w, bit_h),
+                bit_color(state, theme),
+                radius,
+                0.0,
+                Color::TRANSPARENT,
+            );
+            x += bit_w;
+            if i + 1 < shown {
+                x += bit_gap(i, bitmask.width, z);
+            }
+        }
+        if bitmask.width > shown && x < rect.right() {
+            scene.text(
+                point(x + ELLIPSIS_GAP * z, rect.top()),
+                rect.height(),
+                "…",
+                FontRole::Mono,
+                theme.mono_size,
+                theme.editor.text_muted,
+            );
+        }
+    });
+}
 
 pub fn paint(
     model: &TableModel,
@@ -160,14 +260,20 @@ pub fn paint(
                     column.rect.width(),
                     layout.row_height,
                 );
-                let color = if cell.missing {
-                    theme.editor.text_muted
-                } else if cell.changed || selected {
-                    theme.selection.text
+                if let Some(bitmask) = &cell.bitmask
+                    && !cell.missing
+                {
+                    paint_bitmask(scene, rect, bitmask, pad, theme);
                 } else {
-                    theme.editor.text
-                };
-                label(scene, rect, &cell.text, color);
+                    let color = if cell.missing {
+                        theme.editor.text_muted
+                    } else if cell.changed || selected {
+                        theme.selection.text
+                    } else {
+                        theme.editor.text
+                    };
+                    label(scene, rect, &cell.text, color);
+                }
             }
         }
     });

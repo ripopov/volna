@@ -2,11 +2,102 @@
 
 use super::columns::{CellValue, attributes};
 use crate::data::text::{format_attribute, push_limited, truncate};
-use crate::data::translator::{NumericKind, Translated, Translator, Translators};
+use crate::data::translator::{NumericKind, TableCellStyle, Translated, Translator, Translators};
 use std::sync::Arc;
 use volna_trace::data::transactions::AttributeValue;
 use volna_trace::data::value_view::{LogicView, ValueView};
 use volna_trace::data::{SignalHistory, SignalShape};
+
+/// Maximum bits materialized per table cell to stay within the panel byte budget.
+pub const MAX_BITMASK_BITS: usize = 256;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BitState {
+    Zero,
+    One,
+    Undef,
+    HighImp,
+    DontCare,
+    Weak,
+}
+
+impl BitState {
+    #[must_use]
+    pub fn from_ascii(byte: u8) -> Self {
+        match byte {
+            b'0' => Self::Zero,
+            b'1' => Self::One,
+            b'z' | b'Z' => Self::HighImp,
+            b'-' => Self::DontCare,
+            b'l' | b'L' | b'h' | b'H' => Self::Weak,
+            _ => Self::Undef,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CellBitmask {
+    /// Bits in display order (MSB first), capped at [`MAX_BITMASK_BITS`].
+    pub bits: Vec<BitState>,
+    /// True width of the underlying value in bits.
+    pub width: usize,
+}
+
+impl CellBitmask {
+    #[must_use]
+    pub fn from_logic(bits: &LogicView<'_>) -> Self {
+        let count = bits.width.min(MAX_BITMASK_BITS);
+        Self {
+            bits: (0..count)
+                .map(|i| BitState::from_ascii(bits.bit(i)))
+                .collect(),
+            width: bits.width,
+        }
+    }
+
+    #[must_use]
+    pub fn from_u64(value: u64) -> Self {
+        Self {
+            bits: (0..64)
+                .map(|i| {
+                    if (value >> (63 - i)) & 1 != 0 {
+                        BitState::One
+                    } else {
+                        BitState::Zero
+                    }
+                })
+                .collect(),
+            width: 64,
+        }
+    }
+
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.bits.len() * std::mem::size_of::<BitState>()
+    }
+
+    #[must_use]
+    pub fn summary(&self) -> String {
+        if self.width > self.bits.len() {
+            return format!("{} bits", self.width);
+        }
+        let ones = self.bits.iter().filter(|&&b| b == BitState::One).count();
+        let non_binary = self
+            .bits
+            .iter()
+            .any(|b| !matches!(b, BitState::Zero | BitState::One));
+        if non_binary {
+            format!("{ones}/{} · x/z", self.width)
+        } else {
+            format!("{ones}/{}", self.width)
+        }
+    }
+}
+
+pub(super) struct FormattedCell {
+    pub text: String,
+    pub bitmask: Option<CellBitmask>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TableFormats {
@@ -167,6 +258,111 @@ impl TableFormats {
             &value,
             limit,
         )
+    }
+
+    pub(super) fn prepare_cell(
+        &self,
+        translators: &Translators,
+        value: CellValue<'_>,
+        source_index: usize,
+        limit: usize,
+    ) -> FormattedCell {
+        let text = self
+            .format_cell(translators, value, source_index, limit, None)
+            .text;
+        let bitmask = match value {
+            CellValue::Number(v) => self
+                .is_bitmask(translators, source_index, SignalShape::Vector { width: 64 })
+                .then(|| CellBitmask::from_u64(v)),
+            CellValue::Attribute(a) => attribute_shape(a)
+                .filter(|&shape| self.is_bitmask(translators, source_index, shape))
+                .and_then(|_| attribute_bitmask(a)),
+            _ => None,
+        };
+        FormattedCell { text, bitmask }
+    }
+
+    pub(super) fn prepare_signal(
+        &self,
+        translators: &Translators,
+        column: usize,
+        history: &dyn SignalHistory,
+        sample: Option<usize>,
+        limit: usize,
+    ) -> FormattedCell {
+        let translator = self.translator(translators, column, history.shape());
+        let value = if sample.is_none() {
+            ValueView::Unavailable
+        } else {
+            history.value_view(sample)
+        };
+        let text = translate(translator.as_ref(), &value, limit).text;
+        let bitmask = (translator.table_cell_style() == TableCellStyle::Bitmask)
+            .then(|| match &value {
+                ValueView::Logic(bits) => Some(CellBitmask::from_logic(bits)),
+                _ => None,
+            })
+            .flatten();
+        FormattedCell { text, bitmask }
+    }
+
+    pub(super) fn preview_cell(
+        &self,
+        translators: &Translators,
+        value: CellValue<'_>,
+        source_index: usize,
+        translator: &dyn Translator,
+        limit: usize,
+    ) -> String {
+        if translator.table_cell_style() == TableCellStyle::Bitmask
+            && let Some(mask) = cell_bitmask(value)
+        {
+            return mask.summary();
+        }
+        self.format_cell(translators, value, source_index, limit, Some(translator))
+            .text
+    }
+
+    pub(super) fn preview_signal(
+        translator: &dyn Translator,
+        value: &ValueView<'_>,
+        limit: usize,
+    ) -> String {
+        if translator.table_cell_style() == TableCellStyle::Bitmask
+            && let ValueView::Logic(bits) = value
+        {
+            return CellBitmask::from_logic(bits).summary();
+        }
+        translate(translator, value, limit).text
+    }
+
+    fn is_bitmask(&self, translators: &Translators, column: usize, shape: SignalShape) -> bool {
+        self.translator(translators, column, shape)
+            .table_cell_style()
+            == TableCellStyle::Bitmask
+    }
+}
+
+fn cell_bitmask(value: CellValue<'_>) -> Option<CellBitmask> {
+    match value {
+        CellValue::Number(v) => Some(CellBitmask::from_u64(v)),
+        CellValue::Attribute(a) => attribute_bitmask(a),
+        _ => None,
+    }
+}
+
+fn attribute_bitmask(value: &AttributeValue) -> Option<CellBitmask> {
+    match value {
+        AttributeValue::I64(v) => Some(CellBitmask::from_u64(*v as u64)),
+        AttributeValue::U64(v) | AttributeValue::Pointer(v) => Some(CellBitmask::from_u64(*v)),
+        AttributeValue::Logic {
+            width,
+            states,
+            data,
+        } if *width > 0 => Some(CellBitmask::from_logic(&LogicView::packed_lsb(
+            *width, *states, data,
+        ))),
+        _ => None,
     }
 }
 
