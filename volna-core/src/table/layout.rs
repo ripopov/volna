@@ -19,46 +19,49 @@ pub struct ColumnHeader {
 }
 
 impl ColumnHeader {
-    pub const FORMAT_WIDTH: f32 = 76.0;
+    pub const FORMAT_WIDTH: f32 = 0.0;
 
     #[must_use]
     pub fn minimum_width(has_format: bool) -> f32 {
-        if has_format { 144.0 } else { MIN_COLUMN_WIDTH }
+        if has_format { 64.0 } else { MIN_COLUMN_WIDTH }
     }
 
     pub(super) fn new(rect: Rect, has_format: bool, zoom: f32) -> Self {
         let pad = 8.0 * zoom;
         let center_y = rect.top() + rect.height() * 0.5;
         let right = rect.right() - pad;
-        let format = has_format.then(|| {
-            Rect::from_xywh(
-                right - Self::FORMAT_WIDTH * zoom,
-                center_y - 13.0 * zoom,
-                Self::FORMAT_WIDTH * zoom,
-                26.0 * zoom,
-            )
-        });
-        let sort_right = format.map_or(right, |format| format.left() - pad);
+        let sort_size = 24.0 * zoom;
+        let sort_target = Rect::from_xywh(
+            (right - sort_size).max(rect.left()),
+            center_y - sort_size * 0.5,
+            sort_size,
+            sort_size,
+        );
         let sort_icon = Rect::from_xywh(
-            sort_right - 16.0 * zoom,
-            center_y - 8.0 * zoom,
+            sort_target.left() + 4.0 * zoom,
+            sort_target.top() + 4.0 * zoom,
             16.0 * zoom,
             16.0 * zoom,
         );
-        Self {
-            title: Rect::from_xywh(
-                rect.left() + pad,
-                rect.top(),
-                (sort_icon.left() - pad - rect.left() - pad).max(0.0),
-                rect.height(),
-            ),
-            sort_icon,
-            sort_target: Rect::from_xywh(
+        let title_right = sort_target.left() - 6.0 * zoom;
+        let title = Rect::from_xywh(
+            rect.left() + pad,
+            rect.top(),
+            (title_right - rect.left() - pad).max(0.0),
+            rect.height(),
+        );
+        let format = has_format.then(|| {
+            Rect::from_xywh(
                 rect.left() + 4.0 * zoom,
-                rect.top(),
-                (sort_right - rect.left() - 4.0 * zoom).max(0.0),
-                rect.height(),
-            ),
+                center_y - 12.0 * zoom,
+                (sort_target.left() - rect.left() - 8.0 * zoom).max(0.0),
+                24.0 * zoom,
+            )
+        });
+        Self {
+            title,
+            sort_icon,
+            sort_target,
             format,
         }
     }

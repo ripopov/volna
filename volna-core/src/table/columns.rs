@@ -82,7 +82,7 @@ impl TransactionColumn {
     #[must_use]
     pub fn title(&self) -> &str {
         match self {
-            Self::Label => "Label · vtr.label",
+            Self::Label => "Label",
             Self::Begin => "Begin",
             Self::Duration => "Duration",
             Self::End => "End",
@@ -98,7 +98,7 @@ impl TransactionColumn {
             Self::Label => 210.0,
             Self::Begin | Self::End => 120.0,
             Self::Duration => 105.0,
-            Self::Id => 100.0,
+            Self::Id => 116.0,
             Self::Status => 90.0,
             Self::Attributes => 360.0,
             Self::Attribute(_) => 160.0,

@@ -957,8 +957,12 @@ impl PanelCanvas {
                     .tab_index((source_index * 3) as isize)
                     .tab_stop(enabled)
                     .focus(move |style| style.border_1().border_color(t.border_focused))
+                    .rounded(px(4.0 * t.zoom))
+                    .when(enabled, move |el| {
+                        el.hover(move |style| style.bg(t.hover.bg.alpha(0.35)))
+                    })
                     .absolute()
-                    .top_0()
+                    .top(px(column.header.sort_target.top() - header.top()))
                     .left(px(column.header.sort_target.left() - header.left()))
                     .w(px(column.header.sort_target.width()))
                     .h(px(column.header.sort_target.height()))
@@ -1086,20 +1090,17 @@ impl PanelCanvas {
                     }),
             );
             if let Some(rect) = column.header.format {
-                let translator = table.column_translator(source_index).expect("format badge");
+                let badge = table
+                    .column_format_badge(source_index)
+                    .expect("format badge");
                 let owner = self.ws.clone();
-                let inherited = table.formats.columns[source_index].is_none();
-                let foreground = if inherited {
-                    t.panel.text_muted
-                } else {
-                    t.panel.icon_accent
-                };
+                let inherited = badge.inherited;
                 let hint = format!(
                     "Format {}: {} · {}",
                     table.column_title(source_index),
-                    translator.name(),
+                    badge.name,
                     if inherited {
-                        "table default"
+                        "default"
                     } else {
                         "column override"
                     }
@@ -1114,51 +1115,19 @@ impl PanelCanvas {
                         .occlude()
                         .child(
                             Button::new(("table-format", source_index))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(4.0 * t.zoom))
-                                        .font_family(t.mono_font)
-                                        .text_size(px(12.0 * t.zoom))
-                                        .when(!inherited, |el| {
-                                            el.child(
-                                                crate::ui::Icon::new(
-                                                    volna_core::icons::IconName::Pin,
-                                                )
-                                                .inherit_color()
-                                                .size(px(12.0 * t.zoom)),
-                                            )
-                                        })
-                                        .child(translator.badge())
-                                        .child(
-                                            crate::ui::Icon::new(
-                                                volna_core::icons::IconName::ChevronDown,
-                                            )
-                                            .inherit_color()
-                                            .size(px(12.0 * t.zoom)),
-                                        ),
-                                )
                                 .accessibility_label(hint.clone())
                                 .tooltip(hint)
                                 .debug_selector(move || format!("table-format-{source_index}"))
-                                .with_size(px(26.0 * t.zoom))
+                                .with_size(px(rect.height()))
                                 .compact()
                                 .custom(
                                     ButtonCustomVariant::new(cx)
-                                        .color(if inherited {
-                                            t.editor.bg
-                                        } else {
-                                            t.selection.bg
-                                        })
-                                        .foreground(foreground)
-                                        .hover(t.hover.bg)
-                                        .active(t.selection.bg),
+                                        .color(gpui_kit::Hsla::transparent_black())
+                                        .foreground(t.panel.text)
+                                        .hover(t.hover.bg.alpha(0.35))
+                                        .active(t.selection.bg.alpha(0.35)),
                                 )
-                                .border_1()
-                                .border_color(if inherited { t.border } else { foreground })
                                 .rounded(px(4.0 * t.zoom))
-                                .px(px(6.0 * t.zoom))
                                 .w(px(rect.width()))
                                 .h(px(rect.height()))
                                 .tab_index((source_index * 3 + 1) as isize)

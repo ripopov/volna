@@ -46,6 +46,7 @@ pub struct PreparedCell {
     pub bitmask: Option<CellBitmask>,
     pub changed: bool,
     pub missing: bool,
+    pub status: Option<vtr::Status>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +158,33 @@ pub enum TableCommand {
     Retry,
 }
 
+const TIME_FORMAT_RAW: &str = "time";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColumnFormatBadge {
+    pub badge: String,
+    pub name: String,
+    pub inherited: bool,
+}
+
+fn format_clock_duration(timeline: &crate::clock::ClockTimeline, begin: u64, end: u64) -> String {
+    let Some(first) = timeline.cycle_at(begin) else {
+        return "—".into();
+    };
+    let Some(last) = timeline.cycle_at(end) else {
+        return "—".into();
+    };
+    if first.stopped || last.stopped {
+        return "—".into();
+    }
+    let cycles = (last.cycle as f64 + last.fraction) - (first.cycle as f64 + first.fraction);
+    if cycles.fract().abs() < 1e-9 {
+        format!("{cycles:.0}")
+    } else {
+        format!("{cycles:.2}")
+    }
+}
+
 pub struct TableModel {
     pub source: TableSource,
     pub state: TableState,
@@ -168,6 +196,7 @@ pub struct TableModel {
     pub filters_visible: bool,
     pub filters: Vec<Option<super::filter::ColumnFilter>>,
     filter_unit: crate::trace::Unit,
+    linked_clock: Option<(String, Arc<crate::clock::ClockTimeline>)>,
     pub viewport: RowViewport,
     pub active: Option<RowIdentity>,
     selection: RowSelection,
@@ -208,6 +237,21 @@ impl TableModel {
             })
         });
         let mut table = Self::new(source, link, budget, doc.translators.clone());
+        let base = doc.time_base();
+        table.filter_unit = crate::trace::Unit {
+            timescale: base.timescale,
+            name: base.unit.map(str::to_owned),
+        };
+        table.linked_clock = table
+            .source
+            .generator_track()
+            .and_then(|track| doc.clocks.linked(track))
+            .and_then(|clock| {
+                clock
+                    .timeline()
+                    .cloned()
+                    .map(|timeline| (clock.name.clone(), timeline))
+            });
         table.log = log;
         if log {
             let columns = ColumnSet::Transactions(TransactionColumns::logs());
@@ -257,6 +301,7 @@ impl TableModel {
                 timescale: -9,
                 name: None,
             },
+            linked_clock: None,
             viewport: RowViewport::default(),
             active: None,
             selection: RowSelection::default(),
@@ -424,6 +469,27 @@ impl TableModel {
         if self.filter_unit != unit {
             self.filter_unit = unit;
             self.query_changed();
+        }
+        let linked_clock = self
+            .source
+            .generator_track()
+            .and_then(|track| doc.clocks.linked(track))
+            .and_then(|clock| {
+                clock
+                    .timeline()
+                    .cloned()
+                    .map(|timeline| (clock.name.clone(), timeline))
+            });
+        let clock_changed = match (&self.linked_clock, &linked_clock) {
+            (None, None) => false,
+            (Some((a_name, a_tl)), Some((b_name, b_tl))) => {
+                a_name != b_name || !Arc::ptr_eq(a_tl, b_tl)
+            }
+            _ => true,
+        };
+        if clock_changed {
+            self.linked_clock = linked_clock;
+            self.invalidate_window();
         }
         if matches!(self.state, TableState::Refused(_)) || !self.attached {
             return;
@@ -1508,8 +1574,137 @@ impl TableModel {
         })
     }
 
+    fn is_time_column(&self, column: usize) -> bool {
+        matches!(
+            self.transaction_column(column),
+            Some(TransactionColumn::Begin | TransactionColumn::End | TransactionColumn::Duration)
+        )
+    }
+
+    fn time_column_uses_clock(&self, column: usize) -> bool {
+        self.is_time_column(column)
+            && self.linked_clock.is_some()
+            && self.formats.columns.get(column).and_then(Option::as_deref) != Some(TIME_FORMAT_RAW)
+    }
+
+    fn time_unit_label(&self) -> String {
+        self.filter_unit
+            .name
+            .clone()
+            .unwrap_or_else(|| crate::wave::timeline::unit_label(self.filter_unit.timescale))
+    }
+
+    fn format_tx_time_cell(
+        &self,
+        column: &TransactionColumn,
+        tx: &Transaction,
+        uses_clock: bool,
+    ) -> String {
+        if matches!(column, TransactionColumn::End | TransactionColumn::Duration)
+            && tx.status == vtr::Status::Open
+        {
+            return "—".into();
+        }
+        if uses_clock && let Some((_, timeline)) = &self.linked_clock {
+            match column {
+                TransactionColumn::Begin => timeline.cycle_at(tx.begin).map_or_else(
+                    || "—".into(),
+                    |at| {
+                        crate::clock::format_position(
+                            &crate::clock::ClockView::default(),
+                            timeline,
+                            &at,
+                        )
+                    },
+                ),
+                TransactionColumn::End => timeline.cycle_at(tx.end).map_or_else(
+                    || "—".into(),
+                    |at| {
+                        crate::clock::format_position(
+                            &crate::clock::ClockView::default(),
+                            timeline,
+                            &at,
+                        )
+                    },
+                ),
+                TransactionColumn::Duration => format_clock_duration(timeline, tx.begin, tx.end),
+                _ => String::new(),
+            }
+        } else {
+            match column {
+                TransactionColumn::Begin => tx.begin.to_string(),
+                TransactionColumn::End => tx.end.to_string(),
+                TransactionColumn::Duration => tx.end.saturating_sub(tx.begin).to_string(),
+                _ => String::new(),
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn column_format_badge(&self, column: usize) -> Option<ColumnFormatBadge> {
+        if self.is_time_column(column) {
+            let (clock_name, _) = self.linked_clock.as_ref()?;
+            let uses_clock = self.time_column_uses_clock(column);
+            let unit = self.time_unit_label();
+            return Some(ColumnFormatBadge {
+                badge: if uses_clock {
+                    "clk".into()
+                } else {
+                    unit.clone()
+                },
+                name: if uses_clock {
+                    format!("Clock cycles ({clock_name})")
+                } else {
+                    format!("Timestamp ({unit})")
+                },
+                inherited: uses_clock,
+            });
+        }
+        let translator = self.column_translator(column)?;
+        let inherited = self.formats.columns.get(column).is_none_or(Option::is_none);
+        Some(ColumnFormatBadge {
+            badge: translator.badge().into(),
+            name: translator.name().into(),
+            inherited,
+        })
+    }
+
     #[must_use]
     pub fn column_formats(&self, column: usize) -> Option<Vec<FormatChoice>> {
+        if self.is_time_column(column) {
+            let (clock_name, _) = self.linked_clock.as_ref()?;
+            let uses_clock = self.time_column_uses_clock(column);
+            let unit = self.time_unit_label();
+            let tx_col = self.transaction_column(column)?;
+            let example_tx = match &self.rows {
+                Rows::Generator(generator) => self
+                    .active_ordinal()
+                    .and_then(|i| self.source_index(i))
+                    .or(Some(0))
+                    .and_then(|i| generator.transactions().get(i)),
+                _ => None,
+            };
+            let clock_preview = example_tx
+                .map(|tx| self.format_tx_time_cell(tx_col, tx, true))
+                .unwrap_or_default();
+            let time_preview = example_tx
+                .map(|tx| self.format_tx_time_cell(tx_col, tx, false))
+                .unwrap_or_default();
+            return Some(vec![
+                FormatChoice {
+                    translator: None,
+                    label: format!("Clock cycles · {clock_name}"),
+                    preview: clock_preview,
+                    checked: uses_clock,
+                },
+                FormatChoice {
+                    translator: Some(TIME_FORMAT_RAW.into()),
+                    label: format!("Timestamp ({unit})"),
+                    preview: time_preview,
+                    checked: !uses_clock,
+                },
+            ]);
+        }
         let current = self.column_translator(column)?;
         let shape = self.column_shape(column)?;
         let inherited = self.formats.columns.get(column)?.is_none();
@@ -1611,7 +1806,7 @@ impl TableModel {
         if source_index >= self.widths.len() || !width.is_finite() {
             return false;
         }
-        let minimum = ColumnHeader::minimum_width(self.column_translator(source_index).is_some());
+        let minimum = ColumnHeader::minimum_width(self.column_format_badge(source_index).is_some());
         self.widths.update(|widths| {
             widths[source_index] = Some(width.clamp(minimum, MAX_COLUMN_WIDTH));
         })
@@ -1647,16 +1842,14 @@ impl TableModel {
         if source_index >= self.widths.len() {
             return None;
         }
-        let has_format = self.column_translator(source_index).is_some();
-        let mut width = measure.text_width(
-            self.column_title(source_index),
-            FontRole::Mono,
-            theme.mono_size,
-        ) + if has_format {
-            32.0 + ColumnHeader::FORMAT_WIDTH
-        } else {
-            24.0
-        } * theme.zoom;
+        let has_format = self.column_format_badge(source_index).is_some();
+        let header_title = self.column_header_title(source_index);
+        let mut width = measure.text_width(&header_title, FontRole::Mono, theme.mono_size)
+            + if has_format {
+                32.0 + ColumnHeader::FORMAT_WIDTH
+            } else {
+                24.0
+            } * theme.zoom;
         let end = self
             .viewport
             .top
@@ -2041,7 +2234,7 @@ impl TableModel {
         let mut widths = self.visible_column_widths();
         for (index, width) in &mut widths {
             *width = width.max(ColumnHeader::minimum_width(
-                self.column_translator(*index).is_some(),
+                self.column_format_badge(*index).is_some(),
             ));
         }
         let fixed_width = widths.iter().map(|(_, width)| width * zoom).sum::<f32>();
@@ -2108,7 +2301,7 @@ impl TableModel {
                     ),
                     header: ColumnHeader::new(
                         rect,
-                        self.column_translator(source_index).is_some(),
+                        self.column_format_badge(source_index).is_some(),
                         zoom,
                     ),
                     preview_bytes: ((width / (theme.mono_size * 0.5).max(1.0)).ceil() as usize * 4)
@@ -2199,13 +2392,31 @@ impl TableModel {
                         {
                             480.0
                         }
-                        Some(column) => column.width(),
+                        Some(column) => {
+                            let mut width = column.width();
+                            if self.is_time_column(index) {
+                                width += 24.0;
+                            }
+                            width
+                        }
                         None if index == 0 => 130.0,
                         None => 180.0,
                     });
                 (index, width)
             })
             .collect()
+    }
+
+    #[must_use]
+    pub fn column_header_title(&self, source_index: usize) -> std::borrow::Cow<'_, str> {
+        let base = self.column_title(source_index);
+        if let Some(badge) = self.column_format_badge(source_index) {
+            std::borrow::Cow::Owned(format!("{base} ({})", badge.badge))
+        } else if self.is_time_column(source_index) {
+            std::borrow::Cow::Owned(format!("{base} ({})", self.time_unit_label()))
+        } else {
+            std::borrow::Cow::Borrowed(base)
+        }
     }
 
     #[must_use]
@@ -2292,21 +2503,39 @@ impl TableModel {
                     .columns
                     .iter()
                     .map(|column| {
-                        let value = self
+                        let tx_col = self
                             .transaction_column(column.source_index)
-                            .expect("transaction column")
-                            .value(tx);
-                        let formatted = self.formats.prepare_cell(
-                            &self.translators,
-                            value,
-                            column.source_index,
-                            column.preview_bytes,
-                        );
-                        PreparedCell {
-                            text: formatted.text,
-                            bitmask: formatted.bitmask,
-                            changed: false,
-                            missing: matches!(value, CellValue::Missing),
+                            .expect("transaction column");
+                        let value = tx_col.value(tx);
+                        if self.is_time_column(column.source_index) {
+                            let text = self.format_tx_time_cell(
+                                tx_col,
+                                tx,
+                                self.time_column_uses_clock(column.source_index),
+                            );
+                            let missing = matches!(value, CellValue::Missing) || text == "—";
+                            PreparedCell {
+                                text,
+                                bitmask: None,
+                                changed: false,
+                                missing,
+                                status: None,
+                            }
+                        } else {
+                            let formatted = self.formats.prepare_cell(
+                                &self.translators,
+                                value,
+                                column.source_index,
+                                column.preview_bytes,
+                            );
+                            PreparedCell {
+                                text: formatted.text,
+                                bitmask: formatted.bitmask,
+                                changed: false,
+                                missing: matches!(value, CellValue::Missing),
+                                status: matches!(tx_col, TransactionColumn::Status)
+                                    .then_some(tx.status),
+                            }
                         }
                     })
                     .collect();
@@ -2337,6 +2566,7 @@ impl TableModel {
                             bitmask: None,
                             changed: false,
                             missing: false,
+                            status: None,
                         });
                         continue;
                     }
@@ -2362,6 +2592,7 @@ impl TableModel {
                         bitmask: formatted.bitmask,
                         changed,
                         missing,
+                        status: None,
                     });
                 }
                 Some(PreparedRow {
@@ -3571,7 +3802,7 @@ mod tests {
         );
         assert_eq!(
             model.copy_tsv().unwrap(),
-            format!("pc\tLabel · vtr.label\tBegin\n128\t{label}\t10")
+            format!("pc\tLabel\tBegin\n128\t{label}\t10")
         );
     }
 
@@ -3680,7 +3911,7 @@ mod tests {
         drop(model);
         assert_eq!(
             copy().unwrap(),
-            "Label · vtr.label\tID\n\"load\t\"\"a\"\"\nnext\"\t0x1\nstore\t0x2"
+            "Label\tID\n\"load\t\"\"a\"\"\nnext\"\t0x1\nstore\t0x2"
         );
     }
 
@@ -4233,8 +4464,8 @@ mod tests {
                 let header = column.header;
                 let format = header.format.unwrap();
                 assert!(header.title.right() < header.sort_icon.left());
-                assert!(header.sort_icon.right() < format.left());
-                assert!(format.right() < column.resize.left());
+                assert!(format.right() <= header.sort_target.left());
+                assert!(header.sort_icon.right() < column.resize.left());
                 assert_eq!(
                     format.top() + format.height() * 0.5,
                     column.rect.top() + column.rect.height() * 0.5,
@@ -4525,7 +4756,7 @@ mod tests {
         assert_eq!(model.active_ordinal(), Some(899));
         assert_eq!(
             model.copy_tsv().unwrap(),
-            "Label · vtr.label\tBegin\tDuration\tStatus\tAttributes · preview\nrow 900\t3600\t8\tok\taddr=0x80"
+            "Label\tBegin\tDuration\tStatus\tAttributes · preview\nrow 900\t3600\t8\tok\taddr=0x80"
         );
     }
 
@@ -4707,5 +4938,84 @@ mod tests {
         assert!(model.retry(&mut Document::new()));
         assert_eq!(budget.used(), PANEL_BYTES);
         assert!(matches!(model.state, TableState::Unavailable));
+    }
+
+    #[test]
+    fn time_columns_show_units_in_header_and_default_to_linked_clock_cycles() {
+        use crate::clock::ClockTimeline;
+        use crate::scene::MonoMeasure;
+
+        let mut tx = transaction(1, 20, "row");
+        tx.end = 50;
+        let mut model = generator_model(vec![tx]);
+        model.filter_unit = crate::trace::Unit {
+            timescale: -12,
+            name: None,
+        };
+        let theme = Theme::volna(true);
+        let bounds = Rect::from_xywh(0.0, 0.0, 1200.0, 300.0);
+        model.layout(bounds, &theme, &mut MonoMeasure);
+
+        // Without a linked clock: headers show trace timescale unit in parentheses,
+        // no format switcher badge is shown, and cells show raw ticks.
+        assert_eq!(model.column_header_title(1), "Begin (ps)");
+        assert_eq!(model.column_header_title(2), "Duration (ps)");
+        assert_eq!(model.column_header_title(3), "End (ps)");
+        assert!(model.column_format_badge(1).is_none());
+        assert!(model.column_formats(1).is_none());
+        assert_eq!(model.window.rows[0].cells[1].text, "20");
+        assert_eq!(model.window.rows[0].cells[2].text, "30");
+
+        // With a linked 10-tick clock starting at t=10: Begin/Duration default to cycles
+        // and show the unit via the header format pill instead of duplicating it in the title.
+        let timeline = Arc::new(ClockTimeline::new(vec![(10, 100, 10)], false).unwrap());
+        model.linked_clock = Some(("clk".into(), timeline));
+        model.invalidate_window();
+        model.layout(bounds, &theme, &mut MonoMeasure);
+
+        assert_eq!(model.column_header_title(1), "Begin (clk)");
+        assert_eq!(model.column_header_title(2), "Duration (clk)");
+        assert_eq!(model.column_header_title(3), "End (clk)");
+        let badge = model.column_format_badge(1).expect("clock format badge");
+        assert_eq!(badge.badge, "clk");
+        assert!(badge.inherited);
+        assert_eq!(model.window.rows[0].cells[1].text, "1");
+        assert_eq!(model.window.rows[0].cells[2].text, "3");
+        assert_eq!(model.window.rows[0].cells[3].status, Some(vtr::Status::Ok));
+
+        // Switching Begin to raw timestamp units updates only Begin to ps and raw ticks.
+        let mut doc = Document::new();
+        let panel = crate::panels::PanelId(1);
+        assert!(model.command(
+            &mut doc,
+            panel,
+            TableCommand::ColumnFormat {
+                source_index: 1,
+                translator: Some(TIME_FORMAT_RAW.into()),
+            },
+            Instant::now(),
+        ));
+        model.layout(bounds, &theme, &mut MonoMeasure);
+        assert_eq!(model.column_header_title(1), "Begin (ps)");
+        assert_eq!(model.column_header_title(2), "Duration (clk)");
+        let badge = model.column_format_badge(1).expect("raw format badge");
+        assert_eq!(badge.badge, "ps");
+        assert!(!badge.inherited);
+        assert_eq!(model.window.rows[0].cells[1].text, "20");
+        assert_eq!(model.window.rows[0].cells[2].text, "3");
+
+        // Switching Begin back to default restores clock cycles.
+        assert!(model.command(
+            &mut doc,
+            panel,
+            TableCommand::ColumnFormat {
+                source_index: 1,
+                translator: None,
+            },
+            Instant::now(),
+        ));
+        model.layout(bounds, &theme, &mut MonoMeasure);
+        assert_eq!(model.column_header_title(1), "Begin (clk)");
+        assert_eq!(model.window.rows[0].cells[1].text, "1");
     }
 }

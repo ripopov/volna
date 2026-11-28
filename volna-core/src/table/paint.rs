@@ -160,8 +160,9 @@ pub fn paint(
 
     scene.clipped(layout.header, |scene| {
         for column in &layout.columns {
+            let header_title = model.column_header_title(column.source_index);
             let title = fit_title(
-                model.column_title(column.source_index),
+                &header_title,
                 column.header.title.width(),
                 theme,
                 cache,
@@ -181,6 +182,20 @@ pub fn paint(
             let active = model
                 .applied_sort()
                 .filter(|sort| sort.column == column.source_index);
+            let (sort_bg, sort_border) = if !enabled {
+                (Color::TRANSPARENT, theme.border.with_alpha(0.4))
+            } else if active.is_some() {
+                (theme.selection.bg.with_alpha(0.35), theme.panel.icon_accent)
+            } else {
+                (theme.editor.bg.with_alpha(0.5), theme.border)
+            };
+            scene.quad(
+                column.header.sort_target,
+                sort_bg,
+                4.0 * theme.zoom,
+                theme.zoom,
+                sort_border,
+            );
             scene.icon(
                 active.map_or(IconName::ArrowUpDown, |sort| {
                     if sort.descending {
@@ -267,6 +282,18 @@ pub fn paint(
                 } else {
                     let color = if cell.missing {
                         theme.editor.text_muted
+                    } else if let Some(status) = cell.status {
+                        match status {
+                            volna_trace::data::transactions::Status::Ok => theme.wave_signal,
+                            volna_trace::data::transactions::Status::Error => theme.editor.error,
+                            volna_trace::data::transactions::Status::Aborted => theme.wave_weak,
+                            volna_trace::data::transactions::Status::Open => {
+                                theme.panel.icon_accent
+                            }
+                            volna_trace::data::transactions::Status::Unset => {
+                                theme.editor.text_muted
+                            }
+                        }
                     } else if cell.changed || selected {
                         theme.selection.text
                     } else {

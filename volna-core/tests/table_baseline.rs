@@ -390,7 +390,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
         table
             .copy_tsv()
             .unwrap()
-            .starts_with("Label · vtr.label\tBegin\tDuration\tStatus\tAttributes · preview\n")
+            .starts_with("Label\tBegin\tDuration\tStatus\tAttributes · preview\n")
     );
 
     let selection = app.doc.selection().expect("the row is the selection");
@@ -408,7 +408,7 @@ fn generator_table_loads_selects_follows_copies_and_keeps_bounded_rows() {
     assert!(
         table.accessible_rows().count() <= volna_core::table::layout::MAX_PREPARED_ROWS as usize
     );
-    assert!(app.scene().texts().any(|text| text == "ID"));
+    assert!(app.scene().texts().any(|text| text == "ID (hex)"));
 }
 
 #[test]
