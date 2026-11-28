@@ -7,23 +7,24 @@ export async function ensureIsolation() {
   if (!isSecureContext || !navigator.serviceWorker) {
     throw new Error('Background workers require HTTPS and cross-origin isolation.');
   }
-  const reloadKey = 'volna-isolation-reload';
-  if (sessionStorage.getItem(reloadKey)) {
-    sessionStorage.removeItem(reloadKey);
+  // Track the reload guard in history.state rather than sessionStorage: COOP swaps browsing context
+  // groups, leaving a stale sessionStorage flag in the non-isolated group after a later hard reload.
+  const state = history.state && typeof history.state === 'object' ? history.state : {};
+  if (state.volnaIsolationReload) {
+    history.replaceState({ ...state, volnaIsolationReload: false }, '');
     throw new Error('Cross-origin isolation is unavailable. Enable COOP: same-origin and COEP: require-corp on the server.');
   }
   await navigator.serviceWorker.register(new URL('isolation-worker.js', import.meta.url));
   await navigator.serviceWorker.ready;
-  if (!navigator.serviceWorker.controller) {
-    await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
-  }
-  sessionStorage.setItem(reloadKey, '1');
+  // A hard reload bypasses the active worker, leaving controller null without firing controllerchange;
+  // once ready resolves, a normal reload attaches the active worker.
+  history.replaceState({ ...state, volnaIsolationReload: true }, '');
   location.reload();
   await new Promise(() => {});
 }
 
-if (crossOriginIsolated) {
-  try { sessionStorage.removeItem('volna-isolation-reload'); } catch {}
+if (crossOriginIsolated && history.state?.volnaIsolationReload) {
+  try { history.replaceState({ ...history.state, volnaIsolationReload: false }, ''); } catch {}
 }
 if (document.querySelector('iframe[title="Interactive Volna sample recording"]')) {
   ensureIsolation().catch(error => console.error(error.message));

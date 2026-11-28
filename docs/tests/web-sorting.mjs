@@ -256,8 +256,14 @@ try {
   await staticPage.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
   assert.equal(await staticPage.evaluate(() => crossOriginIsolated), true);
   assert.equal(await staticPage.evaluate(() => !!navigator.serviceWorker.controller), true);
+  const cdp = await staticContext.newCDPSession(staticPage);
+  await staticPage.evaluate(() => { delete document.body.dataset.workspaceRestored; });
+  await cdp.send('Page.reload', { ignoreCache: true });
+  await staticPage.locator('body[data-workspace-restored="true"]').waitFor({ timeout: 60000 });
+  assert.equal(await staticPage.evaluate(() => crossOriginIsolated), true);
+  assert.equal(await staticPage.evaluate(() => !!navigator.serviceWorker.controller), true);
   await staticContext.close();
-  console.log('Static hosting without response headers: isolation bootstrap and worker pool passed');
+  console.log('Static hosting without response headers: isolation bootstrap, hard reload, and worker pool passed');
 
   headers = true;
   const unsupported = await browser.newContext();
