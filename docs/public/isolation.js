@@ -1,3 +1,12 @@
+function waitForLoad() {
+  if (document.readyState === 'complete') return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => resolve();
+    window.addEventListener('load', done, { once: true });
+    setTimeout(done, 1000);
+  });
+}
+
 export async function ensureIsolation() {
   if (crossOriginIsolated) return;
   if (window.top !== window) {
@@ -17,10 +26,18 @@ export async function ensureIsolation() {
   await navigator.serviceWorker.register(new URL('isolation-worker.js', import.meta.url));
   await navigator.serviceWorker.ready;
   // A hard reload bypasses the active worker, leaving controller null without firing controllerchange;
-  // once ready resolves, a normal reload attaches the active worker.
+  // once ready resolves, wait for the current load to settle before reloading so Chromium does not
+  // drop location.reload() during an in-progress hard reload or right after history.replaceState().
+  await waitForLoad();
   history.replaceState({ ...state, volnaIsolationReload: true }, '');
-  location.reload();
-  await new Promise(() => {});
+  await new Promise((_, reject) => {
+    setTimeout(() => location.reload(), 0);
+    setTimeout(() => location.replace(location.href), 3000);
+    setTimeout(() => {
+      history.replaceState({ ...state, volnaIsolationReload: false }, '');
+      reject(new Error('Could not reload into cross-origin isolation. Please reload this page.'));
+    }, 8000);
+  });
 }
 
 if (crossOriginIsolated && history.state?.volnaIsolationReload) {
