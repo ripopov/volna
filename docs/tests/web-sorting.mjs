@@ -138,7 +138,7 @@ try {
   await page.keyboard.press('Control+c');
   await page.waitForFunction(() => !!window.copiedTableText);
   assert.equal(await page.evaluate(() => window.copiedTableText),
-    'Label · vtr.label\tBegin\tDuration\tStatus\tAttributes · preview\n' +
+    'Label\tBegin\tDuration\tStatus\tAttributes · preview\n' +
     '00000000000001000000\t0\t1\tok\trecord.kind=transaction\n00000000000000999998\t2\t1\tok\trecord.kind=transaction');
   await page.screenshot({ path: `${results}/multi-selection-dark.png` });
   await page.setViewportSize({ width: 360, height: 800 });
@@ -158,7 +158,7 @@ try {
     requestAnimationFrame(frame);
   });
   await withPausedWorkers(async () => {
-    await page.mouse.click(350, 108);
+    await page.mouse.click(444, 124);
     await sorting();
     await page.mouse.wheel(0, 300);
     await page.waitForFunction(() => window.sortFrames >= 2);
@@ -170,7 +170,7 @@ try {
   await page.screenshot({ path: `${results}/ascending-dark.png` });
 
   await withPausedWorkers(async () => {
-    await page.mouse.click(350, 108);
+    await page.mouse.click(444, 124);
     await sorting();
     await page.screenshot({ path: `${results}/sorting-pending-dark.png` });
     await page.mouse.click(678, 84); // Cancel in the table toolbar.
@@ -179,9 +179,9 @@ try {
   assert.match(await state(), /column: 0, descending: false/, 'cancel retains the applied order');
 
   await withPausedWorkers(async () => {
-    await page.mouse.click(350, 108);
+    await page.mouse.click(444, 124);
     await sorting();
-    await page.mouse.click(500, 108); // A newer Begin query replaces the pending Label query.
+    await page.mouse.click(564, 124); // A newer Begin query replaces the pending Label query.
   });
   await settled();
   assert.match(await state(), /column: 1, descending: false.*first_time=Some\(0\)/);
@@ -189,14 +189,15 @@ try {
   await settings({ 'memory.budgetMiB': 1, 'appearance.theme': 'volna-light' });
   // Wait for the rendered settings change before exercising the disabled header.
   await page.waitForTimeout(100);
-  await page.mouse.click(500, 108);
+  await page.mouse.click(564, 124);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(100);
   assert.match(await state(), /column: 1, descending: false/);
   assert.ok(!(await state()).includes('sorting…'));
   await page.screenshot({ path: `${results}/memory-refused-light.png` });
   await settings({ 'memory.budgetMiB': 512 });
-  await page.mouse.click(500, 108);
+  await page.waitForTimeout(100);
+  await page.mouse.click(564, 124);
   await settled();
   await page.waitForFunction(() => window.volnaCurrentState?.includes('column: 1, descending: true'));
   assert.match(await state(), /first_time=Some\(999999\)/);
@@ -230,7 +231,7 @@ try {
   assert.match(await state(), /rows=499999/);
   await page.mouse.click(485, 91);
   await page.waitForTimeout(60);
-  await page.mouse.click(500, 108); // Sort matches by Begin.
+  await page.mouse.click(564, 124); // Sort matches by Begin.
   await page.waitForFunction(() => /column: 1, descending: false.*status=499999 of 1000000 rows$/.test(window.volnaCurrentState));
   await page.mouse.click(535, 163);
   await page.waitForTimeout(60);

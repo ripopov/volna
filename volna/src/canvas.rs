@@ -947,148 +947,156 @@ impl PanelCanvas {
             let center = column.rect.left() + column.rect.width() * 0.5;
             let draggable = table.source.generator_track().is_some();
             let has_format = column.header.format.is_some();
-            edges = edges.child(
-                div()
-                    .id(("table-sort", source_index))
-                    .debug_selector(move || format!("table-sort-{source_index}"))
-                    .occlude()
-                    .when(enabled, gpui_kit::Styled::cursor_pointer)
-                    .role(gpui_kit::accesskit::Role::Button)
-                    .tab_index((source_index * 3) as isize)
-                    .tab_stop(enabled)
-                    .focus(move |style| style.border_1().border_color(t.border_focused))
-                    .rounded(px(4.0 * t.zoom))
-                    .when(enabled, move |el| {
-                        el.hover(move |style| style.bg(t.hover.bg.alpha(0.35)))
-                    })
-                    .absolute()
-                    .top(px(column.header.sort_target.top() - header.top()))
-                    .left(px(column.header.sort_target.left() - header.left()))
-                    .w(px(column.header.sort_target.width()))
-                    .h(px(column.header.sort_target.height()))
-                    .aria_label(format!(
-                        "Sort {}: {direction}",
-                        table.column_title(source_index)
-                    ))
-                    .aria_description(if enabled {
-                        "Enter or Space cycles ascending, descending, then source order"
-                    } else {
-                        "Sorting unavailable: insufficient memory or source not ready"
-                    })
-                    .key_context("TableColumnSort")
-                    .on_action(move |_: &crate::table_panel::SortColumn, window, cx| {
-                        cx.stop_propagation();
-                        key_owner.update(cx, |ws, cx| {
-                            ws.dispatch_if_current(
-                                generation,
-                                Command::Table(
-                                    panel,
-                                    volna_core::table::TableCommand::SortColumn(source_index),
-                                ),
-                                Some(window),
-                                cx,
-                            );
-                        });
-                    })
-                    .on_click(move |_, window, cx| {
-                        sort_owner.update(cx, |ws, cx| {
-                            ws.dispatch_if_current(
-                                generation,
-                                Command::Table(
-                                    panel,
-                                    volna_core::table::TableCommand::SortColumn(source_index),
-                                ),
-                                Some(window),
-                                cx,
-                            );
-                        });
-                    })
-                    .when_some(header_hint, |el, hint| {
-                        el.tooltip_show_delay(crate::ui::tooltip::delay(cx))
-                            .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(hint.clone())
-                                    .build(window, cx)
-                            })
-                    })
-                    .when(draggable, |el| {
-                        el.on_drag(
-                            TableColumnDrag {
-                                panel,
-                                source_index,
-                                title,
-                            },
-                            |drag, _, _, cx| cx.new(|_| drag.clone()),
-                        )
-                        .drag_over::<TableColumnDrag>(move |style, drag, window, _| {
-                            if drag.panel != panel {
-                                return style;
-                            }
-                            if f32::from(window.mouse_position().x) > center {
-                                style.border_r_2().border_color(t.border_focused)
-                            } else {
-                                style.border_l_2().border_color(t.border_focused)
-                            }
-                        })
-                        .on_drop(
-                            move |drag: &TableColumnDrag, window, cx| {
-                                if drag.panel != panel {
-                                    return;
-                                }
-                                let before = if f32::from(window.mouse_position().x) > center {
-                                    next
-                                } else {
-                                    Some(source_index)
-                                };
-                                drop_owner.update(cx, |ws, cx| {
-                                    ws.dispatch_if_current(
-                                        generation,
-                                        Command::Table(
-                                            panel,
-                                            volna_core::table::TableCommand::MoveColumn {
-                                                source_index: drag.source_index,
-                                                before,
-                                            },
-                                        ),
-                                        Some(window),
-                                        cx,
-                                    );
-                                });
-                            },
-                        )
-                    })
-                    .context_menu(move |mut menu, window, cx| {
-                        if has_format {
-                            let owner = context_owner.clone();
-                            menu = menu
-                                .submenu("Format", window, cx, move |menu, window, cx| {
-                                    crate::table_panel::format_menu(
-                                        menu,
-                                        &owner,
-                                        panel,
-                                        generation,
-                                        Some(source_index),
-                                        window,
-                                        cx,
-                                    )
-                                })
-                                .separator();
+            let header_left = column.rect.left() + 4.0 * t.zoom;
+            let header_width = (column.rect.width() - 8.0 * t.zoom).max(0.0);
+            let mut column_header = div()
+                .id(("table-column-header", source_index))
+                .occlude()
+                .absolute()
+                .top(px(column.rect.top() - header.top()))
+                .left(px(header_left - header.left()))
+                .w(px(header_width))
+                .h(px(column.rect.height()))
+                .when(draggable, |el| {
+                    el.on_drag(
+                        TableColumnDrag {
+                            panel,
+                            source_index,
+                            title,
+                        },
+                        |drag, _, _, cx| cx.new(|_| drag.clone()),
+                    )
+                    .drag_over::<TableColumnDrag>(move |style, drag, window, _| {
+                        if drag.panel != panel {
+                            return style;
                         }
+                        if f32::from(window.mouse_position().x) > center {
+                            style.border_r_2().border_color(t.border_focused)
+                        } else {
+                            style.border_l_2().border_color(t.border_focused)
+                        }
+                    })
+                    .on_drop(move |drag: &TableColumnDrag, window, cx| {
+                        if drag.panel != panel {
+                            return;
+                        }
+                        let before = if f32::from(window.mouse_position().x) > center {
+                            next
+                        } else {
+                            Some(source_index)
+                        };
+                        drop_owner.update(cx, |ws, cx| {
+                            ws.dispatch_if_current(
+                                generation,
+                                Command::Table(
+                                    panel,
+                                    volna_core::table::TableCommand::MoveColumn {
+                                        source_index: drag.source_index,
+                                        before,
+                                    },
+                                ),
+                                Some(window),
+                                cx,
+                            );
+                        });
+                    })
+                })
+                .context_menu(move |mut menu, window, cx| {
+                    if has_format {
                         let owner = context_owner.clone();
-                        let command = hide_command.clone();
-                        menu.item(PopupMenuItem::new("Hide column").on_click(
-                            move |_, window, cx| {
-                                owner.update(cx, |ws, cx| {
-                                    ws.dispatch_if_current(
-                                        generation,
-                                        Command::Table(panel, command.clone()),
-                                        Some(window),
-                                        cx,
-                                    );
-                                });
-                            },
+                        menu = menu
+                            .submenu("Format", window, cx, move |menu, window, cx| {
+                                crate::table_panel::format_menu(
+                                    menu,
+                                    &owner,
+                                    panel,
+                                    generation,
+                                    Some(source_index),
+                                    window,
+                                    cx,
+                                )
+                            })
+                            .separator();
+                    }
+                    let owner = context_owner.clone();
+                    let command = hide_command.clone();
+                    menu.item(
+                        PopupMenuItem::new("Hide column").on_click(move |_, window, cx| {
+                            owner.update(cx, |ws, cx| {
+                                ws.dispatch_if_current(
+                                    generation,
+                                    Command::Table(panel, command.clone()),
+                                    Some(window),
+                                    cx,
+                                );
+                            });
+                        }),
+                    )
+                })
+                .child(
+                    div()
+                        .id(("table-sort", source_index))
+                        .debug_selector(move || format!("table-sort-{source_index}"))
+                        .occlude()
+                        .when(enabled, gpui_kit::Styled::cursor_pointer)
+                        .role(gpui_kit::accesskit::Role::Button)
+                        .tab_index((source_index * 3) as isize)
+                        .tab_stop(enabled)
+                        .focus(move |style| style.border_1().border_color(t.border_focused))
+                        .rounded(px(4.0 * t.zoom))
+                        .when(enabled, move |el| {
+                            el.hover(move |style| style.bg(t.hover.bg.alpha(0.35)))
+                        })
+                        .absolute()
+                        .top(px(column.header.sort_target.top() - column.rect.top()))
+                        .left(px(column.header.sort_target.left() - header_left))
+                        .w(px(column.header.sort_target.width()))
+                        .h(px(column.header.sort_target.height()))
+                        .aria_label(format!(
+                            "Sort {}: {direction}",
+                            table.column_title(source_index)
                         ))
-                    }),
-            );
+                        .aria_description(if enabled {
+                            "Enter or Space cycles ascending, descending, then source order"
+                        } else {
+                            "Sorting unavailable: insufficient memory or source not ready"
+                        })
+                        .key_context("TableColumnSort")
+                        .on_action(move |_: &crate::table_panel::SortColumn, window, cx| {
+                            cx.stop_propagation();
+                            key_owner.update(cx, |ws, cx| {
+                                ws.dispatch_if_current(
+                                    generation,
+                                    Command::Table(
+                                        panel,
+                                        volna_core::table::TableCommand::SortColumn(source_index),
+                                    ),
+                                    Some(window),
+                                    cx,
+                                );
+                            });
+                        })
+                        .on_click(move |_, window, cx| {
+                            sort_owner.update(cx, |ws, cx| {
+                                ws.dispatch_if_current(
+                                    generation,
+                                    Command::Table(
+                                        panel,
+                                        volna_core::table::TableCommand::SortColumn(source_index),
+                                    ),
+                                    Some(window),
+                                    cx,
+                                );
+                            });
+                        })
+                        .when_some(header_hint, |el, hint| {
+                            el.tooltip_show_delay(crate::ui::tooltip::delay(cx))
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(hint.clone())
+                                        .build(window, cx)
+                                })
+                        }),
+                );
             if let Some(rect) = column.header.format {
                 let badge = table
                     .column_format_badge(source_index)
@@ -1105,11 +1113,11 @@ impl PanelCanvas {
                         "column override"
                     }
                 );
-                edges = edges.child(
+                column_header = column_header.child(
                     div()
                         .absolute()
-                        .left(px(rect.left() - header.left()))
-                        .top(px(rect.top() - header.top()))
+                        .left(px(rect.left() - header_left))
+                        .top(px(rect.top() - column.rect.top()))
                         .w(px(rect.width()))
                         .h(px(rect.height()))
                         .occlude()
@@ -1145,6 +1153,7 @@ impl PanelCanvas {
                         ),
                 );
             }
+            edges = edges.child(column_header);
             if column.resize.right() <= header.left() || column.resize.left() >= header.right() {
                 continue;
             }

@@ -5975,8 +5975,11 @@ fn table_column_edges_resize_fit_and_undo_without_opening_details(cx: &mut TestA
         let header = window
             .update(&mut vcx, |ws, _, _| {
                 let table = ws.app.panels.get(panel).unwrap().kind.table().unwrap();
-                let column = &table.layout.columns[0];
-                point(px(column.rect.left() + 20.0), px(column.rect.top() + 12.0))
+                let target = table.layout.columns[0].header.sort_target;
+                point(
+                    px(target.left() + target.width() * 0.5),
+                    px(target.top() + target.height() * 0.5),
+                )
             })
             .unwrap();
         let (budget, previous_limit) = window
@@ -7323,9 +7326,9 @@ fn table_format_menus_preserve_rows_and_support_keyboard_and_narrow_panels(
             vcx.update(|window, cx| window.draw(cx).clear(cx));
             let format_bounds = vcx.debug_bounds("table-format-4").unwrap();
             let sort_bounds = vcx.debug_bounds("table-sort-4").unwrap();
-            assert!(sort_bounds.right() < format_bounds.left());
+            assert!(format_bounds.right() < sort_bounds.left());
             assert_eq!(sort_bounds.center().y, format_bounds.center().y);
-            assert!(format_bounds.size.height >= px(26.0 * zoom));
+            assert!(format_bounds.size.height >= px(24.0 * zoom));
             let click = |vcx: &mut VisualTestContext, selector: &'static str| {
                 let bounds = vcx.debug_bounds(selector).expect(selector);
                 assert!(
